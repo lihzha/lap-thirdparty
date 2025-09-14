@@ -1,0 +1,161 @@
+import dataclasses
+import logging
+import re
+from typing import Literal, Protocol, runtime_checkable
+
+import flax.traverse_util
+import numpy as np
+import openpi.models.model as _model
+import openpi.shared.array_typing as at
+
+import openpi_cot.shared.download as download
+
+logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class WeightLoader(Protocol):
+    def load(self, params: at.Params) -> at.Params:
+        """Loads the model weights.
+
+        Args:
+            params: Parameters of the model. This is a nested structure of array-like objects that
+                represent the model's parameters.
+
+        Returns:
+            Loaded parameters. The structure must be identical to `params`. If returning a subset of
+            the parameters the loader must merge the loaded parameters with `params`.
+        """
+
+
+@dataclasses.dataclass(frozen=True)
+class NoOpWeightLoader(WeightLoader):
+    def load(self, params: at.Params) -> at.Params:
+        return params
+
+
+@dataclasses.dataclass(frozen=True)
+class CheckpointWeightLoader(WeightLoader):
+    """Loads an entire set of weights from a checkpoint.
+
+    Compatible with:
+      trained checkpoints:
+        example: "./checkpoints/<config>/<exp>/<step>/params"
+      released checkpoints:
+        example: "gs://openpi-assets/checkpoints/<model>/params"
+    """
+
+    params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
+        # Preferred logic: use remote cache if present, otherwise mirror upstream into cache and load from there.
+        params_path_str = str(self.params_path)
+
+        if params_path_str.startswith("gs://"):
+            # If this is already a cache path, try it; if missing or incomplete, fall back to upstream and mirror.
+            if "/cache/" in params_path_str:
+                cache_candidate = params_path_str
+                upstream = params_path_str.split("/cache/", 1)[1]
+                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
+                # Prefer existing cache; if present, ensure commit_success marker and use it.
+                # Otherwise, mirror upstream into cache and use the mirror.
+                try:
+                    download.ensure_commit_success(cache_candidate)
+                    params_source = cache_candidate
+                except Exception:
+                    params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+            else:
+                # Not in cache yet; mirror upstream into cache to standardize layout.
+                params_source = download.mirror_checkpoint_to_remote_cache(params_path_str)
+        else:
+            params_source = str(download.maybe_download(params_path_str))
+
+        loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
+        # Add all missing LoRA weights.
+        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+
+
+@dataclasses.dataclass(frozen=True)
+class PaliGemmaWeightLoader(WeightLoader):
+    """Loads weights from the official PaliGemma checkpoint.
+
+    This will overwrite existing weights with similar names while keeping all extra weights intact.
+    This allows us to support the action expert which is used by the Pi0 model.
+    """
+
+    def load(self, params: at.Params) -> at.Params:
+        path = download.maybe_download(
+            "gs://vertex-model-garden-paligemma-us/paligemma/pt_224.npz", gs={"token": "anon"}
+        )
+        with path.open("rb") as f:
+            flat_params = dict(np.load(f, allow_pickle=False))
+        loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
+        # Add all missing weights.
+        return _merge_params(loaded_params, params, missing_regex=".*")
+
+
+@dataclasses.dataclass(frozen=True)
+class WeightLoaderChoice(WeightLoader):
+    """CLI-friendly wrapper to choose a weight loader without nested subcommands.
+
+    This class implements the WeightLoader protocol and forwards to a concrete
+    loader based on the selected kind. It allows setting the loader type and its
+    arguments via flat flags like:
+
+      --weight-loader.kind=checkpoint --weight-loader.params-path=gs://...
+      --weight-loader.kind=paligemma
+      --weight-loader.kind=none
+    """
+
+    # Which loader to use.
+    kind: Literal["none", "checkpoint", "paligemma"] = "none"
+    # Only used when kind == "checkpoint".
+    params_path: str | None = None
+
+    def _resolve(self) -> WeightLoader:
+        match self.kind:
+            case "checkpoint":
+                if not self.params_path:
+                    raise ValueError("--weight-loader.params-path must be set when kind=checkpoint")
+                return CheckpointWeightLoader(self.params_path)
+            case "paligemma":
+                return PaliGemmaWeightLoader()
+            case "none":
+                return NoOpWeightLoader()
+            case _:
+                raise ValueError(f"Unknown weight loader kind: {self.kind}")
+
+    def load(self, params: at.Params) -> at.Params:
+        return self._resolve().load(params)
+
+
+def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex: str) -> at.Params:
+    """Merges the loaded parameters with the reference parameters.
+
+    Args:
+        loaded_params: The parameters to merge.
+        params: The reference parameters.
+        missing_regex: A regex pattern for all missing keys that should be merged from the reference parameters.
+
+    Returns:
+        A new dictionary with the merged parameters.
+    """
+    flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+    flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+
+    # First, take all weights that are a subset of the reference weights.
+    result = {}
+    for k, v in flat_loaded.items():
+        if k in flat_ref:
+            result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
+
+    flat_loaded.clear()
+
+    # Then, merge any missing weights as defined by the missing regex.
+    pattern = re.compile(missing_regex)
+    for k in {k for k in flat_ref if pattern.fullmatch(k)}:
+        if k not in result:
+            result[k] = flat_ref[k]
+
+    return flax.traverse_util.unflatten_dict(result, sep="/")
