@@ -5,7 +5,7 @@ import jax
 from jax.experimental import mesh_utils
 import openpi.training.sharding as up
 
-BATCH_AXIS = "data"
+BATCH_AXIS = "batch"
 FSDP_AXIS = "fsdp"
 # In FSDP, we shard the data across both the batch and FSDP axes.
 DATA_AXIS = (BATCH_AXIS, FSDP_AXIS)
