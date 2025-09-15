@@ -33,7 +33,7 @@ class CoTPolicy:
         logits, t = self._sample_reasoning(CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],
-            "actions": jnp.zeros((1, 1, 7)),
+            "actions": jnp.zeros((1, 1, 32)),
             "reasoning_logits": logits,
             "final_length": t,
         }
