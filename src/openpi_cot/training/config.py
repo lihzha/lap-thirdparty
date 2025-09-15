@@ -314,7 +314,7 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
         delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
         data_transforms = data_transforms.push(
             inputs=[upstream_transforms.DeltaActions(delta_action_mask)],
-            outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
+            # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
         )
 
         model_transforms = ModelTransformFactory(
