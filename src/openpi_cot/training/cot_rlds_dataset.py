@@ -79,6 +79,19 @@ def _maybe(builder_fn: Callable[[], object], fallback_fn: Callable[[], object]):
         return fallback_fn()
 
 
+# Optional imports: OXE configs/mixes/transforms
+try:
+    from openpi_cot.training.oxe_utils.data.oxe.oxe_dataset_configs import OXE_DATASET_CONFIGS  # type: ignore
+    from openpi_cot.training.oxe_utils.data.oxe.oxe_dataset_mixes import OXE_NAMED_MIXES  # type: ignore
+    from openpi_cot.training.oxe_utils.data.oxe.oxe_standardization_transforms import (
+        OXE_STANDARDIZATION_TRANSFORMS,  # type: ignore
+    )
+except Exception:
+    OXE_DATASET_CONFIGS = {}
+    OXE_NAMED_MIXES = {}
+    OXE_STANDARDIZATION_TRANSFORMS = {}
+
+
 class DroidActionSpace(Enum):
     """Action space for DROID dataset."""
 
@@ -1057,42 +1070,269 @@ class OxeCoTRldsDataset:
         if num_parallel_calls == -1:
             num_parallel_calls = tf.data.AUTOTUNE
 
-        # Build TFDS dataset (try regular builder first, then directory fallback)
-        def _make_builder():
-            return tfds.builder(repo_id, data_dir=data_dir)
+        # Helper: create a TFDS builder for a dataset name
+        def _make_builder_for(name: str):
+            def _mk():
+                return tfds.builder(name, data_dir=data_dir)
 
-        def _make_builder_from_dir():
-            # Expect exactly one subdir under data_dir/repo_id
-            import os as _os
+            def _mk_dir():
+                import os as _os
 
-            ds_dir = _os.path.join(data_dir, repo_id)
-            subdirs = [d for d in _os.listdir(ds_dir) if _os.path.isdir(_os.path.join(ds_dir, d))]
-            if len(subdirs) != 1:
-                raise FileNotFoundError(f"Expected one subdir under {ds_dir}, found: {subdirs}")
-            return tfds.builder_from_directory(_os.path.join(ds_dir, subdirs[0]))
+                ds_dir = _os.path.join(data_dir, name)
+                subdirs = [d for d in _os.listdir(ds_dir) if _os.path.isdir(_os.path.join(ds_dir, d))]
+                if len(subdirs) != 1:
+                    raise FileNotFoundError(f"Expected one subdir under {ds_dir}, found: {subdirs}")
+                return tfds.builder_from_directory(_os.path.join(ds_dir, subdirs[0]))
 
-        builder = _maybe(_make_builder, _make_builder_from_dir)
+            return _maybe(_mk, _mk_dir)
 
-        # Use explicit val split if available; else start from full train and filter down deterministically
         want_val = split == "val"
-        if (not want_val) and (max_samples is None):
-            # Repeat across shards to increase interleave
-            dataset = dl.DLataset.from_rlds(builder, split="train", shuffle=True, num_parallel_reads=num_parallel_reads)
-        else:
-            dataset = dl.DLataset.from_rlds(
-                builder, split="train", shuffle=False, num_parallel_reads=num_parallel_reads
-            )
 
-        # Shard across processes for per-host iteration
-        dataset = dataset.shard(jax.process_count(), jax.process_index())
+        # Determine whether to load a named mixture (concatenate) or a single dataset
+        names_and_weights = [(repo_id, 1.0)]
+        if repo_id in OXE_NAMED_MIXES:
+            names_and_weights = OXE_NAMED_MIXES[repo_id]
 
-        # Control determinism and parallelization
+        datasets_to_concat = []
+
+        # Common TF options
         opts = tf.data.Options()
         opts.experimental_deterministic = bool(want_val)
         opts.experimental_optimization.map_parallelization = True
         opts.experimental_optimization.parallel_batch = True
         opts.experimental_optimization.map_fusion = True
-        dataset = dataset.with_options(opts)
+
+        # Build per-dataset pipelines up to trajectory-level grouping
+        for ds_name, _w in names_and_weights:
+            builder = _make_builder_for(ds_name)
+            if (not want_val) and (max_samples is None):
+                ds = dl.DLataset.from_rlds(builder, split="train", shuffle=True, num_parallel_reads=num_parallel_reads)
+            else:
+                ds = dl.DLataset.from_rlds(builder, split="train", shuffle=False, num_parallel_reads=num_parallel_reads)
+            ds = ds.shard(jax.process_count(), jax.process_index())
+            ds = ds.with_options(opts)
+
+            # Per-dataset default mappings from OXE configs if not provided explicitly
+            image_keys_i = (
+                image_obs_keys if image_obs_keys else OXE_DATASET_CONFIGS.get(ds_name, {}).get("image_obs_keys", {})
+            )
+            depth_keys_i = (
+                depth_obs_keys if depth_obs_keys else OXE_DATASET_CONFIGS.get(ds_name, {}).get("depth_obs_keys", {})
+            )
+            proprio_key_i = proprio_obs_key
+            # Standardization transform (if available) – run first on trajectories
+            standardize_fn = OXE_STANDARDIZATION_TRANSFORMS.get(ds_name)
+
+            # Helper: record-id and split filter, parameterized by dataset name for fallback uniqueness
+            def _record_id_from_traj_local(traj):
+                try:
+                    return traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+                except Exception:
+                    try:
+                        return traj["traj_metadata"]["record_metadata"]["file_path"][0]
+                    except Exception:
+                        base = tf.constant(ds_name, tf.string)
+                        idx = tf.as_string(traj.get("_traj_index", tf.constant([0], tf.int64))[0])
+                        return tf.strings.join([base, idx], separator=":")
+
+            def _split_filter_local(traj):
+                rid = _record_id_from_traj_local(traj)
+                salt = tf.strings.as_string(split_seed)
+                key = tf.strings.join([salt, rid])
+                bucket = tf.strings.to_hash_bucket_fast(key, 1000)
+                thr = tf.cast(int(val_fraction * 1000), tf.int64)
+                is_val = bucket < thr
+                return is_val if want_val else tf.logical_not(is_val)
+
+            ds = ds.filter(_split_filter_local)
+            if skip_unlabeled and lang_table is not None:
+
+                def _has_lang_local(traj):
+                    rid = _record_id_from_traj_local(traj)
+                    return tf.not_equal(lang_table.lookup(rid), default_lang_value)
+
+                ds = ds.filter(_has_lang_local)
+
+            # Build restructure specialized for this dataset
+            def _restructure_local(traj):
+                # Apply dataset-specific standardization first
+                if standardize_fn is not None:
+                    traj = standardize_fn(traj)
+
+                # Extract actions
+                if action_key in traj:
+                    actions = tf.cast(traj[action_key], tf.float32)
+                elif "action" in traj:
+                    actions = tf.cast(traj["action"], tf.float32)
+                else:
+                    ad = traj.get("action_dict", {})
+                    actions = tf.cast(ad.get("cartesian_position", traj.get("actions", None)), tf.float32)
+                traj_len = tf.shape(actions)[0]
+
+                # Optional action padding
+                if max_action_dim is not None:
+                    cur = tf.shape(actions)[-1]
+                    pad = tf.maximum(0, int(max_action_dim) - cur)
+                    actions = tf.pad(actions, [[0, 0], [0, pad]])
+
+                rid = _record_id_from_traj_local(traj)
+
+                # Language actions
+                if lang_table is not None:
+                    lang_bytes = lang_table.lookup(rid)
+                    lang_tensor = tf.cond(
+                        tf.greater(tf.strings.length(lang_bytes), 0),
+                        lambda: tf.io.parse_tensor(lang_bytes, out_type=tf.string),
+                        lambda: tf.fill([traj_len], tf.constant("", tf.string)),
+                    )
+                else:
+                    lang_tensor = tf.fill([traj_len], tf.constant("", tf.string))
+                lang_tensor = lang_tensor[:traj_len]
+
+                # Instruction
+                if instr_table is not None:
+                    instr_bytes = instr_table.lookup(rid)
+
+                    def _sample_from_table():
+                        arr = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
+                        return tf.random.shuffle(arr, seed=seed)[0]
+
+                    instruction = tf.cond(
+                        tf.greater(tf.strings.length(instr_bytes), 0),
+                        _sample_from_table,
+                        lambda: fallback_instructions[
+                            tf.random.uniform((), minval=0, maxval=tf.shape(fallback_instructions)[0], dtype=tf.int32)
+                        ],
+                    )
+                else:
+                    instruction = fallback_instructions[
+                        tf.random.uniform((), minval=0, maxval=tf.shape(fallback_instructions)[0], dtype=tf.int32)
+                    ]
+                instruction_vec = tf.fill([traj_len], instruction)
+
+                # Observation mapping
+                obs = traj.get("observation", traj.get("obs", {}))
+                new_obs = {}
+                if image_keys_i:
+                    for new, old in image_keys_i.items():
+                        new_key = f"image_{new}"
+                        if old is None:
+                            new_obs[new_key] = tf.repeat("", traj_len)
+                        else:
+                            new_obs[new_key] = tf.convert_to_tensor(obs[old])
+                if depth_keys_i:
+                    for new, old in depth_keys_i.items():
+                        new_key = f"depth_{new}"
+                        if old is None:
+                            new_obs[new_key] = tf.repeat("", traj_len)
+                        else:
+                            new_obs[new_key] = tf.convert_to_tensor(obs[old])
+                if proprio_key_i is not None and proprio_key_i in obs:
+                    new_obs["proprio"] = tf.cast(obs[proprio_key_i], tf.float32)
+
+                out = {
+                    "actions": actions,
+                    "language_actions": lang_tensor,
+                    "prompt": instruction_vec,
+                    "episode_id": tf.fill([traj_len], rid),
+                    "observation": new_obs,
+                    "dataset_name": tf.repeat(tf.constant(ds_name, tf.string), traj_len),
+                    "traj_index": tf.repeat(traj.get("_traj_index", tf.constant([0]))[0], traj_len),
+                }
+                if wrist_obs_key and wrist_obs_key in obs:
+                    out["observation"]["wrist_image"] = obs[wrist_obs_key]
+                return out
+
+            ds = ds.traj_map(_restructure_local, num_parallel_calls)
+
+            # Optional filters
+            if max_action is not None:
+                ds = ds.filter(lambda x: tf.math.reduce_all(tf.math.abs(x["actions"]) <= max_action))
+            if max_proprio is not None:
+
+                def _has_ok_prop(x):
+                    prop = x.get("observation", {}).get("proprio", None)
+                    return tf.constant(True) if prop is None else tf.math.reduce_all(tf.math.abs(prop) <= max_proprio)
+
+                ds = ds.filter(_has_ok_prop)
+
+            # Chunking
+            def _chunk(traj):
+                traj_len = tf.shape(traj["actions"])[0]
+                idx = tf.broadcast_to(
+                    tf.range(action_chunk_size)[None], [traj_len, action_chunk_size]
+                ) + tf.broadcast_to(tf.range(traj_len)[:, None], [traj_len, action_chunk_size])
+                idx = tf.minimum(idx, traj_len - 1)
+                traj["actions"] = tf.gather(traj["actions"], idx)
+                return traj
+
+            ds = ds.traj_map(_chunk, num_parallel_calls)
+
+            # Subsample
+            if subsample_length is not None:
+
+                def _subsample_local(traj):
+                    t_len = tf.shape(traj["actions"])[0]
+                    l_len = tf.minimum(tf.cast(subsample_length, tf.int32), t_len)
+                    for k in list(traj.keys()):
+                        v = traj[k]
+                        if isinstance(v, dict):
+                            for sk in list(v.keys()):
+                                vv = v[sk]
+                                if tf.rank(vv) >= 1 and tf.shape(vv)[0] == t_len:
+                                    v[sk] = vv[:l_len]
+                        elif tf.rank(v) >= 1 and tf.shape(v)[0] == t_len:
+                            traj[k] = v[:l_len]
+                    return traj
+
+                ds = ds.traj_map(_subsample_local, num_parallel_calls)
+
+            # Window observations
+            if int(window_size) > 1:
+                ws = int(window_size)
+
+                def _win(traj):
+                    t_len = tf.shape(traj["language_actions"])[0]
+                    idx = tf.broadcast_to(tf.range(ws)[None], [t_len, ws]) + tf.broadcast_to(
+                        tf.range(t_len)[:, None], [t_len, ws]
+                    )
+                    idx = tf.minimum(idx, t_len - 1)
+                    for k, v in list(traj["observation"].items()):
+                        if tf.rank(v) >= 1 and tf.shape(v)[0] == t_len:
+                            traj["observation"][k] = tf.gather(v, idx)
+                    return traj
+
+                ds = ds.traj_map(_win, num_parallel_calls)
+
+            # Group language actions windows
+            def _group(traj):
+                traj_len = tf.shape(traj["language_actions"])[0]
+                idx = tf.broadcast_to(tf.range(summation_steps)[None], [traj_len, summation_steps]) + tf.broadcast_to(
+                    tf.range(traj_len)[:, None], [traj_len, summation_steps]
+                )
+                idx = tf.minimum(idx, traj_len - 1)
+                traj["language_actions"] = tf.gather(traj["language_actions"], idx)
+                return traj
+
+            ds = ds.traj_map(_group, num_parallel_calls)
+
+            # Post-chunk transforms
+            for fn in post_chunk_transforms:
+                ds = ds.traj_map(fn, num_parallel_calls)
+
+            datasets_to_concat.append(ds)
+
+        # Concatenate datasets according to descending weights order
+        if len(datasets_to_concat) == 0:
+            raise ValueError("No datasets constructed for OXE CoT dataset")
+        if len(datasets_to_concat) == 1:
+            dataset = datasets_to_concat[0]
+        else:
+            # Sort by weights (descending)
+            order = sorted(range(len(names_and_weights)), key=lambda i: names_and_weights[i][1], reverse=True)
+            dataset = datasets_to_concat[order[0]]
+            for i in order[1:]:
+                dataset = dataset.concatenate(datasets_to_concat[i])
 
         # ---- Language actions lookup (record_id -> serialized tf.string tensor [T(+1)]) ----
         lang_table = None

@@ -75,7 +75,16 @@ def make_mesh(fsdp_devices: int) -> jax.sharding.Mesh:
 
 @contextlib.contextmanager
 def set_mesh(mesh: jax.sharding.Mesh):
-    return up.set_mesh(mesh)
+    """Plumbing the mesh deep into the module tree is extremeley cumbersome; until the JAX team lands a better API, a
+    custom context manager like this one is the recommended way to maintain a reference to a global mesh. This is only used
+    in `activation_sharding_constraint` below."""
+    if up._MeshState.active_mesh is not None:
+        raise ValueError("Cannot nest set_mesh context managers.")
+    up._MeshState.active_mesh = mesh
+    try:
+        yield
+    finally:
+        up._MeshState.active_mesh = None
 
 
 def fsdp_sharding(
