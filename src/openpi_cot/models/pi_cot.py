@@ -328,7 +328,7 @@ class PiCoT(_pi0.Pi0):
     ### left padding
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
-        observation = _model.preprocess_observation(None, observation, train=False)
+        observation = preprocess_observation(None, observation, train=False)
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation)  # (B,Tp,D) + (B,Tp)
         b, tp, d = *p_tokens.shape[:2], p_tokens.shape[-1]
         gen_len = observation.tokenized_prompt.shape[1]
