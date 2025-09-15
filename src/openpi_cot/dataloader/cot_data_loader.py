@@ -9,10 +9,10 @@ import openpi.models.model as _model
 import openpi.training.data_loader as up  # upstream module
 import openpi.transforms as up_tf
 
+from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTRldsDataset
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.policies.droid_cot_policy import DroidCoTInputs  # the one transform you condition on
 import openpi_cot.training.config as _config
-from openpi_cot.training.cot_rlds_dataset import DroidCoTRldsDataset
 
 
 def _create_rlds_dataset(

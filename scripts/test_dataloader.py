@@ -10,9 +10,9 @@ import numpy as np
 from rail_tpu_utils import prevent_cross_region
 import wandb
 
+import openpi_cot.dataloader.cot_data_loader as _data_loader
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
-import openpi_cot.training.cot_data_loader as _data_loader
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 

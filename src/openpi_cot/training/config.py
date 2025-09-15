@@ -19,13 +19,13 @@ import openpi.transforms as upstream_transforms
 from typing_extensions import override
 import tyro
 
+import openpi_cot.dataloader.cot_rlds_dataset as cot_rlds_dataset
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.droid_cot_policy as droid_cot_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize
 import openpi_cot.shared.download as _download
-import openpi_cot.training.cot_rlds_dataset as cot_rlds_dataset
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
 from openpi_cot.transforms import TokenizePromptAndReasoning

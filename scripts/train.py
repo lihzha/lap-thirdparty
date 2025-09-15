@@ -22,11 +22,11 @@ from rail_tpu_utils import prevent_cross_region
 import tqdm_loggable.auto as tqdm
 import wandb
 
+import openpi_cot.dataloader.cot_data_loader as _data_loader
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.training import eval_helper as _eval_helper
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
-import openpi_cot.training.cot_data_loader as _data_loader
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.training.weight_loaders as _weight_loaders

@@ -15,8 +15,8 @@ import orbax.checkpoint as ocp
 import orbax.checkpoint.future as future
 import tensorflow as tf
 
+import openpi_cot.dataloader.cot_data_loader as _data_loader
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_io_adapter
-import openpi_cot.training.cot_data_loader as _data_loader
 import openpi_cot.training.utils as training_utils
 
 
