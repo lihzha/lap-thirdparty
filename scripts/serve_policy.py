@@ -4,6 +4,7 @@ import logging
 import socket
 
 from openpi.policies import policy as _policy
+from openpi.policies import policy_config as upstream_policy_config
 from openpi.serving import websocket_policy_server
 import tyro
 
@@ -89,7 +90,11 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
-            return _policy_config.create_trained_policy_cot(
+            if "cot" in args.policy.config:
+                return _policy_config.create_trained_policy_cot(
+                    _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                )
+            return upstream_policy_config.create_trained_policy(
                 _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
             )
         case Default():

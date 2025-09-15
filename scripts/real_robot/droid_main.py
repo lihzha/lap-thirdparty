@@ -67,6 +67,11 @@ class DroidEvalRunner(BaseEvalRunner):
         return request
 
     def binarize_gripper(self, action):
+        # Binarize gripper action
+        if action[-1].item() > 0.5:
+            action = np.concatenate([action[:-1], np.ones((1,))])
+        else:
+            action = np.concatenate([action[:-1], np.zeros((1,))])
         return action
 
     def _extract_observation(self, obs_dict, save_to_disk=False):
