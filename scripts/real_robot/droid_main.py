@@ -1,5 +1,4 @@
 # ruff: noqa
-
 import dataclasses
 import faulthandler
 import numpy as np
@@ -14,9 +13,7 @@ from shared import BaseEvalRunner
 
 AXIS_PERM = np.array([0, 2, 1])
 AXIS_SIGN = np.array([1, 1, 1])
-
 faulthandler.enable()
-
 # DROID data collection frequency -- we slow down execution to match this frequency
 DROID_CONTROL_FREQUENCY = 15
 
@@ -27,25 +24,22 @@ class Args:
     left_camera_id: str = "31177322"  # e.g., "24259877"
     right_camera_id: str = "38872458"  # e.g., "24514023"
     wrist_camera_id: str = "10501775"  # e.g., "13062452"
-
     # Policy parameters
     external_camera: str = None  # which external camera should be fed to the policy, choose from ["left", "right"]
-
     # Rollout parameters
     max_timesteps: int = 600
     # How many actions to execute from a predicted action chunk before querying policy server again
     # 8 is usually a good default (equals 0.5 seconds of action execution).
     open_loop_horizon: int = 8
-
     # Remote server parameters
     remote_host: str = "0.0.0.0"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
     remote_port: int = (
         8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
-
     in_camera_frame: bool = (
         False  # whether the predicted actions are in camera frame (True) or robot/base frame (False)
     )
+    use_wrist_camera: bool = False  # whether to use the wrist camera image as input to the policy
 
 
 class DroidEvalRunner(BaseEvalRunner):
@@ -59,16 +53,18 @@ class DroidEvalRunner(BaseEvalRunner):
         )
 
     def obs_to_request(self, curr_obs, instruction):
-        return {
+        request = {
             "observation/exterior_image_1_left": image_tools.resize_with_pad(
                 curr_obs[f"{self.args.external_camera}_image"], 224, 224
             ),
-            "observation/wrist_image_left": image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224),
             "observation/cartesian_position": curr_obs["cartesian_position"],
             "observation/gripper_position": curr_obs["gripper_position"],
             "prompt": instruction,
             "batch_size": None,
         }
+        if self.args.use_wrist_camera:
+            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
+        return request
 
     def binarize_gripper(self, action):
         return action
@@ -85,26 +81,21 @@ class DroidEvalRunner(BaseEvalRunner):
                 right_image = image_observations[key]
             elif self.args.wrist_camera_id in key and "left" in key:
                 wrist_image = image_observations[key]
-
         # Drop the alpha dimension
         # left_image = left_image[..., :3]
         right_image = right_image[..., :3]
         wrist_image = wrist_image[..., :3]
-
         # Convert to RGB
         # left_image = left_image[..., ::-1]
         right_image = right_image[..., ::-1]
         wrist_image = wrist_image[..., ::-1]
-
         # In addition to image observations, also capture the proprioceptive state
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
         joint_position = np.array(robot_state["joint_positions"])
         gripper_position = np.array([robot_state["gripper_position"]])
-
         # Save the images to disk so that they can be viewed live while the robot is running
         # Create one combined image to make live viewing easy
-
         return {
             # "left_image": left_image,
             "right_image": right_image,
