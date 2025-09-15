@@ -13,14 +13,10 @@ from openpi_cot.models.adapters.model_adapter import CoTObservation
 class CoTPolicy:
     """A policy that uses Chain of Thought (CoT) reasoning."""
 
-    def __init__(
-        self, base: _policy.Policy, *, sample_kwargs: dict[str, Any] | None = None
-    ):
+    def __init__(self, base: _policy.Policy, *, sample_kwargs: dict[str, Any] | None = None):
         self._base = base
-        assert hasattr(base.model, "sample_reasoning"), (
-            "Model must have a sample_reasoning method"
-        )
-        self._sample_reasoning = nnx_utils.module_jit(base.model.sample_reasoning)
+        assert hasattr(base._model, "sample_reasoning"), "Model must have a sample_reasoning method"
+        self._sample_reasoning = nnx_utils.module_jit(base._model.sample_reasoning)
 
     def __getattr__(self, name: str):
         return getattr(self._base, name)
@@ -34,17 +30,12 @@ class CoTPolicy:
 
         start_time = time.monotonic()
         self._rng, sample_rng = jax.random.split(self._base._rng)
-        logits, t, k_cache, p_mask, p_ar_mask = self._sample_reasoning(
-            CoTObservation.from_dict(inputs)
-        )
+        logits, t = self._sample_reasoning(CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],
             "actions": jnp.zeros((1, 1, 7)),
             "reasoning_logits": logits,
             "final_length": t,
-            "k_cache": k_cache,
-            "p_mask": p_mask,
-            "p_ar_mask": p_ar_mask,
         }
         # Unbatch and convert to np.ndarray.        # Unbatch and convert to np.ndarray.
         # outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)

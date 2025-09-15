@@ -492,6 +492,5 @@ class PiCoT(_pi0.Pi0):
         return p_mask, p_ar_mask, h_buf, id_buf, t, k_cache, v_cache
 
     def sample_reasoning(self, observation: CoTObservation):
-        p_mask, p_ar_mask, h_buf, logits, t, k_cache, v_cache = self._sample_reasoning_tokens(observation)
-        # return self.PaliGemma.llm(reasoning_tokens, method="decode")  # logits
-        return logits, t, k_cache, p_mask, p_ar_mask
+        _, _, _, logits, t, _, _ = self._sample_reasoning_tokens(observation)
+        return logits, t
