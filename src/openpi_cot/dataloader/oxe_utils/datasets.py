@@ -8,7 +8,6 @@ format to OpenVLA, IterableDataset shim.
 from pathlib import Path
 from typing import Any
 
-from prismatic.util.data_utils import tree_map
 from torch.utils.data import IterableDataset
 
 from openpi_cot.dataloader.oxe_utils.rlds import make_interleaved_dataset
@@ -16,6 +15,7 @@ from openpi_cot.dataloader.oxe_utils.rlds import make_single_dataset
 from openpi_cot.dataloader.oxe_utils.rlds.oxe import OXE_NAMED_MIXTURES
 from openpi_cot.dataloader.oxe_utils.rlds.oxe import get_oxe_dataset_kwargs_and_weights
 from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import NormalizationType
+from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import tree_map
 
 # HuggingFace Default / LLaMa-2 IGNORE_INDEX (for labels)
 IGNORE_INDEX = -100

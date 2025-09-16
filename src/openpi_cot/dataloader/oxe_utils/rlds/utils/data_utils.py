@@ -13,12 +13,8 @@ from typing import Any
 
 import dlimp as dl
 import numpy as np
-from prismatic.overwatch import initialize_overwatch
 import tensorflow as tf
 from tqdm import tqdm
-
-# Initialize Overwatch =>> Wraps `logging.Logger`
-overwatch = initialize_overwatch(__name__)
 
 
 def tree_map(fn: Callable, tree: dict) -> dict:

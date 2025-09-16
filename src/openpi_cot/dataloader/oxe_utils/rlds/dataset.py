@@ -13,7 +13,6 @@ import random
 
 import dlimp as dl
 import numpy as np
-from prismatic.overwatch import initialize_overwatch
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
@@ -29,7 +28,6 @@ from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import pprint_data_mi
 from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import tree_map
 
 # Initialize Overwatch =>> Wraps `logging.Logger`
-overwatch = initialize_overwatch(__name__)
 
 
 # Configure Tensorflow with *no GPU devices* (to prevent clobber with PyTorch)
