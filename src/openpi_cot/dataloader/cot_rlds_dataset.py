@@ -771,8 +771,6 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             shuffle_buffer_size=shuffle_buffer_size,
             num_parallel_reads=num_parallel_reads,
             num_parallel_calls=num_parallel_calls,
-            split_seed=split_seed,
-            max_samples=max_samples,
             seed=seed,
             split=split,
         )
