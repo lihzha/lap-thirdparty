@@ -102,7 +102,7 @@ class CoTDataConfig:
     validation_mode: str = "easy"
     vis_dataset: bool = False
     use_wrist_image: bool = False
-    apply_idle_filter: bool = True
+    use_idle_filter: bool = True
     wrist_image_dropout_prob: float = 0.0
     text_state_dropout_prob: float = 0.0
     # If true, will drop samples where projected gripper is outside the resized image bounds.
@@ -261,7 +261,7 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
     validation_mode: str = "easy"
     vis_dataset: bool = False
     use_wrist_image: bool = False
-    apply_idle_filter: bool = True
+    use_idle_filter: bool = True
     # Train-time dropout (applied in DroidCoTInputs). Set nonzero only for training.
     wrist_image_dropout_prob: float = 0.0
     text_state_dropout_prob: float = 0.0
@@ -344,7 +344,7 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
             val_fraction=self.val_fraction,
             validation_mode=self.validation_mode,
             vis_dataset=self.vis_dataset,
-            apply_idle_filter=self.apply_idle_filter,
+            use_idle_filter=self.use_idle_filter,
             drop_gripper_oob=self.drop_gripper_oob,
             wrist_image_dropout_prob=self.wrist_image_dropout_prob,
             text_state_dropout_prob=self.text_state_dropout_prob,
@@ -487,7 +487,7 @@ _CONFIGS = [
             use_wrist_image=False,
             val_max_samples=60000,
             val_fraction=0.02,
-            apply_idle_filter=True,
+            use_idle_filter=True,
             drop_gripper_oob=False,
         ),
         num_train_steps=100_000,
@@ -539,7 +539,7 @@ _CONFIGS = [
             use_wrist_image=False,
             val_max_samples=60000,
             val_fraction=0.02,
-            apply_idle_filter=True,
+            use_idle_filter=True,
             drop_gripper_oob=False,
         ),
         num_train_steps=100_000,
@@ -592,7 +592,7 @@ _CONFIGS = [
             use_wrist_image=False,
             val_max_samples=60000,
             val_fraction=0.02,
-            apply_idle_filter=True,
+            use_idle_filter=True,
             drop_gripper_oob=False,
         ),
         num_train_steps=100_000,
@@ -644,7 +644,7 @@ _CONFIGS = [
             use_wrist_image=False,
             val_max_samples=60000,
             val_fraction=0.02,
-            apply_idle_filter=True,
+            use_idle_filter=True,
             drop_gripper_oob=False,
         ),
         num_train_steps=100_000,
