@@ -200,13 +200,11 @@ def get_dataset_statistics(
 
     # check if cache file exists and load
     if tf.io.gfile.exists(path):
-        overwatch.info(f"Loading existing dataset statistics from {path}.")
         with tf.io.gfile.GFile(path, "r") as f:
             metadata = json.load(f)
         return metadata
 
     if os.path.exists(local_path):
-        overwatch.info(f"Loading existing dataset statistics from {local_path}.")
         with open(local_path) as f:
             metadata = json.load(f)
         return metadata
@@ -224,7 +222,6 @@ def get_dataset_statistics(
     if cardinality == tf.data.INFINITE_CARDINALITY:
         raise ValueError("Cannot compute dataset statistics for infinite datasets.")
 
-    overwatch.info("Computing dataset statistics. This may take a bit, but should only need to happen once.")
     actions, proprios, num_transitions, num_trajectories = [], [], 0, 0
     for traj in tqdm(dataset.iterator(), total=cardinality if cardinality != tf.data.UNKNOWN_CARDINALITY else None):
         actions.append(traj["action"])
@@ -258,7 +255,6 @@ def get_dataset_statistics(
         with tf.io.gfile.GFile(path, "w") as f:
             json.dump(metadata, f)
     except tf.errors.PermissionDeniedError:
-        overwatch.warning(f"Could not write dataset statistics to {path}. Writing to {local_path} instead.")
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, "w") as f:
             json.dump(metadata, f)
@@ -285,7 +281,6 @@ def save_dataset_statistics(dataset_statistics, run_dir):
                 if isinstance(stats["num_transitions"], np.ndarray):
                     stats["num_transitions"] = stats["num_transitions"].item()
         json.dump(dataset_statistics, f_json, indent=2)
-    overwatch.info(f"Saved dataset statistics file at path {out_path}")
 
 
 def allocate_threads(n: int | None, weights: np.ndarray):

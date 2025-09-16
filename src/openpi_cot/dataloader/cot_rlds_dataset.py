@@ -802,8 +802,6 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             filter_table=filter_table,
             action_chunk_size=action_chunk_size,
             summation_steps=self.summation_steps,
-            use_wrist_image=self.use_wrist_image,
-            drop_gripper_oob=self.drop_gripper_oob,
         )
 
         self.apply_flatten()
@@ -891,8 +889,6 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
             shuffle_buffer_size=shuffle_buffer_size,
             num_parallel_reads=num_parallel_reads,
             num_parallel_calls=num_parallel_calls,
-            split_seed=split_seed,
-            max_samples=max_samples,
             seed=seed,
             split=split,
         )
