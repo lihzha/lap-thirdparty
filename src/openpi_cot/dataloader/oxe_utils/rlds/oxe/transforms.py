@@ -17,8 +17,8 @@ Transforms adopt the following structure:
 
 from typing import Any
 
-from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_baseact_transform
-from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_finetuning_transform
+# from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_baseact_transform
+# from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_finetuning_transform
 import tensorflow as tf
 
 from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import binarize_gripper_actions
@@ -937,7 +937,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "berkeley_gnm_recon": gnm_dataset_transform,
     "berkeley_gnm_cory_hall": gnm_dataset_transform,
     "berkeley_gnm_sac_son": gnm_dataset_transform,
-    "droid": droid_baseact_transform,
+    # "droid": droid_baseact_transform,
     "fmb": fmb_dataset_transform,
     "dobbe": dobbe_dataset_transform,
     "roboset": roboset_dataset_transform,
@@ -950,7 +950,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "tdroid_knock_object_over": tdroid_dataset_transform,
     "tdroid_cover_object_with_towel": tdroid_dataset_transform,
     ### DROID Finetuning datasets
-    "droid_wipe": droid_finetuning_transform,
+    # "droid_wipe": droid_finetuning_transform,
     ### LIBERO datasets (modified versions)
     "libero_spatial_no_noops": libero_dataset_transform,
     "libero_object_no_noops": libero_dataset_transform,
