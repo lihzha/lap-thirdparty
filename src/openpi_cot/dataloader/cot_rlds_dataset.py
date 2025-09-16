@@ -58,7 +58,6 @@ from typing import ClassVar
 import dlimp as dl
 import jax
 import numpy as np
-import openpi.training.config as _config
 import psutil
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -75,7 +74,6 @@ from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import get_dataset_st
 from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import normalize_action_and_proprio
 from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import tree_map
-import openpi_cot.training.config as _config
 
 
 def print_memory_usage(label):
@@ -123,7 +121,7 @@ class SingleCoTRldsDataset:
         data_dir: str,
         batch_size: int,
         language_action_dir: str,
-        config: _config.DataConfig,
+        config,
         *,  # Force keyword-only arguments
         shuffle: bool = True,
         action_chunk_size: int = 16,
@@ -744,7 +742,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
         data_dir: str,
         batch_size: int,
         language_action_dir: str,
-        config: _config.DataConfig,
+        config,
         *,  # Force keyword-only arguments
         shuffle: bool = True,
         action_chunk_size: int = 16,
@@ -869,7 +867,7 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
         data_dir: str,
         batch_size: int,
         language_action_dir: str,
-        config: _config.DataConfig,
+        config,
         dataset_kwargs: dict,
         *,  # Force keyword-only arguments
         shuffle: bool = True,
@@ -1070,7 +1068,7 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
 class OxeCoTRldsDataset:
     def __init__(
         self,
-        config: _config.DataConfig,
+        config,
         data_root_dir: str,
         data_mix: str,
         resize_resolution: tuple[int, int],
