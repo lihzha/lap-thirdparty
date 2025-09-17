@@ -1493,7 +1493,7 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
             wrist_key="image_wrist",
             use_wrist_image=use_wrist_image,
         )
-        self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
+        self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
 
         self.dataset = batch_prefetch(self.dataset, batch_size)
 
