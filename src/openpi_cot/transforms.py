@@ -6,7 +6,6 @@ import numpy as np
 from openpi.shared import array_typing as at
 from openpi.transforms import DataTransformFn
 from openpi.transforms import flatten_dict
-from openpi.transforms import unflatten_dict
 
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 
@@ -92,20 +91,37 @@ class SafeRepackTransform:
 
     def __call__(self, data: DataDict) -> DataDict:
         flat_data = flatten_dict(data)
-        flat_struct = flatten_dict(self.structure)  # maps out_key -> source_path or list of candidates
-        out = {}
-        missing = []
-        for out_key, src_spec in flat_struct.items():
-            # Allow a single source path or a list/tuple of fallback source paths.
+
+        missing: list[tuple[str, tuple[str, ...]]] = []
+
+        def _select(src_spec):
             candidates = src_spec if isinstance(src_spec, (list, tuple)) else [src_spec]
-            found = False
             for src_path in candidates:
                 if src_path in flat_data:
-                    out[out_key] = flat_data[src_path]
-                    found = True
-                    break
+                    return True, flat_data[src_path]
+            return False, None
+
+        def _repack(struct_node):
+            # Mirror the shape of `self.structure`, preserving literal keys (including slashes)
+            if isinstance(struct_node, dict):
+                out_node = {}
+                for k, v in struct_node.items():
+                    found, sub = _repack(v)
+                    if found:
+                        out_node[k] = sub
+                # A dict node is considered found if it has any children
+                return (len(out_node) > 0), out_node
+            found, value = _select(struct_node)
             if not found:
-                missing.append((out_key, tuple(candidates)))
+                candidates = struct_node if isinstance(struct_node, (list, tuple)) else (struct_node,)
+                # Use the leaf key path from the provided structure by flattening a singleton
+                # to record a meaningful missing entry (best-effort; key path is not used to build the output).
+                missing.append((str(struct_node), tuple(candidates)))
+            return found, value
+
+        found_root, out = _repack(self.structure)
         if self.strict and missing:
             raise KeyError(f"Missing source paths: {missing}")
-        return unflatten_dict(out)
+        # Return the repacked dict preserving the original key names/shape of `structure`.
+        # Keys that were not found are omitted (unless strict=True, which raises).
+        return out
