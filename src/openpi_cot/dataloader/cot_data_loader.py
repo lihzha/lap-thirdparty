@@ -159,7 +159,6 @@ def create_data_loader(
     sharding: jax.sharding.Sharding | None = None,
     shuffle: bool = False,
     num_batches: int | None = None,
-    skip_norm_stats: bool = False,
     seed: int = 0,
     max_samples: int | None = None,
     split: str = "train",
@@ -191,7 +190,7 @@ def create_data_loader(
         )
 
         # 2) transforms (split-aware)
-        tx = _make_iterable_transforms(data_cfg, skip_norm_stats=skip_norm_stats, split=split)
+        tx = _make_iterable_transforms(data_cfg, skip_norm_stats=data_cfg.norm_stats is None, split=split)
         iterable = up.IterableTransformedDataset(ds, tx, is_batched=True)
 
         return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg)
