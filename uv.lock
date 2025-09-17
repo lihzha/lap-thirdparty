@@ -3122,7 +3122,6 @@ dependencies = [
     { name = "tensorflow-cpu" },
     { name = "tensorflow-datasets" },
     { name = "torch" },
-    { name = "tpu-tools" },
     { name = "tqdm-loggable" },
     { name = "transformers" },
     { name = "treescope" },
@@ -3177,7 +3176,6 @@ requires-dist = [
     { name = "tensorflow-cpu", specifier = "==2.15.0" },
     { name = "tensorflow-datasets", specifier = "==4.9.9" },
     { name = "torch", specifier = ">=2.7.0" },
-    { name = "tpu-tools", editable = "third_party/openpi_tpu_tools" },
     { name = "tqdm-loggable", specifier = ">=0.2" },
     { name = "transformers", specifier = "==4.53.2" },
     { name = "treescope", specifier = ">=0.1.7" },
@@ -4984,17 +4982,6 @@ dependencies = [
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/94/4695640f7edb44acd570b43250755bb128fd13fce14964688674593d48da/tpu_info-0.5.1-py3-none-any.whl", hash = "sha256:68c46edd1fe79a849526b27c9dd1893e8114be2529cfa1bcec20a95afc579b0f", size = 24809, upload-time = "2025-08-18T16:10:07.565Z" },
 ]
-
-[[package]]
-name = "tpu-tools"
-version = "0.1.0"
-source = { editable = "third_party/openpi_tpu_tools" }
-dependencies = [
-    { name = "rich" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "rich", specifier = ">=14.0.0" }]
 
 [[package]]
 name = "tqdm"

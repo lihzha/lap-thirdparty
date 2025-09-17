@@ -194,7 +194,7 @@ def create_data_loader(
         tx = _make_iterable_transforms(data_cfg, skip_norm_stats=skip_norm_stats, split=split)
         iterable = up.IterableTransformedDataset(ds, tx, is_batched=True)
 
-        return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches)
+        return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg)
 
     # Non-RLDS: delegate entirely to upstream (this will require torch if used)
     return up.create_torch_data_loader(
@@ -225,10 +225,11 @@ class CoTRLDSDataLoader:
         *,
         sharding: jax.sharding.Sharding | None = None,
         num_batches: int | None = None,
+        data_cfg: _config.CoTDataConfig,
     ):
         self._dataset = dataset
         self._num_batches = num_batches
-
+        self._data_cfg = data_cfg
         self._n_proc = jax.process_count()
         self._proc_idx = jax.process_index()
 
@@ -304,3 +305,6 @@ class CoTRLDSDataLoader:
             batch = self._to_device(batch)
             seen += 1
             yield CoTObservation.from_dict(batch), batch["actions"]
+
+    def data_config(self) -> _config.CoTDataConfig:
+        return self._data_cfg

@@ -50,6 +50,128 @@ def _to_path(base: str | pathlib.Path, *extra: str) -> pathlib.Path | epath.Path
     return (pathlib.Path(base).joinpath(*extra)).resolve()
 
 
+def build_picot_model(
+    *,
+    action_horizon: int = 10,
+    max_token_len: int = 110,
+    number_token_weight: float | None = 1.0,
+    pi05: bool = True,
+    discrete_state_input: bool = True,
+) -> _model.BaseModelConfig:
+    """Convenience helper for common PiCoT model instantiations."""
+    return pi_cot_config.PiCoTConfig(
+        action_horizon=action_horizon,
+        max_token_len=max_token_len,
+        number_token_weight=number_token_weight,
+        pi05=pi05,
+        discrete_state_input=discrete_state_input,
+    )
+
+
+def build_cosine_lr(
+    *,
+    warmup_steps: int = 1_000,
+    peak_lr: float = 1e-4,
+    decay_steps: int = 1_000_000,
+    decay_lr: float = 1e-4,
+) -> _optimizer.LRScheduleConfig:
+    """Shared cosine LR schedule used by most experiments."""
+    return _optimizer.CosineDecaySchedule(
+        warmup_steps=warmup_steps,
+        peak_lr=peak_lr,
+        decay_steps=decay_steps,
+        decay_lr=decay_lr,
+    )
+
+
+def build_droid_cot_data(
+    *,
+    rlds_data_dir: str,
+    language_action_dir: str,
+    assets_dir: str,
+    asset_id: str = "droid",
+    prompt_from_task: bool = True,
+    shuffle_buffer_size: int = 250_000,
+    summation_steps: int = 15,
+    sum_decimal: str = "0f",
+    left_pad: bool = True,
+    include_decimal_point: bool = False,
+    validation_mode: str = "easy",
+    vis_dataset: bool = False,
+    use_wrist_image: bool = False,
+    val_max_samples: int | None = 60000,
+    val_fraction: float | None = 0.02,
+    use_idle_filter: bool = True,
+    drop_gripper_oob: bool = False,
+) -> "RLDSDroidCoTDataConfig":
+    """Helper to build a standard DROID CoT RLDS data config."""
+    return RLDSDroidCoTDataConfig(
+        repo_id="droid",
+        rlds_data_dir=rlds_data_dir,
+        language_action_dir=language_action_dir,
+        action_space=cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION,
+        base_config=CoTDataConfig(
+            prompt_from_task=prompt_from_task,
+        ),
+        shuffle_buffer_size=shuffle_buffer_size,
+        assets=upstream_config.AssetsConfig(
+            assets_dir=assets_dir,
+            asset_id=asset_id,
+        ),
+        summation_steps=summation_steps,
+        sum_decimal=sum_decimal,
+        left_pad=left_pad,
+        include_decimal_point=include_decimal_point,
+        validation_mode=validation_mode,
+        vis_dataset=vis_dataset,
+        use_wrist_image=use_wrist_image,
+        val_max_samples=val_max_samples,
+        val_fraction=val_fraction,
+        use_idle_filter=use_idle_filter,
+        drop_gripper_oob=drop_gripper_oob,
+    )
+
+
+def build_oxe_cot_data(
+    *,
+    data_root_dir: str,
+    data_mix: str,
+    assets_dir: str,
+    asset_id: str = "oxe",
+    shuffle_buffer_size: int = 250_000,
+    sum_decimal: str = "0f",
+    left_pad: bool = True,
+    include_decimal_point: bool = False,
+    resize_resolution: tuple[int, int] | None = (224, 224),
+    val_max_samples: int | None = 60000,
+    val_fraction: float | None = 0.02,
+    validation_mode: str = "easy",
+    vis_dataset: bool = False,
+    use_wrist_image: bool = False,
+) -> "RLDSOXECoTDataConfig":
+    """Helper to build an OXE CoT RLDS data config."""
+    return RLDSOXECoTDataConfig(
+        repo_id="oxe",
+        data_root_dir=data_root_dir,
+        data_mix=data_mix,
+        resize_resolution=resize_resolution,
+        shuffle_buffer_size=shuffle_buffer_size,
+        max_samples=None,
+        left_pad=left_pad,
+        include_decimal_point=include_decimal_point,
+        sum_decimal=sum_decimal,
+        val_max_samples=val_max_samples,
+        val_fraction=val_fraction,
+        validation_mode=validation_mode,
+        vis_dataset=vis_dataset,
+        use_wrist_image=use_wrist_image,
+        assets=upstream_config.AssetsConfig(
+            assets_dir=assets_dir,
+            asset_id=asset_id,
+        ),
+    )
+
+
 @dataclasses.dataclass(frozen=True)
 class CoTDataConfig:
     # LeRobot repo id. If None, fake data will be created.
@@ -701,37 +823,11 @@ _CONFIGS = [
     TrainConfig(
         name="pi_droid_cot_v4",
         do_val=True,
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=110,
-            number_token_weight=1.0,
-            pi05=True,
-            discrete_state_input=True,
-        ),
-        data=RLDSDroidCoTDataConfig(
-            repo_id="droid",
+        model=build_picot_model(pi05=True, discrete_state_input=True),
+        data=build_droid_cot_data(
             rlds_data_dir="gs://pi0-cot",
             language_action_dir="gs://pi0-cot/droid-lang-actions",
-            action_space=cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION,
-            base_config=CoTDataConfig(
-                prompt_from_task=True,
-            ),
-            shuffle_buffer_size=250_000,
-            assets=upstream_config.AssetsConfig(
-                assets_dir="gs://pi0-cot/assets/pi0_droid_cot_v4",
-                asset_id="droid",
-            ),
-            summation_steps=15,
-            sum_decimal="0f",
-            left_pad=True,
-            include_decimal_point=False,
-            validation_mode="easy",
-            vis_dataset=False,
-            use_wrist_image=False,
-            val_max_samples=60000,
-            val_fraction=0.02,
-            use_idle_filter=True,
-            drop_gripper_oob=False,
+            assets_dir="gs://pi0-cot/assets/pi0_droid_cot_v4",
         ),
         num_train_steps=100_000,
         fsdp_devices=4,
@@ -740,50 +836,18 @@ _CONFIGS = [
         save_interval=500,
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         keep_period=10000,
-        # weight_loader=weight_loaders.WeightLoaderChoice(kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi0_base/params"),
         assets_base_dir="gs://pi0-cot/assets",
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=1e-4,
-            decay_steps=1_000_000,
-            decay_lr=1e-4,
-        ),
+        lr_schedule=build_cosine_lr(),
     ),
     TrainConfig(
         name="pi_droid_cot_v6",
         do_val=True,
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=110,
-            number_token_weight=1.0,
-            pi05=True,
-            discrete_state_input=True,
-        ),
-        data=RLDSDroidCoTDataConfig(
-            repo_id="droid",
+        model=build_picot_model(pi05=True, discrete_state_input=True),
+        data=build_droid_cot_data(
             rlds_data_dir="gs://v6_east1d",
             language_action_dir="gs://v6_east1d/droid-lang-actions",
-            action_space=cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION,
-            base_config=CoTDataConfig(
-                prompt_from_task=True,
-            ),
-            shuffle_buffer_size=250_000,
-            assets=upstream_config.AssetsConfig(
-                assets_dir="gs://v6_east1d/assets/pi0_droid_cot_v4",
-                asset_id="droid",
-            ),
-            summation_steps=15,
-            sum_decimal="0f",
-            left_pad=True,
-            include_decimal_point=False,
-            validation_mode="easy",
-            vis_dataset=False,
-            use_wrist_image=False,
-            val_max_samples=60000,
-            val_fraction=0.02,
-            use_idle_filter=True,
-            drop_gripper_oob=False,
+            assets_dir="gs://v6_east1d/assets/pi0_droid_cot_v4",
         ),
         num_train_steps=100_000,
         fsdp_devices=8,
@@ -791,52 +855,19 @@ _CONFIGS = [
         save_interval=500,
         log_interval=50,
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        # weight_loader=weight_loaders.WeightLoaderChoice(kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi0_base/params"),
         assets_base_dir="gs://v6_east1d/assets",
         checkpoint_base_dir="gs://v6_east1d/checkpoints",
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=1e-4,
-            decay_steps=1_000_000,
-            decay_lr=1e-4,
-        ),
-        # ema_decay=None,
+        lr_schedule=build_cosine_lr(),
         keep_period=10000,
     ),
     TrainConfig(
         name="pi_droid_cot_v5",
         do_val=True,
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=110,
-            number_token_weight=1.0,
-            pi05=True,
-            discrete_state_input=True,
-        ),
-        data=RLDSDroidCoTDataConfig(
-            repo_id="droid",
+        model=build_picot_model(pi05=True, discrete_state_input=True),
+        data=build_droid_cot_data(
             rlds_data_dir="gs://v5_central1_a",
             language_action_dir="gs://v5_central1_a/droid-lang-actions",
-            action_space=cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION,
-            base_config=CoTDataConfig(
-                prompt_from_task=True,
-            ),
-            shuffle_buffer_size=250_000,
-            assets=upstream_config.AssetsConfig(
-                assets_dir="gs://v5_central1_a/assets/pi0_droid_cot_v4",
-                asset_id="droid",
-            ),
-            summation_steps=15,
-            sum_decimal="0f",
-            left_pad=True,
-            include_decimal_point=False,
-            validation_mode="easy",
-            vis_dataset=False,
-            use_wrist_image=False,
-            val_max_samples=60000,
-            val_fraction=0.02,
-            use_idle_filter=True,
-            drop_gripper_oob=False,
+            assets_dir="gs://v5_central1_a/assets/pi0_droid_cot_v4",
         ),
         num_train_steps=100_000,
         fsdp_devices=8,
@@ -844,51 +875,19 @@ _CONFIGS = [
         save_interval=500,
         log_interval=50,
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        # weight_loader=weight_loaders.WeightLoaderChoice(kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi0_base/params"),
         assets_base_dir="gs://v5_central1_a/assets",
         checkpoint_base_dir="gs://v5_central1_a/checkpoints",
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=1e-4,
-            decay_steps=1_000_000,
-            decay_lr=1e-4,
-        ),
-        # ema_decay=None,
+        lr_schedule=build_cosine_lr(),
         keep_period=10000,
     ),
     TrainConfig(
         name="pi_droid_cot_local",
         do_val=True,
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=110,
-            pi05=False,
-            discrete_state_input=False,
-        ),
-        data=RLDSDroidCoTDataConfig(
-            repo_id="droid",
+        model=build_picot_model(pi05=False, discrete_state_input=False),
+        data=build_droid_cot_data(
             rlds_data_dir="/n/fs/robot-data/data/",
             language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
-            action_space=cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION,
-            base_config=CoTDataConfig(
-                prompt_from_task=True,
-            ),
-            shuffle_buffer_size=250_000,
-            assets=upstream_config.AssetsConfig(
-                assets_dir="/n/fs/robot-data/pi0-cot/assets/pi0_droid_cot_v4",
-                asset_id="droid",
-            ),
-            summation_steps=15,
-            sum_decimal="0f",
-            left_pad=True,
-            include_decimal_point=False,
-            validation_mode="easy",
-            vis_dataset=False,
-            use_wrist_image=False,
-            val_max_samples=60000,
-            val_fraction=0.02,
-            use_idle_filter=True,
-            drop_gripper_oob=False,
+            assets_dir="/n/fs/robot-data/pi0-cot/assets/pi0_droid_cot_v4",
         ),
         num_train_steps=100_000,
         fsdp_devices=8,
@@ -901,13 +900,28 @@ _CONFIGS = [
         ),
         assets_base_dir="/n/fs/robot-data/pi0-cot/assets",
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=1_000,
-            peak_lr=1e-4,
-            decay_steps=1_000_000,
-            decay_lr=1e-4,
-        ),
+        lr_schedule=build_cosine_lr(),
         # keep_period=20_000,
+    ),
+    TrainConfig(
+        name="pi_oxe_cot_v4",
+        do_val=True,
+        model=build_picot_model(pi05=True, discrete_state_input=True),
+        data=build_oxe_cot_data(
+            data_root_dir="gs://pi0-cot/oxe",
+            data_mix="omni_magic_soup_plus",
+            assets_dir="gs://pi0-cot/assets/pi0_oxe_cot_v4",
+        ),
+        num_train_steps=100_000,
+        fsdp_devices=4,
+        batch_size=256,
+        save_interval=500,
+        log_interval=50,
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        assets_base_dir="gs://pi0-cot/assets",
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        lr_schedule=build_cosine_lr(),
+        keep_period=10000,
     ),
     *upstream_config._CONFIGS,
 ]

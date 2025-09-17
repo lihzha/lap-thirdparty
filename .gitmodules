@@ -1,3 +1,6 @@
 [submodule "third_party/openpi"]
 	path = third_party/openpi
 	url = https://github.com/Physical-Intelligence/openpi.git
+[submodule "third_party/openpi-tpu-tools"]
+	path = third_party/openpi-tpu-tools
+	url = https://github.com/lihzha/openpi-tpu-tools.git
