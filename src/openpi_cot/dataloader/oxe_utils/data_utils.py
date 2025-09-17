@@ -257,10 +257,19 @@ def get_dataset_statistics(
         "num_trajectories": num_trajectories,
     }
 
+    # Prefer writing to the provided save_dir (e.g., GCS) when available.
+    # Fall back to local cache if write fails or save_dir is None.
+    unique_hash = hashlib.sha256("".join(hash_dependencies).encode("utf-8"), usedforsecurity=False).hexdigest()
+    primary_path = (
+        tf.io.gfile.join(save_dir, f"dataset_statistics_{unique_hash}.json") if save_dir is not None else local_path
+    )
+
     try:
-        with tf.io.gfile.GFile(path, "w") as f:
+        # Ensure the parent directory exists (works for GCS with tf.io.gfile)
+        tf.io.gfile.makedirs(tf.io.gfile.dirname(primary_path))
+        with tf.io.gfile.GFile(primary_path, "w") as f:
             json.dump(metadata, f)
-    except tf.errors.PermissionDeniedError:
+    except (tf.errors.PermissionDeniedError, tf.errors.NotFoundError):
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         with open(local_path, "w") as f:
             json.dump(metadata, f)
