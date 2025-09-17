@@ -496,6 +496,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                 default_value=False,
             )
             print_memory_usage("After building filter_table")
+
         return filter_table
 
     def apply_traj_transforms(

@@ -288,10 +288,7 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
         repack_dict = {
             # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
             # Prefer dataset-specific key if present; otherwise fall back.
-            "observation/exterior_image_1_left": [
-                "observation/image",
-                "observation/image_primary",
-            ],
+            "observation/exterior_image_1_left": "observation/image_primary",
             "observation/cartesian_position": "observation/cartesian_position",
             "observation/gripper_position": "observation/gripper_position",
             "actions": "actions",
@@ -303,12 +300,8 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
             repack_dict["camera_extrinsics"] = "camera_extrinsics"
             repack_dict["observation/cartesian_position_window"] = "observation/cartesian_position_window"
         if self.use_wrist_image:
-            # Support both legacy and standardized wrist image keys
-            repack_dict["observation/wrist_image_left"] = [
-                "observation/wrist_image",
-                "observation/image_wrist",
-            ]
-        repack_transform = upstream_transforms.Group(inputs=[SafeRepackTransform(repack_dict)])
+            repack_dict["observation/wrist_image_left"] = "observation/image_wrist"
+        repack_transform = upstream_transforms.Group(inputs=[upstream_transforms.RepackTransform(repack_dict)])
 
         # Extract state norm stats (if available) to pass into the DroidCoTInputs for binning
         state_stats = None
@@ -368,6 +361,7 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
             drop_gripper_oob=self.drop_gripper_oob,
             wrist_image_dropout_prob=self.wrist_image_dropout_prob,
             text_state_dropout_prob=self.text_state_dropout_prob,
+            dataset_type="droid",
         )
 
 
@@ -429,10 +423,7 @@ class RLDSCombinedCoTDataConfig(DataConfigFactory):
             "prompt": ["prompt", "task/language_instruction"],
             "language_actions": "language_actions",
             # Wrist image candidates (order possibly overridden below based on `use_wrist_image`).
-            "observation/wrist_image_left": [
-                "observation/image_wrist",
-                "observation/wrist_image",
-            ],
+            "observation/wrist_image_left": "observation/image_wrist",
             "observation/proprio": "observation/proprio",
         }
         if self.vis_dataset:
@@ -441,10 +432,7 @@ class RLDSCombinedCoTDataConfig(DataConfigFactory):
             repack_dict["observation/cartesian_position_window"] = "observation/cartesian_position_window"
         if self.use_wrist_image:
             # Prioritize `observation/wrist_image` if present, then fall back to `observation/image_wrist`.
-            repack_dict["observation/wrist_image_left"] = [
-                "observation/wrist_image",
-                "observation/image_wrist",
-            ]
+            repack_dict["observation/wrist_image_left"] = "observation/image_wrist"
         repack_transform = upstream_transforms.Group(inputs=[SafeRepackTransform(repack_dict)])
 
         # Extract state norm stats (if available) to pass into the DroidCoTInputs for binning
