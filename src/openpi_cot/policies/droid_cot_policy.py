@@ -8,6 +8,8 @@ from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 
 
 def _parse_image(image) -> np.ndarray:
+    if image is None:
+        return None
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
@@ -172,7 +174,11 @@ class DroidCoTInputs(upstream_transforms.DataTransformFn):
         base_image = _parse_image(data["observation/exterior_image_1_left"])
         if "observation/wrist_image_left" in data:
             wrist_image = _parse_image(data["observation/wrist_image_left"])
-            wrist_image_mask = np.True_
+            if wrist_image is None:
+                wrist_image = np.zeros_like(base_image)
+                wrist_image_mask = np.False_
+            else:
+                wrist_image_mask = np.True_
         else:
             wrist_image = np.zeros_like(base_image)
             wrist_image_mask = np.False_
