@@ -266,7 +266,7 @@ def get_dataset_statistics(
 
     try:
         # Ensure the parent directory exists (works for GCS with tf.io.gfile)
-        tf.io.gfile.makedirs(tf.io.gfile.dirname(primary_path))
+        tf.io.gfile.makedirs(os.path.dirname(primary_path))
         with tf.io.gfile.GFile(primary_path, "w") as f:
             json.dump(metadata, f)
     except (tf.errors.PermissionDeniedError, tf.errors.NotFoundError):
