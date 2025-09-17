@@ -865,43 +865,34 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
 
 class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
-    def __init__(self, **kwargs):
-        # Split and validate kwargs
-        top_kwargs, _ = _filter_kwargs_for(
-            lambda *,
-            batch_size,
-            shuffle=True,
-            max_samples=None,
-            shuffle_buffer_size=250_000,
-            seed=0,
-            use_wrist_image=False: None,
-            kwargs,
-        )
-        for req in ("batch_size",):
-            if req not in top_kwargs:
-                raise ValueError(f"Missing required arguments: ['{req}']")
-
-        raw_kwargs, _ = _filter_kwargs_for(DroidCoTRldsDatasetRaw.__init__, kwargs)
-        # Required subset for Raw
-        for req in ("data_dir", "language_action_dir", "config"):
-            if req not in raw_kwargs:
-                raise ValueError(f"Missing required arguments: ['{req}']")
-        # Reject any unexpected (not consumed by either top or raw)
-        consumed_keys = set(top_kwargs.keys()) | set(raw_kwargs.keys())
-        unexpected = set(kwargs.keys()) - consumed_keys
-        if unexpected:
-            raise ValueError(f"Unexpected arguments for DroidCoTRldsDataset: {sorted(unexpected)}")
-
-        # Defaults for top-level options
-        shuffle = bool(top_kwargs.get("shuffle", True))
-        max_samples = top_kwargs.get("max_samples")
-        shuffle_buffer_size = int(top_kwargs.get("shuffle_buffer_size", 250_000))
-        seed = int(top_kwargs.get("seed", 0))
-        use_wrist_image = bool(top_kwargs.get("use_wrist_image", False))
-        batch_size = int(top_kwargs["batch_size"])  # required
-
+    def __init__(
+        self,
+        data_dir,
+        language_action_dir,
+        batch_size,
+        shuffle,
+        action_chunk_size,
+        action_space,
+        shuffle_buffer_size,
+        split_seed,
+        max_samples,
+        seed,
+        config,
+        split,
+    ):
         # Initialize the base class with only the raw kwargs
-        super().__init__(**raw_kwargs)
+        super().__init__(
+            data_dir,
+            language_action_dir,
+            config,
+            action_chunk_size=action_chunk_size,
+            action_space=action_space,
+            shuffle_buffer_size=shuffle_buffer_size,
+            split_seed=split_seed,
+            max_samples=max_samples,
+            seed=seed,
+            split=split,
+        )
 
         # Apply common shuffling/take/cache behavior
         self.dataset = maybe_shuffle_and_take(
@@ -914,7 +905,7 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
         )
 
         # Apply frame transforms via shared decode helper
-        self.apply_frame_transforms(use_wrist_image=use_wrist_image)
+        self.apply_frame_transforms(use_wrist_image=config.use_wrist_image)
 
         # Batch and prefetch
         self.dataset = batch_prefetch(self.dataset, batch_size)
