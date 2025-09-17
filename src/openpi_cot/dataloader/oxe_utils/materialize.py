@@ -10,10 +10,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from openpi_cot.dataloader.oxe_utils.rlds.oxe.configs import OXE_DATASET_CONFIGS
-from openpi_cot.dataloader.oxe_utils.rlds.oxe.configs import ActionEncoding
-from openpi_cot.dataloader.oxe_utils.rlds.oxe.transforms import OXE_STANDARDIZATION_TRANSFORMS
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import NormalizationType
+from openpi_cot.dataloader.oxe_utils.configs import OXE_DATASET_CONFIGS
+from openpi_cot.dataloader.oxe_utils.configs import ActionEncoding
+from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
+from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
 
 
 def make_oxe_dataset_kwargs(

@@ -65,21 +65,103 @@ import tensorflow_datasets as tfds
 from openpi_cot.dataloader.helpers import euler_xyz_to_rot
 from openpi_cot.dataloader.helpers import extract_episode_path_from_file_path
 from openpi_cot.dataloader.helpers import project_in_bounds
-from openpi_cot.dataloader.oxe_utils.rlds import traj_transforms
-from openpi_cot.dataloader.oxe_utils.rlds.oxe import get_oxe_dataset_kwargs_and_weights
-from openpi_cot.dataloader.oxe_utils.rlds.oxe.mixtures import OXE_NAMED_MIXTURES
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import NormalizationType
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import allocate_threads
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import get_dataset_statistics
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import normalize_action_and_proprio
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import pprint_data_mixture
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import tree_map
+from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
+from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
+from openpi_cot.dataloader.oxe_utils.data_utils import get_dataset_statistics
+from openpi_cot.dataloader.oxe_utils.data_utils import normalize_action_and_proprio
+from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
+from openpi_cot.dataloader.oxe_utils.data_utils import tree_map
+from openpi_cot.dataloader.oxe_utils.materialize import get_oxe_dataset_kwargs_and_weights
+from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
 
 
 def print_memory_usage(label):
     process = psutil.Process(os.getpid())
     mem = process.memory_info().rss / (1024**2)  # in MB
     logging.info(f"[{label}] Memory usage: {mem:.2f} MB")
+
+
+def batch_prefetch(dataset: dl.DLataset, batch_size: int) -> dl.DLataset:
+    batched = dataset.batch(batch_size, drop_remainder=True)
+    try:
+        prefetched = batched.prefetch_to_device(2)
+    except Exception:
+        prefetched = batched.prefetch(2)
+    # Note =>> Seems to reduce memory usage without affecting speed?
+    return prefetched.with_ram_budget(1)
+
+
+def maybe_shuffle_and_take(
+    dataset: dl.DLataset,
+    *,
+    want_val: bool,
+    shuffle: bool,
+    shuffle_buffer_size: int,
+    seed: int,
+    max_samples: int | None,
+) -> dl.DLataset:
+    """Apply common finalization: optional shuffle and optional take/cache/repeat.
+
+    Only shuffles during training (not in validation). If max_samples is set,
+    takes that many samples and repeats indefinitely.
+    """
+    if (not want_val) and shuffle and max_samples is None:
+        return dataset.shuffle(shuffle_buffer_size, seed=seed)
+    if max_samples is not None:
+        return dataset.take(int(max_samples)).cache().repeat()
+    return dataset
+
+
+def make_decode_images_fn(
+    *,
+    primary_key: str,
+    wrist_key: str | None,
+    use_wrist_image: bool,
+):
+    """Return a frame_map function that decodes encoded image bytes to uint8 tensors."""
+
+    def _decode_single(img_bytes):
+        return tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8)
+
+    def _decode_frame(traj: dict) -> dict:
+        traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
+        if use_wrist_image and wrist_key is not None:
+            traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
+        return traj
+
+    return _decode_frame
+
+
+def _param_info(fn: Callable):
+    """Return (accepted_param_names, required_param_names, has_var_kwargs) for a callable.
+
+    - Skips `self`.
+    - Considers parameters without defaults (and not varargs) as required.
+    """
+    sig = inspect.signature(fn)
+    accepted: set[str] = set()
+    required: set[str] = set()
+    has_var_kwargs = False
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            has_var_kwargs = True
+            continue
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            continue
+        accepted.add(name)
+        if param.default is inspect.Signature.empty:
+            required.add(name)
+    return accepted, required, has_var_kwargs
+
+
+def _filter_kwargs_for(fn: Callable, provided: dict) -> tuple[dict, list[str]]:
+    """Filter `provided` to only kwargs accepted by `fn` and report missing required."""
+    accepted, required, _ = _param_info(fn)
+    filtered = {k: v for k, v in provided.items() if k in accepted}
+    missing = [k for k in required if k not in provided]
+    return filtered, missing
 
 
 class DroidActionSpace(Enum):
@@ -90,7 +172,7 @@ class DroidActionSpace(Enum):
     CARTESIAN_POSITION = auto()
 
 
-class SingleCoTRldsDataset:
+class SingleCoTRldsDatasetRaw:
     fallback_instructions = tf.constant(
         [
             "Do something useful.",
@@ -119,13 +201,8 @@ class SingleCoTRldsDataset:
         self,
         dataset_name: str,
         data_dir: str,
-        batch_size: int,
-        language_action_dir: str,
         config,
         *,  # Force keyword-only arguments
-        shuffle: bool = True,
-        action_chunk_size: int = 16,
-        shuffle_buffer_size: int = 250_000,
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         # Global seed for all dataset-related randomness
@@ -135,6 +212,8 @@ class SingleCoTRldsDataset:
         self.config = config
         self.seed = seed
         self.want_val = split == "val"
+        self.dataset_name = dataset_name
+
         self.num_parallel_reads = tf.data.AUTOTUNE if num_parallel_reads == -1 else num_parallel_reads
         self.num_parallel_calls = tf.data.AUTOTUNE if num_parallel_calls == -1 else num_parallel_calls
         self.validation_mode = getattr(self.config, "validation_mode", "easy")
@@ -142,19 +221,7 @@ class SingleCoTRldsDataset:
         assert self.validation_mode in {"easy", "hard"}, (
             f"validation_mode must be one of 'easy', 'hard'; got: {self.validation_mode}"
         )
-        self.summation_steps = getattr(self.config, "summation_steps", 15)
         self.val_fraction = getattr(self.config, "val_fraction", 0.02)
-        self.vis_dataset = getattr(self.config, "vis_dataset", False)
-        self.use_wrist_image = getattr(self.config, "use_wrist_image", False)
-        self.use_idle_filter = getattr(self.config, "use_idle_filter", True)
-        self.drop_gripper_oob = getattr(self.config, "drop_gripper_oob", False)
-        self.need_calib = bool(self.vis_dataset or self.drop_gripper_oob)
-        logging.info(
-            f"validation_mode: {self.validation_mode}, val_fraction: {self.val_fraction}, vis_dataset: {self.vis_dataset}, \
-                use_wrist_image: {self.use_wrist_image}, summation_steps: {self.summation_steps}, \
-                    sum_decimal: {self.config.sum_decimal}, left_pad: {self.config.left_pad}, include_decimal_point: {self.config.include_decimal_point}, \
-                        batch_size: {batch_size}"
-        )
 
         # ------------------------------------------------------------------
         # Global seeding for reproducibility across dataset ops
@@ -165,9 +232,13 @@ class SingleCoTRldsDataset:
         with contextlib.suppress(Exception):
             tf.config.set_visible_devices([], "TPU")
 
-        self.builder, self.dataset = self.build_single_dataset(dataset_name, data_dir)
+        self.builder = self.build_dataset_builder(dataset_name, data_dir)
+        self.dataset = self.build_dataset(self.builder)
 
-    def build_single_dataset(self, ds_name, data_dir):
+    def build_dataset_builder(self, ds_name, data_dir):
+        return tfds.builder(ds_name, data_dir=data_dir)
+
+    def build_dataset(self, builder):
         opts = tf.data.Options()
         opts.experimental_deterministic = bool(self.want_val)
         opts.experimental_optimization.map_parallelization = True
@@ -175,7 +246,6 @@ class SingleCoTRldsDataset:
         opts.experimental_optimization.map_fusion = True
         cpu_count = psutil.cpu_count(logical=True) or 16
         opts.experimental_threading.private_threadpool_size = int(max(16, cpu_count))
-        builder = tfds.builder(ds_name, data_dir=data_dir)
         dataset = dl.DLataset.from_rlds(
             builder,
             split="all",
@@ -185,14 +255,14 @@ class SingleCoTRldsDataset:
         dataset = dataset.shard(jax.process_count(), jax.process_index())
         # Repeat early to increase interleaving across files/episodes
         dataset = dataset.with_options(opts)
-        return builder, dataset
+        return dataset
 
     def apply_flatten(self):
         # Flatten: map from trajectory dataset to dataset of individual action chunks
         self.dataset = self.dataset.flatten(num_parallel_calls=self.num_parallel_calls)
 
 
-class DroidCoTRldsDataset(SingleCoTRldsDataset):
+class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
     lang_action_tfrecord_pattern = "tfds_language_actions-*.tfrecord.gz"
     lang_action_dir_name = "droid-lang-actions"
     lang_action_dir_name_base = "droid-base-lang-actions"
@@ -270,7 +340,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
         print_memory_usage("After building ep_table")
         return ep_table
 
-    def build_cam_tables(self, metadata_path):
+    def build_cam_tables(self, metadata_path, need_calib: bool):
         # ---------------------------------------------------------------------
         # 3. Camera-index table  (episode_id → ext-cam idx)
         # ---------------------------------------------------------------------
@@ -278,7 +348,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             cam2base_extrinsics = json.load(fp)
         with tf.io.gfile.GFile(f"{metadata_path}/{self.camera_serials_file}", "r") as fp:
             camera_serials = json.load(fp)
-        if self.need_calib:
+        if need_calib:
             with tf.io.gfile.GFile(f"{metadata_path}/{self.intrinsics_file}", "r") as fp:
                 intrinsics_json = json.load(fp)
             eid_to_intr_vec = {}
@@ -304,7 +374,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             calib_image_idx = self.images_list.index(calib_image_name)
             eid_to_cam_dict[eid] = calib_image_idx
 
-            if self.need_calib:
+            if need_calib:
                 # Camera intrinsics as [fx, fy, cx, cy]
                 try:
                     fx, cx, fy, cy = intrinsics_json[eid][camera_serial]["cameraMatrix"]
@@ -316,11 +386,11 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
                 # Camera extrinsics 4x4 from [tx,ty,tz,rx,ry,rz]
                 try:
                     tx, ty, tz, rx, ry, rz = extr[camera_serial]
-                    R = euler_xyz_to_rot(rx, ry, rz)
-                    T = np.eye(4, dtype=np.float32)
-                    T[:3, :3] = R
-                    T[:3, 3] = [tx, ty, tz]
-                    eid_to_extr_mat[eid] = T.reshape(-1)
+                    rot_matrix = euler_xyz_to_rot(rx, ry, rz)
+                    transform_matrix = np.eye(4, dtype=np.float32)
+                    transform_matrix[:3, :3] = rot_matrix
+                    transform_matrix[:3, 3] = [tx, ty, tz]
+                    eid_to_extr_mat[eid] = transform_matrix.reshape(-1)
                 except Exception:
                     eid_to_extr_mat[eid] = np.eye(4, dtype=np.float32).reshape(-1)
 
@@ -335,7 +405,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
         # Camera intrinsics/extrinsics lookup tables (serialize tensors to tf.string to avoid shape issues)
         intr_table = None
         extr_table = None
-        if self.need_calib:
+        if need_calib:
             calib_eids = list(eid_to_cam_dict.keys())
             intr_ser = []
             extr_ser = []
@@ -355,6 +425,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
                 tf.lookup.KeyValueTensorInitializer(calib_keys, extr_vals),
                 default_value=self.default_extr_ser,
             )
+            print_memory_usage("After building intr_table and extr_table")
         return cam_table, intr_table, extr_table
 
     def build_instr_table(self, metadata_path):
@@ -403,9 +474,9 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
         print_memory_usage("After building instr_table")
         return instr_table
 
-    def build_filter_table(self, metadata_path):
+    def build_filter_table(self, metadata_path, use_idle_filter: bool):
         filter_table = None
-        if self.use_idle_filter:
+        if use_idle_filter:
             with tf.io.gfile.GFile(f"{metadata_path}/{self.keep_ranges_file}", "r") as f:
                 filter_dict = json.load(f)
 
@@ -438,6 +509,10 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
         filter_table: tf.lookup.StaticHashTable,
         action_chunk_size: int,
         summation_steps: int,
+        use_wrist_image: bool,
+        use_idle_filter: bool,
+        need_calib: bool,
+        drop_gripper_oob: bool,
     ):
         def restructure(traj):
             """Reformat observation and action keys, sample language instruction."""
@@ -500,7 +575,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             _return_dict = {
                 "actions": actions,
                 "observation": {
-                    "image": exterior_img,
+                    "image_primary": exterior_img,
                     "cartesian_position": traj["observation"]["cartesian_position"],
                     "gripper_position": traj["observation"]["gripper_position"],
                 },
@@ -509,7 +584,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
                 "episode_id": episode_id_vec,
             }
 
-            if self.use_idle_filter:
+            if use_idle_filter:
                 step_id = (
                     traj["traj_metadata"]["episode_metadata"]["recording_folderpath"]
                     + "--"
@@ -520,7 +595,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
                 passes_filter = filter_table.lookup(step_id)
                 _return_dict["passes_filter"] = passes_filter
 
-            if self.need_calib:
+            if need_calib:
                 intr = tf.io.parse_tensor(intr_table.lookup(episode_id), out_type=tf.float32)  # [4]
                 extr = tf.reshape(
                     tf.io.parse_tensor(extr_table.lookup(episode_id), out_type=tf.float32),
@@ -531,8 +606,8 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
                 _return_dict["camera_intrinsics"] = intr_b  # [traj_len, 4]
                 _return_dict["camera_extrinsics"] = extr_b  # [traj_len, 4, 4]
 
-            if self.use_wrist_image:
-                _return_dict["observation"]["wrist_image"] = traj["observation"]["wrist_image_left"]
+            if use_wrist_image:
+                _return_dict["observation"]["image_wrist"] = traj["observation"]["wrist_image_left"]
             return _return_dict
 
         def chunk_actions(traj):
@@ -595,7 +670,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             #         traj["observation"]["wrist_image"] = grouped_wrist_images
 
             # Group cartesian positions for start/end projection when needed
-            if self.need_calib:
+            if need_calib:
                 grouped_cart = tf.gather(traj["observation"]["cartesian_position"], summation_indices)
                 traj["observation"]["cartesian_position_window"] = grouped_cart
                 # camera_intrinsics: [traj_len, 4] -> [traj_len, summation_steps, 4]
@@ -604,11 +679,11 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
                 assert "camera_extrinsics" in traj, "camera_extrinsics not found in traj"
                 # camera_extrinsics: [traj_len, 4,4] -> [traj_len, summation_steps, 4,4]
                 idx = summation_indices
-                T = traj["camera_extrinsics"]
-                traj["camera_extrinsics"] = tf.gather(T, idx)
+                extrinsics_tensor = traj["camera_extrinsics"]
+                traj["camera_extrinsics"] = tf.gather(extrinsics_tensor, idx)
 
             # Optional: compute in-view mask using calibration if requested
-            if self.drop_gripper_oob:
+            if drop_gripper_oob:
                 # Expect calibration present; if missing, mark as False to be safe
 
                 # Use start and end positions per window
@@ -628,8 +703,8 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
-    def apply_frame_filters(self):
-        if self.use_idle_filter:
+    def apply_frame_filters(self, use_idle_filter: bool, drop_gripper_oob: bool):
+        if use_idle_filter:
 
             def filter_from_dict(frame):
                 return frame["passes_filter"]
@@ -644,7 +719,7 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             self.dataset = self.dataset.map(remove_passes_filter)
 
         # Optional filter: drop samples where gripper projects out of the view
-        if self.drop_gripper_oob:
+        if drop_gripper_oob:
 
             def _filter_in_view(frame):
                 return frame["gripper_in_view"]
@@ -656,32 +731,6 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
                 return frame
 
             self.dataset = self.dataset.map(_remove_in_view)
-
-    def apply_frame_transforms(self):
-        # Decode images: RLDS saves encoded images, only decode now for efficiency
-        def decode_images(traj):
-            def _decode_single(img_bytes):
-                return tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8)
-
-            # if vis_dataset:
-            #     traj["observation"]["image"] = tf.map_fn(
-            #         _decode_single,
-            #         traj["observation"]["image"],
-            #         fn_output_signature=tf.uint8,
-            #     )
-            #     if use_wrist_image:
-            #         traj["observation"]["wrist_image"] = tf.map_fn(
-            #             _decode_single,
-            #             traj["observation"]["wrist_image"],
-            #             fn_output_signature=tf.uint8,
-            #         )
-            # else:
-            traj["observation"]["image"] = _decode_single(traj["observation"]["image"])
-            if self.use_wrist_image:
-                traj["observation"]["wrist_image"] = _decode_single(traj["observation"]["wrist_image"])
-            return traj
-
-        self.dataset = self.dataset.frame_map(decode_images, self.num_parallel_calls)
 
     def apply_traj_filters(self, lang_table, ep_table):
         # ------------------------------------------------------------------
@@ -740,39 +789,40 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
     def __init__(
         self,
         data_dir: str,
-        batch_size: int,
         language_action_dir: str,
         config,
         *,  # Force keyword-only arguments
-        shuffle: bool = True,
         action_chunk_size: int = 16,
-        # We default to joint position actions, since they allow policy evaluation in simulation.
         action_space: DroidActionSpace = DroidActionSpace.CARTESIAN_POSITION,
         # Reduce this if you are running out of memory, but careful -- below ~100k shuffling is not sufficiently random.
-        shuffle_buffer_size: int = 250_000,
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         # Validation support
         split_seed: int = 0,
-        # Overfitting support: cap number of flattened samples (after shuffle)
-        max_samples: int | None = None,
         # Global seed for all dataset-related randomness
         seed: int = 0,
         split: str = "train",
+        **kwargs,
     ):
         super().__init__(
             dataset_name=config.repo_id,
             data_dir=data_dir,
-            batch_size=batch_size,
-            language_action_dir=language_action_dir,
             config=config,
-            shuffle=shuffle,
-            action_chunk_size=action_chunk_size,
-            shuffle_buffer_size=shuffle_buffer_size,
             num_parallel_reads=num_parallel_reads,
             num_parallel_calls=num_parallel_calls,
             seed=seed,
             split=split,
+        )
+        summation_steps = getattr(self.config, "summation_steps", 15)
+        vis_dataset = getattr(self.config, "vis_dataset", False)
+        use_wrist_image = getattr(self.config, "use_wrist_image", False)
+        use_idle_filter = getattr(self.config, "use_idle_filter", True)
+        drop_gripper_oob = getattr(self.config, "drop_gripper_oob", False)
+        need_calib = bool(vis_dataset or drop_gripper_oob)
+        logging.info(
+            f"validation_mode: {self.validation_mode}, val_fraction: {self.val_fraction}, need_calib: {need_calib}, \
+                use_wrist_image: {use_wrist_image}, summation_steps: {summation_steps}, \
+                    sum_decimal: {self.config.sum_decimal}"
         )
         assert action_space == DroidActionSpace.CARTESIAN_POSITION, "CoT only supports EEF actions for now"
 
@@ -785,9 +835,9 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
 
         lang_table = self.build_lang_action_table(language_action_dir)
         ep_table = self.build_lookup_table(metadata_path)
-        cam_table, intr_table, extr_table = self.build_cam_tables(metadata_path)
+        cam_table, intr_table, extr_table = self.build_cam_tables(metadata_path, need_calib=need_calib)
         instr_table = self.build_instr_table(metadata_path)
-        filter_table = self.build_filter_table(metadata_path)
+        filter_table = self.build_filter_table(metadata_path, use_idle_filter=use_idle_filter)
 
         self.apply_traj_filters(lang_table=lang_table, ep_table=ep_table)
         self.split_val(ep_table=ep_table, split_seed=split_seed)
@@ -801,33 +851,81 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             extr_table=extr_table,
             filter_table=filter_table,
             action_chunk_size=action_chunk_size,
-            summation_steps=self.summation_steps,
+            summation_steps=summation_steps,
+            use_wrist_image=use_wrist_image,
+            use_idle_filter=use_idle_filter,
+            need_calib=need_calib,
+            drop_gripper_oob=drop_gripper_oob,
         )
 
         self.apply_flatten()
 
-        self.apply_frame_filters()
+        self.apply_frame_filters(use_idle_filter=use_idle_filter, drop_gripper_oob=drop_gripper_oob)
 
-        self.apply_frame_transforms()
 
-        # Only shuffle during training; validation should be deterministic and cheaper
-        if (not self.want_val) and shuffle and max_samples is None:
-            self.dataset = self.dataset.shuffle(shuffle_buffer_size, seed=seed)
+class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
+    def __init__(self, **kwargs):
+        # Split and validate kwargs
+        top_kwargs, _ = _filter_kwargs_for(
+            lambda *,
+            batch_size,
+            shuffle=True,
+            max_samples=None,
+            shuffle_buffer_size=250_000,
+            seed=0,
+            use_wrist_image=False: None,
+            kwargs,
+        )
+        for req in ("batch_size",):
+            if req not in top_kwargs:
+                raise ValueError(f"Missing required arguments: ['{req}']")
 
-        # If requested, cap the number of flattened samples for overfitting tests.
-        # We cache the capped set so repeating yields the same fixed subset.
-        if max_samples is not None:
-            self.dataset = self.dataset.take(int(max_samples)).cache().repeat()
+        raw_kwargs, _ = _filter_kwargs_for(DroidCoTRldsDatasetRaw.__init__, kwargs)
+        # Required subset for Raw
+        for req in ("data_dir", "language_action_dir", "config"):
+            if req not in raw_kwargs:
+                raise ValueError(f"Missing required arguments: ['{req}']")
+        # Reject any unexpected (not consumed by either top or raw)
+        consumed_keys = set(top_kwargs.keys()) | set(raw_kwargs.keys())
+        unexpected = set(kwargs.keys()) - consumed_keys
+        if unexpected:
+            raise ValueError(f"Unexpected arguments for DroidCoTRldsDataset: {sorted(unexpected)}")
 
-        # Shuffle, batch
-        self.dataset = self.dataset.batch(batch_size, drop_remainder=True)
-        # Overlap input pipeline with consumers; let TF fill a buffer per host.
-        try:
-            self.dataset = self.dataset.prefetch_to_device(2)
-        except Exception:
-            self.dataset = self.dataset.prefetch(2)
-        # Note =>> Seems to reduce memory usage without affecting speed?
-        self.dataset = self.dataset.with_ram_budget(1)
+        # Defaults for top-level options
+        shuffle = bool(top_kwargs.get("shuffle", True))
+        max_samples = top_kwargs.get("max_samples")
+        shuffle_buffer_size = int(top_kwargs.get("shuffle_buffer_size", 250_000))
+        seed = int(top_kwargs.get("seed", 0))
+        use_wrist_image = bool(top_kwargs.get("use_wrist_image", False))
+        batch_size = int(top_kwargs["batch_size"])  # required
+
+        # Initialize the base class with only the raw kwargs
+        super().__init__(**raw_kwargs)
+
+        # Apply common shuffling/take/cache behavior
+        self.dataset = maybe_shuffle_and_take(
+            self.dataset,
+            want_val=self.want_val,
+            shuffle=shuffle,
+            shuffle_buffer_size=shuffle_buffer_size,
+            seed=seed,
+            max_samples=max_samples,
+        )
+
+        # Apply frame transforms via shared decode helper
+        self.apply_frame_transforms(use_wrist_image=use_wrist_image)
+
+        # Batch and prefetch
+        self.dataset = batch_prefetch(self.dataset, batch_size)
+
+    def apply_frame_transforms(self, use_wrist_image: bool):
+        # Retained for compatibility; use shared helper
+        decode_fn = make_decode_images_fn(
+            primary_key="image_primary",
+            wrist_key="image_wrist",
+            use_wrist_image=use_wrist_image,
+        )
+        self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
 
     def __iter__(self):
         it = self.dataset.as_numpy_iterator()
@@ -840,12 +938,11 @@ class DroidCoTRldsDataset(SingleCoTRldsDataset):
             yield batch
 
     def __len__(self):
-        # This is the approximate number of samples in DROID after filtering.
-        # Easier to hardcode than to iterate through the dataset and compute it.
+        # Approximate size after filtering
         return 20_000_000
 
 
-class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
+class SingleOXECoTRldsDataset(SingleCoTRldsDatasetRaw):
     """
 
     New features:
@@ -861,32 +958,21 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
         self,
         dataset_name: str,
         data_dir: str,
-        batch_size: int,
-        language_action_dir: str,
         config,
         dataset_kwargs: dict,
         *,  # Force keyword-only arguments
-        shuffle: bool = True,
         action_chunk_size: int = 16,
-        shuffle_buffer_size: int = 250_000,
+        summation_steps: int = 15,
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         split_seed: int = 0,
-        max_samples: int | None = None,
         seed: int = 0,
         split: str = "train",
-        dataset_statistics: dict | str | None = None,
-        dataset_frame_transform_kwargs: dict | None = None,
     ):
         super().__init__(
             dataset_name=dataset_name,
             data_dir=data_dir,
-            batch_size=batch_size,
-            language_action_dir=language_action_dir,
             config=config,
-            shuffle=shuffle,
-            action_chunk_size=action_chunk_size,
-            shuffle_buffer_size=shuffle_buffer_size,
             num_parallel_reads=num_parallel_reads,
             num_parallel_calls=num_parallel_calls,
             seed=seed,
@@ -900,28 +986,24 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
         self.action_proprio_normalization_type = dataset_kwargs["action_proprio_normalization_type"]
         self.absolute_action_mask = dataset_kwargs["absolute_action_mask"]
         self.action_normalization_mask = dataset_kwargs["action_normalization_mask"]
-        if dataset_frame_transform_kwargs is None:
-            dataset_frame_transform_kwargs = {}
+        dataset_frame_transform_kwargs = dataset_kwargs["dataset_frame_transform_kwargs"]
         if self.depth_obs_keys is None:
             self.depth_obs_keys = {}
         if self.image_obs_keys is None:
             self.image_obs_keys = {}
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
-        self.dataset_statistics = dataset_statistics
-        self.dataset_name = dataset_name
+
         self.apply_restructure()
-        just_compute_statistics = dataset_statistics is None
-        if just_compute_statistics:
-            dataset_statistics = get_dataset_statistics(
-                self.dataset,
-                hash_dependencies=(
-                    str(self.builder.info),
-                    str(self.state_obs_keys),
-                    inspect.getsource(self.standardize_fn) if self.standardize_fn is not None else "",
-                ),
-                save_dir=self.builder.data_dir,
-            )
+        dataset_statistics = get_dataset_statistics(
+            self.dataset,
+            hash_dependencies=(
+                str(self.builder.info),
+                str(self.state_obs_keys),
+                inspect.getsource(self.standardize_fn) if self.standardize_fn is not None else "",
+            ),
+            save_dir=self.builder.data_dir,
+        )
         dataset_statistics = tree_map(np.array, dataset_statistics)
         if self.action_normalization_mask is not None and "ego" not in self.dataset_name:
             if len(self.action_normalization_mask) != dataset_statistics["action"]["mean"].shape[-1]:
@@ -931,16 +1013,11 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
                 )
             dataset_statistics["action"]["mask"] = np.array(self.action_normalization_mask)
         self.dataset_statistics = dataset_statistics
-        if not just_compute_statistics:
-            self.apply_traj_transforms()
-            self.apply_flatten()
-            self.apply_per_dataset_frame_transforms(**dataset_frame_transform_kwargs)
-
-    def apply_traj_filters(self):
-        def is_nonzero_length(traj):
-            return tf.shape(traj["action"])[0] > 0
-
-        self.dataset = self.dataset.filter(is_nonzero_length)
+        self.apply_traj_filters()
+        self.split_val(split_seed=split_seed)
+        self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=summation_steps)
+        self.apply_flatten()
+        self.apply_per_dataset_frame_filters(**dataset_frame_transform_kwargs)
 
     def apply_restructure(self):
         def restructure(traj):
@@ -959,16 +1036,17 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
             new_obs = {}
 
             for new, old in self.image_obs_keys.items():
+                # if new == "primary":
+                #     img_key = "image"
+                # elif new == "wrist":
+                #     img_key = "wrist_image"
+                # else:
+                #     raise ValueError(f"Unknown image key: {new}")
+                img_key = f"image_{new}"
                 if old is None:
-                    new_obs[f"image_{new}"] = tf.repeat("", traj_len)  # padding
+                    new_obs[img_key] = tf.repeat("", traj_len)  # padding
                 else:
-                    new_obs[f"image_{new}"] = old_obs[old]
-
-            for new, old in self.depth_obs_keys.items():
-                if old is None:
-                    new_obs[f"depth_{new}"] = tf.repeat("", traj_len)  # padding
-                else:
-                    new_obs[f"depth_{new}"] = old_obs[old]
+                    new_obs[img_key] = old_obs[old]
 
             if self.state_obs_keys:
                 new_obs["proprio"] = tf.concat(
@@ -984,7 +1062,7 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
                 )
 
             # add timestep info
-            new_obs["timestep"] = tf.range(traj_len)
+            # new_obs["timestep"] = tf.range(traj_len)
 
             # extracts `language_key` into the "task" dict
             task = {}
@@ -993,13 +1071,59 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
                     raise ValueError(
                         f"Language key {self.language_key} has dtype {traj[self.language_key].dtype}, but it must be tf.string."
                     )
-                task["language_instruction"] = traj.pop(self.language_key)
+                raw_language_instruction = traj.pop(self.language_key)
+
+                # episode_id = self._episode_id_from_traj(traj, ep_table)
+                # lang_bytes = lang_table.lookup(episode_id)
+                # lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
+                # # Language actions may include an extra terminal step; crop to match action length
+                # lang_tensor = lang_tensor[:traj_len]
+                # # Sample instruction from merged table or fallback
+                fallback_index = tf.random.uniform(
+                    (),
+                    minval=0,
+                    maxval=tf.shape(self.fallback_instructions)[0],
+                    dtype=tf.int32,
+                    seed=self.seed,
+                )
+                fallback_instruction = self.fallback_instructions[fallback_index]
+
+                def _sample_from_table():
+                    arr = raw_language_instruction
+                    return tf.random.shuffle(arr, seed=self.seed)[0]
+
+                instruction = tf.cond(
+                    tf.greater(tf.strings.length(raw_language_instruction), 0),
+                    _sample_from_table,
+                    lambda: fallback_instruction,
+                )
+
+                instruction_vec = tf.fill([tf.shape(traj["action"])[0]], instruction)
+                task["language_instruction"] = instruction_vec
+
+            # Build a deterministic per-trajectory identifier using a strong hash
+            # of the dataset name and the serialized action tensor. This avoids
+            # relying on per-dataset metadata with inconsistent schemas.
+            max_steps = 128
+            action_for_hash = tf.cond(
+                max_steps >= traj_len,
+                lambda: traj["action"],
+                lambda: tf.concat([traj["action"][:64], traj["action"][-64:]], axis=0),
+            )
+            serialized_action = tf.io.serialize_tensor(action_for_hash)
+            name_tensor = tf.constant(self.dataset_name, dtype=tf.string)
+            sep1 = tf.constant("::", dtype=tf.string)
+            sep2 = tf.constant("-", dtype=tf.string)
+            to_hash = tf.strings.join([name_tensor, sep1, serialized_action])
+            hashed = tf.strings.to_hash_bucket_strong(to_hash, 2147483647, key=[self.seed, 1337])
+            traj_uid = tf.strings.join([name_tensor, sep2, tf.strings.as_string(hashed)])
 
             traj = {
                 "observation": new_obs,
                 "task": task,
                 "action": tf.cast(traj["action"], tf.float32),
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
+                "trajectory_id": tf.repeat(traj_uid, traj_len),
             }
 
             if self.absolute_action_mask is not None:
@@ -1012,7 +1136,29 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
 
-    def apply_traj_transforms(self):
+    def apply_traj_filters(self):
+        def is_nonzero_length(traj):
+            return tf.shape(traj["action"])[0] > 0
+
+        # self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
+
+        self.dataset = self.dataset.filter(is_nonzero_length)
+
+    def split_val(self, split_seed):
+        def _split_filter(traj):
+            salt = tf.strings.as_string(split_seed)
+            # Use the per-trajectory identifier (constant along time) to split deterministically
+            traj_id = traj["trajectory_id"][0]
+            key = tf.strings.join([salt, traj_id])
+            bucket = tf.strings.to_hash_bucket_fast(key, 1000)
+            thr = tf.cast(int(self.val_fraction * 1000), tf.int64)
+            is_val = bucket < thr
+
+            return is_val if self.want_val else tf.logical_not(is_val)
+
+        self.dataset = self.dataset.filter(_split_filter)
+
+    def apply_traj_transforms(self, action_chunk_size: int, summation_steps: int):
         """
         Compare to original transforms, we omit the following:
         - skip_unlabeled
@@ -1031,20 +1177,71 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
             self.num_parallel_calls,
         )
 
-        self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
+        def chunk_actions(traj):
+            """Splits episode into action chunks."""
+            traj_len = tf.shape(traj["action"])[0]
 
-        self.dataset = self.dataset.traj_map(traj_transforms.add_pad_mask_dict, self.num_parallel_calls)
+            # For each step in the trajectory, construct indices for the next n actions
+            action_chunk_indices = tf.broadcast_to(
+                tf.range(action_chunk_size)[None],
+                [traj_len, action_chunk_size],
+            ) + tf.broadcast_to(
+                tf.range(traj_len)[:, None],
+                [traj_len, action_chunk_size],
+            )
 
-        self.dataset = self.dataset.traj_map(
-            partial(
-                traj_transforms.chunk_act_obs,
-                window_size=self.window_size,
-                future_action_window_size=self.future_action_window_size,
-            ),
-            self.num_parallel_calls,
-        )
+            # Cap to length of the sequence --> final chunks will repeat the last action
+            # This makes sense, since we are using absolute joint + gripper position actions
+            action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
 
-    def apply_per_dataset_frame_transforms(
+            # Gather the actions for each chunk
+            traj["action"] = tf.gather(traj["action"], action_chunk_indices)
+            return traj
+
+        # self.dataset = self.dataset.traj_map(traj_transforms.add_pad_mask_dict, self.num_parallel_calls)
+
+        # self.dataset = self.dataset.traj_map(
+        #     partial(
+        #         traj_transforms.chunk_act_obs,
+        #         window_size=action_chunk_size,
+        #         future_action_window_size=0,
+        #     ),
+        #     self.num_parallel_calls,
+        # )
+        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
+
+        def group_language_actions(traj):
+            """Compute per-timestep summed language actions over future steps.
+
+            For each timestep t, we sum the language actions from t to
+            t + summation_steps - 1 (capped at trajectory end). We DO NOT
+            chunk the language actions; after flattening, each sample will
+            have a single language string aligned to its action chunk.
+            """
+            traj_len = tf.shape(traj["action"])[0]
+
+            # First, create indices for summation (current + future steps)
+            summation_indices = tf.broadcast_to(
+                tf.range(summation_steps)[None],
+                [traj_len, summation_steps],
+            ) + tf.broadcast_to(
+                tf.range(traj_len)[:, None],
+                [traj_len, summation_steps],
+            )
+
+            # Cap to length of the sequence (same as chunk_actions)
+            summation_indices = tf.minimum(summation_indices, traj_len - 1)
+
+            # Gather the language actions for summation
+            language_actions_to_sum = tf.gather(traj["action"], summation_indices)
+            # Keep unsummed window for debugging: shape [traj_len, summation_steps]
+            traj["language_actions"] = language_actions_to_sum
+
+            return traj
+
+        self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
+
+    def apply_per_dataset_frame_filters(
         self,
         chunk_filter_fn: Callable | None = None,
     ):
@@ -1056,18 +1253,15 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDataset):
         """
         if chunk_filter_fn:
             self.dataset = self.dataset.filter(chunk_filter_fn)
-        return self.dataset
 
 
-class OxeCoTRldsDataset:
+class OXECoTRldsDatasetsRaw:
     def __init__(
         self,
         config,
         data_root_dir: str,
         data_mix: str,
         resize_resolution: tuple[int, int],
-        batch_size: int,
-        language_action_dir: str,
         shuffle: bool = True,  # noqa: FBT001, FBT002
         action_chunk_size: int = 16,
         split_seed: int = 0,
@@ -1077,9 +1271,10 @@ class OxeCoTRldsDataset:
         shuffle_buffer_size: int = 250_000,
         window_size: int = 10,
         image_aug: bool = False,  # noqa: FBT001, FBT002
-        balance_weights: bool = False,  # noqa: FBT001, FBT002
+        balance_weights: bool = True,  # noqa: FBT001, FBT002
         traj_transform_threads: int | None = None,
         traj_read_threads: int | None = None,
+        **kwargs,
     ):
         # Configure RLDS Dataset(s)
         if data_mix in OXE_NAMED_MIXTURES:  # noqa: SIM108
@@ -1092,7 +1287,7 @@ class OxeCoTRldsDataset:
         dataset_kwargs_list, sample_weights = get_oxe_dataset_kwargs_and_weights(
             data_root_dir,
             mixture_spec,
-            load_camera_views=("primary",),
+            load_camera_views=("primary", "wrist"),
             load_depth=False,
             load_proprio=True,
             load_language=True,
@@ -1105,7 +1300,7 @@ class OxeCoTRldsDataset:
         },
         frame_transform_kwargs={
             "resize_size": resize_resolution,
-            "num_parallel_calls": -1,                          # For CPU-intensive ops (decoding, resizing, etc.)
+            "num_parallel_calls": tf.data.AUTOTUNE,                          # For CPU-intensive ops (decoding, resizing, etc.)
         },
         # If applicable, enable image augmentations
         if image_aug:
@@ -1139,47 +1334,42 @@ class OxeCoTRldsDataset:
         threads_per_dataset = allocate_threads(traj_transform_threads, sample_weights)
         reads_per_dataset = allocate_threads(traj_read_threads, sample_weights)
 
-        # Get Dataset Sizes
-        dataset_sizes, all_dataset_statistics = [], {}
+        logging.info("Threads per Dataset: %s", threads_per_dataset)
+        logging.info("Reads per Dataset: %s", reads_per_dataset)
+
+        datasets, dataset_sizes, all_dataset_statistics = [], [], {}
+        logging.info("Constructing datasets...")
         for dataset_kwargs, threads, reads in zip(  # noqa: B905
                 dataset_kwargs_list,
                 threads_per_dataset,
                 reads_per_dataset,
             ):
-            dataset_frame_transform_kwargs = (
-                dataset_kwargs.pop("dataset_frame_transform_kwargs")
-                if "dataset_frame_transform_kwargs" in dataset_kwargs
-                else {}
-            )
+            # Pass only accepted args to SingleOXECoTRldsDataset
             ds = SingleOXECoTRldsDataset(
                 dataset_name=dataset_kwargs["name"],
                 data_dir=dataset_kwargs["data_dir"],
-                batch_size=batch_size,
-                language_action_dir=language_action_dir,
                 config=config,
                 dataset_kwargs=dataset_kwargs,
-                shuffle=shuffle,
                 action_chunk_size=action_chunk_size,
-                shuffle_buffer_size=shuffle_buffer_size,
                 num_parallel_reads=reads,
                 num_parallel_calls=threads,
                 split_seed=split_seed,
-                max_samples=max_samples,
                 seed=seed,
                 split=split,
-                dataset_statistics=None,
-                dataset_frame_transform_kwargs=dataset_frame_transform_kwargs,
             )
+            datasets.append(ds.dataset)
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["num_transitions"])
             all_dataset_statistics[dataset_kwargs["name"]] = dataset_statistics
 
         # Get the indices of the "primary" datasets (i.e., datasets with sample_weight == 1.0)
-        primary_dataset_indices = np.array([idx for idx in range(len(sample_weights)) if sample_weights[idx] == 1.0])
+        # primary_dataset_indices = np.array([idx for idx in range(len(sample_weights)) if sample_weights[idx] == 1.0])
+        primary_dataset_indices = np.array(list(range(len(sample_weights))))
 
         # Balance and Normalize Weights
         if balance_weights:
             sample_weights = np.array(sample_weights) * np.array(dataset_sizes)
+        unnormalized_sample_weights = sample_weights.copy()
         sample_weights = np.array(sample_weights) / np.sum(sample_weights)
         pprint_data_mixture(dataset_kwargs_list, sample_weights)
 
@@ -1187,79 +1377,219 @@ class OxeCoTRldsDataset:
         #   =>> Note :: Only counting the "primary" datasets (i.e., datasets with sample_weight == 1.0)
         dataset_len = int((np.array(dataset_sizes) / sample_weights)[primary_dataset_indices].max())
 
-
-
-        logging.info("Threads per Dataset: %s", threads_per_dataset)
-        logging.info("Reads per Dataset: %s", reads_per_dataset)
-
-        # Construct Datasets
-        logging.info("Constructing datasets...")
-
-
-        datasets = []
-        for dataset_kwargs, threads, reads in zip(  # noqa: B905
-            dataset_kwargs_list,
-            threads_per_dataset,
-            reads_per_dataset,
-        ):
-            dataset_frame_transform_kwargs = (
-                dataset_kwargs.pop("dataset_frame_transform_kwargs")
-                if "dataset_frame_transform_kwargs" in dataset_kwargs
-                else {}
-            )
-            dataset, _ = SingleOXECoTRldsDataset(
-                dataset_name=dataset_kwargs["name"],
-                data_dir=dataset_kwargs["data_dir"],
-                batch_size=batch_size,
-                language_action_dir=language_action_dir,
-                config=config,
-                dataset_kwargs=dataset_kwargs,
-                shuffle=shuffle,
-                action_chunk_size=action_chunk_size,
-                shuffle_buffer_size=shuffle_buffer_size,
-                num_parallel_reads=reads,
-                num_parallel_calls=threads,
-                split_seed=split_seed,
-                max_samples=max_samples,
-                seed=seed,
-                split=split,
-                dataset_statistics=dataset_statistics[dataset_kwargs["name"]],
-                dataset_frame_transform_kwargs=dataset_frame_transform_kwargs,
-            )
-            datasets.append(dataset)
-
-        # datasets.append(DroidCoTRldsDataset(
-        #     data_dir=data_root_dir,
-        #     batch_size=batch_size,
-        #     language_action_dir=language_action_dir,
-        #     config=config,
-        #     shuffle=shuffle,
-        # ).dataset)
-
-        dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, sample_weights)
-
-        # Validation =>> fix a single shuffle buffer of data and cache it in RAM; prevents gradual memory increase!
-        if split != "train":
-            dataset = dataset.take(shuffle_buffer_size).cache()
-
-        # Shuffle the Dataset
-        #   =>> IMPORTANT :: Shuffle AFTER .cache(), or else memory will still leak!
-        dataset = dataset.shuffle(shuffle_buffer_size)
-
-        # Apply Frame Transforms
-        logging.info("Applying frame transforms on dataset...")
-        dataset = self.apply_frame_transforms(dataset, **frame_transform_kwargs, train=split == "train")
-
-        # [Contract] When training VLA Policies, we let the Collator handle Batching!
-        if batch_size is not None:
-            dataset = dataset.batch(batch_size)
-
-        # Note =>> Seems to reduce memory usage without affecting speed?
-        dataset = dataset.with_ram_budget(1)
-
-        # Save for Later
-        dataset.sample_weights = sample_weights
-
-        self.dataset = dataset
-        self.dataset_length = dataset_len
+        self.sample_weights = sample_weights
+        self.unnormalized_sample_weights = unnormalized_sample_weights
         self.dataset_statistics = all_dataset_statistics
+        self.dataset_length = dataset_len
+        self.datasets = datasets
+
+    # def apply_frame_transforms(
+    #     self,
+    #     train: bool,
+    #     image_augment_kwargs: dict | dict[str, dict] = {},
+    #     resize_size: tuple[int, int] | dict[str, tuple[int, int]] = {},
+    #     depth_resize_size: tuple[int, int] | dict[str, tuple[int, int]] = {},
+    #     num_parallel_calls: int = tf.data.AUTOTUNE,
+    # ):
+    #     # Convenience wrapper that takes a function that operates on a non-chunked "observation" dict and applies
+    #     # it to the chunked "observation" dict as well as the non-chunked "task" dict
+    #     def apply_obs_transform(fn: Callable[[dict], dict], frame: dict) -> dict:
+    #         frame["task"] = fn(frame["task"])
+    #         frame["observation"] = dl.vmap(fn)(frame["observation"])
+    #         return frame
+
+    #     # Decode + resize images (and depth images)
+    #     self.dataset = self.dataset.frame_map(
+    #         partial(
+    #             apply_obs_transform,
+    #             partial(obs_transforms.decode_and_resize, resize_size=resize_size, depth_resize_size=depth_resize_size),
+    #         ),
+    #         num_parallel_calls,
+    #     )
+
+    #     if train:
+    #         # Augment all images with the same seed, skipping padding images
+    #         def aug(frame: dict):
+    #             seed = tf.random.uniform([2], maxval=tf.dtypes.int32.max, dtype=tf.int32)
+    #             aug_fn = partial(obs_transforms.augment, seed=seed, augment_kwargs=image_augment_kwargs)
+    #             return apply_obs_transform(aug_fn, frame)
+
+    #         self.dataset = self.dataset.frame_map(aug, num_parallel_calls)
+
+
+class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
+    def __init__(self, **kwargs):
+        # Filter kwargs using inspect
+        top_kwargs, _ = _filter_kwargs_for(
+            lambda *,
+            batch_size,
+            shuffle=True,
+            max_samples=None,
+            shuffle_buffer_size=250_000,
+            seed=0,
+            use_wrist_image=False,
+            split="train": None,
+            kwargs,
+        )
+        for req in ("batch_size",):
+            if req not in top_kwargs:
+                raise ValueError(f"Missing required arguments: ['{req}']")
+        raw_kwargs, _ = _filter_kwargs_for(OXECoTRldsDatasetsRaw.__init__, kwargs)
+        for req in ("config", "data_root_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
+            if req not in raw_kwargs:
+                raise ValueError(f"Missing required arguments: ['{req}']")
+        consumed_keys = set(top_kwargs.keys()) | set(raw_kwargs.keys())
+        unexpected = set(kwargs.keys()) - consumed_keys
+        if unexpected:
+            raise ValueError(f"Unexpected arguments for OXECoTRldsDatasets: {sorted(unexpected)}")
+
+        batch_size = int(top_kwargs["batch_size"])  # required
+        shuffle = bool(top_kwargs.get("shuffle", True))
+        max_samples = top_kwargs.get("max_samples")
+        shuffle_buffer_size = int(top_kwargs.get("shuffle_buffer_size", 250_000))
+        seed = int(top_kwargs.get("seed", 0))
+        use_wrist_image = bool(top_kwargs.get("use_wrist_image", False))
+        want_val = raw_kwargs.get("split", "train") == "val"
+
+        super().__init__(**raw_kwargs)
+
+        self.dataset = maybe_shuffle_and_take(
+            self.dataset,
+            want_val=want_val,
+            shuffle=shuffle,
+            shuffle_buffer_size=shuffle_buffer_size,
+            seed=seed,
+            max_samples=max_samples,
+        )
+
+        decode_fn = make_decode_images_fn(
+            primary_key="image_primary",
+            wrist_key="image_wrist",
+            use_wrist_image=use_wrist_image,
+        )
+        self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
+
+        self.dataset = batch_prefetch(self.dataset, batch_size)
+
+    def __iter__(self):
+        it = self.dataset.as_numpy_iterator()
+        while True:
+            try:
+                batch = next(it)
+            except StopIteration:
+                logging.info("StopIteration")
+                return
+            yield batch
+
+    def __len__(self):
+        return self.dataset_length
+
+
+class CombinedCoTRldsDataset:
+    def __init__(
+        self,
+        **kwargs,
+    ):
+        # Filter using inspect
+        def _top_sig(
+            *,
+            batch_size,
+            droid_weight,
+            shuffle=True,
+            max_samples=None,
+            shuffle_buffer_size=250_000,
+            seed=0,
+            split="train",
+            use_wrist_image=False,
+        ):
+            return None
+
+        top_kwargs, _ = _filter_kwargs_for(_top_sig, kwargs)
+        for req in ("batch_size", "droid_weight"):
+            if req not in top_kwargs:
+                raise ValueError(f"Missing required arguments: ['{req}']")
+
+        droid_kwargs, _ = _filter_kwargs_for(DroidCoTRldsDatasetRaw.__init__, kwargs)
+        for req in ("data_dir", "language_action_dir", "config"):
+            if req not in droid_kwargs:
+                raise ValueError(f"Missing required arguments: ['{req}']")
+
+        oxe_kwargs, _ = _filter_kwargs_for(OXECoTRldsDatasetsRaw.__init__, kwargs)
+        for req in ("config", "data_root_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
+            if req not in oxe_kwargs:
+                raise ValueError(f"Missing required arguments: ['{req}']")
+
+        consumed_keys = set(top_kwargs.keys()) | set(droid_kwargs.keys()) | set(oxe_kwargs.keys())
+        unexpected = set(kwargs.keys()) - consumed_keys
+        if unexpected:
+            raise ValueError(f"Unexpected arguments for CombinedCoTRldsDataset: {sorted(unexpected)}")
+
+        use_wrist_image = bool(top_kwargs.get("use_wrist_image", False))
+        batch_size = int(top_kwargs["batch_size"])  # required
+        shuffle = bool(top_kwargs.get("shuffle", True))
+        max_samples = top_kwargs.get("max_samples")
+        shuffle_buffer_size = int(top_kwargs.get("shuffle_buffer_size", 250_000))
+        seed = int(top_kwargs.get("seed", 0))
+        split = top_kwargs.get("split", oxe_kwargs.get("split", droid_kwargs.get("split", "train")))
+        want_val = split == "val"
+        droid_weight = float(top_kwargs["droid_weight"])  # required
+
+        # Build sub-datasets with only their required args
+        droid = DroidCoTRldsDatasetRaw(**droid_kwargs)
+        oxe = OXECoTRldsDatasetsRaw(**oxe_kwargs)
+
+        all_datasets = [*oxe.datasets, droid.dataset]
+        sample_weights = [*oxe.unnormalized_sample_weights, droid_weight]
+
+        logging.info("Interleaving datasets...")
+        self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(all_datasets, sample_weights)
+
+        # Apply common finalization
+        self.dataset = maybe_shuffle_and_take(
+            self.dataset,
+            want_val=want_val,
+            shuffle=shuffle,
+            shuffle_buffer_size=shuffle_buffer_size,
+            seed=seed,
+            max_samples=max_samples,
+        )
+
+        # Apply frame transforms via shared helper
+        logging.info("Applying frame transforms on dataset...")
+        decode_fn = make_decode_images_fn(
+            primary_key="image_primary",
+            wrist_key="image_wrist",
+            use_wrist_image=use_wrist_image,
+        )
+        self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
+        self.dataset.sample_weights = sample_weights
+        self.dataset_length = oxe.dataset_length
+        self.dataset_statistics = oxe.dataset_statistics
+
+        self.dataset = batch_prefetch(self.dataset, batch_size)
+
+    def apply_frame_transforms(self, use_wrist_image: bool):
+        # Decode images: RLDS saves encoded images, only decode now for efficiency
+        def decode_images(traj):
+            def _decode_single(img_bytes):
+                return tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8)
+
+            traj["observation"]["image_primary"] = _decode_single(traj["observation"]["image_primary"])
+            if use_wrist_image:
+                traj["observation"]["image_wrist"] = _decode_single(traj["observation"]["image_wrist"])
+            return traj
+
+        self.dataset = self.dataset.frame_map(decode_images, tf.data.AUTOTUNE)
+
+    def __len__(self):
+        return self.dataset_length
+
+    def __iter__(self):
+        it = self.dataset.as_numpy_iterator()
+        while True:
+            try:
+                batch = next(it)
+            except StopIteration:
+                logging.info("StopIteration")
+                return
+            yield batch

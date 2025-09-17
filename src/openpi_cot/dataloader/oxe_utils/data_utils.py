@@ -177,6 +177,28 @@ def pprint_data_mixture(dataset_kwargs_list: list[dict[str, Any]], dataset_weigh
     print("######################################################################################\n")
 
 
+def check_dataset_statistics(hash_dependencies: tuple[str, ...], save_dir: str | None = None) -> dict:
+    """
+    Checks if the dataset statistics are already computed and returns them if they are.
+    """
+    unique_hash = hashlib.sha256("".join(hash_dependencies).encode("utf-8"), usedforsecurity=False).hexdigest()
+
+    # Fallback local path for when data_dir is not writable or not provided
+    local_path = os.path.expanduser(os.path.join("~", ".cache", "orca", f"dataset_statistics_{unique_hash}.json"))
+    path = tf.io.gfile.join(save_dir, f"dataset_statistics_{unique_hash}.json") if save_dir is not None else local_path
+
+    # check if cache file exists and load
+    if tf.io.gfile.exists(path):
+        with tf.io.gfile.GFile(path, "r") as f:
+            return json.load(f), path, local_path
+
+    if os.path.exists(local_path):
+        with open(local_path) as f:
+            return json.load(f), local_path, local_path
+
+    return None, local_path, local_path
+
+
 def get_dataset_statistics(
     dataset: dl.DLataset,
     hash_dependencies: tuple[str, ...],
@@ -189,24 +211,8 @@ def get_dataset_statistics(
     Currently, the statistics include the min/max/mean/std of the actions and proprio as well as the number of
     transitions and trajectories in the dataset.
     """
-    unique_hash = hashlib.sha256("".join(hash_dependencies).encode("utf-8"), usedforsecurity=False).hexdigest()
-
-    # Fallback local path for when data_dir is not writable or not provided
-    local_path = os.path.expanduser(os.path.join("~", ".cache", "orca", f"dataset_statistics_{unique_hash}.json"))
-    if save_dir is not None:
-        path = tf.io.gfile.join(save_dir, f"dataset_statistics_{unique_hash}.json")
-    else:
-        path = local_path
-
-    # check if cache file exists and load
-    if tf.io.gfile.exists(path):
-        with tf.io.gfile.GFile(path, "r") as f:
-            metadata = json.load(f)
-        return metadata
-
-    if os.path.exists(local_path):
-        with open(local_path) as f:
-            metadata = json.load(f)
+    metadata, path, local_path = check_dataset_statistics(hash_dependencies, save_dir)
+    if metadata is not None:
         return metadata
 
     dataset = dataset.traj_map(
@@ -260,27 +266,6 @@ def get_dataset_statistics(
             json.dump(metadata, f)
 
     return metadata
-
-
-def save_dataset_statistics(dataset_statistics, run_dir):
-    """Saves a `dataset_statistics.json` file."""
-    out_path = run_dir / "dataset_statistics.json"
-    with open(out_path, "w") as f_json:
-        for _, stats in dataset_statistics.items():
-            for k in stats["action"].keys():
-                if isinstance(stats["action"][k], np.ndarray):
-                    stats["action"][k] = stats["action"][k].tolist()
-            if "proprio" in stats:
-                for k in stats["proprio"].keys():
-                    if isinstance(stats["proprio"][k], np.ndarray):
-                        stats["proprio"][k] = stats["proprio"][k].tolist()
-            if "num_trajectories" in stats:
-                if isinstance(stats["num_trajectories"], np.ndarray):
-                    stats["num_trajectories"] = stats["num_trajectories"].item()
-            if "num_transitions" in stats:
-                if isinstance(stats["num_transitions"], np.ndarray):
-                    stats["num_transitions"] = stats["num_transitions"].item()
-        json.dump(dataset_statistics, f_json, indent=2)
 
 
 def allocate_threads(n: int | None, weights: np.ndarray):

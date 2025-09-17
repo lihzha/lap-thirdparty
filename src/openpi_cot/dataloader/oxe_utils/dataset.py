@@ -16,16 +16,12 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-from openpi_cot.dataloader.oxe_utils.rlds import obs_transforms
-from openpi_cot.dataloader.oxe_utils.rlds import traj_transforms
-from openpi_cot.dataloader.oxe_utils.rlds.utils import goal_relabeling
-from openpi_cot.dataloader.oxe_utils.rlds.utils import task_augmentation
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import NormalizationType
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import allocate_threads
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import get_dataset_statistics
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import normalize_action_and_proprio
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import pprint_data_mixture
-from openpi_cot.dataloader.oxe_utils.rlds.utils.data_utils import tree_map
+from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
+from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
+from openpi_cot.dataloader.oxe_utils.data_utils import get_dataset_statistics
+from openpi_cot.dataloader.oxe_utils.data_utils import normalize_action_and_proprio
+from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
+from openpi_cot.dataloader.oxe_utils.data_utils import tree_map
 
 # Initialize Overwatch =>> Wraps `logging.Logger`
 

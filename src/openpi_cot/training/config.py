@@ -23,11 +23,13 @@ import openpi_cot.dataloader.cot_rlds_dataset as cot_rlds_dataset
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
+import openpi_cot.policies.combined_cot_policy as combined_cot_policy
 import openpi_cot.policies.droid_cot_policy as droid_cot_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize
 import openpi_cot.shared.download as _download
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
+from openpi_cot.transforms import SafeRepackTransform
 from openpi_cot.transforms import TokenizePromptAndReasoning
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
@@ -107,6 +109,16 @@ class CoTDataConfig:
     text_state_dropout_prob: float = 0.0
     # If true, will drop samples where projected gripper is outside the resized image bounds.
     drop_gripper_oob: bool = False
+
+    # Dataset selection and OXE/Combined-specific knobs
+    # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
+    dataset_type: Literal["droid", "oxe", "combined"] = "droid"
+    # OXE fields (used when dataset_type == "oxe" or "combined")
+    data_root_dir: str | None = None
+    data_mix: str | None = None
+    resize_resolution: tuple[int, int] | None = None
+    # Combined-only: weight for DROID when interleaving with OXE
+    droid_weight: float = 1.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -245,7 +257,7 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
     rlds_data_dir: str | None = None
     action_space: cot_rlds_dataset.DroidActionSpace | None = None
     cot: bool = True
-    language_action_dir: str = "/n/fs/robot-data/vlm-syn/posed_droid"
+    language_action_dir: str | None = None
     shuffle_buffer_size: int = 250_000
     # Number of future steps to sum over for language actions
     summation_steps: int = 15
@@ -348,6 +360,241 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
             drop_gripper_oob=self.drop_gripper_oob,
             wrist_image_dropout_prob=self.wrist_image_dropout_prob,
             text_state_dropout_prob=self.text_state_dropout_prob,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class RLDSCombinedCoTDataConfig(DataConfigFactory):
+    """
+    Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
+    """
+
+    rlds_data_dir: str | None = None
+    action_space: cot_rlds_dataset.DroidActionSpace | None = None
+    cot: bool = True
+    language_action_dir: str | None = None
+    shuffle_buffer_size: int = 250_000
+    # Number of future steps to sum over for language actions
+    summation_steps: int = 15
+    max_samples: int | None = None
+    sum_decimal: str = "2f"
+    left_pad: bool = True
+    include_decimal_point: bool = True
+
+    # If set, validation loader will materialize a fixed subset of this many
+    # flattened samples via take(K).cache().repeat(), ensuring consistent val batches.
+    val_max_samples: int | None = None
+    val_fraction: float | None = None
+    validation_mode: str = "easy"
+    vis_dataset: bool = False
+    use_wrist_image: bool = False
+    use_idle_filter: bool = True
+    # Train-time dropout (applied in DroidCoTInputs). Set nonzero only for training.
+    wrist_image_dropout_prob: float = 0.0
+    text_state_dropout_prob: float = 0.0
+    # Drop samples where gripper is out of view after projection to resized image
+    drop_gripper_oob: bool = False
+
+    # OXE/Combined fields
+    data_root_dir: str | None = None
+    data_mix: str | None = None
+    resize_resolution: tuple[int, int] | None = (224, 224)
+    droid_weight: float = 1.0
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        # Load base config first to access norm stats (for state binning in prompt augmentation)
+        base_cfg = self.create_base_config(assets_dirs, model_config)
+
+        repack_dict = {
+            # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
+            # Prefer dataset-specific key if present; otherwise fall back.
+            "observation/exterior_image_1_left": [
+                "observation/image",
+                "observation/image_primary",
+            ],
+            "observation/cartesian_position": "observation/cartesian_position",
+            "observation/gripper_position": "observation/gripper_position",
+            # Support both `actions` and `action` sources, map to output `actions`.
+            "actions": ["actions", "action"],
+            # Support both direct prompt and task-based language instruction.
+            "prompt": ["prompt", "task/language_instruction"],
+            "language_actions": "language_actions",
+            # Wrist image candidates (order possibly overridden below based on `use_wrist_image`).
+            "observation/wrist_image_left": [
+                "observation/image_wrist",
+                "observation/wrist_image",
+            ],
+            "observation/proprio": "observation/proprio",
+        }
+        if self.vis_dataset:
+            repack_dict["camera_intrinsics"] = "camera_intrinsics"
+            repack_dict["camera_extrinsics"] = "camera_extrinsics"
+            repack_dict["observation/cartesian_position_window"] = "observation/cartesian_position_window"
+        if self.use_wrist_image:
+            # Prioritize `observation/wrist_image` if present, then fall back to `observation/image_wrist`.
+            repack_dict["observation/wrist_image_left"] = [
+                "observation/wrist_image",
+                "observation/image_wrist",
+            ]
+        repack_transform = upstream_transforms.Group(inputs=[SafeRepackTransform(repack_dict)])
+
+        # Extract state norm stats (if available) to pass into the DroidCoTInputs for binning
+        state_stats = None
+        if base_cfg.norm_stats is not None and "state" in base_cfg.norm_stats:
+            state_stats = base_cfg.norm_stats["state"]
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                combined_cot_policy.CombinedCoTInputs(
+                    action_dim=model_config.action_dim,
+                    model_type=model_config.model_type,
+                    sum_decimal=self.sum_decimal,
+                    state_norm_stats=state_stats,
+                    wrist_image_dropout_prob=self.wrist_image_dropout_prob,
+                    text_state_dropout_prob=self.text_state_dropout_prob,
+                )
+            ],
+            outputs=[combined_cot_policy.CombinedCoTOutputs()],
+        )
+
+        # Data loader returns absolute joint position actions -- convert to delta actions for training.
+        delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
+        data_transforms = data_transforms.push(
+            inputs=[upstream_transforms.DeltaActions(delta_action_mask)],
+            # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
+        )
+
+        model_transforms = ModelTransformFactory(
+            left_pad=self.left_pad, include_decimal_point=self.include_decimal_point
+        )(model_config)
+
+        assert self.rlds_data_dir is not None, "Need to set rlds data dir for RLDS data loader."
+
+        return dataclasses.replace(
+            base_cfg,
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+            rlds_data_dir=self.rlds_data_dir,
+            action_space=self.action_space,
+            cot=self.cot,
+            language_action_dir=self.language_action_dir,
+            shuffle_buffer_size=self.shuffle_buffer_size,
+            summation_steps=self.summation_steps,
+            max_samples=self.max_samples,
+            sum_decimal=self.sum_decimal,
+            left_pad=self.left_pad,
+            include_decimal_point=self.include_decimal_point,
+            use_wrist_image=self.use_wrist_image,
+            val_max_samples=self.val_max_samples,
+            val_fraction=self.val_fraction,
+            validation_mode=self.validation_mode,
+            vis_dataset=self.vis_dataset,
+            use_idle_filter=self.use_idle_filter,
+            drop_gripper_oob=self.drop_gripper_oob,
+            wrist_image_dropout_prob=self.wrist_image_dropout_prob,
+            text_state_dropout_prob=self.text_state_dropout_prob,
+            # Combined/OXE knobs
+            dataset_type="combined",
+            data_root_dir=self.data_root_dir,
+            data_mix=self.data_mix,
+            resize_resolution=self.resize_resolution,
+            droid_weight=self.droid_weight,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class RLDSOXECoTDataConfig(DataConfigFactory):
+    """
+    Config for training on OXE datasets using RLDS format and CoT-style transforms.
+    """
+
+    # OXE-specific
+    data_root_dir: str | None = None
+    data_mix: str | None = None
+    resize_resolution: tuple[int, int] | None = (224, 224)
+    shuffle_buffer_size: int = 250_000
+    max_samples: int | None = None
+    left_pad: bool = True
+    include_decimal_point: bool = True
+    sum_decimal: str = "2f"
+    # Validation
+    val_max_samples: int | None = None
+    val_fraction: float | None = None
+    validation_mode: str = "easy"
+    vis_dataset: bool = False
+    use_wrist_image: bool = False
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        base_cfg = self.create_base_config(assets_dirs, model_config)
+
+        repack_dict = {
+            # For OXE, images are already standardized by dataset wrappers to `image_primary`/`image_wrist`.
+            "observation/image_primary": [
+                "observation/image",
+                "observation/image_primary",
+            ],
+            "observation/image_wrist": [
+                "observation/wrist_image",
+                "observation/image_wrist",
+            ],
+            # Some datasets provide proprio under different names; try to pass through if present.
+            "observation/proprio": "observation/proprio",
+            # Either `action` or `actions` may be present depending on upstream conversion.
+            "actions": ["actions", "action"],
+            # When available, prefer explicit instruction string; otherwise leave for tokenizer defaulting.
+            "prompt": ["prompt", "task/language_instruction"],
+            # OXE CoT variant can inject language_actions derived from actions; present for interface parity.
+            "language_actions": ["language_actions"],
+        }
+        repack_transform = upstream_transforms.Group(inputs=[SafeRepackTransform(repack_dict)])
+
+        # State stats from assets (optional)
+        state_stats = None
+        if base_cfg.norm_stats is not None and "state" in base_cfg.norm_stats:
+            state_stats = base_cfg.norm_stats["state"]
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                combined_cot_policy.CombinedCoTInputs(
+                    action_dim=model_config.action_dim,
+                    model_type=model_config.model_type,
+                    sum_decimal=self.sum_decimal,
+                    state_norm_stats=state_stats,
+                )
+            ],
+            outputs=[combined_cot_policy.CombinedCoTOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory(
+            left_pad=self.left_pad, include_decimal_point=self.include_decimal_point
+        )(model_config)
+
+        return dataclasses.replace(
+            base_cfg,
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+            # OXE selection
+            dataset_type="oxe",
+            data_root_dir=self.data_root_dir,
+            data_mix=self.data_mix,
+            resize_resolution=self.resize_resolution,
+            # Common knobs
+            shuffle_buffer_size=self.shuffle_buffer_size,
+            max_samples=self.max_samples,
+            left_pad=self.left_pad,
+            include_decimal_point=self.include_decimal_point,
+            sum_decimal=self.sum_decimal,
+            val_max_samples=self.val_max_samples,
+            val_fraction=self.val_fraction,
+            validation_mode=self.validation_mode,
+            vis_dataset=self.vis_dataset,
+            use_wrist_image=self.use_wrist_image,
         )
 
 

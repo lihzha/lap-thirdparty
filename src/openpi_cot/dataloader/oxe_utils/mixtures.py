@@ -5,10 +5,8 @@ Defines a registry of dataset mixtures and weights for the Open-X Embodiment Dat
 a float "sampling weight"
 """
 
-from typing import Dict, List, Tuple
-
 # fmt: off
-OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
+OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     # === Bridge V2 Dataset ===
     "bridge": [
         ("bridge_oxe", 1.0),                                      # Version of Bridge V2 in Open-X GCP Bucket
@@ -18,9 +16,9 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
     "droid": [
         ("droid", 1.0),
     ],
-    
+
     # === Human-data Only ===
-    "Ego4D": [ 
+    "Ego4D": [
         ("ego4d_split_1", 1.0),
         ("ego4d_split_2", 1.0),
         ("ego4d_split_3", 1.0),
@@ -49,9 +47,9 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
 
     # === UniVLA Magic Soup+ ===
     "omni_magic_soup_plus": [
-        ("fractal20220817_data", 0.5),                
+        ("fractal20220817_data", 0.5),
         ("kuka", 0.1),
-        ("bridge_oxe", 1.0),                                   
+        ("bridge_oxe", 1.0),
         ("taco_play", 2.0),
         ("jaco_play", 1.0),
         ("berkeley_cable_routing", 1.0),
@@ -72,9 +70,9 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),
         ("cmu_stretch", 1.0),
-        ("bc_z", 0.2),                                          
+        ("bc_z", 0.2),
         ("fmb", 1.0),
-        ("dobbe", 0.2),                   
+        ("dobbe", 0.2),
         ## Datasets for Navigation
         ("berkeley_gnm_recon", 1.0),
         ("berkeley_gnm_cory_hall", 1.0),
@@ -83,9 +81,9 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
 
     # === UniVLA Magic Soup++ ===
     "omni_magic_soup_plus_plus": [
-        ("fractal20220817_data", 0.5),                
+        ("fractal20220817_data", 0.5),
         ("kuka", 0.1),
-        ("bridge_oxe", 1.0),                                   
+        ("bridge_oxe", 1.0),
         ("taco_play", 2.0),
         ("jaco_play", 1.0),
         ("berkeley_cable_routing", 1.0),
@@ -106,9 +104,9 @@ OXE_NAMED_MIXTURES: Dict[str, List[Tuple[str, float]]] = {
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),
         ("cmu_stretch", 1.0),
-        ("bc_z", 0.2),                                          
+        ("bc_z", 0.2),
         ("fmb", 1.0),
-        ("dobbe", 0.2),                   
+        ("dobbe", 0.2),
         ## Datasets for Navigation
         ("berkeley_gnm_recon", 2.0),
         ("berkeley_gnm_cory_hall", 2.0),

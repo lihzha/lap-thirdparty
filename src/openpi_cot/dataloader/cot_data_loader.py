@@ -9,8 +9,11 @@ import openpi.models.model as _model
 import openpi.training.data_loader as up  # upstream module
 import openpi.transforms as up_tf
 
+from openpi_cot.dataloader.cot_rlds_dataset import CombinedCoTRldsDataset
 from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTRldsDataset
+from openpi_cot.dataloader.cot_rlds_dataset import OXECoTRldsDatasets
 from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.policies.combined_cot_policy import CombinedCoTInputs
 from openpi_cot.policies.droid_cot_policy import DroidCoTInputs  # the one transform you condition on
 import openpi_cot.training.config as _config
 
@@ -29,7 +32,10 @@ def _create_rlds_dataset(
     # Per-host batching; avoids redundant slicing work in multi-process setups
     local_bsz = max(1, batch_size // jax.process_count())
 
-    if getattr(data_cfg, "cot", False):
+    # Some configs may expose an optional `dataset_type` attribute.
+    dataset_type = getattr(data_cfg, "dataset_type", "droid")
+
+    if dataset_type == "droid":
         return DroidCoTRldsDataset(
             data_dir=data_cfg.rlds_data_dir,
             language_action_dir=data_cfg.language_action_dir,
@@ -43,6 +49,71 @@ def _create_rlds_dataset(
             seed=seed,
             config=data_cfg,
             split=split,
+        )
+    if dataset_type == "oxe":
+        # OXE requires additional fields; only proceed if present, else fall back upstream.
+        oxe_required = (
+            hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None,
+            hasattr(data_cfg, "resize_resolution") and data_cfg.resize_resolution is not None,
+        )
+        data_root_dir = getattr(data_cfg, "data_root_dir", None) or getattr(data_cfg, "rlds_data_dir", None)
+        if all(oxe_required) and data_root_dir is not None:
+            return OXECoTRldsDatasets(
+                config=data_cfg,
+                data_root_dir=data_root_dir,
+                data_mix=data_cfg.data_mix,
+                resize_resolution=data_cfg.resize_resolution,
+                action_chunk_size=action_horizon,
+                batch_size=local_bsz,
+                shuffle=shuffle,
+                shuffle_buffer_size=data_cfg.shuffle_buffer_size,
+                seed=seed,
+                split=split,
+                max_samples=max_samples,
+                use_wrist_image=getattr(data_cfg, "use_wrist_image", False),
+            )
+        logging.warning(
+            "dataset_type='oxe' selected but required fields missing; falling back to upstream RLDS loader."
+        )
+    if dataset_type == "combined":
+        # Combined requires both DROID and OXE fields; validate and proceed if present.
+        data_root_dir = getattr(data_cfg, "data_root_dir", None) or getattr(data_cfg, "rlds_data_dir", None)
+        has_droid = (
+            getattr(data_cfg, "rlds_data_dir", None) is not None
+            and getattr(data_cfg, "language_action_dir", None) is not None
+        )
+        has_oxe = (
+            data_root_dir is not None
+            and hasattr(data_cfg, "data_mix")
+            and data_cfg.data_mix is not None
+            and hasattr(data_cfg, "resize_resolution")
+            and data_cfg.resize_resolution is not None
+        )
+        if has_droid and has_oxe:
+            return CombinedCoTRldsDataset(
+                # Top-level
+                batch_size=local_bsz,
+                shuffle=shuffle,
+                shuffle_buffer_size=data_cfg.shuffle_buffer_size,
+                max_samples=max_samples,
+                seed=seed,
+                split=split,
+                use_wrist_image=getattr(data_cfg, "use_wrist_image", False),
+                droid_weight=getattr(data_cfg, "droid_weight", 1.0),
+                # DROID-specific (Raw)
+                data_dir=data_cfg.rlds_data_dir,
+                language_action_dir=data_cfg.language_action_dir,
+                config=data_cfg,
+                action_chunk_size=action_horizon,
+                action_space=data_cfg.action_space,
+                split_seed=split_seed,
+                # OXE-specific (Raw)
+                data_root_dir=data_root_dir,
+                data_mix=data_cfg.data_mix,
+                resize_resolution=data_cfg.resize_resolution,
+            )
+        logging.warning(
+            "dataset_type='combined' selected but required fields missing; falling back to upstream RLDS loader."
         )
 
     return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)
@@ -72,7 +143,7 @@ def _make_iterable_transforms(
     if split is not None and split != "train":
         new_tx = []
         for t in tx:
-            if isinstance(t, DroidCoTInputs):
+            if isinstance(t, (DroidCoTInputs, CombinedCoTInputs)):
                 new_tx.append(dataclasses.replace(t, wrist_image_dropout_prob=0.0, text_state_dropout_prob=0.0))
             else:
                 new_tx.append(t)
