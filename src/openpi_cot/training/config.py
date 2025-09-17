@@ -616,7 +616,6 @@ class RLDSCombinedCoTDataConfig(DataConfigFactory):
             text_state_dropout_prob=self.text_state_dropout_prob,
             # Combined/OXE knobs
             dataset_type="combined",
-            rlds_data_dir=self.rlds_data_dir,
             data_mix=self.data_mix,
             resize_resolution=self.resize_resolution,
             droid_weight=self.droid_weight,
