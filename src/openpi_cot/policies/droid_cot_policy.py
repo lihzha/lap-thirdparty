@@ -1,5 +1,4 @@
 import dataclasses
-import logging
 
 import einops
 import numpy as np
@@ -9,7 +8,6 @@ from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 
 
 def _parse_image(image) -> np.ndarray:
-    logging.info(f"Parsing image: {image.shape}")
     if image is None:
         return None
     image = np.asarray(image)
