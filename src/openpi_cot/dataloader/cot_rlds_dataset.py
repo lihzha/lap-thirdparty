@@ -1114,14 +1114,14 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDatasetRaw):
                 fallback_instruction = self.fallback_instructions[fallback_index]
 
                 def _sample_from_table():
-                    arr = raw_language_instruction
+                    arr = tf.reshape(raw_language_instruction, [-1])
                     return tf.random.shuffle(arr, seed=self.seed)[0]
 
-                instruction = tf.cond(
-                    tf.greater(tf.strings.length(raw_language_instruction), 0),
-                    _sample_from_table,
-                    lambda: fallback_instruction,
+                has_any_instruction = tf.reduce_any(
+                    tf.greater(tf.strings.length(tf.reshape(raw_language_instruction, [-1])), 0)
                 )
+
+                instruction = tf.cond(has_any_instruction, _sample_from_table, lambda: fallback_instruction)
 
                 instruction_vec = tf.fill([tf.shape(traj["action"])[0]], instruction)
                 task["language_instruction"] = instruction_vec
