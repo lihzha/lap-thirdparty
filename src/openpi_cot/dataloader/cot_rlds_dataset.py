@@ -1013,7 +1013,7 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDatasetRaw):
         self.action_proprio_normalization_type = dataset_kwargs["action_proprio_normalization_type"]
         self.absolute_action_mask = dataset_kwargs["absolute_action_mask"]
         self.action_normalization_mask = dataset_kwargs["action_normalization_mask"]
-        dataset_frame_transform_kwargs = dataset_kwargs["dataset_frame_transform_kwargs"]
+        dataset_frame_transform_kwargs = dataset_kwargs.get("dataset_frame_transform_kwargs", {})
         if self.image_obs_keys is None:
             self.image_obs_keys = {}
         if self.language_key is not None:
