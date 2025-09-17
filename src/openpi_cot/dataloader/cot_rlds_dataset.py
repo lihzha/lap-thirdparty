@@ -1477,6 +1477,7 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
         want_val = raw_kwargs.get("split", "train") == "val"
 
         super().__init__(**raw_kwargs)
+        self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(self.datasets, self.sample_weights)
 
         self.dataset = maybe_shuffle_and_take(
             self.dataset,
