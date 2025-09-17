@@ -918,8 +918,8 @@ _CONFIGS = [
         do_val=True,
         model=build_picot_model(pi05=True, discrete_state_input=True),
         data=build_oxe_cot_data(
-            rlds_data_dir="gs://pi0-cot/oxe",
-            data_mix="omni_magic_soup_plus",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            data_mix="oxe_pi_magic_soup",
             assets_dir="gs://pi0-cot/assets/pi0_oxe_cot_v4",
         ),
         num_train_steps=100_000,
