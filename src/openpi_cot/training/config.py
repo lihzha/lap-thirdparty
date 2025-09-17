@@ -134,7 +134,7 @@ def build_droid_cot_data(
 
 def build_oxe_cot_data(
     *,
-    data_root_dir: str,
+    rlds_data_dir: str,
     data_mix: str,
     assets_dir: str,
     asset_id: str = "oxe",
@@ -152,7 +152,7 @@ def build_oxe_cot_data(
     """Helper to build an OXE CoT RLDS data config."""
     return RLDSOXECoTDataConfig(
         repo_id="oxe",
-        data_root_dir=data_root_dir,
+        rlds_data_dir=rlds_data_dir,
         data_mix=data_mix,
         resize_resolution=resize_resolution,
         shuffle_buffer_size=shuffle_buffer_size,
@@ -236,7 +236,7 @@ class CoTDataConfig:
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
     dataset_type: Literal["droid", "oxe", "combined"] = "droid"
     # OXE fields (used when dataset_type == "oxe" or "combined")
-    data_root_dir: str | None = None
+    rlds_data_dir: str | None = None
     data_mix: str | None = None
     resize_resolution: tuple[int, int] | None = None
     # Combined-only: weight for DROID when interleaving with OXE
@@ -520,7 +520,7 @@ class RLDSCombinedCoTDataConfig(DataConfigFactory):
     drop_gripper_oob: bool = False
 
     # OXE/Combined fields
-    data_root_dir: str | None = None
+    rlds_data_dir: str | None = None
     data_mix: str | None = None
     resize_resolution: tuple[int, int] | None = (224, 224)
     droid_weight: float = 1.0
@@ -616,7 +616,7 @@ class RLDSCombinedCoTDataConfig(DataConfigFactory):
             text_state_dropout_prob=self.text_state_dropout_prob,
             # Combined/OXE knobs
             dataset_type="combined",
-            data_root_dir=self.data_root_dir,
+            rlds_data_dir=self.rlds_data_dir,
             data_mix=self.data_mix,
             resize_resolution=self.resize_resolution,
             droid_weight=self.droid_weight,
@@ -630,7 +630,7 @@ class RLDSOXECoTDataConfig(DataConfigFactory):
     """
 
     # OXE-specific
-    data_root_dir: str | None = None
+    rlds_data_dir: str | None = None
     data_mix: str | None = None
     resize_resolution: tuple[int, int] | None = (224, 224)
     shuffle_buffer_size: int = 250_000
@@ -699,7 +699,7 @@ class RLDSOXECoTDataConfig(DataConfigFactory):
             use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
             # OXE selection
             dataset_type="oxe",
-            data_root_dir=self.data_root_dir,
+            rlds_data_dir=self.rlds_data_dir,
             data_mix=self.data_mix,
             resize_resolution=self.resize_resolution,
             # Common knobs
@@ -908,7 +908,7 @@ _CONFIGS = [
         do_val=True,
         model=build_picot_model(pi05=True, discrete_state_input=True),
         data=build_oxe_cot_data(
-            data_root_dir="gs://pi0-cot/oxe",
+            rlds_data_dir="gs://pi0-cot/oxe",
             data_mix="omni_magic_soup_plus",
             assets_dir="gs://pi0-cot/assets/pi0_oxe_cot_v4",
         ),

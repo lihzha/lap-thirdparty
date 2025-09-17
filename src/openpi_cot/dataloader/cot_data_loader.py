@@ -56,11 +56,11 @@ def _create_rlds_dataset(
             hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None,
             hasattr(data_cfg, "resize_resolution") and data_cfg.resize_resolution is not None,
         )
-        data_root_dir = getattr(data_cfg, "data_root_dir", None) or getattr(data_cfg, "rlds_data_dir", None)
-        if all(oxe_required) and data_root_dir is not None:
+        rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
+        if all(oxe_required) and rlds_data_dir is not None:
             return OXECoTRldsDatasets(
                 config=data_cfg,
-                data_root_dir=data_root_dir,
+                rlds_data_dir=rlds_data_dir,
                 data_mix=data_cfg.data_mix,
                 resize_resolution=data_cfg.resize_resolution,
                 action_chunk_size=action_horizon,
@@ -77,13 +77,13 @@ def _create_rlds_dataset(
         )
     if dataset_type == "combined":
         # Combined requires both DROID and OXE fields; validate and proceed if present.
-        data_root_dir = getattr(data_cfg, "data_root_dir", None) or getattr(data_cfg, "rlds_data_dir", None)
+        rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
         has_droid = (
             getattr(data_cfg, "rlds_data_dir", None) is not None
             and getattr(data_cfg, "language_action_dir", None) is not None
         )
         has_oxe = (
-            data_root_dir is not None
+            rlds_data_dir is not None
             and hasattr(data_cfg, "data_mix")
             and data_cfg.data_mix is not None
             and hasattr(data_cfg, "resize_resolution")
@@ -108,7 +108,7 @@ def _create_rlds_dataset(
                 action_space=data_cfg.action_space,
                 split_seed=split_seed,
                 # OXE-specific (Raw)
-                data_root_dir=data_root_dir,
+                rlds_data_dir=rlds_data_dir,
                 data_mix=data_cfg.data_mix,
                 resize_resolution=data_cfg.resize_resolution,
             )

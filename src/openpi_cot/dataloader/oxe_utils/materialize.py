@@ -18,7 +18,7 @@ from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANS
 
 def make_oxe_dataset_kwargs(
     dataset_name: str,
-    data_root_dir: Path,
+    rlds_data_dir: Path,
     load_camera_views: tuple[str] = ("primary",),
     load_depth: bool = False,
     load_proprio: bool = True,
@@ -73,11 +73,11 @@ def make_oxe_dataset_kwargs(
     if "aux_kwargs" in dataset_kwargs:
         dataset_kwargs.update(dataset_kwargs.pop("aux_kwargs"))
 
-    return {"name": dataset_name, "data_dir": str(data_root_dir), **dataset_kwargs}
+    return {"name": dataset_name, "data_dir": str(rlds_data_dir), **dataset_kwargs}
 
 
 def get_oxe_dataset_kwargs_and_weights(
-    data_root_dir: Path,
+    rlds_data_dir: Path,
     mixture_spec: list[tuple[str, float]],
     load_camera_views: tuple[str] = ("primary",),
     load_depth: bool = False,
@@ -89,7 +89,7 @@ def get_oxe_dataset_kwargs_and_weights(
     Generates dataset kwargs for a given dataset mix from the Open X-Embodiment dataset. The returned kwargs
     (per-dataset configs) and weights can be passed directly to `make_interleaved_dataset`.
 
-    :param data_root_dir: Base directory containing RLDS/TFDS-formatted datasets (from Open-X)
+    :param rlds_data_dir: Base directory containing RLDS/TFDS-formatted datasets (from Open-X)
     :param mixture_spec: List of (dataset_name, sampling_weight) from `oxe.mixtures.OXE_NAMED_MIXTURES`
     :param load_camera_views: Camera views to load; see `oxe.dataset_configs.py` for available views.
     :param load_depth: Load depth information in addition to camera RGB.
@@ -115,7 +115,7 @@ def get_oxe_dataset_kwargs_and_weights(
             per_dataset_kwargs.append(
                 make_oxe_dataset_kwargs(
                     d_name,
-                    data_root_dir,
+                    rlds_data_dir,
                     load_camera_views,
                     load_depth,
                     load_proprio,

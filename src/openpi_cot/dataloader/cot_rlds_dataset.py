@@ -1287,7 +1287,7 @@ class OXECoTRldsDatasetsRaw:
     def __init__(
         self,
         config,
-        data_root_dir: str,
+        rlds_data_dir: str,
         data_mix: str,
         resize_resolution: tuple[int, int],
         shuffle: bool = True,  # noqa: FBT001, FBT002
@@ -1313,7 +1313,7 @@ class OXECoTRldsDatasetsRaw:
 
         # fmt: off
         dataset_kwargs_list, sample_weights = get_oxe_dataset_kwargs_and_weights(
-            data_root_dir,
+            rlds_data_dir,
             mixture_spec,
             load_camera_views=("primary", "wrist"),
             load_depth=False,
@@ -1463,7 +1463,7 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
             if req not in top_kwargs:
                 raise ValueError(f"Missing required arguments: ['{req}']")
         raw_kwargs, _ = _filter_kwargs_for(OXECoTRldsDatasetsRaw.__init__, kwargs)
-        for req in ("config", "data_root_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
+        for req in ("config", "rlds_data_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
             if req not in raw_kwargs:
                 raise ValueError(f"Missing required arguments: ['{req}']")
         consumed_keys = set(top_kwargs.keys()) | set(raw_kwargs.keys())
@@ -1543,7 +1543,7 @@ class CombinedCoTRldsDataset:
                 raise ValueError(f"Missing required arguments: ['{req}']")
 
         oxe_kwargs, _ = _filter_kwargs_for(OXECoTRldsDatasetsRaw.__init__, kwargs)
-        for req in ("config", "data_root_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
+        for req in ("config", "rlds_data_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
             if req not in oxe_kwargs:
                 raise ValueError(f"Missing required arguments: ['{req}']")
 
