@@ -121,7 +121,16 @@ def make_decode_images_fn(
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors."""
 
     def _decode_single(img_bytes):
-        return tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8)
+        # If already numeric, cast to uint8 and return
+        if img_bytes.dtype != tf.string:
+            return tf.cast(img_bytes, tf.uint8)
+        # Guard against empty placeholders (e.g., padding "")
+        has_data = tf.greater(tf.strings.length(img_bytes), 0)
+        return tf.cond(
+            has_data,
+            lambda: tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8),
+            lambda: tf.zeros([1, 1, 3], dtype=tf.uint8),
+        )
 
     def _decode_frame(traj: dict) -> dict:
         traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
