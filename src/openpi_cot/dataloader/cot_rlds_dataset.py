@@ -477,23 +477,42 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
     def build_filter_table(self, metadata_path, use_idle_filter: bool):
         filter_table = None
         if use_idle_filter:
+            # with tf.io.gfile.GFile(f"{metadata_path}/{self.keep_ranges_file}", "r") as f:
+            #     filter_dict = json.load(f)
+
+            # logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
+
+            # ep_keys = []
+            # ranges_ser = []
+            # for episode_key, ranges in filter_dict.items():
+            #     arr = np.array(ranges, dtype=np.int32)  # shape [M, 2]
+            #     ep_keys.append(episode_key)
+            #     ranges_ser.append(tf.io.serialize_tensor(tf.constant(arr)).numpy())
+
+            # keys = tf.constant(ep_keys, dtype=tf.string)
+            # vals = tf.constant(ranges_ser, dtype=tf.string)
+            # filter_table = tf.lookup.StaticHashTable(
+            #     tf.lookup.KeyValueTensorInitializer(keys, vals),
+            #     default_value=tf.constant(b"", dtype=tf.string),
+            # )
+            # print_memory_usage("After building filter_table")
             with tf.io.gfile.GFile(f"{metadata_path}/{self.keep_ranges_file}", "r") as f:
                 filter_dict = json.load(f)
 
             logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
 
-            ep_keys = []
-            ranges_ser = []
-            for episode_key, ranges in filter_dict.items():
-                arr = np.array(ranges, dtype=np.int32)  # shape [M, 2]
-                ep_keys.append(episode_key)
-                ranges_ser.append(tf.io.serialize_tensor(tf.constant(arr)).numpy())
+            keys_tensor = []
+            values_tensor = []
 
-            keys = tf.constant(ep_keys, dtype=tf.string)
-            vals = tf.constant(ranges_ser, dtype=tf.string)
+            for episode_key, ranges in filter_dict.items():
+                for start, end in ranges:
+                    for t in range(start, end):
+                        frame_key = f"{episode_key}--{t}"
+                        keys_tensor.append(frame_key)
+                        values_tensor.append(True)
             filter_table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(keys, vals),
-                default_value=tf.constant(b"", dtype=tf.string),
+                tf.lookup.KeyValueTensorInitializer(keys_tensor, values_tensor),
+                default_value=False,
             )
             print_memory_usage("After building filter_table")
 
@@ -586,22 +605,31 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             }
 
             if use_idle_filter:
-                # episode_id: scalar tf.string; traj_len: int
-                ranges_bytes = filter_table.lookup(episode_id)
+                # # episode_id: scalar tf.string; traj_len: int
+                # ranges_bytes = filter_table.lookup(episode_id)
 
-                def _compute_mask():
-                    ranges = tf.io.parse_tensor(ranges_bytes, out_type=tf.int32)  # [M, 2]
-                    t = tf.range(traj_len)[:, None]  # [T, 1]
-                    starts = tf.cast(ranges[:, 0][None, :], tf.int32)  # [1, M]
-                    ends = tf.cast(ranges[:, 1][None, :], tf.int32)  # [1, M]
-                    in_any = tf.reduce_any((t >= starts) & (t < ends), axis=1)  # [T]
-                    return in_any
+                # def _compute_mask():
+                #     ranges = tf.io.parse_tensor(ranges_bytes, out_type=tf.int32)  # [M, 2]
+                #     t = tf.range(traj_len)[:, None]  # [T, 1]
+                #     starts = tf.cast(ranges[:, 0][None, :], tf.int32)  # [1, M]
+                #     ends = tf.cast(ranges[:, 1][None, :], tf.int32)  # [1, M]
+                #     in_any = tf.reduce_any((t >= starts) & (t < ends), axis=1)  # [T]
+                #     return in_any
 
-                passes_filter = tf.cond(
-                    tf.greater(tf.strings.length(ranges_bytes), 0),
-                    _compute_mask,
-                    lambda: tf.zeros([traj_len], dtype=tf.bool),
+                # passes_filter = tf.cond(
+                #     tf.greater(tf.strings.length(ranges_bytes), 0),
+                #     _compute_mask,
+                #     lambda: tf.zeros([traj_len], dtype=tf.bool),
+                # )
+                # _return_dict["passes_filter"] = passes_filter
+                step_id = (
+                    traj["traj_metadata"]["episode_metadata"]["recording_folderpath"]
+                    + "--"
+                    + traj["traj_metadata"]["episode_metadata"]["file_path"]
+                    + "--"
+                    + tf.as_string(tf.range(traj_len))
                 )
+                passes_filter = filter_table.lookup(step_id)
                 _return_dict["passes_filter"] = passes_filter
 
             if need_calib:
