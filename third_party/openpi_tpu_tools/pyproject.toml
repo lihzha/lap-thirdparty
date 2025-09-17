@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tpu-tools = "openpi_tpu_tools.cli:main"
+tpu-tools = "tpu_tools.cli:main"
 
 [build-system]
 requires = ["hatchling"]

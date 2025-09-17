@@ -151,14 +151,15 @@ class TPUManager:
 
     def tmux(self, version: Literal["v4", "v5", "v6"], *, cmd: str, session: str = "tpu") -> bool:
         # Ensure tmux exists and start/send in a session across all workers
-        quoted_cmd = shlex.join(["set", "-eo", "pipefail;", "export", "PYTHONUNBUFFERED=1;", f"{cmd}"])
+        line = f"set -eo pipefail; export PYTHONUNBUFFERED=1; {cmd} 2>&1 | tee -a $LOG"
         remote = (
             "command -v tmux >/dev/null || (sudo apt-get update && sudo apt-get install -y tmux);"
             "mkdir -p ~/openpi-cot/logs;"
             "TS=$(date +%Y%m%d-%H%M%S);"
             f"LOG=~/openpi-cot/logs/{session}_$TS.log;"
             f"if ! tmux has-session -t {session} 2>/dev/null; then tmux new-session -ds {session} -e SSH_AUTH_SOCK=$SSH_AUTH_SOCK; fi;"
-            f"tmux send-keys -t {session} {shlex.quote('set -eo pipefail; export PYTHONUNBUFFERED=1; ')}{shlex.quote(cmd)} {shlex.quote('2>&1 | tee -a $LOG')} C-m"
+            # Use -l to send a literal line to the shell; quote once for remote bash parsing
+            f"tmux send-keys -t {session} -l {shlex.quote(line)} C-m"
         )
         proc = gcloud_tpu_ssh(
             tpu_name=self.env.tpu_name,
@@ -169,6 +170,26 @@ class TPUManager:
             ssh=self.ssh,
         )
         return proc.returncode == 0
+
+    def raw(self, version: Literal["v4", "v5", "v6"], *, cmd: str, worker: str | None = "all") -> int:
+        """Run a raw command on TPU worker(s) without tmux.
+
+        Mirrors `v4 "<cmd>"` style helpers from ~/.tpu_funcs.sh.
+        """
+        proc = gcloud_tpu_ssh(
+            tpu_name=self.env.tpu_name,
+            project=self.env.tpu_project,
+            zone=self._zone_for(version),
+            worker=worker if worker is not None else None,
+            command=cmd,
+            ssh=self.ssh,
+        )
+        # Forward remote stdout/stderr to local terminal
+        if proc.stdout:
+            print(proc.stdout, end="")
+        if proc.stderr:
+            print(proc.stderr, end="")
+        return proc.returncode
 
     def attach(self, version: Literal["v4", "v5", "v6"], *, session: str = "tpu", worker: int = 0) -> int:
         proc = gcloud_tpu_ssh(

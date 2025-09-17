@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_tmux = sub.add_parser("tmux", help="Run a tmux command on all workers")
     _add_common(p_tmux)
     p_tmux.add_argument("--session", default="tpu")
-    p_tmux.add_argument("cmd", nargs=argparse.REMAINDER)
+    p_tmux.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run in tmux session")
 
     p_attach = sub.add_parser("attach", help="Attach to tmux on a worker")
     _add_common(p_attach)
@@ -60,6 +60,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_nuke = sub.add_parser("nuke", help="Kill tmux, JAX, and clean tmp on all workers")
     _add_common(p_nuke)
 
+    # Raw SSH commands without tmux: v4/v5/v6
+    p_v4 = sub.add_parser("v4", help="Run raw command on v4 workers (no tmux)")
+    p_v4.add_argument("--worker", type=int, default=None, help="Worker index (default: all)")
+    p_v4.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run remotely")
+    p_v5 = sub.add_parser("v5", help="Run raw command on v5 workers (no tmux)")
+    p_v5.add_argument("--worker", type=int, default=None, help="Worker index (default: all)")
+    p_v5.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run remotely")
+    p_v6 = sub.add_parser("v6", help="Run raw command on v6 workers (no tmux)")
+    p_v6.add_argument("--worker", type=int, default=None, help="Worker index (default: all)")
+    p_v6.add_argument("rest", nargs=argparse.REMAINDER, help="Command to run remotely")
+
     return ap
 
 
@@ -83,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
     if ns.cmd == "delete-name":
         return mgr.delete_by_name(ns.version, ns.name)
     if ns.cmd == "tmux":
-        cmd = " ".join(ns.cmd) if ns.cmd else ""
+        cmd = " ".join(ns.rest) if getattr(ns, "rest", None) else ""
         ok = mgr.tmux(ns.version, cmd=cmd, session=ns.session)
         return 0 if ok else 1
     if ns.cmd == "attach":
@@ -105,6 +116,11 @@ def main(argv: list[str] | None = None) -> int:
     if ns.cmd == "nuke":
         ok = mgr.nuke_all(ns.version)
         return 0 if ok else 1
+    if ns.cmd in {"v4", "v5", "v6"}:
+        # Preserve spacing and quotes of the raw command by joining with spaces
+        cmd = " ".join(ns.rest) if getattr(ns, "rest", None) else ""
+        worker = None if getattr(ns, "worker", None) is None else str(ns.worker)
+        return mgr.raw(ns.cmd, cmd=cmd, worker=(worker or "all"))
     ap.error("Unknown command")
     return 2
 

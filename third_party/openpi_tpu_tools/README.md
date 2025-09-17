@@ -2,10 +2,22 @@
 
 Unified TPU utilities and watcher for OpenPI-CoT across **v4 / v5 / v6**.
 
-## Installation & Quick Start
+## Installation (no uv required)
+
+Recommended (isolated):
 
 ```bash
-uv run tpu-tools --help
+# Install with pipx
+pipx install /Users/lihanzha/code/openpi-cot/third_party/openpi_tpu_tools
+
+# or install for current user with pip
+python -m pip install --user /Users/lihanzha/code/openpi-cot/third_party/openpi_tpu_tools
+
+# Ensure ~/.local/bin is on PATH (for --user installs)
+export PATH="$HOME/.local/bin:$PATH"
+
+# Verify
+tpu-tools --help
 ```
 
 ## Watch & Run
@@ -14,19 +26,19 @@ Replaces the old `watch_and_run*.sh` scripts.
 
 ```bash
 # v6 example (8 workers)
-uv run tpu-tools watch v6 -f -n 8 -- <extra args>
+tpu-tools watch v6 -f -n 8 -- <extra args>
 
 # v5 example (16 workers)
-uv run tpu-tools watch v5 -f -n 16 -- <extra args>
+tpu-tools watch v5 -f -n 16 -- <extra args>
 
 # v4 example (8 workers, maps 8→2x2x2 topology)
-uv run tpu-tools watch v4 -f -n 8 -- <extra args>
+tpu-tools watch v4 -f -n 8 -- <extra args>
 ```
 
 Use `--` to separate TPU arguments from training script arguments:
 
 ```bash
-uv run tpu-tools watch v6 -f -n 8 -- --config.some_flag=value
+tpu-tools watch v6 -f -n 8 -- --config.some_flag=value
 ```
 
 ---
@@ -37,17 +49,17 @@ Replaces functions from `.tpu_funcs.sh`:
 
 | Command                                              | Description                     |
 | ---------------------------------------------------- | ------------------------------- |
-| `uv run tpu-tools list v6`                          | List TPUs in v6                 |
-| `uv run tpu-tools delete v6`                        | Delete current TPU              |
-| `uv run tpu-tools delete-name v6 NAME`              | Delete TPU by name              |
-| `uv run tpu-tools tmux v6 --session s`              | Run command in tmux on TPU      |
-| `uv run tpu-tools attach v6 --session s --worker 0` | Attach to tmux session worker 0 |
-| `uv run tpu-tools tmux-ls v6`                       | List tmux sessions              |
-| `uv run tpu-tools tail v6 --worker 0`               | Tail last log for worker 0      |
-| `uv run tpu-tools tmux-kill-all v6`                 | Kill all tmux sessions          |
-| `uv run tpu-tools kill-jax v6`                      | Kill all JAX processes          |
-| `uv run tpu-tools clean-tmp v6`                     | Clean `/tmp` on TPU             |
-| `uv run tpu-tools nuke v6`                          | Delete all TPUs in v6           |
+| `tpu-tools list v6`                                 | List TPUs in v6                 |
+| `tpu-tools delete v6`                               | Delete current TPU              |
+| `tpu-tools delete-name v6 NAME`                     | Delete TPU by name              |
+| `tpu-tools tmux v6 --session s <cmd>`               | Run command in tmux on TPU      |
+| `tpu-tools attach v6 --session s --worker 0`        | Attach to tmux session worker 0 |
+| `tpu-tools tmux-ls v6`                              | List tmux sessions              |
+| `tpu-tools tail v6 --worker 0`                      | Tail last log for worker 0      |
+| `tpu-tools tmux-kill-all v6`                        | Kill all tmux sessions          |
+| `tpu-tools kill-jax v6`                             | Kill all JAX processes          |
+| `tpu-tools clean-tmp v6`                            | Clean `/tmp` on TPU             |
+| `tpu-tools nuke v6`                                 | Kill tmux, JAX, and clean tmp   |
 
 ---
 
@@ -81,6 +93,21 @@ SLEEP_SECS
 
 ---
 
+## Raw SSH Aliases (no tmux)
+
+If you source your local helpers (e.g. `~/.tpu_funcs.sh`), you can send commands to all workers without tmux:
+
+```bash
+# Examples (run on all workers)
+v4 "hostname"
+v5 "uname -a"
+v6 "nvidia-smi || true"
+```
+
+These wrappers use `gcloud compute tpus tpu-vm ssh` directly and respect your `TPU_*` env vars.
+
+---
+
 ## Package Structure
 
 ```
@@ -97,12 +124,10 @@ third_party/openpi_tpu_tools/
   LICENSE
 ```
 
-Root `pyproject.toml` updated to include `packages/openpi-tpu` as a workspace member.
-
 ---
 
 ## Help
 
 ```bash
-uv run tpu-tools --help
+tpu-tools --help
 ```

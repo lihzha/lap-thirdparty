@@ -32,9 +32,10 @@ class SSHOptions:
     total_timeout_s: int = int(os.environ.get("SSH_TOTAL_TIMEOUT", 60))
     kill_after_s: int = int(os.environ.get("SSH_KILL_AFTER", 5))
     key_file: str | None = os.environ.get("GCLOUD_SSH_KEY_FILE")
+    forward_agent: bool = os.environ.get("SSH_FORWARD_AGENT", "1") != "0"
 
     def to_ssh_flags(self) -> list[str]:
-        return [
+        flags: list[str] = [
             "-o",
             "BatchMode=yes",
             "-o",
@@ -48,6 +49,10 @@ class SSHOptions:
             "-o",
             "UserKnownHostsFile=/dev/null",
         ]
+        # Forward agent if enabled and an agent socket is present
+        if self.forward_agent and os.environ.get("SSH_AUTH_SOCK"):
+            flags.append("-A")
+        return flags
 
 
 def run_with_timeout(timeout_s: int, kill_after_s: int, argv: Sequence[str]) -> subprocess.CompletedProcess:
@@ -84,6 +89,11 @@ def gcloud_tpu_ssh(
         args += ["--worker", str(worker)]
     if ssh.key_file and os.path.exists(ssh.key_file):
         args += ["--ssh-key-file", ssh.key_file]
+    if worker == "all":
+        # gcloud requires --command when targeting all workers; pass raw command as-is
+        if command:
+            args += ["--command", command]
+        return run_with_timeout(ssh.total_timeout_s, ssh.kill_after_s, args)
     if extra_args:
         args.extend(list(extra_args))
     # raw ssh flags come after "--"
@@ -91,5 +101,4 @@ def gcloud_tpu_ssh(
     args.extend(ssh.to_ssh_flags())
     if command:
         args += ["bash", "-lc", command]
-
     return run_with_timeout(ssh.total_timeout_s, ssh.kill_after_s, args)

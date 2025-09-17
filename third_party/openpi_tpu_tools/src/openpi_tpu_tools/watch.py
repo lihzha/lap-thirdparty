@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from dataclasses import dataclass
 import os
 import signal
+from string import Template
 import sys
 
 from .config import TPUEnvConfig
@@ -61,7 +63,9 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
             state = mgr.describe(cfg.version)  # may raise for invalid zone
         except Exception as exc:
             print(str(exc))
-            os.sleep(mgr.sleep_secs)
+            from time import sleep
+
+            sleep(mgr.sleep_secs)
             continue
 
         print(f"{_ts()} - TPU {env.tpu_name} state: {state}")
@@ -113,24 +117,78 @@ def watch_and_run(cfg: WatchConfig, env: TPUEnvConfig) -> None:
                 "v6": env.tpu_bucket_v6,
             }[cfg.version]
             openpi_data_home = f"{bucket_env}/cache"
-            setup_cmd = (
-                "curl -LsSf https://astral.sh/uv/install.sh | sh && "
-                "echo 'export WANDB_API_KEY=9d133998a3d44bf5dd2d827a5d8e2710dc91a19b' >> ~/.zshrc && "
-                f"echo 'export OPENPI_DATA_HOME=\"{openpi_data_home}\"' >> ~/.zshrc && "
-                "source ~/.zshrc && "
-                # Configure git identity (safe defaults) and token auth for GitHub if provided
-                'git config --global user.name "lihzha" && '
-                'git config --global user.email "lihanzha20@gmail.com" && '
-                # Set credential helper to store to avoid prompts
-                "git config --global credential.helper store && "
-                # If GITHUB_TOKEN is set, write credentials for github.com
-                'bash -lc \'if [ -n "$GITHUB_TOKEN" ]; then mkdir -p ~/.config/git && printf "https://%s:x-oauth-basic@github.com\\n" "$GITHUB_TOKEN" > ~/.config/git/credentials; git config --global credential.helper "store --file=~/.config/git/credentials"; fi\' && '
-                # Clone using token URL if available, else HTTPS public URL
-                'bash -lc \'if [ -n "$GITHUB_TOKEN" ]; then REPO_URL="https://$GITHUB_TOKEN:x-oauth-basic@github.com/lihzha/openpi-cot.git"; else REPO_URL="https://github.com/lihzha/openpi-cot.git"; fi; '
-                'git clone --recurse-submodules "$REPO_URL" || true\' && '
-                "cd openpi-cot && "
-                "uv sync"
+            # Build a robust remote script and send via base64 to avoid quoting issues
+            local_token = os.environ.get("GITHUB_TOKEN", "")
+            setup_tpl = Template(r"""set -euo pipefail
+
+            # --- ephemeral env for this session only (avoid persisting secrets) ---
+            echo 'export WANDB_API_KEY=9d133998a3d44bf5dd2d827a5d8e2710dc91a19b' >> ~/.zshrc
+            echo 'export OPENPI_DATA_HOME=\"{openpi_data_home}\"' >> ~/.zshrc
+            echo 'export GH_TOKEN=\"{local_token}\"' >> ~/.zshrc
+            echo 'export GH_OWNER=\"lihzha\"' >> ~/.zshrc
+            echo 'export GH_REPO=\"openpi-cot\"' >> ~/.zshrc
+            echo 'export READ_ONLY=true' >> ~/.zshrc source ~/.zshrc
+            git config --global credential."https://github.com".helper ""
+            echo 'export GIT_TERMINAL_PROMPT=0' >> ~/.zshrc
+
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            export PATH="$HOME/.local/bin:$PATH"
+
+            source ~/.zshrc
+
+            # --- SSH deploy key setup ---
+            KEY_TITLE="${GH_REPO}-deploy-$(hostname)"
+            KEY_PATH="$HOME/.ssh/${GH_REPO}_deploy"
+
+            mkdir -p ~/.ssh && chmod 700 ~/.ssh
+            ssh-keygen -t ed25519 -N "" -f "$KEY_PATH" -C "$KEY_TITLE" >/dev/null
+
+            ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+            chmod 600 ~/.ssh/known_hosts
+
+            PUB_KEY="$(cat "${KEY_PATH}.pub")"
+            # turn READ_ONLY into true/false for the API
+            if [ "${READ_ONLY}" = "true" ]; then RO=true; else RO=false; fi
+            JSON=$(printf '{"title":"%s","key":"%s","read_only":%s}' "$KEY_TITLE" "$PUB_KEY" "$RO")
+
+            set +e
+            HTTP=$(curl -sS -o /tmp/deploykey.out -w "%{http_code}" -X POST \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GH_OWNER}/${GH_REPO}/keys" \
+            -d "$JSON")
+            set -e
+            if [ "$HTTP" != "201" ] && [ "$HTTP" != "422" ]; then
+            echo "Deploy key API error (HTTP $HTTP):"
+            cat /tmp/deploykey.out
+            exit 1
+            fi
+
+            # SSH config alias to pin the identity
+            {
+            echo "Host github-${GH_REPO}"
+            echo "  HostName github.com"
+            echo "  User git"
+            echo "  IdentityFile ${KEY_PATH}"
+            echo "  IdentitiesOnly yes"
+            } >> ~/.ssh/config
+            chmod 600 ~/.ssh/config
+
+            # --- clone + setup ---
+            if [ ! -d "openpi-cot/.git" ]; then
+            git clone --recurse-submodules "git@github-${GH_REPO}:${GH_OWNER}/${GH_REPO}.git"
+            fi
+
+            cd openpi-cot
+            uv sync
+            """)
+            setup_script = setup_tpl.substitute(
+                OPENPI_DATA_HOME=openpi_data_home,
+                GH_TOKEN=local_token,
             )
+
+            encoded = base64.b64encode(setup_script.encode()).decode().replace("\n", "")
+            setup_cmd = f"bash -lc 'echo {encoded} | base64 -d | bash -s'"
             if not mgr.tmux(cfg.version, cmd=setup_cmd, session="setup"):
                 print(f"{_ts()} - Setup failed/SSH timed out. Back to state check.")
                 from time import sleep
