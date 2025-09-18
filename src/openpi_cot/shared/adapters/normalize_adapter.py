@@ -1,4 +1,3 @@
-import json
 import os
 
 import dlimp as dl
@@ -30,20 +29,20 @@ def check_dataset_statistics(save_dir: str | None = None) -> dict:
     Checks if the dataset statistics are already computed and returns them if they are.
     """
 
-    # Fallback local path for when data_dir is not writable or not provided
-    local_path = os.path.expanduser(os.path.join("~", ".cache", "orca"))
-    path = save_dir if save_dir is not None else local_path
+    # Fallback local directory for when save_dir is not writable or not provided
+    local_dir = os.path.expanduser(os.path.join("~", ".cache", "orca"))
+    preferred_dir = save_dir if save_dir is not None else local_dir
 
-    # check if cache file exists and load
-    if tf.io.gfile.exists(path):
-        with tf.io.gfile.GFile(path, "r") as f:
-            return json.load(f), path, local_path
+    # Look for norm_stats.json in the preferred dir first, then in the local cache dir.
+    if tf.io.gfile.exists(preferred_dir):
+        stats = load(preferred_dir)
+        return stats, preferred_dir, local_dir
 
-    if os.path.exists(local_path):
-        with open(local_path) as f:
-            return json.load(f), local_path, local_path
+    if tf.io.gfile.exists(local_dir):
+        stats = load(local_dir)
+        return stats, local_dir, local_dir
 
-    return None, local_path, local_path
+    return None, preferred_dir, local_dir
 
 
 def get_dataset_statistics(
@@ -59,7 +58,7 @@ def get_dataset_statistics(
     Currently, the statistics include the min/max/mean/std of the actions and proprio as well as the number of
     transitions and trajectories in the dataset.
     """
-    metadata, output_path, _ = check_dataset_statistics(save_dir)
+    metadata, output_dir, _ = check_dataset_statistics(save_dir)
     if metadata is not None:
         return metadata
 
@@ -87,22 +86,23 @@ def get_dataset_statistics(
 
     norm_stats = {
         "state": _normalize.NormStats(
-            mean=proprios.mean(0).tolist(),
-            std=proprios.std(0).tolist(),
-            q01=np.quantile(proprios, 0.01, axis=0).tolist(),
-            q99=np.quantile(proprios, 0.99, axis=0).tolist(),
+            mean=np.asarray(proprios.mean(0)),
+            std=np.asarray(proprios.std(0)),
+            q01=np.asarray(np.quantile(proprios, 0.01, axis=0)),
+            q99=np.asarray(np.quantile(proprios, 0.99, axis=0)),
         ),
         "actions": _normalize.NormStats(
-            mean=actions.mean(0).tolist(),
-            std=actions.std(0).tolist(),
-            q01=np.quantile(actions, 0.01, axis=0).tolist(),
-            q99=np.quantile(actions, 0.99, axis=0).tolist(),
+            mean=np.asarray(actions.mean(0)),
+            std=np.asarray(actions.std(0)),
+            q01=np.asarray(np.quantile(actions, 0.01, axis=0)),
+            q99=np.asarray(np.quantile(actions, 0.99, axis=0)),
         ),
-        "num_transitions": num_transitions,
-        "num_trajectories": num_trajectories,
     }
 
-    print(f"Writing stats to: {output_path}")
-    save(output_path, norm_stats)
+    print(f"Writing stats to: {output_dir}")
+    save(output_dir, norm_stats)
 
-    return metadata
+    norm_stats["num_transitions"] = num_transitions
+    norm_stats["num_trajectories"] = num_trajectories
+
+    return norm_stats
