@@ -67,14 +67,14 @@ def get_dataset_statistics(
     if metadata is not None:
         return metadata
 
-    dataset = dataset.traj_map(
-        lambda traj: {
-            action_key: traj[action_key],
-            state_key: (
-                traj["observation"][state_key] if state_key in traj["observation"] else tf.zeros_like(traj[action_key])
-            ),
-        }
-    )
+    # dataset = dataset.traj_map(
+    #     lambda traj: {
+    #         action_key: traj[action_key],
+    #         state_key: (
+    #             traj["observation"][state_key] if state_key in traj["observation"] else tf.zeros_like(traj[action_key])
+    #         ),
+    #     }
+    # )
 
     cardinality = dataset.cardinality().numpy()
     if cardinality == tf.data.INFINITE_CARDINALITY:
@@ -83,7 +83,7 @@ def get_dataset_statistics(
     actions, proprios, num_transitions, num_trajectories = [], [], 0, 0
     for traj in tqdm(dataset.iterator(), total=cardinality if cardinality != tf.data.UNKNOWN_CARDINALITY else None):
         actions.append(traj[action_key])
-        proprios.append(traj[state_key])
+        proprios.append(traj["observation"][state_key])
         num_transitions += traj[action_key].shape[0]
         num_trajectories += 1
 

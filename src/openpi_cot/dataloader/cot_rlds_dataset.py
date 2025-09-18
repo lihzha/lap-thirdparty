@@ -1,6 +1,5 @@
 from collections.abc import Callable
 import contextlib
-import copy
 from enum import Enum
 from enum import auto
 from functools import partial
@@ -877,7 +876,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             need_calib=need_calib,
         )
         dataset_statistics = get_dataset_statistics(
-            copy.deepcopy(self.dataset),
+            self.dataset,
             save_dir=self.builder.data_dir,
             data_config=self.config,
             action_key="actions",
@@ -1023,7 +1022,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
         self.apply_restructure()
         dataset_statistics = get_dataset_statistics(
-            copy.deepcopy(self.dataset),
+            self.dataset,
             save_dir=self.builder.data_dir,
             data_config=self.config,
             action_key="action",
