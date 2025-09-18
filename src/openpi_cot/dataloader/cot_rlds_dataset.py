@@ -865,6 +865,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         cam_table, intr_table, extr_table = self.build_cam_tables(metadata_path, need_calib=need_calib)
         instr_table = self.build_instr_table(metadata_path)
         filter_table = self.build_filter_table(metadata_path, use_idle_filter=use_idle_filter)
+        self.apply_traj_filters(lang_table=lang_table, ep_table=ep_table)
 
         self.apply_restructure(
             lang_table=lang_table,
@@ -887,7 +888,6 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.dataset_statistics = tree_map(np.array, dataset_statistics)
         self.dataset_statistics = dataset_statistics
 
-        self.apply_traj_filters(lang_table=lang_table, ep_table=ep_table)
         self.split_val(ep_table=ep_table, split_seed=split_seed)
 
         self.apply_traj_transforms(
