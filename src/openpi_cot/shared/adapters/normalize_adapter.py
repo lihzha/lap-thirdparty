@@ -4,7 +4,7 @@ import dlimp as dl
 import numpy as np
 from openpi.shared import normalize as _normalize
 import tensorflow as tf
-import tqdm
+from tqdm_loggable.auto import tqdm
 
 
 def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
