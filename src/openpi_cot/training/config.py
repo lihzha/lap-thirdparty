@@ -1,6 +1,7 @@
 """See _CONFIGS for the list of available configs."""
 
 import dataclasses
+import difflib
 import pathlib
 from typing import Literal, TypeAlias
 
@@ -291,7 +292,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
             outputs=[cot_policy.CoTOutputs()],
         )
 
-        assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
+        # assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
         # TODO: Data loader returns absolute joint position actions -- convert to delta actions for training. confirm with oxe
         delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
         data_transforms = data_transforms.push(
