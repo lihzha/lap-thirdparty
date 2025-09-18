@@ -571,6 +571,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                 "prompt": instruction_vec,
                 "language_actions": lang_tensor,
                 "episode_id": episode_id_vec,
+                "metadata": traj["traj_metadata"],
             }
 
             if use_idle_filter:
