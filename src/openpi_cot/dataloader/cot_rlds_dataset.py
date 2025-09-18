@@ -1041,9 +1041,9 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.apply_traj_filters()
         self.split_val(split_seed=split_seed)
         self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=summation_steps)
+        self.apply_repack_transforms()
         self.apply_flatten()
         self.apply_per_dataset_frame_filters(**dataset_frame_transform_kwargs)
-        self.apply_repack_transforms()
 
     def apply_restructure(self):
         def restructure(traj):
