@@ -90,7 +90,7 @@ def get_dataset_statistics(
 
     actions, proprios = np.concatenate(actions), np.concatenate(proprios)
 
-    norm_stats = {
+    norm_stats_for_save = {
         "state": _normalize.NormStats(
             mean=np.asarray(proprios.mean(0)),
             std=np.asarray(proprios.std(0)),
@@ -106,9 +106,27 @@ def get_dataset_statistics(
     }
 
     print(f"Writing stats to: {output_dir}")
-    save(output_dir, norm_stats)
+    save(output_dir, norm_stats_for_save)
 
-    norm_stats["num_transitions"] = num_transitions
-    norm_stats["num_trajectories"] = num_trajectories
+    norm_stats = {
+        "actions": {
+            "mean": actions.mean(0).tolist(),
+            "std": actions.std(0).tolist(),
+            "max": actions.max(0).tolist(),
+            "min": actions.min(0).tolist(),
+            "q01": np.quantile(actions, 0.01, axis=0).tolist(),
+            "q99": np.quantile(actions, 0.99, axis=0).tolist(),
+        },
+        "state": {
+            "mean": proprios.mean(0).tolist(),
+            "std": proprios.std(0).tolist(),
+            "max": proprios.max(0).tolist(),
+            "min": proprios.min(0).tolist(),
+            "q01": np.quantile(proprios, 0.01, axis=0).tolist(),
+            "q99": np.quantile(proprios, 0.99, axis=0).tolist(),
+        },
+        "num_transitions": num_transitions,
+        "num_trajectories": num_trajectories,
+    }
 
     return norm_stats

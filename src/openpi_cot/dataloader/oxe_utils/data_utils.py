@@ -59,31 +59,30 @@ def normalize_action_and_proprio(
     def bounds(x, _min, _max):
         return tf.clip_by_value(2 * (x - _min) / (_max - _min + 1e-8) - 1, -1, 1)
 
-    try:
-        norm_stats["actions"].item().q01
-        norm_stats["actions"] = norm_stats["actions"].item()
-        norm_stats["state"] = norm_stats["state"].item()
-    except:
-        norm_stats["actions"].q01
-
     if normalization_type == NormalizationType.NORMAL:
-        traj[action_key] = normal(traj[action_key], norm_stats["actions"].mean, norm_stats["actions"].std)
+        traj[action_key] = normal(traj[action_key], norm_stats["actions"]["mean"], norm_stats["actions"]["std"])
         traj["observation"][state_key] = normal(
-            traj["observation"][state_key], norm_stats["state"].mean, norm_stats["state"].std
+            traj["observation"][state_key], norm_stats["state"]["mean"], norm_stats["state"]["std"]
         )
     elif normalization_type == NormalizationType.BOUNDS or normalization_type == NormalizationType.BOUNDS_Q99:
-        low = norm_stats["actions"].min if normalization_type == NormalizationType.BOUNDS else norm_stats["actions"].q01
+        low = (
+            norm_stats["actions"]["min"]
+            if normalization_type == NormalizationType.BOUNDS
+            else norm_stats["actions"]["q01"]
+        )
         high = (
-            norm_stats["actions"].max if normalization_type == NormalizationType.BOUNDS else norm_stats["actions"].q99
+            norm_stats["actions"]["max"]
+            if normalization_type == NormalizationType.BOUNDS
+            else norm_stats["actions"]["q99"]
         )
         traj[action_key] = bounds(traj[action_key], low, high)
         traj["observation"][state_key] = bounds(traj["observation"][state_key], low, high)
 
-        zeros_mask = norm_stats["actions"].min == norm_stats["actions"].max
+        zeros_mask = norm_stats["actions"]["min"] == norm_stats["actions"]["max"]
         traj = dl.transforms.selective_tree_map(
             traj, match=lambda k, _: k == action_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
         )
-        zeros_mask = norm_stats["state"].min == norm_stats["state"].max
+        zeros_mask = norm_stats["state"]["min"] == norm_stats["state"]["max"]
         traj = dl.transforms.selective_tree_map(
             traj, match=lambda k, _: k == state_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
         )
