@@ -7,8 +7,6 @@ from openpi.shared import normalize as _normalize
 import tensorflow as tf
 import tqdm
 
-import openpi_cot.training.config as _config
-
 
 def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
     """Save the normalization stats to a directory (supports gs:// or local)."""
@@ -27,7 +25,7 @@ def load(directory: str) -> dict[str, _normalize.NormStats]:
         return _normalize.deserialize_json(f.read())
 
 
-def check_dataset_statistics(save_dir: str | None = None, data_config: _config.CoTDataConfig | None = None) -> dict:
+def check_dataset_statistics(save_dir: str | None = None, data_config=None) -> dict:
     """
     Checks if the dataset statistics are already computed and returns them if they are.
     """
@@ -54,7 +52,7 @@ def check_dataset_statistics(save_dir: str | None = None, data_config: _config.C
 def get_dataset_statistics(
     dataset: dl.DLataset,
     save_dir: str | None = None,
-    data_config: _config.CoTDataConfig | None = None,
+    data_config=None,
     action_key: str = "action",
     state_key: str = "proprio",
 ) -> dict:
