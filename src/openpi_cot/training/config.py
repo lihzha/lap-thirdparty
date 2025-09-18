@@ -294,11 +294,11 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
         # assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
         # TODO: Data loader returns absolute joint position actions -- convert to delta actions for training. confirm with oxe
-        delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
-        data_transforms = data_transforms.push(
-            inputs=[upstream_transforms.DeltaActions(delta_action_mask)],
-            # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
-        )
+        # delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
+        # data_transforms = data_transforms.push(
+        #     inputs=[upstream_transforms.DeltaActions(delta_action_mask)],
+        #     # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
+        # )
 
         model_transforms = ModelTransformFactory(
             left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
