@@ -13,8 +13,6 @@ from openpi_cot.dataloader.cot_rlds_dataset import CombinedCoTRldsDataset
 from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTRldsDataset
 from openpi_cot.dataloader.cot_rlds_dataset import OXECoTRldsDatasets
 from openpi_cot.models.adapters.model_adapter import CoTObservation
-from openpi_cot.policies.combined_cot_policy import CombinedCoTInputs
-from openpi_cot.policies.droid_cot_policy import DroidCoTInputs  # the one transform you condition on
 import openpi_cot.training.config as _config
 
 
@@ -52,17 +50,13 @@ def _create_rlds_dataset(
         )
     if dataset_type == "oxe":
         # OXE requires additional fields; only proceed if present, else fall back upstream.
-        oxe_required = (
-            hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None,
-            hasattr(data_cfg, "resize_resolution") and data_cfg.resize_resolution is not None,
-        )
+        oxe_required = hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
         rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
-        if all(oxe_required) and rlds_data_dir is not None:
+        if oxe_required and rlds_data_dir is not None:
             return OXECoTRldsDatasets(
                 config=data_cfg,
                 rlds_data_dir=rlds_data_dir,
                 data_mix=data_cfg.data_mix,
-                resize_resolution=data_cfg.resize_resolution,
                 action_chunk_size=action_horizon,
                 batch_size=local_bsz,
                 shuffle=shuffle,
@@ -82,13 +76,7 @@ def _create_rlds_dataset(
             getattr(data_cfg, "rlds_data_dir", None) is not None
             and getattr(data_cfg, "language_action_dir", None) is not None
         )
-        has_oxe = (
-            rlds_data_dir is not None
-            and hasattr(data_cfg, "data_mix")
-            and data_cfg.data_mix is not None
-            and hasattr(data_cfg, "resize_resolution")
-            and data_cfg.resize_resolution is not None
-        )
+        has_oxe = rlds_data_dir is not None and hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
         if has_droid and has_oxe:
             return CombinedCoTRldsDataset(
                 # Top-level
@@ -110,7 +98,6 @@ def _create_rlds_dataset(
                 # OXE-specific (Raw)
                 rlds_data_dir=rlds_data_dir,
                 data_mix=data_cfg.data_mix,
-                resize_resolution=data_cfg.resize_resolution,
             )
         logging.warning(
             "dataset_type='combined' selected but required fields missing; falling back to upstream RLDS loader."
@@ -143,8 +130,8 @@ def _make_iterable_transforms(
     if split is not None and split != "train":
         new_tx = []
         for t in tx:
-            if isinstance(t, (DroidCoTInputs, CombinedCoTInputs)):
-                new_tx.append(dataclasses.replace(t, wrist_image_dropout_prob=0.0, text_state_dropout_prob=0.0))
+            if hasattr(t, "wrist_image_dropout_prob"):
+                new_tx.append(dataclasses.replace(t, wrist_image_dropout_prob=0.0))
             else:
                 new_tx.append(t)
         tx = new_tx
@@ -206,7 +193,7 @@ def create_data_loader(
         num_batches=num_batches,
         num_workers=config.num_workers,
         seed=seed,
-        skip_norm_stats=skip_norm_stats,
+        skip_norm_stats=data_cfg.norm_stats is None,
         framework=framework,
     )
 

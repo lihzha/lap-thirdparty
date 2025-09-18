@@ -16,7 +16,7 @@ import orbax.checkpoint.future as future
 import tensorflow as tf
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
-import openpi_cot.shared.adapters.normalize_adapter as _normalize_io_adapter
+import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 import openpi_cot.training.utils as training_utils
 
 
@@ -110,7 +110,7 @@ def save_state(
         data_config = data_loader.data_config()
         norm_stats = data_config.norm_stats
         if norm_stats is not None and data_config.asset_id is not None:
-            _normalize_io_adapter.save(str(directory / data_config.asset_id), norm_stats)
+            _normalize_adapter.save(str(directory / data_config.asset_id), norm_stats)
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
@@ -146,7 +146,7 @@ def restore_state(
 
 def load_norm_stats(assets_dir: epath.Path | str, asset_id: str) -> dict[str, _normalize.NormStats] | None:
     norm_stats_dir = epath.Path(assets_dir) / asset_id
-    norm_stats = _normalize_io_adapter.load(str(norm_stats_dir))
+    norm_stats = _normalize_adapter.load(str(norm_stats_dir))
     logging.info(f"Loaded norm stats from {norm_stats_dir}")
     return norm_stats
 

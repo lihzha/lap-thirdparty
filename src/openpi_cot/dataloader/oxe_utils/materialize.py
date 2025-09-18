@@ -40,6 +40,7 @@ def make_oxe_dataset_kwargs(
         dataset_kwargs["action_normalization_mask"] = [True] * 9 + [False]
     else:
         raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
+
     dataset_kwargs["action_proprio_normalization_type"] = action_proprio_normalization_type
 
     # Adjust Loaded Camera Views
@@ -50,6 +51,9 @@ def make_oxe_dataset_kwargs(
     dataset_kwargs["image_obs_keys"] = {
         k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in load_camera_views
     }
+    for k, v in dataset_kwargs["image_obs_keys"].items():
+        if k == "primary":
+            assert v is not None, f"primary image is required for {dataset_name}"
     dataset_kwargs["depth_obs_keys"] = {
         k: v for k, v in dataset_kwargs["depth_obs_keys"].items() if k in load_camera_views
     }

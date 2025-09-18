@@ -1,18 +1,12 @@
 """See _CONFIGS for the list of available configs."""
 
-import abc
-from collections.abc import Sequence
 import dataclasses
-import difflib
-import logging
 import pathlib
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 import etils.epath as epath
 import flax.nnx as nnx
 import openpi.models.model as _model
-import openpi.models.pi0_config as pi0_config
-import openpi.models.tokenizer as _tokenizer
 import openpi.training.config as upstream_config
 import openpi.training.optimizer as _optimizer
 import openpi.transforms as upstream_transforms
@@ -23,13 +17,9 @@ import openpi_cot.dataloader.cot_rlds_dataset as cot_rlds_dataset
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
-import openpi_cot.policies.combined_cot_policy as combined_cot_policy
-import openpi_cot.policies.droid_cot_policy as droid_cot_policy
-import openpi_cot.shared.adapters.normalize_adapter as _normalize
-import openpi_cot.shared.download as _download
+import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
-from openpi_cot.transforms import SafeRepackTransform
 from openpi_cot.transforms import TokenizePromptAndReasoning
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
@@ -103,9 +93,9 @@ def build_droid_cot_data(
     val_fraction: float | None = 0.02,
     use_idle_filter: bool = True,
     drop_gripper_oob: bool = False,
-) -> "RLDSDroidCoTDataConfig":
+) -> "RLDSCoTDataConfig":
     """Helper to build a standard DROID CoT RLDS data config."""
-    return RLDSDroidCoTDataConfig(
+    return RLDSCoTDataConfig(
         repo_id="droid",
         rlds_data_dir=rlds_data_dir,
         language_action_dir=language_action_dir,
@@ -129,6 +119,7 @@ def build_droid_cot_data(
         val_fraction=val_fraction,
         use_idle_filter=use_idle_filter,
         drop_gripper_oob=drop_gripper_oob,
+        dataset_type="droid",
     )
 
 
@@ -148,9 +139,9 @@ def build_oxe_cot_data(
     validation_mode: str = "easy",
     vis_dataset: bool = False,
     use_wrist_image: bool = False,
-) -> "RLDSOXECoTDataConfig":
+) -> "RLDSCoTDataConfig":
     """Helper to build an OXE CoT RLDS data config."""
-    return RLDSOXECoTDataConfig(
+    return RLDSCoTDataConfig(
         repo_id="oxe",
         rlds_data_dir=rlds_data_dir,
         data_mix=data_mix,
@@ -169,46 +160,13 @@ def build_oxe_cot_data(
             assets_dir=assets_dir,
             asset_id=asset_id,
         ),
+        dataset_type="oxe",
     )
 
 
 @dataclasses.dataclass(frozen=True)
-class CoTDataConfig:
-    # LeRobot repo id. If None, fake data will be created.
-    repo_id: str | None = None
-    # Directory within the assets directory containing the data assets.
-    asset_id: str | None = None
-    # Contains precomputed normalization stats. If None, normalization will not be performed.
-    norm_stats: dict[str, upstream_transforms.NormStats] | None = None
-
-    # Used to adopt the inputs from a dataset specific format to a common format
-    # which is expected by the data transforms.
-    repack_transforms: upstream_transforms.Group = dataclasses.field(default_factory=upstream_transforms.Group)
-    # Data transforms, typically include robot specific transformations. Will be applied
-    # before the data is normalized. See `model.Observation` and `model.Actions` to learn about the
-    # normalized data.
-    data_transforms: upstream_transforms.Group = dataclasses.field(default_factory=upstream_transforms.Group)
-    # Model specific transforms. Will be applied after the data is normalized.
-    model_transforms: upstream_transforms.Group = dataclasses.field(default_factory=upstream_transforms.Group)
-    # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
-    use_quantile_norm: bool = False
-
-    # Names of keys that will be used by the data loader to generate the action sequence. The length of the
-    # sequence is defined by the `action_horizon` field in the model config. This should be adjusted if your
-    # LeRobot dataset is using different keys to represent the action.
-    action_sequence_keys: Sequence[str] = ("actions",)
-
-    # If true, will use the LeRobot dataset task to define the prompt.
-    prompt_from_task: bool = False
-
-    # Only used for RLDS data loader (ie currently only used for DROID).
-    rlds_data_dir: str | None = None
-    # Action space for DROID dataset.
-    action_space: cot_rlds_dataset.DroidActionSpace | None = None
-    # Path to the data filter file for DROID dataset
-    filter_dict_path: str | None = None
-
-    # For DROID-CoT (optional; used only when `cot` is True)
+class CoTDataConfig(upstream_config.DataConfig):
+    # TODO: remove the cot argument
     cot: bool = False
     language_action_dir: str | None = None
     shuffle_buffer_size: int = 250_000
@@ -228,7 +186,6 @@ class CoTDataConfig:
     use_wrist_image: bool = False
     use_idle_filter: bool = True
     wrist_image_dropout_prob: float = 0.0
-    text_state_dropout_prob: float = 0.0
     # If true, will drop samples where projected gripper is outside the resized image bounds.
     drop_gripper_oob: bool = False
 
@@ -236,216 +193,108 @@ class CoTDataConfig:
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
     dataset_type: Literal["droid", "oxe", "combined"] = "droid"
     # OXE fields (used when dataset_type == "oxe" or "combined")
-    rlds_data_dir: str | None = None
-    data_mix: str | None = None
-    resize_resolution: tuple[int, int] | None = None
+    data_mix: str | None = "oxe_pi_magic_soup"
     # Combined-only: weight for DROID when interleaving with OXE
-    droid_weight: float = 1.0
+    droid_weight: float = 2.0
 
 
 @dataclasses.dataclass(frozen=True)
-class ModelTransformFactory(upstream_config.GroupFactory):
+class ModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
 
-    # If provided, will determine the default prompt that be used by the model.
-    default_prompt: str | None = None
     left_pad: bool = True
     include_decimal_point: bool = True
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
-        match model_config.model_type:
-            case ModelType.PI0:
-                return upstream_transforms.Group(
-                    inputs=[
-                        upstream_transforms.InjectDefaultPrompt(self.default_prompt),
-                        upstream_transforms.ResizeImages(224, 224),
-                        upstream_transforms.TokenizePrompt(
-                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
+        if model_config.model_type == ModelType.PI_COT:
+            assert isinstance(model_config, pi_cot_config.PiCoTConfig)
+            return upstream_transforms.Group(
+                inputs=[
+                    upstream_transforms.InjectDefaultPrompt(self.default_prompt),
+                    upstream_transforms.ResizeImages(224, 224),
+                    TokenizePromptAndReasoning(
+                        PaligemmaCoTTokenizer(
+                            model_config.max_token_len,
+                            left_pad=self.left_pad,
+                            include_decimal_point=self.include_decimal_point,
                         ),
-                        upstream_transforms.PadStatesAndActions(model_config.action_dim),
-                    ],
-                )
-            case ModelType.PI05:
-                assert isinstance(model_config, pi0_config.Pi0Config)
-                return upstream_transforms.Group(
-                    inputs=[
-                        upstream_transforms.InjectDefaultPrompt(self.default_prompt),
-                        upstream_transforms.ResizeImages(224, 224),
-                        upstream_transforms.TokenizePrompt(
-                            _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
-                            discrete_state_input=model_config.discrete_state_input,
-                        ),
-                        upstream_transforms.PadStatesAndActions(model_config.action_dim),
-                    ],
-                )
-            case ModelType.PI0_FAST:
-                tokenizer_cls = (
-                    _tokenizer.FASTTokenizer
-                    if model_config.fast_model_tokenizer is None
-                    else model_config.fast_model_tokenizer
-                )
-                tokenizer_kwargs = (
-                    {} if model_config.fast_model_tokenizer_kwargs is None else model_config.fast_model_tokenizer_kwargs
-                )
-                return upstream_transforms.Group(
-                    inputs=[
-                        upstream_transforms.InjectDefaultPrompt(self.default_prompt),
-                        upstream_transforms.ResizeImages(224, 224),
-                        upstream_transforms.TokenizeFASTInputs(
-                            tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
-                        ),
-                    ],
-                    outputs=[
-                        upstream_transforms.ExtractFASTActions(
-                            tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
-                            action_horizon=model_config.action_horizon,
-                            action_dim=model_config.action_dim,
+                        discrete_state_input=model_config.discrete_state_input,
+                    ),
+                    upstream_transforms.PadStatesAndActions(model_config.action_dim),
+                ],
+                outputs=[
+                    DetokenizeReasoning(
+                        PaligemmaCoTTokenizer(
+                            model_config.max_token_len,
+                            left_pad=self.left_pad,
+                            include_decimal_point=self.include_decimal_point,
                         )
-                    ],
-                )
-            case ModelType.PI_COT:
-                assert isinstance(model_config, pi_cot_config.PiCoTConfig)
-                return upstream_transforms.Group(
-                    inputs=[
-                        upstream_transforms.InjectDefaultPrompt(self.default_prompt),
-                        upstream_transforms.ResizeImages(224, 224),
-                        TokenizePromptAndReasoning(
-                            PaligemmaCoTTokenizer(
-                                model_config.max_token_len,
-                                left_pad=self.left_pad,
-                                include_decimal_point=self.include_decimal_point,
-                            ),
-                            discrete_state_input=model_config.discrete_state_input,
-                        ),
-                        upstream_transforms.PadStatesAndActions(model_config.action_dim),
-                    ],
-                    outputs=[
-                        DetokenizeReasoning(
-                            PaligemmaCoTTokenizer(
-                                model_config.max_token_len,
-                                left_pad=self.left_pad,
-                                include_decimal_point=self.include_decimal_point,
-                            )
-                        )
-                    ],
-                )
+                    )
+                ],
+            )
+        return super().__call__(model_config)
 
 
 @dataclasses.dataclass(frozen=True)
-class DataConfigFactory(abc.ABC):
-    # The LeRobot repo id.
-    repo_id: str = tyro.MISSING
-    # Determines how the assets will be loaded.
-    assets: upstream_config.AssetsConfig = dataclasses.field(default_factory=upstream_config.AssetsConfig)
-    # Base config that will be updated by the factory.
-    base_config: tyro.conf.Suppress[CoTDataConfig | None] = None
+class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
+    """
+    Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
+    """
 
-    @abc.abstractmethod
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        """Create a data config."""
+    dataset_type: Literal["droid", "oxe", "combined"] = "droid"
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        cot_fields = CoTDataConfig.__dataclass_fields__.keys()
+        data = {k: getattr(self, k) for k in cot_fields}
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
         asset_id = self.assets.asset_id or repo_id
-        return dataclasses.replace(
-            self.base_config or CoTDataConfig(),
+        data.update(
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
             use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
+        return CoTDataConfig(**data)
 
     def _load_norm_stats(
-        self, assets_dir: epath.Path, asset_id: str | None
+        self, assets_dirs: pathlib.Path, asset_id: str | None
     ) -> dict[str, upstream_transforms.NormStats] | None:
-        if asset_id is None:
-            return None
-        try:
-            data_assets_dir = str(assets_dir / asset_id)
-            norm_stats = _normalize.load(_download.maybe_download(data_assets_dir))
-            logging.info(f"Loaded norm stats from {data_assets_dir}")
-            return norm_stats
-        except FileNotFoundError:
-            logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
-        return None
-
-
-@dataclasses.dataclass(frozen=True)
-class RLDSDroidCoTDataConfig(DataConfigFactory):
-    """
-    Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
-    """
-
-    rlds_data_dir: str | None = None
-    action_space: cot_rlds_dataset.DroidActionSpace | None = None
-    cot: bool = True
-    language_action_dir: str | None = None
-    shuffle_buffer_size: int = 250_000
-    # Number of future steps to sum over for language actions
-    summation_steps: int = 15
-    max_samples: int | None = None
-    sum_decimal: str = "2f"
-    left_pad: bool = True
-    include_decimal_point: bool = True
-
-    # If set, validation loader will materialize a fixed subset of this many
-    # flattened samples via take(K).cache().repeat(), ensuring consistent val batches.
-    val_max_samples: int | None = None
-    val_fraction: float | None = None
-    validation_mode: str = "easy"
-    vis_dataset: bool = False
-    use_wrist_image: bool = False
-    use_idle_filter: bool = True
-    # Train-time dropout (applied in DroidCoTInputs). Set nonzero only for training.
-    wrist_image_dropout_prob: float = 0.0
-    text_state_dropout_prob: float = 0.0
-    # Drop samples where gripper is out of view after projection to resized image
-    drop_gripper_oob: bool = False
+        # TODO: implement
+        pass
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        # Load base config first to access norm stats (for state binning in prompt augmentation)
         base_cfg = self.create_base_config(assets_dirs, model_config)
-
         repack_dict = {
-            # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
-            # Prefer dataset-specific key if present; otherwise fall back.
-            "observation/exterior_image_1_left": "observation/image_primary",
-            "observation/cartesian_position": "observation/cartesian_position",
-            "observation/gripper_position": "observation/gripper_position",
+            # always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
+            "observation/exterior_image_1_left": "observation/image",
+            "observation/state": "observation/state",
             "actions": "actions",
             "prompt": "prompt",
             "language_actions": "language_actions",
         }
-        if self.vis_dataset:
+        if base_cfg.vis_dataset:
             repack_dict["camera_intrinsics"] = "camera_intrinsics"
             repack_dict["camera_extrinsics"] = "camera_extrinsics"
             repack_dict["observation/cartesian_position_window"] = "observation/cartesian_position_window"
-        if self.use_wrist_image:
-            repack_dict["observation/wrist_image_left"] = "observation/image_wrist"
+        if base_cfg.use_wrist_image:
+            repack_dict["observation/wrist_image_left"] = "observation/wrist_image"
         repack_transform = upstream_transforms.Group(inputs=[upstream_transforms.RepackTransform(repack_dict)])
 
-        # Extract state norm stats (if available) to pass into the DroidCoTInputs for binning
-        state_stats = None
-        if base_cfg.norm_stats is not None and "state" in base_cfg.norm_stats:
-            state_stats = base_cfg.norm_stats["state"]
-
         data_transforms = upstream_transforms.Group(
             inputs=[
-                droid_cot_policy.DroidCoTInputs(
+                cot_policy.CoTInputs(
                     action_dim=model_config.action_dim,
                     model_type=model_config.model_type,
-                    sum_decimal=self.sum_decimal,
-                    state_norm_stats=state_stats,
-                    wrist_image_dropout_prob=self.wrist_image_dropout_prob,
-                    text_state_dropout_prob=self.text_state_dropout_prob,
+                    sum_decimal=base_cfg.sum_decimal,
+                    wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                 )
             ],
-            outputs=[droid_cot_policy.DroidCoTOutputs()],
+            outputs=[cot_policy.CoTOutputs()],
         )
 
-        assert self.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
-        # Data loader returns absolute joint position actions -- convert to delta actions for training.
+        assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
+        # TODO: Data loader returns absolute joint position actions -- convert to delta actions for training. confirm with oxe
         delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
         data_transforms = data_transforms.push(
             inputs=[upstream_transforms.DeltaActions(delta_action_mask)],
@@ -453,10 +302,10 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
         )
 
         model_transforms = ModelTransformFactory(
-            left_pad=self.left_pad, include_decimal_point=self.include_decimal_point
+            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
         )(model_config)
 
-        assert self.rlds_data_dir is not None, "Need to set rlds data dir for RLDS data loader."
+        assert base_cfg.rlds_data_dir is not None, "Need to set rlds data dir for RLDS data loader."
 
         return dataclasses.replace(
             base_cfg,
@@ -464,368 +313,32 @@ class RLDSDroidCoTDataConfig(DataConfigFactory):
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
-            rlds_data_dir=self.rlds_data_dir,
-            action_space=self.action_space,
-            cot=self.cot,
-            language_action_dir=self.language_action_dir,
-            shuffle_buffer_size=self.shuffle_buffer_size,
-            summation_steps=self.summation_steps,
-            max_samples=self.max_samples,
-            sum_decimal=self.sum_decimal,
-            left_pad=self.left_pad,
-            include_decimal_point=self.include_decimal_point,
-            use_wrist_image=self.use_wrist_image,
-            val_max_samples=self.val_max_samples,
-            val_fraction=self.val_fraction,
-            validation_mode=self.validation_mode,
-            vis_dataset=self.vis_dataset,
-            use_idle_filter=self.use_idle_filter,
-            drop_gripper_oob=self.drop_gripper_oob,
-            wrist_image_dropout_prob=self.wrist_image_dropout_prob,
-            text_state_dropout_prob=self.text_state_dropout_prob,
-            dataset_type="droid",
         )
 
 
 @dataclasses.dataclass(frozen=True)
-class RLDSCombinedCoTDataConfig(DataConfigFactory):
-    """
-    Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
-    """
-
-    rlds_data_dir: str | None = None
-    action_space: cot_rlds_dataset.DroidActionSpace | None = None
-    cot: bool = True
-    language_action_dir: str | None = None
-    shuffle_buffer_size: int = 250_000
-    # Number of future steps to sum over for language actions
-    summation_steps: int = 15
-    max_samples: int | None = None
-    sum_decimal: str = "2f"
-    left_pad: bool = True
-    include_decimal_point: bool = True
-
-    # If set, validation loader will materialize a fixed subset of this many
-    # flattened samples via take(K).cache().repeat(), ensuring consistent val batches.
-    val_max_samples: int | None = None
-    val_fraction: float | None = None
-    validation_mode: str = "easy"
-    vis_dataset: bool = False
-    use_wrist_image: bool = False
-    use_idle_filter: bool = True
-    # Train-time dropout (applied in DroidCoTInputs). Set nonzero only for training.
-    wrist_image_dropout_prob: float = 0.0
-    text_state_dropout_prob: float = 0.0
-    # Drop samples where gripper is out of view after projection to resized image
-    drop_gripper_oob: bool = False
-
-    # OXE/Combined fields
-    rlds_data_dir: str | None = None
-    data_mix: str | None = None
-    resize_resolution: tuple[int, int] | None = (224, 224)
-    droid_weight: float = 1.0
-
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        # Load base config first to access norm stats (for state binning in prompt augmentation)
-        base_cfg = self.create_base_config(assets_dirs, model_config)
-
-        repack_dict = {
-            # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
-            # Prefer dataset-specific key if present; otherwise fall back.
-            "observation/exterior_image_1_left": [
-                "observation/image",
-                "observation/image_primary",
-            ],
-            "observation/cartesian_position": "observation/cartesian_position",
-            "observation/gripper_position": "observation/gripper_position",
-            # Support both `actions` and `action` sources, map to output `actions`.
-            "actions": ["actions", "action"],
-            # Support both direct prompt and task-based language instruction.
-            "prompt": ["prompt", "task/language_instruction"],
-            "language_actions": "language_actions",
-            # Wrist image candidates (order possibly overridden below based on `use_wrist_image`).
-            "observation/wrist_image_left": "observation/image_wrist",
-            "observation/proprio": "observation/proprio",
-        }
-        if self.vis_dataset:
-            repack_dict["camera_intrinsics"] = "camera_intrinsics"
-            repack_dict["camera_extrinsics"] = "camera_extrinsics"
-            repack_dict["observation/cartesian_position_window"] = "observation/cartesian_position_window"
-        if self.use_wrist_image:
-            # Prioritize `observation/wrist_image` if present, then fall back to `observation/image_wrist`.
-            repack_dict["observation/wrist_image_left"] = "observation/image_wrist"
-        repack_transform = upstream_transforms.Group(inputs=[SafeRepackTransform(repack_dict)])
-
-        # Extract state norm stats (if available) to pass into the DroidCoTInputs for binning
-        state_stats = None
-        if base_cfg.norm_stats is not None and "state" in base_cfg.norm_stats:
-            state_stats = base_cfg.norm_stats["state"]
-
-        data_transforms = upstream_transforms.Group(
-            inputs=[
-                combined_cot_policy.CombinedCoTInputs(
-                    action_dim=model_config.action_dim,
-                    model_type=model_config.model_type,
-                    sum_decimal=self.sum_decimal,
-                    state_norm_stats=state_stats,
-                    wrist_image_dropout_prob=self.wrist_image_dropout_prob,
-                    text_state_dropout_prob=self.text_state_dropout_prob,
-                )
-            ],
-            outputs=[combined_cot_policy.CombinedCoTOutputs()],
-        )
-
-        # Data loader returns absolute joint position actions -- convert to delta actions for training.
-        delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
-        data_transforms = data_transforms.push(
-            inputs=[upstream_transforms.DeltaActions(delta_action_mask)],
-            # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
-        )
-
-        model_transforms = ModelTransformFactory(
-            left_pad=self.left_pad, include_decimal_point=self.include_decimal_point
-        )(model_config)
-
-        assert self.rlds_data_dir is not None, "Need to set rlds data dir for RLDS data loader."
-
-        return dataclasses.replace(
-            base_cfg,
-            repack_transforms=repack_transform,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
-            rlds_data_dir=self.rlds_data_dir,
-            action_space=self.action_space,
-            cot=self.cot,
-            language_action_dir=self.language_action_dir,
-            shuffle_buffer_size=self.shuffle_buffer_size,
-            summation_steps=self.summation_steps,
-            max_samples=self.max_samples,
-            sum_decimal=self.sum_decimal,
-            left_pad=self.left_pad,
-            include_decimal_point=self.include_decimal_point,
-            use_wrist_image=self.use_wrist_image,
-            val_max_samples=self.val_max_samples,
-            val_fraction=self.val_fraction,
-            validation_mode=self.validation_mode,
-            vis_dataset=self.vis_dataset,
-            use_idle_filter=self.use_idle_filter,
-            drop_gripper_oob=self.drop_gripper_oob,
-            wrist_image_dropout_prob=self.wrist_image_dropout_prob,
-            text_state_dropout_prob=self.text_state_dropout_prob,
-            # Combined/OXE knobs
-            dataset_type="combined",
-            data_mix=self.data_mix,
-            resize_resolution=self.resize_resolution,
-            droid_weight=self.droid_weight,
-        )
-
-
-@dataclasses.dataclass(frozen=True)
-class RLDSOXECoTDataConfig(DataConfigFactory):
-    """
-    Config for training on OXE datasets using RLDS format and CoT-style transforms.
-    """
-
-    # OXE-specific
-    rlds_data_dir: str | None = None
-    data_mix: str | None = None
-    resize_resolution: tuple[int, int] | None = (224, 224)
-    shuffle_buffer_size: int = 250_000
-    max_samples: int | None = None
-    left_pad: bool = True
-    include_decimal_point: bool = True
-    sum_decimal: str = "2f"
-    # Validation
-    val_max_samples: int | None = None
-    val_fraction: float | None = None
-    validation_mode: str = "easy"
-    vis_dataset: bool = False
-    use_wrist_image: bool = False
-
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        base_cfg = self.create_base_config(assets_dirs, model_config)
-
-        repack_dict = {
-            # For OXE, images are already standardized by dataset wrappers to `image_primary`/`image_wrist`.
-            "observation/image_primary": [
-                "observation/image",
-                "observation/image_primary",
-            ],
-            "observation/image_wrist": [
-                "observation/wrist_image",
-                "observation/image_wrist",
-            ],
-            # Some datasets provide proprio under different names; try to pass through if present.
-            "observation/proprio": "observation/proprio",
-            # Either `action` or `actions` may be present depending on upstream conversion.
-            "actions": ["actions", "action"],
-            # When available, prefer explicit instruction string; otherwise leave for tokenizer defaulting.
-            "prompt": ["prompt", "task/language_instruction"],
-            # OXE CoT variant can inject language_actions derived from actions; present for interface parity.
-            "language_actions": ["language_actions"],
-        }
-        repack_transform = upstream_transforms.Group(inputs=[SafeRepackTransform(repack_dict)])
-
-        # State stats from assets (optional)
-        state_stats = None
-        if base_cfg.norm_stats is not None and "state" in base_cfg.norm_stats:
-            state_stats = base_cfg.norm_stats["state"]
-
-        data_transforms = upstream_transforms.Group(
-            inputs=[
-                combined_cot_policy.CombinedCoTInputs(
-                    action_dim=model_config.action_dim,
-                    model_type=model_config.model_type,
-                    sum_decimal=self.sum_decimal,
-                    state_norm_stats=state_stats,
-                )
-            ],
-            outputs=[combined_cot_policy.CombinedCoTOutputs()],
-        )
-
-        model_transforms = ModelTransformFactory(
-            left_pad=self.left_pad, include_decimal_point=self.include_decimal_point
-        )(model_config)
-
-        return dataclasses.replace(
-            base_cfg,
-            repack_transforms=repack_transform,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
-            # OXE selection
-            dataset_type="oxe",
-            rlds_data_dir=self.rlds_data_dir,
-            data_mix=self.data_mix,
-            resize_resolution=self.resize_resolution,
-            # Common knobs
-            shuffle_buffer_size=self.shuffle_buffer_size,
-            max_samples=self.max_samples,
-            left_pad=self.left_pad,
-            include_decimal_point=self.include_decimal_point,
-            sum_decimal=self.sum_decimal,
-            val_max_samples=self.val_max_samples,
-            val_fraction=self.val_fraction,
-            validation_mode=self.validation_mode,
-            vis_dataset=self.vis_dataset,
-            use_wrist_image=self.use_wrist_image,
-        )
-
-    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
-        asset_id = self.assets.asset_id or repo_id
-        return dataclasses.replace(
-            self.base_config or CoTDataConfig(),
-            repo_id=repo_id,
-            asset_id=asset_id,
-            norm_stats=None,
-            use_quantile_norm=model_config.model_type != ModelType.PI0,
-        )
-
-
-@dataclasses.dataclass(frozen=True)
-class TrainConfig:
-    # Name of the config. Must be unique. Will be used to reference this config.
-    name: tyro.conf.Suppress[str]
-    # Project name.
-    project_name: str = "openpi"
-    # Experiment name. Will be used to name the metadata and checkpoint directories.
-    exp_name: str = tyro.MISSING
-
-    # Defines the model config. Some attributes (action_dim, action_horizon, and max_token_len) are shared by all models
-    # -- see BaseModelConfig. Specific model implementations (e.g., Pi0Config) inherit from BaseModelConfig and may
-    # define additional attributes.
-    model: _model.BaseModelConfig = dataclasses.field(default_factory=pi0_config.Pi0Config)
-
-    # A weight loader can optionally load (possibly partial) weights from disk after the model is initialized.
-    # Uses a CLI-friendly choice wrapper to avoid nested subcommands.
+class TrainConfig(upstream_config.TrainConfig):
+    # Overide
+    project_name: str = "openpi-cot"
     weight_loader: weight_loaders.WeightLoaderChoice = dataclasses.field(
         default_factory=weight_loaders.WeightLoaderChoice
     )
-
-    # Optional path to a PyTorch checkpoint to load weights from.
-    pytorch_weight_path: str | None = None
-
-    # Precision for PyTorch training.
-    pytorch_training_precision: Literal["bfloat16", "float32"] = "bfloat16"
-
-    lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=_optimizer.CosineDecaySchedule)
-    optimizer: _optimizer.OptimizerConfig = dataclasses.field(default_factory=_optimizer.AdamW)
-    ema_decay: float | None = 0.99
-
-    # Specifies which weights should be frozen.
-    freeze_filter: tyro.conf.Suppress[Filter] = dataclasses.field(default_factory=nnx.Nothing)
-
-    # Determines the data to be trained on.
-    data: DataConfigFactory = dataclasses.field(default_factory=upstream_config.FakeDataConfig)
-
-    # Base directory for config assets (e.g., norm stats).
-    assets_base_dir: str = "./assets"
-    # Base directory for checkpoints.
-    checkpoint_base_dir: str = "./checkpoints"
-
-    # Random seed that will be used by random generators during training.
-    seed: int = 42
-    # Global batch size.
-    batch_size: int = 32
-    # Number of workers to use for the data loader. Increasing this number will speed up data loading but
-    # will increase memory and CPU usage.
-    num_workers: int = 2
-    # Number of train steps (batches) to run.
-    num_train_steps: int = 30_000
-
-    # How often (in steps) to log training metrics.
-    log_interval: int = 100
-    # How often (in steps) to save checkpoints.
-    save_interval: int = 1000
-    # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
-    keep_period: int | None = 5000
-
-    # If true, will overwrite the checkpoint directory if it already exists.
-    overwrite: bool = False
-    # If true, will resume training from the last checkpoint.
-    resume: bool = False
-
-    # If true, will enable wandb logging.
-    wandb_enabled: bool = True
-    # If set, will rewind wandb run to this step when resuming (requires wandb SDK >= 0.17.1)
-    rewind_to_step: int | None = None
-
-    # Used to pass metadata to the policy server.
-    policy_metadata: dict[str, Any] | None = None
-
-    # If the value is greater than 1, FSDP will be enabled and shard across number of specified devices; overall
-    # device memory will be reduced but training could potentially be slower.
-    # eg. if total device is 4 and fsdp devices is 2; then the model will shard to 2 devices and run
-    # data parallel between 2 groups of devices.
-    fsdp_devices: int = 1
-
-    # Do validation or not
+    # New field
     do_val: bool = False
 
     @property
+    @override
     def assets_dirs(self) -> pathlib.Path | epath.Path:
         """Assets directory (works for local paths and gs://…)."""
         return _to_path(self.assets_base_dir, self.name)
 
     @property
+    @override
     def checkpoint_dir(self) -> pathlib.Path | epath.Path:
         """Checkpoint directory (local or Cloud Storage)."""
         if not self.exp_name:
             raise ValueError("--exp_name must be set")
         return _to_path(self.checkpoint_base_dir, self.name, self.exp_name)
-
-    @property
-    def trainable_filter(self) -> nnx.filterlib.Filter:
-        """Get the filter for the trainable parameters."""
-        return nnx.All(nnx.Param, nnx.Not(self.freeze_filter))
-
-    def __post_init__(self) -> None:
-        if self.resume and self.overwrite:
-            raise ValueError("Cannot resume and overwrite at the same time.")
 
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -933,7 +446,7 @@ _CONFIGS = [
         lr_schedule=build_cosine_lr(),
         keep_period=10000,
     ),
-    *upstream_config._CONFIGS,
+    *upstream_config._CONFIGS,  # noqa: SLF001
 ]
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
@@ -942,14 +455,8 @@ _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
 
 def cli() -> TrainConfig:
-    return tyro.extras.overridable_config_cli({k: (k, v) for k, v in _CONFIGS_DICT.items()})
+    return upstream_config.cli()
 
 
 def get_config(config_name: str) -> TrainConfig:
-    """Get a config by name."""
-    if config_name not in _CONFIGS_DICT:
-        closest = difflib.get_close_matches(config_name, _CONFIGS_DICT.keys(), n=1, cutoff=0.0)
-        closest_str = f" Did you mean '{closest[0]}'? " if closest else ""
-        raise ValueError(f"Config '{config_name}' not found.{closest_str}")
-
-    return _CONFIGS_DICT[config_name]
+    return upstream_config.get_config(config_name)

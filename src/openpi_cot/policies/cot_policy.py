@@ -34,6 +34,89 @@ def _to_str_list(x):
     return out
 
 
+def _format_numeric(val: float, sum_decimal: str) -> str:
+    # Match droid policy formatting for numbers
+    import re
+
+    decimals = 0
+    if isinstance(sum_decimal, str):
+        if sum_decimal == "no_number":
+            return ""
+        m = re.fullmatch(r"(\d+)f", sum_decimal)
+        if m:
+            try:
+                decimals = int(m.group(1))
+            except Exception:
+                decimals = 0
+    return f"{val:.{decimals}f}"
+
+
+def _summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
+    """Convert numeric delta EE actions ([..., 7]) into a language string.
+
+    Expects translation in indices [0,1,2] (meters) and gripper at index 6.
+    Sums over time, converts meters→cm, emits signed directional commands and final gripper setting.
+    """
+    try:
+        arr = np.asarray(arr_like, dtype=float)
+    except Exception:
+        return None
+    if arr.ndim == 1:
+        arr = arr[None, :]
+    if arr.shape[-1] < 7:
+        return None
+
+    # Sum translations over the window
+    dx_m = float(arr[..., 0].sum())
+    dy_m = float(arr[..., 1].sum())
+    dz_m = float(arr[..., 2].sum())
+    # Convert to centimeters
+    dx = abs(dx_m * 100.0)
+    dy = abs(dy_m * 100.0)
+    dz = abs(dz_m * 100.0)
+
+    parts: list[str] = []
+
+    if sum_decimal == "no_number":
+        if dx_m > 0:
+            parts.append("move right")
+        elif dx_m < 0:
+            parts.append("move left")
+        if dy_m > 0:
+            parts.append("move forward")
+        elif dy_m < 0:
+            parts.append("move backward")
+        if dz_m > 0:
+            parts.append("move up")
+        elif dz_m < 0:
+            parts.append("move down")
+    else:
+        fmt_dx = _format_numeric(dx, sum_decimal)
+        fmt_dy = _format_numeric(dy, sum_decimal)
+        fmt_dz = _format_numeric(dz, sum_decimal)
+        if dx_m > 0 and dx > 0:
+            parts.append(f"move right {fmt_dx} cm")
+        elif dx_m < 0 and dx > 0:
+            parts.append(f"move left {fmt_dx} cm")
+        if dz_m > 0 and dz > 0:
+            parts.append(f"move up {fmt_dz} cm")
+        elif dz_m < 0 and dz > 0:
+            parts.append(f"move down {fmt_dz} cm")
+        if dy_m > 0 and dy > 0:
+            parts.append(f"move forward {fmt_dy} cm")
+        elif dy_m < 0 and dy > 0:
+            parts.append(f"move backward {fmt_dy} cm")
+
+    # Final gripper value from last step
+    try:
+        g_last = float(arr[-1, 6])
+        parts.append(f"set gripper to {g_last:.2f}")
+    except Exception:
+        pass
+
+    return " and ".join(parts)
+
+
 def _sum_language_actions(actions_list, sum_decimal):
     import re
 
@@ -145,28 +228,16 @@ def _sum_language_actions(actions_list, sum_decimal):
 
 
 @dataclasses.dataclass(frozen=True)
-class DroidCoTInputs(upstream_transforms.DataTransformFn):
+class CoTInputs(upstream_transforms.DataTransformFn):
     # The action dimension of the model. Will be used to pad state and actions.
     action_dim: int
     sum_decimal: str = "0f"
     # Train-time dropout probs (set to 0.0 for val/inference)
     wrist_image_dropout_prob: float = 0.0
-    text_state_dropout_prob: float = 0.0
-
-    # Optional global stats for state; used to produce a compact, binned summary in the prompt.
-    # Expect stats for the key "state" from normalization assets.
-    state_norm_stats: upstream_transforms.NormStats | None = None
-
     # Determines which model will be used.
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
 
     def __call__(self, data: dict) -> dict:
-        gripper_pos = np.asarray(data["observation/gripper_position"])
-        if gripper_pos.ndim == 0:
-            # Ensure gripper position is a 1D array, not a scalar, so we can concatenate with joint positions
-            gripper_pos = gripper_pos[np.newaxis]
-        state = np.concatenate([data["observation/cartesian_position"], gripper_pos])
-
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
         # stores as float32 (C,H,W), gets skipped for policy inference
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
@@ -200,7 +271,7 @@ class DroidCoTInputs(upstream_transforms.DataTransformFn):
         )
 
         inputs = {
-            "state": state,
+            "state": data["observation/state"],
             "image": dict(zip(names, images, strict=True)),
             "image_mask": dict(zip(names, image_masks, strict=True)),
         }
@@ -225,34 +296,42 @@ class DroidCoTInputs(upstream_transforms.DataTransformFn):
             inputs["prompt"] = prompt_str
 
         if "language_actions" in data:
-            seq = _to_str_list(data["language_actions"])
+            la_val = data["language_actions"]
+            seq = _to_str_list(la_val)  # None if numeric array
+            summarized = None
             if seq is not None:
-                summed = _sum_language_actions(seq, self.sum_decimal)
-                if summed is not None and len(summed) > 0:
-                    inputs["language_actions"] = summed
+                summarized = _sum_language_actions(seq, self.sum_decimal)
             else:
-                # Scalar/bytes case
-                la = data["language_actions"]
-                if isinstance(la, bytes):
-                    la = la.decode("utf-8")
-                else:
-                    raise ValueError(f"Language actions is not a bytes string: {la}")
-                inputs["language_actions"] = la
+                summarized = _summarize_numeric_actions(la_val, self.sum_decimal)
+            if summarized is not None and len(summarized) > 0:
+                inputs["language_actions"] = summarized
+
+        # if "language_actions" in data:
+        #     seq = _to_str_list(data["language_actions"])
+        #     if seq is not None:
+        #         summed = _sum_language_actions(seq, self.sum_decimal)
+        #         if summed is not None and len(summed) > 0:
+        #             inputs["language_actions"] = summed
+        #     else:
+        #         # Scalar/bytes case
+        #         la = data["language_actions"]
+        #         if isinstance(la, bytes):
+        #             la = la.decode("utf-8")
+        #         else:
+        #             raise ValueError(f"Language actions is not a bytes string: {la}")
+        #         inputs["language_actions"] = la
 
         # Optional calibration/context passthroughs for visualization
-        if "camera_intrinsics" in data:
-            inputs["camera_intrinsics"] = np.asarray(data["camera_intrinsics"], dtype=np.float32)
-        if "camera_extrinsics" in data:
-            inputs["camera_extrinsics"] = np.asarray(data["camera_extrinsics"], dtype=np.float32)
-        if "observation/cartesian_position_window" in data:
-            inputs["cartesian_position_window"] = np.asarray(
-                data["observation/cartesian_position_window"], dtype=np.float32
-            )
+        for k in ("camera_intrinsics", "camera_extrinsics", "observation/cartesian_position_window"):
+            if k in data:
+                nk = "cartesian_position_window" if k.endswith("cartesian_position_window") else k
+                inputs[nk] = np.asarray(data[k])
+
         return inputs
 
 
 @dataclasses.dataclass(frozen=True)
-class DroidCoTOutputs(upstream_transforms.DataTransformFn):
+class CoTOutputs(upstream_transforms.DataTransformFn):
     def __call__(self, data: dict) -> dict:
         # Only return the first 8 dims.
         actions = data.get("actions")

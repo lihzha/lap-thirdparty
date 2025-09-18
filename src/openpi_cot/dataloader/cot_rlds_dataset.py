@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import contextlib
+import copy
 from enum import Enum
 from enum import auto
 from functools import partial
@@ -67,12 +68,12 @@ from openpi_cot.dataloader.helpers import extract_episode_path_from_file_path
 from openpi_cot.dataloader.helpers import project_in_bounds
 from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
-from openpi_cot.dataloader.oxe_utils.data_utils import get_dataset_statistics
 from openpi_cot.dataloader.oxe_utils.data_utils import normalize_action_and_proprio
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.data_utils import tree_map
 from openpi_cot.dataloader.oxe_utils.materialize import get_oxe_dataset_kwargs_and_weights
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 
 
 def print_memory_usage(label):
@@ -527,7 +528,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
         return filter_table
 
-    def apply_traj_transforms(
+    def apply_restructure(
         self,
         lang_table: tf.lookup.StaticHashTable,
         ep_table: tf.lookup.StaticHashTable,
@@ -536,12 +537,9 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         intr_table: tf.lookup.StaticHashTable,
         extr_table: tf.lookup.StaticHashTable,
         filter_table: tf.lookup.StaticHashTable,
-        action_chunk_size: int,
-        summation_steps: int,
         use_wrist_image: bool,
         use_idle_filter: bool,
         need_calib: bool,
-        drop_gripper_oob: bool,
     ):
         def restructure(traj):
             """Reformat observation and action keys, sample language instruction."""
@@ -601,12 +599,20 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             # )
             episode_id_vec = tf.fill([traj_len], episode_id)
 
+            state = tf.concat(
+                [
+                    traj["observation"]["cartesian_position"],
+                    traj["observation"]["gripper_position"],
+                ],
+                axis=-1,
+            )
+
             _return_dict = {
                 "actions": actions,
                 "observation": {
-                    "image_primary": exterior_img,
-                    "cartesian_position": traj["observation"]["cartesian_position"],
-                    "gripper_position": traj["observation"]["gripper_position"],
+                    "image": exterior_img,
+                    "state": state,
+                    "cartesian_position": traj["observation"]["cartesian_position"],  # for need_calib
                 },
                 "prompt": instruction_vec,
                 "language_actions": lang_tensor,
@@ -653,8 +659,27 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                 _return_dict["camera_extrinsics"] = extr_b  # [traj_len, 4, 4]
 
             if use_wrist_image:
-                _return_dict["observation"]["image_wrist"] = traj["observation"]["wrist_image_left"]
+                _return_dict["observation"]["wrist_image"] = traj["observation"]["wrist_image_left"]
             return _return_dict
+
+        self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
+
+    def apply_traj_transforms(
+        self,
+        action_chunk_size: int,
+        summation_steps: int,
+        need_calib: bool,
+        drop_gripper_oob: bool,
+        action_proprio_normalization_type: NormalizationType,
+    ):
+        self.dataset = self.dataset.traj_map(
+            partial(
+                normalize_action_and_proprio,
+                metadata=self.dataset_statistics,
+                normalization_type=action_proprio_normalization_type,
+            ),
+            self.num_parallel_calls,
+        )
 
         def chunk_actions(traj):
             """Splits episode into action chunks."""
@@ -677,7 +702,6 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
             return traj
 
-        self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
         self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
         def group_language_actions(traj):
@@ -848,6 +872,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         # Global seed for all dataset-related randomness
         seed: int = 0,
         split: str = "train",
+        action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
         **kwargs,
     ):
         super().__init__(
@@ -885,10 +910,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         instr_table = self.build_instr_table(metadata_path)
         filter_table = self.build_filter_table(metadata_path, use_idle_filter=use_idle_filter)
 
-        self.apply_traj_filters(lang_table=lang_table, ep_table=ep_table)
-        self.split_val(ep_table=ep_table, split_seed=split_seed)
-
-        self.apply_traj_transforms(
+        self.apply_restructure(
             lang_table=lang_table,
             ep_table=ep_table,
             instr_table=instr_table,
@@ -896,12 +918,30 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             intr_table=intr_table,
             extr_table=extr_table,
             filter_table=filter_table,
+            use_wrist_image=use_wrist_image,
+            use_idle_filter=use_idle_filter,
+            need_calib=need_calib,
+        )
+        dataset_statistics = get_dataset_statistics(
+            copy.deepcopy(self.dataset),
+            save_dir=self.builder.data_dir,
+            data_config=self.config,
+            action_key="actions",
+            state_key="state",
+        )
+        self.dataset_statistics = tree_map(np.array, dataset_statistics)
+
+        self.apply_traj_filters(lang_table=lang_table, ep_table=ep_table)
+        self.split_val(ep_table=ep_table, split_seed=split_seed)
+
+        self.apply_traj_transforms(
             action_chunk_size=action_chunk_size,
             summation_steps=summation_steps,
             use_wrist_image=use_wrist_image,
             use_idle_filter=use_idle_filter,
             need_calib=need_calib,
             drop_gripper_oob=drop_gripper_oob,
+            action_proprio_normalization_type=action_proprio_normalization_type,
         )
 
         self.apply_flatten()
@@ -958,8 +998,8 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
     def apply_frame_transforms(self, use_wrist_image: bool):
         # Retained for compatibility; use shared helper
         decode_fn = make_decode_images_fn(
-            primary_key="image_primary",
-            wrist_key="image_wrist",
+            primary_key="image",
+            wrist_key="wrist_image",
             use_wrist_image=use_wrist_image,
         )
         self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
@@ -975,11 +1015,10 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
             yield batch
 
     def __len__(self):
-        # Approximate size after filtering
-        return 20_000_000
+        return self.dataset_statistics["num_transitions"]
 
 
-class SingleOXECoTRldsDataset(SingleCoTRldsDatasetRaw):
+class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
     """
 
     New features:
@@ -1030,28 +1069,27 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDatasetRaw):
 
         self.apply_restructure()
         dataset_statistics = get_dataset_statistics(
-            self.dataset,
-            hash_dependencies=(
-                str(self.builder.info),
-                str(self.state_obs_keys),
-                inspect.getsource(self.standardize_fn) if self.standardize_fn is not None else "",
-            ),
+            copy.deepcopy(self.dataset),
             save_dir=self.builder.data_dir,
+            data_config=self.config,
+            action_key="action",
+            state_key="proprio",
         )
         dataset_statistics = tree_map(np.array, dataset_statistics)
-        if self.action_normalization_mask is not None and "ego" not in self.dataset_name:
-            if len(self.action_normalization_mask) != dataset_statistics["action"]["mean"].shape[-1]:
-                raise ValueError(
-                    f"Length of skip_normalization_mask ({len(self.action_normalization_mask)}) "
-                    f"does not match action dimension ({dataset_statistics['action']['mean'].shape[-1]})."
-                )
-            dataset_statistics["action"]["mask"] = np.array(self.action_normalization_mask)
+        # if self.action_normalization_mask is not None and "ego" not in self.dataset_name:
+        #     if len(self.action_normalization_mask) != dataset_statistics["action"]["mean"].shape[-1]:
+        #         raise ValueError(
+        #             f"Length of skip_normalization_mask ({len(self.action_normalization_mask)}) "
+        #             f"does not match action dimension ({dataset_statistics['action']['mean'].shape[-1]})."
+        #         )
+        #     dataset_statistics["action"]["mask"] = np.array(self.action_normalization_mask)
         self.dataset_statistics = dataset_statistics
         self.apply_traj_filters()
         self.split_val(split_seed=split_seed)
         self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=summation_steps)
         self.apply_flatten()
         self.apply_per_dataset_frame_filters(**dataset_frame_transform_kwargs)
+        self.apply_repack_transforms()
 
     def apply_restructure(self):
         def restructure(traj):
@@ -1288,6 +1326,21 @@ class SingleOXECoTRldsDataset(SingleCoTRldsDatasetRaw):
         if chunk_filter_fn:
             self.dataset = self.dataset.filter(chunk_filter_fn)
 
+    def apply_repack_transforms(self):
+        def repack_transforms(traj):
+            return {
+                "actions": traj["action"],
+                "observation": {
+                    "image": traj["observation"]["image_primary"],
+                    "wrist_image": traj["observation"]["wrist_image"],
+                    "state": traj["observation"]["proprio"],
+                },
+                "prompt": traj["task"]["language_instruction"],
+                "language_actions": traj["language_actions"],
+            }
+
+        self.dataset = self.dataset.traj_map(repack_transforms, self.num_parallel_calls)
+
 
 class OXECoTRldsDatasetsRaw:
     def __init__(
@@ -1379,7 +1432,7 @@ class OXECoTRldsDatasetsRaw:
                 reads_per_dataset,
             ):
             # Pass only accepted args to SingleOXECoTRldsDataset
-            ds = SingleOXECoTRldsDataset(
+            ds = SingleOXECoTRldsDatasetRaw(
                 dataset_name=dataset_kwargs["name"],
                 data_dir=dataset_kwargs["data_dir"],
                 config=config,
@@ -1498,8 +1551,8 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
         )
 
         decode_fn = make_decode_images_fn(
-            primary_key="image_primary",
-            wrist_key="image_wrist",
+            primary_key="image",
+            wrist_key="wrist_image",
             use_wrist_image=use_wrist_image,
         )
         self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
@@ -1574,7 +1627,7 @@ class CombinedCoTRldsDataset:
         oxe = OXECoTRldsDatasetsRaw(**oxe_kwargs)
 
         all_datasets = [*oxe.datasets, droid.dataset]
-        sample_weights = [*oxe.unnormalized_sample_weights, droid_weight]
+        sample_weights = [*oxe.unnormalized_sample_weights, droid_weight * droid.dataset_statistics["num_transitions"]]
 
         logging.info("Interleaving datasets...")
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(all_datasets, sample_weights)
@@ -1592,8 +1645,8 @@ class CombinedCoTRldsDataset:
         # Apply frame transforms via shared helper
         logging.info("Applying frame transforms on dataset...")
         decode_fn = make_decode_images_fn(
-            primary_key="image_primary",
-            wrist_key="image_wrist",
+            primary_key="image",
+            wrist_key="wrist_image",
             use_wrist_image=use_wrist_image,
         )
         self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
@@ -1609,9 +1662,9 @@ class CombinedCoTRldsDataset:
             def _decode_single(img_bytes):
                 return tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8)
 
-            traj["observation"]["image_primary"] = _decode_single(traj["observation"]["image_primary"])
+            traj["observation"]["image"] = _decode_single(traj["observation"]["image"])
             if use_wrist_image:
-                traj["observation"]["image_wrist"] = _decode_single(traj["observation"]["image_wrist"])
+                traj["observation"]["wrist_image"] = _decode_single(traj["observation"]["wrist_image"])
             return traj
 
         self.dataset = self.dataset.frame_map(decode_images, tf.data.AUTOTUNE)

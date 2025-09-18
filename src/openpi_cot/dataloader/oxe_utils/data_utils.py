@@ -6,15 +6,11 @@ Additional RLDS-specific data utilities.
 
 from collections.abc import Callable
 from enum import Enum
-import hashlib
-import json
-import os
 from typing import Any
 
 import dlimp as dl
 import numpy as np
 import tensorflow as tf
-from tqdm import tqdm
 
 
 def tree_map(fn: Callable, tree: dict) -> dict:
@@ -175,106 +171,6 @@ def pprint_data_mixture(dataset_kwargs_list: list[dict[str, Any]], dataset_weigh
         pad = 80 - len(dataset_kwargs["name"])
         print(f"# {dataset_kwargs['name']}: {weight:=>{pad}f} #")
     print("######################################################################################\n")
-
-
-def check_dataset_statistics(hash_dependencies: tuple[str, ...], save_dir: str | None = None) -> dict:
-    """
-    Checks if the dataset statistics are already computed and returns them if they are.
-    """
-    unique_hash = hashlib.sha256("".join(hash_dependencies).encode("utf-8"), usedforsecurity=False).hexdigest()
-
-    # Fallback local path for when data_dir is not writable or not provided
-    local_path = os.path.expanduser(os.path.join("~", ".cache", "orca", f"dataset_statistics_{unique_hash}.json"))
-    path = tf.io.gfile.join(save_dir, f"dataset_statistics_{unique_hash}.json") if save_dir is not None else local_path
-
-    # check if cache file exists and load
-    if tf.io.gfile.exists(path):
-        with tf.io.gfile.GFile(path, "r") as f:
-            return json.load(f), path, local_path
-
-    if os.path.exists(local_path):
-        with open(local_path) as f:
-            return json.load(f), local_path, local_path
-
-    return None, local_path, local_path
-
-
-def get_dataset_statistics(
-    dataset: dl.DLataset,
-    hash_dependencies: tuple[str, ...],
-    save_dir: str | None = None,
-) -> dict:
-    """
-    Either computes the statistics of a dataset or loads them from a cache file if this function has been called before
-    with the same `hash_dependencies`.
-
-    Currently, the statistics include the min/max/mean/std of the actions and proprio as well as the number of
-    transitions and trajectories in the dataset.
-    """
-    metadata, path, local_path = check_dataset_statistics(hash_dependencies, save_dir)
-    if metadata is not None:
-        return metadata
-
-    dataset = dataset.traj_map(
-        lambda traj: {
-            "action": traj["action"],
-            "proprio": (
-                traj["observation"]["proprio"] if "proprio" in traj["observation"] else tf.zeros_like(traj["action"])
-            ),
-        }
-    )
-
-    cardinality = dataset.cardinality().numpy()
-    if cardinality == tf.data.INFINITE_CARDINALITY:
-        raise ValueError("Cannot compute dataset statistics for infinite datasets.")
-
-    actions, proprios, num_transitions, num_trajectories = [], [], 0, 0
-    for traj in tqdm(dataset.iterator(), total=cardinality if cardinality != tf.data.UNKNOWN_CARDINALITY else None):
-        actions.append(traj["action"])
-        proprios.append(traj["proprio"])
-        num_transitions += traj["action"].shape[0]
-        num_trajectories += 1
-
-    actions, proprios = np.concatenate(actions), np.concatenate(proprios)
-    metadata = {
-        "action": {
-            "mean": actions.mean(0).tolist(),
-            "std": actions.std(0).tolist(),
-            "max": actions.max(0).tolist(),
-            "min": actions.min(0).tolist(),
-            "q01": np.quantile(actions, 0.01, axis=0).tolist(),
-            "q99": np.quantile(actions, 0.99, axis=0).tolist(),
-        },
-        "proprio": {
-            "mean": proprios.mean(0).tolist(),
-            "std": proprios.std(0).tolist(),
-            "max": proprios.max(0).tolist(),
-            "min": proprios.min(0).tolist(),
-            "q01": np.quantile(proprios, 0.01, axis=0).tolist(),
-            "q99": np.quantile(proprios, 0.99, axis=0).tolist(),
-        },
-        "num_transitions": num_transitions,
-        "num_trajectories": num_trajectories,
-    }
-
-    # Prefer writing to the provided save_dir (e.g., GCS) when available.
-    # Fall back to local cache if write fails or save_dir is None.
-    unique_hash = hashlib.sha256("".join(hash_dependencies).encode("utf-8"), usedforsecurity=False).hexdigest()
-    primary_path = (
-        tf.io.gfile.join(save_dir, f"dataset_statistics_{unique_hash}.json") if save_dir is not None else local_path
-    )
-
-    try:
-        # Ensure the parent directory exists (works for GCS with tf.io.gfile)
-        tf.io.gfile.makedirs(os.path.dirname(primary_path))
-        with tf.io.gfile.GFile(primary_path, "w") as f:
-            json.dump(metadata, f)
-    except (tf.errors.PermissionDeniedError, tf.errors.NotFoundError):
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        with open(local_path, "w") as f:
-            json.dump(metadata, f)
-
-    return metadata
 
 
 def allocate_threads(n: int | None, weights: np.ndarray):
