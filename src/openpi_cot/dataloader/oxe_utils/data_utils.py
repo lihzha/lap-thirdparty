@@ -59,6 +59,13 @@ def normalize_action_and_proprio(
     def bounds(x, _min, _max):
         return tf.clip_by_value(2 * (x - _min) / (_max - _min + 1e-8) - 1, -1, 1)
 
+    try:
+        norm_stats["actions"].item().q01
+        norm_stats["actions"] = norm_stats["actions"].item()
+        norm_stats["state"] = norm_stats["state"].item()
+    except:
+        norm_stats["actions"].q01
+
     if normalization_type == NormalizationType.NORMAL:
         traj[action_key] = normal(traj[action_key], norm_stats["actions"].mean, norm_stats["actions"].std)
         traj["observation"][state_key] = normal(
