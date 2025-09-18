@@ -1284,16 +1284,18 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
     def apply_repack_transforms(self):
         def repack_transforms(traj):
-            return {
+            new_traj = {
                 "actions": traj["action"],
                 "observation": {
                     "image": traj["observation"]["image_primary"],
-                    "wrist_image": traj["observation"]["wrist_image"],
                     "state": traj["observation"]["proprio"],
                 },
                 "prompt": traj["task"]["language_instruction"],
                 "language_actions": traj["language_actions"],
             }
+            if "wrist_image" in traj["observation"]:
+                new_traj["observation"]["wrist_image"] = traj["observation"]["wrist_image"]
+            return new_traj
 
         self.dataset = self.dataset.traj_map(repack_transforms, self.num_parallel_calls)
 
