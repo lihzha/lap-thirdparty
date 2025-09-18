@@ -3,8 +3,16 @@ import os
 import dlimp as dl
 import numpy as np
 from openpi.shared import normalize as _normalize
+import openpi.shared.normalize as up
+import pydantic
 import tensorflow as tf
 from tqdm_loggable.auto import tqdm
+
+
+@pydantic.dataclasses.dataclass
+class ExtendedNormStats(up.NormStats):
+    num_transitions: int | None = None
+    num_trajectories: int | None = None
 
 
 def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
@@ -15,13 +23,16 @@ def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
         f.write(_normalize.serialize_json(norm_stats))
 
 
-def load(directory: str) -> dict[str, _normalize.NormStats]:
+def load(directory: str) -> dict:
     """Load the normalization stats from a directory (supports gs:// and local)."""
     path = tf.io.gfile.join(directory, "norm_stats.json")
     if not tf.io.gfile.exists(path):
         raise FileNotFoundError(f"Norm stats file not found at: {path}")
     with tf.io.gfile.GFile(path, "r") as f:
-        return _normalize.deserialize_json(f.read())
+        norm_stats = _normalize.deserialize_json(f.read())
+        # Turn into a dict of [str, numpy.ndarray]
+        norm_stats = {k: v.model_dump() for k, v in norm_stats.items()}
+        return norm_stats
 
 
 def check_dataset_statistics(save_dir: str | None = None) -> dict:
