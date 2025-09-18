@@ -878,7 +878,6 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         dataset_statistics = get_dataset_statistics(
             self.dataset,
             save_dir=self.builder.data_dir,
-            data_config=self.config,
             action_key="actions",
             state_key="state",
         )
@@ -1024,7 +1023,6 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         dataset_statistics = get_dataset_statistics(
             self.dataset,
             save_dir=self.builder.data_dir,
-            data_config=self.config,
             action_key="action",
             state_key="proprio",
         )

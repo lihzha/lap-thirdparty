@@ -25,34 +25,30 @@ def load(directory: str) -> dict[str, _normalize.NormStats]:
         return _normalize.deserialize_json(f.read())
 
 
-def check_dataset_statistics(save_dir: str | None = None, data_config=None) -> dict:
+def check_dataset_statistics(save_dir: str | None = None) -> dict:
     """
     Checks if the dataset statistics are already computed and returns them if they are.
     """
 
     # Fallback local path for when data_dir is not writable or not provided
-    local_path = os.path.expanduser(
-        os.path.join("~", ".cache", "orca", f"dataset_statistics_{data_config.repo_id}.json")
-    )
-    path = tf.io.gfile.join(save_dir, data_config.repo_id) if save_dir is not None else local_path
+    local_path = os.path.expanduser(os.path.join("~", ".cache", "orca"))
+    path = save_dir if save_dir is not None else local_path
 
     # check if cache file exists and load
     if tf.io.gfile.exists(path):
         with tf.io.gfile.GFile(path, "r") as f:
             return json.load(f), path, local_path
 
-    raise ValueError(f"Norm stats file not found at: {path}")
-    # if os.path.exists(local_path):
-    #     with open(local_path) as f:
-    #         return json.load(f), local_path, local_path
+    if os.path.exists(local_path):
+        with open(local_path) as f:
+            return json.load(f), local_path, local_path
 
-    # return None, local_path, local_path
+    return None, local_path, local_path
 
 
 def get_dataset_statistics(
     dataset: dl.DLataset,
     save_dir: str | None = None,
-    data_config=None,
     action_key: str = "action",
     state_key: str = "proprio",
 ) -> dict:
@@ -63,7 +59,7 @@ def get_dataset_statistics(
     Currently, the statistics include the min/max/mean/std of the actions and proprio as well as the number of
     transitions and trajectories in the dataset.
     """
-    metadata, output_path, _ = check_dataset_statistics(save_dir, data_config)
+    metadata, output_path, _ = check_dataset_statistics(save_dir)
     if metadata is not None:
         return metadata
 
