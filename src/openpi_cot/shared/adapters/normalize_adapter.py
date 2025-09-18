@@ -34,7 +34,7 @@ def check_dataset_statistics(save_dir: str | None = None, data_config=None) -> d
     local_path = os.path.expanduser(
         os.path.join("~", ".cache", "orca", f"dataset_statistics_{data_config.repo_id}.json")
     )
-    path = save_dir / data_config.repo_id if save_dir is not None else local_path
+    path = tf.io.gfile.join(save_dir, data_config.repo_id) if save_dir is not None else local_path
 
     # check if cache file exists and load
     if tf.io.gfile.exists(path):
