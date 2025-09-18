@@ -237,7 +237,8 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
     droid_instructions_file = "droid_instructions.json"
     droid_language_annotations_file = "droid_language_annotations.json"
     keep_ranges_file = "keep_ranges_1_0_1.json"
-    default_lang_value = tf.constant(b"", dtype=tf.string)
+    # Use a serialized empty tf.string tensor as default to keep tf.io.parse_tensor safe
+    default_lang_value = tf.io.serialize_tensor(tf.constant([], dtype=tf.string))
     default_ep_value = tf.constant("", dtype=tf.string)
     default_intr_ser = tf.io.serialize_tensor(tf.zeros([4], tf.float32))
     default_extr_ser = tf.io.serialize_tensor(tf.reshape(tf.eye(4, dtype=tf.float32), [-1]))

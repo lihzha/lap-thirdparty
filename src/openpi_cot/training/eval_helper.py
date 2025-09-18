@@ -191,6 +191,11 @@ def _draw_line(
     return out
 
 
+def get_language_actions(batch, tok):
+    texts = _decode_reasoning_strings(batch[0], tok)
+    return texts
+
+
 def prepare_eval_batch(batch):
     # Process the batch to remove reasoning and update masks
     obs, actions = batch
@@ -374,5 +379,4 @@ def eval_step(
             vis2 = _draw_line(vis2, start_xy, end_true_xy, (0, 255, 0))
             vis2 = _draw_line(vis2, start_xy, pred_end_xy, (0, 0, 255))
             to_log.append(vis2)
-
     return l2_cm_values, to_log

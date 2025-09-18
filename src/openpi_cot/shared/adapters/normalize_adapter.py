@@ -1,18 +1,11 @@
 import os
 
 import dlimp as dl
+import jax
 import numpy as np
 from openpi.shared import normalize as _normalize
-import openpi.shared.normalize as up
-import pydantic
 import tensorflow as tf
 from tqdm_loggable.auto import tqdm
-
-
-@pydantic.dataclasses.dataclass
-class ExtendedNormStats(up.NormStats):
-    num_transitions: int | None = None
-    num_trajectories: int | None = None
 
 
 def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
@@ -114,10 +107,13 @@ def get_dataset_statistics(
             q01=np.asarray(np.quantile(actions, 0.01, axis=0)),
             q99=np.asarray(np.quantile(actions, 0.99, axis=0)),
         ),
+        "num_transitions": num_transitions,
+        "num_trajectories": num_trajectories,
     }
 
-    print(f"Writing stats to: {output_dir}")
-    save(output_dir, norm_stats_for_save)
+    if jax.process_index() == 0:
+        print(f"Writing stats to: {output_dir}")
+        save(output_dir, norm_stats_for_save)
 
     norm_stats = {
         "actions": {
