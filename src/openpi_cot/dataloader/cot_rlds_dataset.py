@@ -23,7 +23,6 @@ from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import normalize_action_and_proprio
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
-from openpi_cot.dataloader.oxe_utils.data_utils import tree_map
 from openpi_cot.dataloader.oxe_utils.materialize import get_oxe_dataset_kwargs_and_weights
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
@@ -883,7 +882,8 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             action_key="actions",
             state_key="state",
         )
-        self.dataset_statistics = tree_map(np.array, dataset_statistics)
+        # self.dataset_statistics = tree_map(np.array, dataset_statistics)
+        self.dataset_statistics = dataset_statistics
 
         self.apply_traj_filters(lang_table=lang_table, ep_table=ep_table)
         self.split_val(ep_table=ep_table, split_seed=split_seed)
@@ -1028,7 +1028,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             action_key="action",
             state_key="proprio",
         )
-        dataset_statistics = tree_map(np.array, dataset_statistics)
+        # dataset_statistics = tree_map(np.array, dataset_statistics)
         # if self.action_normalization_mask is not None and "ego" not in self.dataset_name:
         #     if len(self.action_normalization_mask) != dataset_statistics["action"]["mean"].shape[-1]:
         #         raise ValueError(
