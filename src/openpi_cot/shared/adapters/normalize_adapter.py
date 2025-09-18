@@ -1,3 +1,4 @@
+import logging
 import os
 
 import dlimp as dl
@@ -14,6 +15,7 @@ def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
     tf.io.gfile.makedirs(os.path.dirname(str(path)))
     with tf.io.gfile.GFile(path, "w") as f:
         f.write(_normalize.serialize_json(norm_stats))
+    logging.info(f"Saved stats to: {path}")
 
 
 def load(directory: str) -> dict:
