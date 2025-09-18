@@ -118,6 +118,9 @@ def _make_iterable_transforms(
             )
         norm_stats = data_cfg.norm_stats
 
+    if norm_stats is None:
+        logging.info("Not using normalization stats in the cot_data_loader.")
+
     tx = [
         *data_cfg.repack_transforms.inputs,
         *data_cfg.data_transforms.inputs,

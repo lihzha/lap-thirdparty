@@ -628,8 +628,10 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.dataset = self.dataset.traj_map(
             partial(
                 normalize_action_and_proprio,
-                metadata=self.dataset_statistics,
+                norm_stats=self.dataset_statistics,
                 normalization_type=action_proprio_normalization_type,
+                action_key="actions",
+                state_key="state",
             ),
             self.num_parallel_calls,
         )
@@ -1194,8 +1196,10 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.dataset = self.dataset.traj_map(
             partial(
                 normalize_action_and_proprio,
-                metadata=self.dataset_statistics,
+                norm_stats=self.dataset_statistics,
                 normalization_type=self.action_proprio_normalization_type,
+                action_key="action",
+                state_key="proprio",
             ),
             self.num_parallel_calls,
         )

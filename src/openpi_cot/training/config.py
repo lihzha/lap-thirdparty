@@ -2,6 +2,7 @@
 
 import dataclasses
 import difflib
+import logging
 import pathlib
 from typing import Literal, TypeAlias
 
@@ -19,6 +20,8 @@ import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
+import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
+from openpi_cot.shared.download import maybe_download
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
 from openpi_cot.transforms import TokenizePromptAndReasoning
@@ -250,16 +253,25 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         data.update(
             repo_id=repo_id,
             asset_id=asset_id,
-            norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            # norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            norm_stats=None,
             use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
         return CoTDataConfig(**data)
 
     def _load_norm_stats(
-        self, assets_dirs: pathlib.Path, asset_id: str | None
+        self, assets_dir: epath.Path, asset_id: str | None
     ) -> dict[str, upstream_transforms.NormStats] | None:
-        # TODO: implement
-        pass
+        if asset_id is None:
+            return None
+        try:
+            data_assets_dir = str(assets_dir / asset_id)
+            norm_stats = _normalize_adapter.load(maybe_download(data_assets_dir))
+            logging.info(f"Loaded norm stats from {data_assets_dir}")
+            return norm_stats
+        except FileNotFoundError:
+            logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
+        return None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:

@@ -8,7 +8,6 @@ from collections.abc import Callable
 from enum import Enum
 from typing import Any
 
-import dlimp as dl
 import numpy as np
 import tensorflow as tf
 
@@ -48,50 +47,55 @@ class NormalizationType(str, Enum):
 # === State / Action Processing Primitives ===
 
 
-# ruff: noqa: B023
-def normalize_action_and_proprio(traj: dict, metadata: dict, normalization_type: NormalizationType):
+def normalize_action_and_proprio(
+    traj: dict, norm_stats, normalization_type: NormalizationType, action_key: str, state_key: str
+):
     """Normalizes the action and proprio fields of a trajectory using the given metadata."""
-    keys_to_normalize = {"action": "action", "proprio": "observation/proprio"}
 
-    if normalization_type == NormalizationType.NORMAL:
-        for key, traj_key in keys_to_normalize.items():
-            mask = metadata[key].get("mask", tf.ones_like(metadata[key]["mean"], dtype=tf.bool))
-            traj = dl.transforms.selective_tree_map(
-                traj,
-                match=lambda k, _: k == traj_key,
-                map_fn=lambda x: tf.where(mask, (x - metadata[key]["mean"]) / (metadata[key]["std"] + 1e-8), x),
-            )
+    assert normalization_type == NormalizationType.NORMAL, "Only NormalizationType.NORMAL is supported for OXE."
 
-        return traj
+    traj[action_key] = (traj[action_key] - norm_stats["actions"].mean) / (norm_stats["actions"].std + 1e-6)
+    traj["observation"][state_key] = (traj["observation"][state_key] - norm_stats["state"].mean) / (
+        norm_stats["state"].std + 1e-6
+    )
+    # for key, traj_key in keys_to_normalize.items():
+    #     mask = metadata[key].get("mask", tf.ones_like(metadata[key]["mean"], dtype=tf.bool))
+    #     traj = dl.transforms.selective_tree_map(
+    #         traj,
+    #         match=lambda k, _: k == traj_key,
+    #         map_fn=lambda x: tf.where(mask, (x - metadata[key]["mean"]) / (metadata[key]["std"] + 1e-8), x),
+    #     )
 
-    if normalization_type in [NormalizationType.BOUNDS, NormalizationType.BOUNDS_Q99]:
-        for key, traj_key in keys_to_normalize.items():
-            if normalization_type == NormalizationType.BOUNDS:
-                low = metadata[key]["min"]
-                high = metadata[key]["max"]
-            elif normalization_type == NormalizationType.BOUNDS_Q99:
-                low = metadata[key]["q01"]
-                high = metadata[key]["q99"]
-            mask = metadata[key].get("mask", tf.ones_like(metadata[key]["min"], dtype=tf.bool))
-            traj = dl.transforms.selective_tree_map(
-                traj,
-                match=lambda k, _: k == traj_key,
-                map_fn=lambda x: tf.where(
-                    mask,
-                    tf.clip_by_value(2 * (x - low) / (high - low + 1e-8) - 1, -1, 1),
-                    x,
-                ),
-            )
+    # return traj
 
-            # Note (Moo Jin): Map unused action dimensions (i.e., dimensions where min == max) to all 0s.
-            zeros_mask = metadata[key]["min"] == metadata[key]["max"]
-            traj = dl.transforms.selective_tree_map(
-                traj, match=lambda k, _: k == traj_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
-            )
+    # if normalization_type in [NormalizationType.BOUNDS, NormalizationType.BOUNDS_Q99]:
+    #     for key, traj_key in keys_to_normalize.items():
+    #         if normalization_type == NormalizationType.BOUNDS:
+    #             low = metadata[key]["min"]
+    #             high = metadata[key]["max"]
+    #         elif normalization_type == NormalizationType.BOUNDS_Q99:
+    #             low = metadata[key]["q01"]
+    #             high = metadata[key]["q99"]
+    #         mask = metadata[key].get("mask", tf.ones_like(metadata[key]["min"], dtype=tf.bool))
+    #         traj = dl.transforms.selective_tree_map(
+    #             traj,
+    #             match=lambda k, _: k == traj_key,
+    #             map_fn=lambda x: tf.where(
+    #                 mask,
+    #                 tf.clip_by_value(2 * (x - low) / (high - low + 1e-8) - 1, -1, 1),
+    #                 x,
+    #             ),
+    #         )
 
-        return traj
+    #         # Note (Moo Jin): Map unused action dimensions (i.e., dimensions where min == max) to all 0s.
+    #         zeros_mask = metadata[key]["min"] == metadata[key]["max"]
+    #         traj = dl.transforms.selective_tree_map(
+    #             traj, match=lambda k, _: k == traj_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
+    #         )
 
-    raise ValueError(f"Unknown Normalization Type {normalization_type}")
+    #     return traj
+
+    # raise ValueError(f"Unknown Normalization Type {normalization_type}")
 
 
 def binarize_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
