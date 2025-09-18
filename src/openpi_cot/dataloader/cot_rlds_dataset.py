@@ -1300,18 +1300,13 @@ class OXECoTRldsDatasetsRaw:
     def __init__(
         self,
         config,
-        rlds_data_dir: str,
+        data_dir: str,
         data_mix: str,
-        resize_resolution: tuple[int, int],
-        shuffle: bool = True,  # noqa: FBT001, FBT002
         action_chunk_size: int = 16,
         split_seed: int = 0,
-        max_samples: int | None = None,
         seed: int = 0,
         split: str = "train",
         shuffle_buffer_size: int = 250_000,
-        window_size: int = 10,
-        image_aug: bool = False,  # noqa: FBT001, FBT002
         balance_weights: bool = True,  # noqa: FBT001, FBT002
         traj_transform_threads: int | None = None,
         traj_read_threads: int | None = None,
@@ -1326,7 +1321,7 @@ class OXECoTRldsDatasetsRaw:
 
         # fmt: off
         dataset_kwargs_list, sample_weights = get_oxe_dataset_kwargs_and_weights(
-            rlds_data_dir,
+            data_dir,
             mixture_spec,
             load_camera_views=("primary", "wrist"),
             load_depth=False,
@@ -1339,27 +1334,6 @@ class OXECoTRldsDatasetsRaw:
             "future_action_window_size": 0,                        # For action chunking
             "skip_unlabeled": True,                                # Skip trajectories without language labels
         },
-        frame_transform_kwargs={
-            "resize_size": resize_resolution,
-            "num_parallel_calls": tf.data.AUTOTUNE,                          # For CPU-intensive ops (decoding, resizing, etc.)
-        },
-        # If applicable, enable image augmentations
-        if image_aug:
-            image_augment_kwargs = {
-                "random_resized_crop": dict(scale=[0.9, 0.9], ratio=[1.0, 1.0]),  # noqa: C408
-                "random_brightness": [0.2],
-                "random_contrast": [0.8, 1.2],
-                "random_saturation": [0.8, 1.2],
-                "random_hue": [0.05],
-                "augment_order": [
-                    "random_resized_crop",
-                    "random_brightness",
-                    "random_contrast",
-                    "random_saturation",
-                    "random_hue",
-                ],
-            }
-            frame_transform_kwargs["image_augment_kwargs"] = image_augment_kwargs
 
         if not sample_weights:
             sample_weights = [1.0] * len(dataset_kwargs_list)
@@ -1368,8 +1342,8 @@ class OXECoTRldsDatasetsRaw:
             raise ValueError(f"sample_weights must be None or have length {len(dataset_kwargs_list)}.")
 
         # Check valid `traj_transform_kwargs` and `frame_transform_kwargs`
-        if traj_transform_kwargs is None or frame_transform_kwargs is None:
-            raise ValueError("Missing `traj_transform_kwargs` and `frame_transform_kwargs`!")
+        if traj_transform_kwargs is None:
+            raise ValueError("Missing `traj_transform_kwargs`!")
 
         # Allocate Threads based on Weights
         threads_per_dataset = allocate_threads(traj_transform_threads, sample_weights)
@@ -1459,41 +1433,36 @@ class OXECoTRldsDatasetsRaw:
 
 
 class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
-    def __init__(self, **kwargs):
-        # Filter kwargs using inspect
-        top_kwargs, _ = _filter_kwargs_for(
-            lambda *,
-            batch_size,
-            shuffle=True,
-            max_samples=None,
-            shuffle_buffer_size=250_000,
-            seed=0,
-            use_wrist_image=False,
-            split="train": None,
-            kwargs,
+    def __init__(
+        self,
+        data_dir,
+        data_mix,
+        batch_size,
+        shuffle,
+        action_chunk_size,
+        shuffle_buffer_size,
+        split_seed,
+        max_samples,
+        seed,
+        config,
+        split,
+    ):
+        super().__init__(
+            config=config,
+            data_dir=data_dir,
+            data_mix=data_mix,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            action_chunk_size=action_chunk_size,
+            shuffle_buffer_size=shuffle_buffer_size,
+            split_seed=split_seed,
+            max_samples=max_samples,
+            seed=seed,
+            split=split,
         )
-        for req in ("batch_size",):
-            if req not in top_kwargs:
-                raise ValueError(f"Missing required arguments: ['{req}']")
-        raw_kwargs, _ = _filter_kwargs_for(OXECoTRldsDatasetsRaw.__init__, kwargs)
-        for req in ("config", "rlds_data_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
-            if req not in raw_kwargs:
-                raise ValueError(f"Missing required arguments: ['{req}']")
-        consumed_keys = set(top_kwargs.keys()) | set(raw_kwargs.keys())
-        unexpected = set(kwargs.keys()) - consumed_keys
-        if unexpected:
-            raise ValueError(f"Unexpected arguments for OXECoTRldsDatasets: {sorted(unexpected)}")
-
-        batch_size = int(top_kwargs["batch_size"])  # required
-        shuffle = bool(top_kwargs.get("shuffle", True))
-        max_samples = top_kwargs.get("max_samples")
-        shuffle_buffer_size = int(top_kwargs.get("shuffle_buffer_size", 250_000))
-        seed = int(top_kwargs.get("seed", 0))
-        use_wrist_image = bool(top_kwargs.get("use_wrist_image", False))
-        want_val = raw_kwargs.get("split", "train") == "val"
-
-        super().__init__(**raw_kwargs)
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(self.datasets, self.sample_weights)
+
+        want_val = split == "val"
 
         self.dataset = maybe_shuffle_and_take(
             self.dataset,
@@ -1507,7 +1476,7 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
         decode_fn = make_decode_images_fn(
             primary_key="image",
             wrist_key="wrist_image",
-            use_wrist_image=use_wrist_image,
+            use_wrist_image=config.use_wrist_image,
         )
         self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
 

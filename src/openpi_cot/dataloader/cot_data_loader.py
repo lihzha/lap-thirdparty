@@ -54,17 +54,17 @@ def _create_rlds_dataset(
         rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
         if oxe_required and rlds_data_dir is not None:
             return OXECoTRldsDatasets(
-                config=data_cfg,
-                rlds_data_dir=rlds_data_dir,
+                data_dir=rlds_data_dir,
                 data_mix=data_cfg.data_mix,
-                action_chunk_size=action_horizon,
                 batch_size=local_bsz,
                 shuffle=shuffle,
+                action_chunk_size=action_horizon,
                 shuffle_buffer_size=data_cfg.shuffle_buffer_size,
-                seed=seed,
-                split=split,
+                split_seed=split_seed,
                 max_samples=max_samples,
-                use_wrist_image=getattr(data_cfg, "use_wrist_image", False),
+                seed=seed,
+                config=data_cfg,
+                split=split,
             )
         logging.warning(
             "dataset_type='oxe' selected but required fields missing; falling back to upstream RLDS loader."
@@ -86,8 +86,6 @@ def _create_rlds_dataset(
                 max_samples=max_samples,
                 seed=seed,
                 split=split,
-                use_wrist_image=getattr(data_cfg, "use_wrist_image", False),
-                droid_weight=getattr(data_cfg, "droid_weight", 1.0),
                 # DROID-specific (Raw)
                 data_dir=data_cfg.rlds_data_dir,
                 language_action_dir=data_cfg.language_action_dir,
