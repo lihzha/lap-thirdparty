@@ -453,8 +453,14 @@ _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
 
 
 def cli() -> TrainConfig:
-    return upstream_config.cli()
+    return tyro.extras.overridable_config_cli({k: (k, v) for k, v in _CONFIGS_DICT.items()})
 
 
 def get_config(config_name: str) -> TrainConfig:
-    return upstream_config.get_config(config_name)
+    """Get a config by name."""
+    if config_name not in _CONFIGS_DICT:
+        closest = difflib.get_close_matches(config_name, _CONFIGS_DICT.keys(), n=1, cutoff=0.0)
+        closest_str = f" Did you mean '{closest[0]}'? " if closest else ""
+        raise ValueError(f"Config '{config_name}' not found.{closest_str}")
+
+    return _CONFIGS_DICT[config_name]
