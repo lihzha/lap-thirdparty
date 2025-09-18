@@ -35,12 +35,18 @@ def check_dataset_statistics(save_dir: str | None = None) -> dict:
 
     # Look for norm_stats.json in the preferred dir first, then in the local cache dir.
     if tf.io.gfile.exists(preferred_dir):
-        stats = load(preferred_dir)
-        return stats, preferred_dir, local_dir
+        try:
+            stats = load(preferred_dir)
+            return stats, preferred_dir, local_dir
+        except Exception:
+            pass
 
     if tf.io.gfile.exists(local_dir):
-        stats = load(local_dir)
-        return stats, local_dir, local_dir
+        try:
+            stats = load(local_dir)
+            return stats, local_dir, local_dir
+        except Exception:
+            pass
 
     return None, preferred_dir, local_dir
 
