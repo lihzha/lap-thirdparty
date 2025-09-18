@@ -49,9 +49,59 @@ class NormalizationType(str, Enum):
 
 
 def normalize_action_and_proprio(
-    traj: dict, norm_stats, normalization_type: NormalizationType, action_key: str, state_key: str
+    traj: dict,
+    norm_stats=None,
+    normalization_type: NormalizationType | str = NormalizationType.NORMAL,
+    action_key: str = "action",
+    state_key: str = "proprio",
+    metadata=None,  # Back-compat: some callers pass `metadata` instead of `norm_stats`
 ):
-    """Normalizes the action and proprio fields of a trajectory using the given metadata."""
+    """Normalizes the action and proprio fields of a trajectory using provided stats.
+
+    Accepts either `norm_stats` or `metadata` for backwards compatibility. Supports
+    stats structures with keys "actions" or "action", and values that may be
+    dicts, dataclass-like objects (with attributes), lists, NumPy arrays or
+    tensors. All stats are coerced to tf.Tensor before use.
+    """
+
+    # Back-compat argument name
+    if norm_stats is None and metadata is not None:
+        norm_stats = metadata
+
+    if norm_stats is None:
+        return traj
+
+    # Normalize enum input
+    if isinstance(normalization_type, str):
+        try:
+            normalization_type = NormalizationType(normalization_type)
+        except ValueError:
+            raise ValueError(f"Unknown Normalization Type {normalization_type}")
+
+    def _get_group(stats_root, group_name: str):
+        # support both "actions" and "action"
+        if isinstance(stats_root, dict):
+            group = stats_root.get(group_name)
+            if group is None and group_name.endswith("s"):
+                group = stats_root.get(group_name[:-1])
+            return group
+        # if a non-dict is provided, there's nothing to select
+        return None
+
+    def _get_value(group_stats, key: str):
+        if group_stats is None:
+            return None
+        if isinstance(group_stats, dict):
+            value = group_stats.get(key)
+        else:
+            # dataclass-like objects
+            value = getattr(group_stats, key, None)
+        if value is None:
+            return None
+        # Coerce to tf.Tensor[float32]
+        if isinstance(value, tf.Tensor):
+            return tf.cast(value, tf.float32)
+        return tf.convert_to_tensor(value, dtype=tf.float32)
 
     def normal(x, mean, std):
         return (x - mean) / (std + 1e-6)
@@ -59,39 +109,41 @@ def normalize_action_and_proprio(
     def bounds(x, _min, _max):
         return tf.clip_by_value(2 * (x - _min) / (_max - _min + 1e-8) - 1, -1, 1)
 
-    if normalization_type == NormalizationType.NORMAL:
-        traj[action_key] = normal(traj[action_key], norm_stats["actions"]["mean"], norm_stats["actions"]["std"])
-        traj["observation"][state_key] = normal(
-            traj["observation"][state_key], norm_stats["state"]["mean"], norm_stats["state"]["std"]
-        )
-    elif normalization_type == NormalizationType.BOUNDS or normalization_type == NormalizationType.BOUNDS_Q99:
-        action_low = (
-            norm_stats["actions"]["min"]
-            if normalization_type == NormalizationType.BOUNDS
-            else norm_stats["actions"]["q01"]
-        )
-        action_high = (
-            norm_stats["actions"]["max"]
-            if normalization_type == NormalizationType.BOUNDS
-            else norm_stats["actions"]["q99"]
-        )
-        state_low = (
-            norm_stats["state"]["min"] if normalization_type == NormalizationType.BOUNDS else norm_stats["state"]["q01"]
-        )
-        state_high = (
-            norm_stats["state"]["max"] if normalization_type == NormalizationType.BOUNDS else norm_stats["state"]["q99"]
-        )
-        traj[action_key] = bounds(traj[action_key], action_low, action_high)
-        traj["observation"][state_key] = bounds(traj["observation"][state_key], state_low, state_high)
+    actions_stats = _get_group(norm_stats, "actions")
+    state_stats = _get_group(norm_stats, "state")
 
-        zeros_mask = action_low == action_high
-        traj = dl.transforms.selective_tree_map(
-            traj, match=lambda k, _: k == action_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
-        )
-        zeros_mask = state_low == state_high
-        traj = dl.transforms.selective_tree_map(
-            traj, match=lambda k, _: k == state_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
-        )
+    if normalization_type == NormalizationType.NORMAL:
+        a_mean = _get_value(actions_stats, "mean")
+        a_std = _get_value(actions_stats, "std")
+        s_mean = _get_value(state_stats, "mean")
+        s_std = _get_value(state_stats, "std")
+
+        if a_mean is not None and a_std is not None:
+            traj[action_key] = normal(traj[action_key], a_mean, a_std)
+        if s_mean is not None and s_std is not None and state_key in traj.get("observation", {}):
+            traj["observation"][state_key] = normal(traj["observation"][state_key], s_mean, s_std)
+    elif normalization_type in (NormalizationType.BOUNDS, NormalizationType.BOUNDS_Q99):
+        low_key = "min" if normalization_type == NormalizationType.BOUNDS else "q01"
+        high_key = "max" if normalization_type == NormalizationType.BOUNDS else "q99"
+
+        action_low = _get_value(actions_stats, low_key)
+        action_high = _get_value(actions_stats, high_key)
+        state_low = _get_value(state_stats, low_key)
+        state_high = _get_value(state_stats, high_key)
+
+        if action_low is not None and action_high is not None:
+            traj[action_key] = bounds(traj[action_key], action_low, action_high)
+            zeros_mask = tf.equal(action_low, action_high)
+            traj = dl.transforms.selective_tree_map(
+                traj, match=lambda k, _: k == action_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
+            )
+
+        if state_low is not None and state_high is not None and state_key in traj.get("observation", {}):
+            traj["observation"][state_key] = bounds(traj["observation"][state_key], state_low, state_high)
+            zeros_mask = tf.equal(state_low, state_high)
+            traj = dl.transforms.selective_tree_map(
+                traj, match=lambda k, _: k == state_key, map_fn=lambda x: tf.where(zeros_mask, 0.0, x)
+            )
 
     return traj
 
