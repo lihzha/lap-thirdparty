@@ -392,12 +392,12 @@ _CONFIGS = [
     TrainConfig(
         name="pi0_droid_cot_eval",
         model=pi_cot_config.PiCoTConfig(
-        action_horizon=10,
-        max_token_len=110,
-        number_token_weight=1.0,
-        pi05=False,
-        discrete_state_input=False,
-            ),
+            action_horizon=10,
+            max_token_len=110,
+            number_token_weight=1.0,
+            pi05=False,
+            discrete_state_input=False,
+        ),
         data=RLDSCoTDataConfig(
             repo_id="droid",
             asset_id="droid",
