@@ -1,33 +1,52 @@
+import json
 import logging
 import os
 
 import dlimp as dl
+import jax
 import numpy as np
 from openpi.shared import normalize as _normalize
+import pydantic
 import tensorflow as tf
 from tqdm_loggable.auto import tqdm
 
 
-def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
+@pydantic.dataclasses.dataclass
+class ExtendedNormStats(_normalize.NormStats):
+    num_transitions: int | None = None
+    num_trajectories: int | None = None
+
+
+class _NormStatsDict(pydantic.BaseModel):
+    norm_stats: dict[str, ExtendedNormStats]
+
+
+def serialize_json(norm_stats: dict[str, ExtendedNormStats]) -> str:
+    """Serialize the running statistics to a JSON string."""
+    return _NormStatsDict(norm_stats=norm_stats).model_dump_json(indent=2)
+
+
+def deserialize_json(data: str) -> dict[str, ExtendedNormStats]:
+    """Deserialize the running statistics from a JSON string."""
+    return _NormStatsDict(**json.loads(data)).norm_stats
+
+
+def save(directory: str, norm_stats: dict[str, ExtendedNormStats]) -> None:
     """Save the normalization stats to a directory (supports gs:// or local)."""
     path = tf.io.gfile.join(directory, "norm_stats.json")
     tf.io.gfile.makedirs(os.path.dirname(str(path)))
     with tf.io.gfile.GFile(path, "w") as f:
-        f.write(_normalize.serialize_json(norm_stats))
+        f.write(serialize_json(norm_stats))
     logging.info(f"Saved stats to: {path}")
 
 
-def load(directory: str) -> dict[str, _normalize.NormStats]:
+def load(directory: str) -> dict[str, ExtendedNormStats]:
     """Load the normalization stats from a directory (supports gs:// and local)."""
     path = tf.io.gfile.join(directory, "norm_stats.json")
     if not tf.io.gfile.exists(path):
         raise FileNotFoundError(f"Norm stats file not found at: {path}")
     with tf.io.gfile.GFile(path, "r") as f:
-        return _normalize.deserialize_json(f.read())
-
-
-def norm_stats_to_dict(norm_stats: dict[str, _normalize.NormStats]) -> dict[str, np.ndarray]:
-    return {k: v.model_dump() for k, v in norm_stats.items()}
+        return deserialize_json(f.read())
 
 
 def check_dataset_statistics(save_dir: str | None = None) -> dict:
@@ -96,29 +115,27 @@ def get_dataset_statistics(
 
     actions, proprios = np.concatenate(actions), np.concatenate(proprios)
 
-    norm_stats_for_save = {
-        "state": _normalize.NormStats(
+    norm_stats = {
+        "state": ExtendedNormStats(
             mean=np.asarray(proprios.mean(0)),
             std=np.asarray(proprios.std(0)),
             q01=np.asarray(np.quantile(proprios, 0.01, axis=0)),
             q99=np.asarray(np.quantile(proprios, 0.99, axis=0)),
+            num_transitions=num_transitions,
+            num_trajectories=num_trajectories,
         ),
-        "actions": _normalize.NormStats(
+        "actions": ExtendedNormStats(
             mean=np.asarray(actions.mean(0)),
             std=np.asarray(actions.std(0)),
             q01=np.asarray(np.quantile(actions, 0.01, axis=0)),
             q99=np.asarray(np.quantile(actions, 0.99, axis=0)),
+            num_transitions=num_transitions,
+            num_trajectories=num_trajectories,
         ),
     }
 
-    # if jax.process_index() == 0:
-    #     print(f"Writing stats to: {output_dir}")
-    #     save(output_dir, norm_stats_for_save)
-
-    norm_stats = {
-        **norm_stats_for_save,
-        "num_transitions": num_transitions,
-        "num_trajectories": num_trajectories,
-    }
+    if jax.process_index() == 0:
+        print(f"Writing stats to: {output_dir}")
+        save(output_dir, norm_stats)
 
     return norm_stats

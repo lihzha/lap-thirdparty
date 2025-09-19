@@ -953,18 +953,18 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
         )
 
         # Apply frame transforms via shared decode helper
-        self.apply_frame_transforms(use_wrist_image=config.use_wrist_image)
+        self.apply_frame_transforms(use_wrist_image=config.use_wrist_image, resize_resolution=config.resize_resolution)
 
         # Batch and prefetch
         self.dataset = batch_prefetch(self.dataset, batch_size)
 
-    def apply_frame_transforms(self, use_wrist_image: bool):  # noqa: FBT001
+    def apply_frame_transforms(self, use_wrist_image: bool, resize_resolution: tuple[int, int]):  # noqa: FBT001
         # Retained for compatibility; use shared helper
         decode_fn = make_decode_images_fn(
             primary_key="exterior_image_1_left",
             wrist_key="wrist_image_left",
             use_wrist_image=use_wrist_image,
-            resize_to=(224, 224),
+            resize_to=resize_resolution,
         )
         self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
 
@@ -979,7 +979,7 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
             yield batch
 
     def __len__(self):
-        return self.dataset_statistics["num_transitions"]
+        return self.dataset_statistics["state"].num_transitions
 
 
 class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
@@ -1035,13 +1035,25 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
 
-        self.apply_restructure()
-        dataset_statistics = get_dataset_statistics(
-            self.dataset,
-            save_dir=self.builder.data_dir,
-            action_key="action",
-            state_key="proprio",
-        )
+        cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
+        if cached_stats is not None:
+            # Prefer early filtering when stats are already available to reduce downstream work.
+            self.apply_traj_filters()
+            self.apply_restructure(use_wrist_image=config.use_wrist_image)
+            self.split_val(split_seed=split_seed)
+            self.dataset_statistics = cached_stats
+        else:
+            # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
+            self.apply_restructure(use_wrist_image=config.use_wrist_image)
+            self.dataset_statistics = get_dataset_statistics(
+                self.dataset,
+                save_dir=self.builder.data_dir,
+                action_key="action",
+                state_key="proprio",
+            )
+            self.apply_traj_filters()
+            self.split_val(split_seed=split_seed)
+
         # dataset_statistics = tree_map(np.array, dataset_statistics)
         # if self.action_normalization_mask is not None and "ego" not in self.dataset_name:
         #     if len(self.action_normalization_mask) != dataset_statistics["action"]["mean"].shape[-1]:
@@ -1050,15 +1062,12 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         #             f"does not match action dimension ({dataset_statistics['action']['mean'].shape[-1]})."
         #         )
         #     dataset_statistics["action"]["mask"] = np.array(self.action_normalization_mask)
-        self.dataset_statistics = dataset_statistics
-        self.apply_traj_filters()
-        self.split_val(split_seed=split_seed)
         self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=config.summation_steps)
-        self.apply_repack_transforms()
+        self.apply_repack_transforms(use_wrist_image=config.use_wrist_image)
         self.apply_flatten()
         self.apply_frame_filters(**dataset_frame_transform_kwargs)
 
-    def apply_restructure(self):
+    def apply_restructure(self, use_wrist_image: bool):
         def restructure(traj):
             # apply a standardization function, if provided
             if self.standardize_fn is not None:
@@ -1088,6 +1097,8 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                 # else:
                 #     raise ValueError(f"Unknown image key: {new}")
                 img_key = f"image_{new}"
+                if not use_wrist_image and new == "wrist":
+                    continue
                 if old is None:
                     new_obs[img_key] = tf.repeat("", traj_len)  # padding
                 else:
@@ -1174,6 +1185,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                 "action": tf.cast(traj["action"], tf.float32),
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": tf.repeat(traj_uid, traj_len),
+                "raw_action": tf.cast(traj["action"], tf.float32),
             }
 
             return traj
@@ -1217,7 +1229,6 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             traj_len = tf.shape(traj["action"])[0]
 
             action_chunk_indices = compute_window_indices(traj_len, action_chunk_size)
-            traj["raw_action"] = traj["action"]
             traj["action"] = tf.gather(traj["action"], action_chunk_indices)
             return traj
 
@@ -1278,18 +1289,20 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         if chunk_filter_fn:
             self.dataset = self.dataset.filter(chunk_filter_fn)
 
-    def apply_repack_transforms(self):
+    def apply_repack_transforms(self, use_wrist_image: bool):
         def repack_transforms(traj):
-            return {
+            return_dict = {
                 "actions": traj["action"],
                 "observation": {
                     "exterior_image_1_left": traj["observation"]["image_primary"],
                     "state": traj["observation"]["proprio"],
-                    "wrist_image_left": traj["observation"]["image_wrist"],
                 },
                 "prompt": traj["task"]["language_instruction"],
                 "language_actions": traj["language_actions"],
             }
+            if use_wrist_image:
+                return_dict["observation"]["wrist_image_left"] = traj["observation"]["image_wrist"]
+            return return_dict
 
         self.dataset = self.dataset.traj_map(repack_transforms, self.num_parallel_calls)
 
@@ -1327,6 +1340,8 @@ class OXECoTRldsDatasetsRaw:
             load_language=True,
             action_proprio_normalization_type=action_proprio_normalization_type,
         )
+        self.dataset_names = [dataset_kwargs["name"] for dataset_kwargs in dataset_kwargs_list]
+
 
         if len(sample_weights) != len(dataset_kwargs_list):
             raise ValueError(f"sample_weights must be None or have length {len(dataset_kwargs_list)}.")
@@ -1363,7 +1378,7 @@ class OXECoTRldsDatasetsRaw:
             )
             datasets.append(ds.dataset)
             dataset_statistics = ds.dataset_statistics
-            dataset_sizes.append(dataset_statistics["num_transitions"])
+            dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_kwargs["name"]] = dataset_statistics
 
         # Get the indices of the "primary" datasets (i.e., datasets with sample_weight == 1.0)
@@ -1375,7 +1390,6 @@ class OXECoTRldsDatasetsRaw:
             sample_weights = np.array(sample_weights) * np.array(dataset_sizes)
         unnormalized_sample_weights = sample_weights.copy()
         sample_weights = np.array(sample_weights) / np.sum(sample_weights)
-        pprint_data_mixture(dataset_kwargs_list, sample_weights)
 
         # Effective Dataset Length = Number of samples until each dataset has completed at least one epoch
         #   =>> Note :: Only counting the "primary" datasets (i.e., datasets with sample_weight == 1.0)
@@ -1446,6 +1460,8 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
             split=split,
             balance_weights=balance_weights,
         )
+        pprint_data_mixture(self.dataset_names, self.sample_weights)
+
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(self.datasets, self.sample_weights)
 
         want_val = split == "val"
@@ -1463,7 +1479,7 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
             primary_key="exterior_image_1_left",
             wrist_key="wrist_image_left",
             use_wrist_image=config.use_wrist_image,
-            resize_to=(224, 224),
+            resize_to=config.resize_resolution,
         )
         self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
 
@@ -1528,8 +1544,9 @@ class CombinedCoTRldsDataset:
         all_datasets = [*oxe.datasets, droid.dataset]
         sample_weights = [
             *oxe.unnormalized_sample_weights,
-            config.droid_weight * droid.dataset_statistics["num_transitions"],
+            config.droid_weight * droid.dataset_statistics["state"].num_transitions,
         ]
+        pprint_data_mixture([*oxe.dataset_names, "droid"], sample_weights)
 
         logging.info("Interleaving datasets...")
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(all_datasets, sample_weights)

@@ -148,6 +148,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     dataset_type: Literal["droid", "oxe", "combined"] = "droid"
     state_encoding: StateEncoding = StateEncoding.POS_EULER
     action_encoding: ActionEncoding = ActionEncoding.ABS_EEF_POS
+    resize_resolution: tuple[int, int] = (224, 224)
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
@@ -180,7 +181,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
             return upstream_transforms.Group(
                 inputs=[
                     upstream_transforms.InjectDefaultPrompt(self.default_prompt),
-                    upstream_transforms.ResizeImages(224, 224),
+                    # upstream_transforms.ResizeImages(224, 224),
                     TokenizePromptAndReasoning(
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
@@ -367,6 +368,7 @@ _CONFIGS = [
             language_action_dir="gs://pi0-cot/droid-base-lang-actions",
             data_mix="oxe_pi_magic_soup",
             droid_weight=2.0,
+            shuffle_buffer_size=400_000,
         ),
         fsdp_devices=4,
         batch_size=256,
@@ -383,6 +385,7 @@ _CONFIGS = [
             language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
             data_mix="oxe_pi_magic_soup",
             droid_weight=2.0,
+            shuffle_buffer_size=400_000,
         ),
         fsdp_devices=4,
         batch_size=256,

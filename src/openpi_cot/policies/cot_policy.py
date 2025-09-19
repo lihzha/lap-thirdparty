@@ -48,6 +48,7 @@ def _to_str_list(x):
     return out
 
 
+# TODO: during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
 @dataclasses.dataclass(frozen=True)
 class CoTInputs(upstream_transforms.DataTransformFn):
     # The action dimension of the model. Will be used to pad state and actions.
@@ -118,24 +119,20 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             inputs["prompt"] = prompt_str
 
         if "language_actions" in data:
-            breakpoint()
-            # if isinstance(data["language_actions"][0], np.ndarray):
-            #     summed = summarize_numeric_actions(data["language_actions"], self.sum_decimal)
-            #     inputs["language_actions"] = summed
-            # else:
             la = data["language_actions"]
             assert isinstance(la[0], bytes)
-            if _maybe_parse_serialized_tensor_to_ndarray(la[0]):  # oxe case
+            if _maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
                 raw_array = [_maybe_parse_serialized_tensor_to_ndarray(x) for x in la]
-                summed = summarize_numeric_actions(la, self.sum_decimal)
-                seq = _to_str_list(data["language_actions"])
+                summed = summarize_numeric_actions(raw_array, self.sum_decimal)
+                inputs["language_actions"] = summed
+            else:
+                seq = _to_str_list(la)
                 if seq is not None:
                     summed = sum_language_actions(seq, self.sum_decimal)
                     if summed is not None and len(summed) > 0:
                         inputs["language_actions"] = summed
                 else:
                     # Scalar/bytes case
-                    la = data["language_actions"]
                     if isinstance(la, bytes):
                         la = la.decode("utf-8")
                     else:

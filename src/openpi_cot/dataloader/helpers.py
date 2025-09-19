@@ -4,6 +4,8 @@ import numpy as np
 import tensorflow as tf
 
 
+# Note: Both DROID and OXE use roll-pitch-yaw convention.
+# Note: quaternion is in xyzw order.
 # Defines Proprioceptive State Encoding Schemes
 class StateEncoding(IntEnum):
     NONE = -1  # No Proprioceptive State
@@ -16,7 +18,7 @@ class StateEncoding(IntEnum):
 
 # Defines Action Encoding Schemes
 class ActionEncoding(IntEnum):
-    EEF_POS = 1  # EEF Delta XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1)
+    EEF_POS = 1  # EEF Delta XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1).
     JOINT_POS = 2  # Joint Delta Position (7) + Gripper Open/Close (1)
     JOINT_POS_BIMANUAL = 3  # Joint Delta Position (2 x [ Joint Delta Position (6) + Gripper Open/Close (1) ])
     EEF_R6 = 4  # EEF Delta XYZ (3) + R6 (6) + Gripper Open/Close (1)
@@ -158,7 +160,7 @@ def convert_action_encoding(action: tf.Tensor, from_encoding: ActionEncoding, to
 def _convert_pos_euler_quat(state: tf.Tensor, from_encoding: StateEncoding, to_encoding: StateEncoding) -> tf.Tensor:
     """Convert between POS_EULER and POS_QUAT encodings."""
     if from_encoding == StateEncoding.POS_EULER and to_encoding == StateEncoding.POS_QUAT:
-        # POS_EULER: [x, y, z, rx, ry, rz, pad, gripper] -> POS_QUAT: [x, y, z, qw, qx, qy, qz, gripper]
+        # POS_EULER: [x, y, z, rx, ry, rz, pad, gripper] -> POS_QUAT: [x, y, z, qx, qy, qz, qw, gripper]
         xyz = state[..., :3]  # [..., 3]
         euler = state[..., 3:6]  # [..., 3] - rx, ry, rz
         gripper = state[..., -1:]  # [..., 1]
@@ -169,9 +171,9 @@ def _convert_pos_euler_quat(state: tf.Tensor, from_encoding: StateEncoding, to_e
         return tf.concat([xyz, quat, gripper], axis=-1)
 
     if from_encoding == StateEncoding.POS_QUAT and to_encoding == StateEncoding.POS_EULER:
-        # POS_QUAT: [x, y, z, qw, qx, qy, qz, gripper] -> POS_EULER: [x, y, z, rx, ry, rz, pad, gripper]
+        # POS_QUAT: [x, y, z, qx, qy, qz, qw, gripper] -> POS_EULER: [x, y, z, rx, ry, rz, pad, gripper]
         xyz = state[..., :3]  # [..., 3]
-        quat = state[..., 3:7]  # [..., 4] - qw, qx, qy, qz
+        quat = state[..., 3:7]  # [..., 4] - qx, qy, qz, qw
         gripper = state[..., -1:]  # [..., 1]
 
         # Convert quaternion to euler angles
@@ -194,19 +196,19 @@ def _convert_pos_to_eef_r6(state: tf.Tensor, from_encoding: StateEncoding) -> tf
 
         # Convert euler angles to rotation matrix (first 6 elements of 3x3 matrix)
         rot_matrix = _euler_to_rotation_matrix(euler)  # [..., 3, 3]
-        r6 = tf.reshape(rot_matrix[..., :2, :], tf.concat([tf.shape(rot_matrix)[:-2], [6]], axis=0))  # [..., 6]
+        r6 = _rotation_matrix_to_r6(rot_matrix)
 
         return tf.concat([tf.cast(xyz, dtype), tf.cast(r6, dtype), tf.cast(gripper, dtype)], axis=-1)
 
     if from_encoding == StateEncoding.POS_QUAT:
-        # POS_QUAT: [x, y, z, qw, qx, qy, qz, gripper] -> EEF_R6: [x, y, z, r11, r12, r13, r21, r22, r23, gripper]
+        # POS_QUAT: [x, y, z, qx, qy, qz, qw, gripper] -> EEF_R6: [x, y, z, r11, r12, r13, r21, r22, r23, gripper]
         xyz = state[..., :3]  # [..., 3]
-        quat = state[..., 3:7]  # [..., 4] - qw, qx, qy, qz
+        quat = state[..., 3:7]  # [..., 4] - qx, qy, qz, qw
         gripper = state[..., -1:]  # [..., 1]
 
         # Convert quaternion to rotation matrix (first 6 elements of 3x3 matrix)
         rot_matrix = _quaternion_to_rotation_matrix(quat)  # [..., 3, 3]
-        r6 = tf.reshape(rot_matrix[..., :2, :], tf.concat([tf.shape(rot_matrix)[:-2], [6]], axis=0))  # [..., 6]
+        r6 = _rotation_matrix_to_r6(rot_matrix)
 
         return tf.concat([tf.cast(xyz, dtype), tf.cast(r6, dtype), tf.cast(gripper, dtype)], axis=-1)
 
@@ -220,35 +222,7 @@ def _convert_eef_r6_to_eef_pos(action: tf.Tensor) -> tf.Tensor:
     r6_delta = action[..., 3:9]  # [..., 6] - dr11, dr12, dr13, dr21, dr22, dr23
     gripper = action[..., -1:]  # [..., 1]
 
-    # Reconstruct rotation matrix from first 6 elements
-    r11, r12, r13, r21, r22, r23 = tf.unstack(r6_delta, axis=-1)
-
-    # Compute third row using orthogonality
-    r31 = r12 * r23 - r13 * r22
-    r32 = r13 * r21 - r11 * r23
-    r33 = r11 * r22 - r12 * r21
-
-    # Normalize
-    r1_norm = tf.sqrt(r11**2 + r12**2 + r13**2)
-    r2_norm = tf.sqrt(r21**2 + r22**2 + r23**2)
-    r3_norm = tf.sqrt(r31**2 + r32**2 + r33**2)
-
-    r11, r12, r13 = r11 / r1_norm, r12 / r1_norm, r13 / r1_norm
-    r21, r22, r23 = r21 / r2_norm, r22 / r2_norm, r23 / r2_norm
-    r31, r32, r33 = r31 / r3_norm, r32 / r3_norm, r33 / r3_norm
-
-    eps = tf.constant(1e-8, r6_delta.dtype)
-    r1 = tf.stack([r11, r12, r13], axis=-1)  # [..., 3]
-    r2 = tf.stack([r21, r22, r23], axis=-1)  # [..., 3]
-
-    r1 = r1 / (tf.norm(r1, axis=-1, keepdims=True) + eps)
-    # remove component of r2 along r1
-    r2 = r2 - tf.reduce_sum(r2 * r1, axis=-1, keepdims=True) * r1
-    r2 = r2 / (tf.norm(r2, axis=-1, keepdims=True) + eps)
-
-    r3 = tf.linalg.cross(r1, r2)
-
-    rot_matrix = tf.stack([r1, r2, r3], axis=-2)  # [..., 3, 3]
+    rot_matrix = _r6_to_rotation_matrix(r6_delta)
 
     # Convert rotation matrix to euler angles
     euler_delta = _rotation_matrix_to_euler(rot_matrix)
@@ -262,35 +236,7 @@ def _convert_eef_r6_to_pos(state: tf.Tensor, to_encoding: StateEncoding) -> tf.T
     r6 = state[..., 3:9]  # [..., 6] - r11, r12, r13, r21, r22, r23
     gripper = state[..., -1:]  # [..., 1]
 
-    # Reconstruct rotation matrix from first 6 elements
-    r11, r12, r13, r21, r22, r23 = tf.unstack(r6, axis=-1)
-
-    # Compute third row using orthogonality: r3 = r1 × r2
-    r31 = r12 * r23 - r13 * r22
-    r32 = r13 * r21 - r11 * r23
-    r33 = r11 * r22 - r12 * r21
-
-    # Normalize to ensure orthonormality
-    r1_norm = tf.sqrt(r11**2 + r12**2 + r13**2)
-    r2_norm = tf.sqrt(r21**2 + r22**2 + r23**2)
-    r3_norm = tf.sqrt(r31**2 + r32**2 + r33**2)
-
-    r11, r12, r13 = r11 / r1_norm, r12 / r1_norm, r13 / r1_norm
-    r21, r22, r23 = r21 / r2_norm, r22 / r2_norm, r23 / r2_norm
-    r31, r32, r33 = r31 / r3_norm, r32 / r3_norm, r33 / r3_norm
-
-    eps = tf.constant(1e-8, r6.dtype)
-    r1 = tf.stack([r11, r12, r13], axis=-1)  # [..., 3]
-    r2 = tf.stack([r21, r22, r23], axis=-1)  # [..., 3]
-
-    r1 = r1 / (tf.norm(r1, axis=-1, keepdims=True) + eps)
-    # remove component of r2 along r1
-    r2 = r2 - tf.reduce_sum(r2 * r1, axis=-1, keepdims=True) * r1
-    r2 = r2 / (tf.norm(r2, axis=-1, keepdims=True) + eps)
-
-    r3 = tf.linalg.cross(r1, r2)
-
-    rot_matrix = tf.stack([r1, r2, r3], axis=-2)  # [..., 3, 3]
+    rot_matrix = _r6_to_rotation_matrix(r6)
 
     if to_encoding == StateEncoding.POS_EULER:
         # Convert rotation matrix to euler angles
@@ -313,20 +259,20 @@ def _convert_eef_pos_to_eef_r6(action: tf.Tensor) -> tf.Tensor:
     euler_delta = action[..., 3:6]  # [..., 3] - drx, dry, drz
     gripper = action[..., -1:]  # [..., 1]
 
+    dtype = action.dtype
+
     # Convert euler angle deltas to rotation matrix deltas
     rot_delta = _euler_to_rotation_matrix(euler_delta)  # [..., 3, 3]
-    r6_delta = tf.reshape(rot_delta[..., :2, :], tf.concat([tf.shape(rot_delta)[:-2], [6]], axis=0))  # [..., 6]
+    r6_delta = _rotation_matrix_to_r6(rot_delta)
 
-    return tf.concat(
-        [tf.cast(xyz_delta, tf.float32), tf.cast(r6_delta, tf.float32), tf.cast(gripper, tf.float32)], axis=-1
-    )
+    return tf.concat([tf.cast(xyz_delta, dtype), tf.cast(r6_delta, dtype), tf.cast(gripper, dtype)], axis=-1)
 
 
 # Helper functions for quaternion and rotation matrix conversions
 
 
 def _euler_to_quaternion(euler: tf.Tensor) -> tf.Tensor:
-    """Convert euler angles (rx, ry, rz) to quaternion (qw, qx, qy, qz)."""
+    """Convert euler angles (rx, ry, rz) to quaternion (qx, qy, qz, qw)."""
     rx, ry, rz = tf.unstack(euler, axis=-1)
 
     # Half angles
@@ -340,7 +286,7 @@ def _euler_to_quaternion(euler: tf.Tensor) -> tf.Tensor:
     qy = cx * sy * cz + sx * cy * sz
     qz = cx * cy * sz - sx * sy * cz
 
-    return tf.stack([qw, qx, qy, qz], axis=-1)
+    return tf.stack([qx, qy, qz, qw], axis=-1)
 
 
 def _euler_to_rotation_matrix(euler: tf.Tensor) -> tf.Tensor:
@@ -392,8 +338,8 @@ def _euler_to_rotation_matrix(euler: tf.Tensor) -> tf.Tensor:
 
 
 def _quaternion_to_euler(quat: tf.Tensor) -> tf.Tensor:
-    """Convert quaternion (qw, qx, qy, qz) to euler angles (rx, ry, rz) - XYZ intrinsic."""
-    qw, qx, qy, qz = tf.unstack(quat, axis=-1)
+    """Convert quaternion (qx, qy, qz, qw) to euler angles (rx, ry, rz) - XYZ intrinsic."""
+    qx, qy, qz, qw = tf.unstack(quat, axis=-1)
 
     # Normalize quaternion
     norm = tf.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
@@ -419,9 +365,9 @@ def _quaternion_to_euler(quat: tf.Tensor) -> tf.Tensor:
 
 
 def _quaternion_to_rotation_matrix(quat: tf.Tensor) -> tf.Tensor:
-    """Convert quaternion (qw, qx, qy, qz) to rotation matrix."""
+    """Convert quaternion (qx, qy, qz, qw) to rotation matrix."""
     eps = tf.constant(1e-8, quat.dtype)
-    qw, qx, qy, qz = tf.unstack(quat, axis=-1)
+    qx, qy, qz, qw = tf.unstack(quat, axis=-1)
     norm = tf.sqrt(tf.maximum(qw**2 + qx**2 + qy**2 + qz**2, eps))
     qw, qx, qy, qz = qw / norm, qx / norm, qy / norm, qz / norm
 
@@ -497,6 +443,35 @@ def _rotation_matrix_to_quaternion(rot_matrix: tf.Tensor) -> tf.Tensor:
     qz = tf.where(cond1, qz1, tf.where(cond2, qz2, tf.where(cond3, qz3, qz4)))
 
     # Final normalize to kill residual numeric drift
-    q = tf.stack([qw, qx, qy, qz], axis=-1)
+    q = tf.stack([qx, qy, qz, qw], axis=-1)
     q = q / (tf.norm(q, axis=-1, keepdims=True) + eps)
     return q
+
+
+def _rotation_matrix_to_r6(rot_matrix: tf.Tensor) -> tf.Tensor:
+    """Flatten the first two rotation matrix rows into the 6D (R6) representation."""
+    upper_two_rows = rot_matrix[..., :2, :]  # [..., 2, 3]
+    return tf.reshape(upper_two_rows, tf.concat([tf.shape(rot_matrix)[:-2], [6]], axis=0))
+
+
+def _r6_to_rotation_matrix(r6: tf.Tensor) -> tf.Tensor:
+    """Reconstruct an orthonormal rotation matrix from the 6D (R6) representation."""
+    dtype = r6.dtype
+    eps = tf.constant(1e-8, dtype)
+
+    def _normalize(vec: tf.Tensor) -> tf.Tensor:
+        norm = tf.maximum(tf.norm(vec, axis=-1, keepdims=True), eps)
+        return vec / norm
+
+    r1 = r6[..., :3]
+    r2 = r6[..., 3:]
+
+    r1 = _normalize(r1)
+    # Remove component of r2 along r1 before normalizing again (Gram-Schmidt)
+    r2 = r2 - tf.reduce_sum(r2 * r1, axis=-1, keepdims=True) * r1
+    r2 = _normalize(r2)
+
+    r3 = tf.linalg.cross(r1, r2)
+    r3 = _normalize(r3)
+
+    return tf.stack([r1, r2, r3], axis=-2)

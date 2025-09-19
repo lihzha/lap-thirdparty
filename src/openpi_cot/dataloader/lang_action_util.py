@@ -1,82 +1,13 @@
+import re
+
 import numpy as np
 
 AXIS_PERM = np.array([0, 2, 1])  # X -> dx (right/left), Z -> dy (forward/backward), Y -> dz (down/up)
 AXIS_SIGN = np.array([1, 1, 1])  # start with no flips
 
 
-def describe_movement(gripper_poses: np.ndarray, gripper_actions: np.ndarray) -> list[str]:
-    """Return list of NL phrases for a 3-D translation *in metres*."""
-
-    sentences = []
-
-    for i in range(len(gripper_poses) - 1):
-        p_i = gripper_poses[i][:3, 3]
-        p_ip1 = gripper_poses[i + 1][:3, 3]
-        t_cam = p_ip1 - p_i  # camera-frame delta
-        v = (AXIS_SIGN * t_cam[AXIS_PERM]) * 100.0
-        # dT = np.linalg.inv(gripper_poses[i]) @ gripper_poses[i + 1]
-        # t = dT[:3, 3]
-        # dR = dT[:3, :3]
-
-        # v = (AXIS_SIGN * t[AXIS_PERM]) * 100.0
-        dx, dy, dz = v
-
-        # each timestep is a sentence
-
-        parts = []
-        parts.append(f"move {'right' if dx > 0 else 'left'} {abs(dx):.2f} cm")
-        parts.append(f"move {'forward' if dy > 0 else 'backward'} {abs(dy):.2f} cm")
-        parts.append(f"move {'down' if dz > 0 else 'up'} {abs(dz):.2f} cm")
-
-        # droll, dpitch, dyaw = R.from_matrix(dR).as_euler("xyz")
-
-        # droll = gripper_rotations[i, 0] - gripper_rotations[i - 1, 0]
-        # dpitch = gripper_rotations[i, 1] - gripper_rotations[i - 1, 1]
-        # dyaw = gripper_rotations[i, 2] - gripper_rotations[i - 1, 2]
-
-        # parts.append(f"rotate roll {droll / np.pi * 180:.2f}°")
-        # parts.append(f"rotate pitch {dpitch / np.pi * 180:.2f}°")
-        # parts.append(f"rotate yaw {dyaw / np.pi * 180:.2f}°")
-        parts.append(f"set gripper to {gripper_actions[i]:.2f}")
-        sentence = " and ".join(parts) if parts else "(negligible motion)"
-        sentences.append(sentence)
-    return sentences
-
-
-def describe_base_movement(gripper_poses: np.ndarray, gripper_actions: np.ndarray) -> list[str]:
-    """Return list of NL phrases for a 3-D translation *in metres*."""
-
-    sentences = []
-
-    for i in range(len(gripper_poses) - 1):
-        p_i = gripper_poses[i][:3]
-        p_ip1 = gripper_poses[i + 1][:3]
-        t_base = (p_ip1 - p_i) * 100.0  # base-frame delta
-        dx, dy, dz = t_base
-
-        parts = []
-        parts.append(f"move {'right' if dx > 0 else 'left'} {abs(dx):.2f} cm")
-        parts.append(f"move {'forward' if dy > 0 else 'backward'} {abs(dy):.2f} cm")
-        parts.append(f"move {'down' if dz > 0 else 'up'} {abs(dz):.2f} cm")
-
-        # droll, dpitch, dyaw = R.from_matrix(dR).as_euler("xyz")
-
-        # droll = gripper_rotations[i, 0] - gripper_rotations[i - 1, 0]
-        # dpitch = gripper_rotations[i, 1] - gripper_rotations[i - 1, 1]
-        # dyaw = gripper_rotations[i, 2] - gripper_rotations[i - 1, 2]
-
-        # parts.append(f"rotate roll {droll / np.pi * 180:.2f}°")
-        # parts.append(f"rotate pitch {dpitch / np.pi * 180:.2f}°")
-        # parts.append(f"rotate yaw {dyaw / np.pi * 180:.2f}°")
-        parts.append(f"set gripper to {gripper_actions[i]:.2f}")
-        sentence = " and ".join(parts)
-        sentences.append(sentence)
-    return sentences
-
-
 def _format_numeric(val: float, sum_decimal: str) -> str:
     # Match droid policy formatting for numbers
-    import re
 
     decimals = 0
     if isinstance(sum_decimal, str):
@@ -105,9 +36,13 @@ def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
     dy_m = float(arr[..., 1].sum())
     dz_m = float(arr[..., 2].sum())
     # Convert to centimeters
-    dx = abs(dx_m * 100.0)
-    dy = abs(dy_m * 100.0)
-    dz = abs(dz_m * 100.0)
+    if sum_decimal == "no_number":
+        decimals = 0
+    else:
+        decimals = int(re.fullmatch(r"(\d+)f", sum_decimal).group(1))
+    dx = round(abs(dx_m * 100.0), decimals)
+    dy = round(abs(dy_m * 100.0), decimals)
+    dz = round(abs(dz_m * 100.0), decimals)
 
     parts: list[str] = []
 
@@ -149,8 +84,6 @@ def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
 
 
 def sum_language_actions(actions_list, sum_decimal):
-    import re
-
     # Determine rounding/formatting behavior from sum_decimal
     decimals = 0
     no_number = False
