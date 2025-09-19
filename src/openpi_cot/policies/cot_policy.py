@@ -10,12 +10,15 @@ from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 
 
 def _maybe_parse_serialized_tensor_to_ndarray(b) -> np.ndarray | None:
-    if not isinstance(b, (bytes, np.bytes_)):
-        return None
-    import tensorflow as tf  # Lazy import to avoid TF dependency at module import time
+    try:
+        if not isinstance(b, (bytes, np.bytes_)):
+            return None
+        import tensorflow as tf  # Lazy import to avoid TF dependency at module import time
 
-    t = tf.io.parse_tensor(b, out_type=tf.float32)
-    return t.numpy()
+        t = tf.io.parse_tensor(b, out_type=tf.float32)
+        return t.numpy()
+    except Exception:
+        return None
 
 
 def _parse_image(image) -> np.ndarray:
@@ -115,50 +118,29 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             inputs["prompt"] = prompt_str
 
         if "language_actions" in data:
+            breakpoint()
+            # if isinstance(data["language_actions"][0], np.ndarray):
+            #     summed = summarize_numeric_actions(data["language_actions"], self.sum_decimal)
+            #     inputs["language_actions"] = summed
+            # else:
             la = data["language_actions"]
-
-            # Normalize to a Python list of elements
-            if isinstance(la, np.ndarray):
-                # try:
-                #     seq_like = la.tolist()
-                # except Exception:
-                #     seq_like = list(la)
-                raise ValueError("Language actions should be a list of strings")
-            if isinstance(la, (list, tuple)):
-                # seq_like = list(la)
-                raise ValueError("Language actions should be a list of strings")
-            seq_like = [la]
-
-            numeric_rows: list[np.ndarray] = []
-            nl_rows: list[str] = []
-
-            for item in seq_like:
-                # If already numeric array
-                if isinstance(item, np.ndarray):
-                    numeric_rows.append(item)
-                    continue
-                # Bytes: may be serialized tensor or a utf-8 NL string
-                if isinstance(item, (bytes, np.bytes_)):
-                    parsed = _maybe_parse_serialized_tensor_to_ndarray(item)
-                    if parsed is not None:
-                        numeric_rows.append(parsed)
-                        continue
-                    nl_rows.append(item.decode("utf-8"))
-                    continue
-                # Plain string case
-                if isinstance(item, str):
-                    nl_rows.append(item)
-
-            summed: str | None = None
-            if len(numeric_rows) > 0:
-                # Convert to array [W, A] if possible
-                numeric_window = np.asarray(numeric_rows, dtype=float)
-                summed = summarize_numeric_actions(numeric_window, self.sum_decimal)
-            elif len(nl_rows) > 0:
-                summed = sum_language_actions(nl_rows, self.sum_decimal)
-
-            if summed is not None and len(summed) > 0:
-                inputs["language_actions"] = summed
+            assert isinstance(la[0], bytes)
+            if _maybe_parse_serialized_tensor_to_ndarray(la[0]):  # oxe case
+                raw_array = [_maybe_parse_serialized_tensor_to_ndarray(x) for x in la]
+                summed = summarize_numeric_actions(la, self.sum_decimal)
+                seq = _to_str_list(data["language_actions"])
+                if seq is not None:
+                    summed = sum_language_actions(seq, self.sum_decimal)
+                    if summed is not None and len(summed) > 0:
+                        inputs["language_actions"] = summed
+                else:
+                    # Scalar/bytes case
+                    la = data["language_actions"]
+                    if isinstance(la, bytes):
+                        la = la.decode("utf-8")
+                    else:
+                        raise ValueError(f"Language actions is not a bytes string: {la}")
+                    inputs["language_actions"] = la
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

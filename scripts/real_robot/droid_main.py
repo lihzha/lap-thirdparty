@@ -8,6 +8,7 @@ import tyro
 from scipy.spatial.transform import Rotation as R
 import sys
 
+
 sys.path.append(".")
 from shared import BaseEvalRunner
 
@@ -40,6 +41,7 @@ class Args:
         False  # whether the predicted actions are in camera frame (True) or robot/base frame (False)
     )
     use_wrist_camera: bool = False  # whether to use the wrist camera image as input to the policy
+    run_upstream: bool = False  # whether to run the upstream policy server
 
 
 class DroidEvalRunner(BaseEvalRunner):
@@ -144,4 +146,7 @@ if __name__ == "__main__":
         eval_runner = DroidExtrEvalRunner(args)
     else:
         eval_runner = DroidEvalRunner(args)
-    eval_runner.run()
+    if args.run_upstream:
+        eval_runner.run_upstream()
+    else:
+        eval_runner.run()

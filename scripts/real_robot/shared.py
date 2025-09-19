@@ -227,3 +227,64 @@ class BaseEvalRunner:
                 if "n" in answer.lower():
                     continue
                 break
+
+    def run_upstream(self):
+        # Connect to the policy server
+        policy_client = websocket_client_policy.WebsocketClientPolicy(self.args.remote_host, self.args.remote_port)
+        while True:
+            instruction = input("Enter instruction: ")
+            # Prepare to save video of rollout
+            bar = tqdm.tqdm(range(self.args.max_timesteps))
+            print("Running rollout... press Ctrl+C to stop early.")
+            # Maintain a small open-loop action chunk predicted from the latest policy call
+            actions_from_chunk_completed = 0
+            pred_action_chunk = None
+            video = []
+            for t_step in bar:
+                start_time = time.time()
+                try:
+                    # Get the current observation
+                    curr_obs = self._extract_observation(
+                        self.env.get_observation(),
+                        # Save the first observation to disk
+                        save_to_disk=t_step == 0,
+                    )
+                    video.append(curr_obs[f"{self.args.external_camera}_image"])
+                    # Predict a new chunk if needed
+                    if pred_action_chunk is None or actions_from_chunk_completed >= self.args.open_loop_horizon:
+                        actions_from_chunk_completed = 0
+                        print("running inference again....*****")
+                        request_data = self.obs_to_request(curr_obs, instruction)
+                        # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
+                        # Ctrl+C will be handled after the server call is complete
+                        with prevent_keyboard_interrupt():
+                            # this returns natural language reasoning steps; convert to deltas then to absolute action
+                            st = time.time()
+                            pred_action_chunk = policy_client.infer(request_data)["actions"]
+                            et = time.time()
+                            print(f"Time taken for inference: {et - st}")
+                    # Select current action to execute from chunk
+                    print(actions_from_chunk_completed)
+                    action = pred_action_chunk[actions_from_chunk_completed]
+                    action = self.binarize_gripper(action)
+                    actions_from_chunk_completed += 1
+                    self.env.step(action)
+                    # Sleep to match DROID data collection frequency
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time < 1 / DROID_CONTROL_FREQUENCY:
+                        time.sleep(1 / DROID_CONTROL_FREQUENCY - elapsed_time)
+                except KeyboardInterrupt:
+                    break
+            video = np.stack(video)
+            timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
+            save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
+            ImageSequenceClip(list(video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
+            answer = input("Do one more eval? (enter y or n) ")
+            if "n" in answer.lower():
+                break
+            while True:
+                self.env.reset()
+                answer = input("Correctly reset (enter y or n)? ")
+                if "n" in answer.lower():
+                    continue
+                break

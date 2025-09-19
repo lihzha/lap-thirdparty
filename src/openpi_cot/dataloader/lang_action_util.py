@@ -88,7 +88,18 @@ def _format_numeric(val: float, sum_decimal: str) -> str:
     return f"{val:.{decimals}f}"
 
 
-def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
+def summarize_numeric_actions_absolute(arr_like, sum_decimal: str) -> str | None:
+    """Convert numeric absolute EE actions ([..., 7]) into a language string."""
+    arr = np.asarray(arr_like, dtype=float)
+    if arr.ndim == 1:
+        arr = arr[None, :]
+    if arr.shape[-1] < 7:
+        return None
+
+    # use the last step to get the absolute position
+
+
+def summarize_numeric_actions_delta(arr_like, sum_decimal: str) -> str | None:
     """Convert numeric delta EE actions ([..., 7]) into a language string.
 
     Expects translation in indices [0,1,2] (meters) and gripper at index 6.
