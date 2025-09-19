@@ -24,10 +24,7 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
     out: list[str] = []
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
-        try:
-            text = tokenizer.decode(sel.astype(np.int32))
-        except Exception:
-            text = ""
+        text = tokenizer.decode(sel.astype(np.int32))
         out.append(text)
     return out
 
@@ -53,10 +50,7 @@ def _parse_language_delta_cm(text: str) -> np.ndarray | None:
         if not m:
             continue
         direction = m.group(1).lower()
-        try:
-            value = float(m.group(2))
-        except Exception:
-            continue
+        value = float(m.group(2))
         unit = m.group(3).lower()
         # Normalize to cm
         if unit.startswith("mm"):

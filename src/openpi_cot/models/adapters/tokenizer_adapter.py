@@ -23,18 +23,14 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
         if state is not None:
             # This is the Pi05 format, where the state is part of the discrete language input.
-            discretized_state = (
-                np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-            )
+            discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
             state_str = " ".join(map(str, discretized_state))
             cleaned_prompt = f"Task: {cleaned_prompt}, State: {state_str};\nAction: "
         # eos_id = self._tokenizer.eos_id()
         pad_id = self._tokenizer.pad_id()
 
         tokens = self._tokenizer.encode(cleaned_prompt, add_bos=True, add_eos=False)
-        if (
-            state is None
-        ):  # This is the Pi0 format, where the state is part of the continuous action expert input.
+        if state is None:  # This is the Pi0 format, where the state is part of the continuous action expert input.
             tokens += self._tokenizer.encode("\n")
 
         reasoning_start = len(tokens)
@@ -71,10 +67,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             if end_idx > start_idx:
                 reasoning_mask[start_idx:end_idx] = True
             # Build numeric mask: mark tokens that contain digits within reasoning span only
-            try:
-                pieces = [self._tokenizer.id_to_piece(t) for t in tokens]
-            except Exception:
-                pieces = [""] * len(tokens)
+            pieces = [self._tokenizer.id_to_piece(t) for t in tokens]
 
             def _has_digit(p: str) -> bool:
                 return bool(re.search(r"[0-9]", p))
@@ -99,12 +92,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             reasoning_mask[reasoning_start:reasoning_end] = True
             tokens += [pad_id] * (self._max_len - len(tokens))
             # Build numeric mask without left padding
-            try:
-                pieces = [
-                    self._tokenizer.id_to_piece(t) for t in tokens[:reasoning_end]
-                ]
-            except Exception:
-                pieces = [""] * len(tokens[:reasoning_end])
+            pieces = [self._tokenizer.id_to_piece(t) for t in tokens[:reasoning_end]]
 
             def _has_digit(p: str) -> bool:
                 return bool(re.search(r"[0-9]", p))
@@ -121,9 +109,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
             for i in range(reasoning_start, reasoning_end):
                 idx = i
-                if idx < len(pieces) and (
-                    _has_digit(pieces[idx]) or _is_decimal_point_index(idx)
-                ):
+                if idx < len(pieces) and (_has_digit(pieces[idx]) or _is_decimal_point_index(idx)):
                     numeric_mask[i] = True
 
         return (

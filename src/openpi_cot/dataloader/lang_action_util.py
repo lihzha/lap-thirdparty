@@ -84,10 +84,7 @@ def _format_numeric(val: float, sum_decimal: str) -> str:
             return ""
         m = re.fullmatch(r"(\d+)f", sum_decimal)
         if m:
-            try:
-                decimals = int(m.group(1))
-            except Exception:
-                decimals = 0
+            decimals = int(m.group(1))
     return f"{val:.{decimals}f}"
 
 
@@ -97,10 +94,7 @@ def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
     Expects translation in indices [0,1,2] (meters) and gripper at index 6.
     Sums over time, converts meters→cm, emits signed directional commands and final gripper setting.
     """
-    try:
-        arr = np.asarray(arr_like, dtype=float)
-    except Exception:
-        return None
+    arr = np.asarray(arr_like, dtype=float)
     if arr.ndim == 1:
         arr = arr[None, :]
     if arr.shape[-1] < 7:
@@ -148,11 +142,8 @@ def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
             parts.append(f"move backward {fmt_dy} cm")
 
     # Final gripper value from last step
-    try:
-        g_last = float(arr[-1, 6])
-        parts.append(f"set gripper to {g_last:.2f}")
-    except Exception:
-        pass
+    g_last = float(arr[-1, 6])
+    parts.append(f"set gripper to {g_last:.2f}")
 
     return " and ".join(parts)
 
@@ -169,10 +160,7 @@ def sum_language_actions(actions_list, sum_decimal):
         else:
             m = re.fullmatch(r"(\d+)f", sum_decimal)
             if m:
-                try:
-                    decimals = int(m.group(1))
-                except Exception:
-                    decimals = 0
+                decimals = int(m.group(1))
 
     # Accumulate per-direction totals
     totals = {

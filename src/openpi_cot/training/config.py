@@ -15,6 +15,8 @@ import openpi.transforms as upstream_transforms
 from typing_extensions import override
 import tyro
 
+from openpi_cot.dataloader.helpers import ActionEncoding
+from openpi_cot.dataloader.helpers import StateEncoding
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
@@ -77,7 +79,13 @@ def build_cosine_lr(
     )
 
 
-def build_droid_cfg(tpu_version: str, fsdp_devices: int, batch_size: int):
+def build_droid_cfg(
+    tpu_version: str,
+    fsdp_devices: int,
+    batch_size: int,
+    droid_dataset_name: Literal["droid", "droid_subset"] = "droid",
+    droid_rlds_data_dir: str | None = None,
+):
     language_action_dir = None
     ckpt_base_dir = None
     match tpu_version:
@@ -99,21 +107,21 @@ def build_droid_cfg(tpu_version: str, fsdp_devices: int, batch_size: int):
     if ckpt_base_dir is None:
         ckpt_base_dir = rlds_data_dir.replace("OXE", "checkpoints")
 
-    return (
-        TrainConfig(
-            name=f"pi_droid_cot_{tpu_version}",
-            data=RLDSCoTDataConfig(
-                repo_id="droid",
-                asset_id="droid",
-                dataset_type="droid",
-                rlds_data_dir=rlds_data_dir,
-                language_action_dir=language_action_dir,
-            ),
-            fsdp_devices=fsdp_devices,
-            batch_size=batch_size,
-            checkpoint_base_dir=ckpt_base_dir,
-            weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+    return TrainConfig(
+        name=f"pi_droid_cot_{tpu_version}",
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir=rlds_data_dir,
+            language_action_dir=language_action_dir,
+            droid_dataset_name=droid_dataset_name,
+            droid_rlds_data_dir=droid_rlds_data_dir,
         ),
+        fsdp_devices=fsdp_devices,
+        batch_size=batch_size,
+        checkpoint_base_dir=ckpt_base_dir,
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
     )
 
 
@@ -134,21 +142,28 @@ class CoTDataConfig(upstream_config.DataConfig):
     val_max_samples: int | None = 60000
     val_fraction: float | None = 0.02
     validation_mode: str = "easy"
-    vis_dataset: bool = False
     use_wrist_image: bool = True
-    use_idle_filter: bool = True
     wrist_image_dropout_prob: float = 0.0
-    # If true, will drop samples where projected gripper is outside the resized image bounds.
-    drop_gripper_oob: bool = False
-
-    # Dataset selection and OXE/Combined-specific knobs
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
     dataset_type: Literal["droid", "oxe", "combined"] = "droid"
-    # DROID fields (used when dataset_type == "droid")
+    state_encoding: StateEncoding = StateEncoding.POS_EULER
+    action_encoding: ActionEncoding = ActionEncoding.ABS_EEF_POS
+
+    ### DROID fields (used when dataset_type == "droid")
+    vis_dataset: bool = False
+    use_idle_filter: bool = True
+    # If true, will drop samples where projected gripper is outside the resized image bounds.
+    drop_gripper_oob: bool = False
     language_action_dir: str | None = None
-    # OXE fields (used when dataset_type == "oxe" or "combined")
+    # Optional path when DROID path is different from OXE path
+    droid_rlds_data_dir: str | None = None
+    # support using droid_subset for debugging
+    droid_dataset_name: Literal["droid", "droid_subset"] = "droid"
+
+    ### OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_pi_magic_soup"
-    # Combined-only: weight for DROID when interleaving with OXE
+
+    #### Combined-only: weight for DROID when interleaving with OXE
     droid_weight: float = 2.0
 
 
@@ -349,8 +364,9 @@ _CONFIGS = [
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
+            droid_dataset_name="droid",
             rlds_data_dir="gs://pi0-cot",
-            language_action_dir="gs://pi0-cot/droid-lang-actions",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
             data_mix="oxe_pi_magic_soup",
             droid_weight=2.0,
         ),
@@ -366,14 +382,14 @@ _CONFIGS = [
             asset_id="combined",
             dataset_type="combined",
             rlds_data_dir="/n/fs/vla-mi/datasets/OXE",
-            language_action_dir="gs://pi0-cot/droid-lang-actions",
+            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
             data_mix="oxe_pi_magic_soup",
             droid_weight=2.0,
         ),
         fsdp_devices=4,
         batch_size=256,
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]

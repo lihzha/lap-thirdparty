@@ -33,11 +33,13 @@ def make_oxe_dataset_kwargs(
     # [Contract] For EEF_POS & EEF_R6 actions, only the last action dimension (gripper) is absolute!
     # Normalize all action dimensions *except* the gripper
     if dataset_kwargs["action_encoding"] is ActionEncoding.EEF_POS:
-        dataset_kwargs["absolute_action_mask"] = [False] * 6 + [True]
-        dataset_kwargs["action_normalization_mask"] = [True] * 6 + [False]
+        # dataset_kwargs["absolute_action_mask"] = [False] * 6 + [True]
+        # dataset_kwargs["action_normalization_mask"] = [True] * 6 + [False]
+        pass
     elif dataset_kwargs["action_encoding"] is ActionEncoding.EEF_R6:
-        dataset_kwargs["absolute_action_mask"] = [False] * 9 + [True]
-        dataset_kwargs["action_normalization_mask"] = [True] * 9 + [False]
+        # dataset_kwargs["absolute_action_mask"] = [False] * 9 + [True]
+        # dataset_kwargs["action_normalization_mask"] = [True] * 9 + [False]
+        pass
     else:
         raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
 
@@ -59,8 +61,8 @@ def make_oxe_dataset_kwargs(
     }
 
     # Eliminate Unnecessary Keys
-    dataset_kwargs.pop("state_encoding")
-    dataset_kwargs.pop("action_encoding")
+    # dataset_kwargs.pop("state_encoding")
+    # dataset_kwargs.pop("action_encoding")
     if not load_depth:
         dataset_kwargs.pop("depth_obs_keys")
     if not load_proprio:
@@ -115,21 +117,17 @@ def get_oxe_dataset_kwargs_and_weights(
     # Assemble Dataset Config (kwargs) and Weights
     per_dataset_kwargs, sampling_weights = [], []
     for d_name, d_weight in filtered_mixture_spec:
-        try:
-            per_dataset_kwargs.append(
-                make_oxe_dataset_kwargs(
-                    d_name,
-                    rlds_data_dir,
-                    load_camera_views,
-                    load_depth,
-                    load_proprio,
-                    load_language,
-                    action_proprio_normalization_type,
-                )
+        per_dataset_kwargs.append(
+            make_oxe_dataset_kwargs(
+                d_name,
+                rlds_data_dir,
+                load_camera_views,
+                load_depth,
+                load_proprio,
+                load_language,
+                action_proprio_normalization_type,
             )
-            sampling_weights.append(d_weight)
-
-        except ValueError as e:
-            logging.warning(f"Skipping `{d_name}` due to Error: {e}")
+        )
+        sampling_weights.append(d_weight)
 
     return per_dataset_kwargs, sampling_weights

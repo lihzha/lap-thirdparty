@@ -18,11 +18,10 @@ import openpi_cot.training.config as _config
 
 def _create_rlds_dataset(
     data_cfg: _config.CoTDataConfig,
-    action_horizon: int,
     batch_size: int,
+    action_horizon: int,
     *,
     shuffle: bool,
-    split_seed: int,
     seed: int,
     max_samples: int | None,
     split: str,
@@ -34,64 +33,33 @@ def _create_rlds_dataset(
     dataset_type = getattr(data_cfg, "dataset_type", "droid")
     rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
     assert rlds_data_dir is not None, "rlds_data_dir is required"
+    droid_required = hasattr(data_cfg, "language_action_dir") and data_cfg.language_action_dir is not None
+    oxe_required = hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
+    dataset_cls = None
 
     if dataset_type == "droid":
-        return DroidCoTRldsDataset(
-            data_dir=rlds_data_dir,
-            language_action_dir=data_cfg.language_action_dir,
-            batch_size=local_bsz,
-            shuffle=shuffle,
-            action_chunk_size=action_horizon,
-            shuffle_buffer_size=data_cfg.shuffle_buffer_size,
-            split_seed=split_seed,
-            max_samples=max_samples,
-            seed=seed,
-            config=data_cfg,
-            split=split,
-        )
-    if dataset_type == "oxe":
-        # OXE requires additional fields; only proceed if present, else fall back upstream.
-        oxe_required = hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
-        assert oxe_required, "data_mix is required"
-        return OXECoTRldsDatasets(
-            data_dir=rlds_data_dir,
-            data_mix=data_cfg.data_mix,
-            batch_size=local_bsz,
-            shuffle=shuffle,
-            action_chunk_size=action_horizon,
-            shuffle_buffer_size=data_cfg.shuffle_buffer_size,
-            split_seed=split_seed,
-            max_samples=max_samples,
-            seed=seed,
-            config=data_cfg,
-            split=split,
-        )
-    if dataset_type == "combined":
-        # Combined requires both DROID and OXE fields; validate and proceed if present.
-        oxe_required = hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
-        assert oxe_required, "data_mix is required"
-        droid_required = hasattr(data_cfg, "language_action_dir") and data_cfg.language_action_dir is not None
         assert droid_required, "language_action_dir is required"
-        return CombinedCoTRldsDataset(
-            data_dir=rlds_data_dir,
-            batch_size=local_bsz,
-            shuffle=shuffle,
-            action_chunk_size=action_horizon,
-            shuffle_buffer_size=data_cfg.shuffle_buffer_size,
-            split_seed=split_seed,
-            max_samples=max_samples,
-            seed=seed,
-            config=data_cfg,
-            split=split,
-            # DROID-specific (Raw)
-            language_action_dir=data_cfg.language_action_dir,
-            # OXE-specific (Raw)
-            data_mix=data_cfg.data_mix,
-            # Combined-specific (Raw)
-            droid_weight=data_cfg.droid_weight,
-        )
+        dataset_cls = DroidCoTRldsDataset
+    if dataset_type == "oxe":
+        assert oxe_required, "data_mix is required"
+        dataset_cls = OXECoTRldsDatasets
+    if dataset_type == "combined":
+        assert oxe_required, "data_mix is required"
+        assert droid_required, "language_action_dir is required"
+        dataset_cls = CombinedCoTRldsDataset
 
-    return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)
+    if dataset_cls is None:
+        return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)
+    return dataset_cls(
+        data_dir=rlds_data_dir,
+        batch_size=local_bsz,
+        shuffle=shuffle,
+        max_samples=max_samples,
+        seed=seed,
+        config=data_cfg,
+        split=split,
+        action_horizon=action_horizon,
+    )
 
 
 def _make_iterable_transforms(
@@ -158,10 +126,9 @@ def create_data_loader(
         # 1) dataset
         ds = _create_rlds_dataset(
             data_cfg,
-            config.model.action_horizon,
             config.batch_size,
+            config.model.action_horizon,
             shuffle=shuffle,
-            split_seed=seed,
             seed=seed,
             max_samples=max_samples if max_samples is not None else getattr(data_cfg, "max_samples", None),
             split=split,

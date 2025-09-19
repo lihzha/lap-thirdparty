@@ -61,10 +61,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
                 m = re.match(r"move\s+(\w+)\s+([-+]?\d*\.?\d+)\s*(\w+)", p)
                 if not m:
                     continue
-                try:
-                    val = float(m.group(2))
-                except Exception:
-                    continue
+                val = float(m.group(2))
                 if abs(val) > 1e-6:
                     any_nonzero = True
                     break
