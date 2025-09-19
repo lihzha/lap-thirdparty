@@ -44,10 +44,8 @@ uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi_cot_droid_lo
 4. Install `tyro`, which we will use for command line parsing: `pip install tyro`.
 
 ```bash
-python3 scripts/real_robot/droid_main.py --remote_host=<server_ip> --remote_port=<server_port> --external_camera="right"
+python3 scripts/real_robot/droid_main.py --remote_host=<server_ip> --remote_port=<server_port> --external_camera="right" --no-in-camera-frame --use-wrist-camera --run-upstream
 ```
-
-Note, if you want to run policy inference from upstream, e.g., vanilla $\pi_{0.5}$, you need to run `third_party/openpi/scripts/serve_policy.py`.
 
 
 ## Training on DROID using language actions

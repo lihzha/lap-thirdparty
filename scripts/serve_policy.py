@@ -10,6 +10,7 @@ import tyro
 
 import openpi_cot.policies.adapters.policy_config_adapter as _policy_config
 from openpi_cot.training import config as _config
+from openpi.training import config as upstream_config
 
 
 class EnvMode(enum.Enum):
@@ -95,7 +96,7 @@ def create_policy(args: Args) -> _policy.Policy:
                     _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
                 )
             return upstream_policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                upstream_config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

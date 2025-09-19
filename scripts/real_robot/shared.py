@@ -185,7 +185,7 @@ class BaseEvalRunner:
                         with prevent_keyboard_interrupt():
                             # this returns natural language reasoning steps; convert to deltas then to absolute action
                             st = time.time()
-                            pred = policy_client.infer_reasoning(request_data)["reasoning"]
+                            pred = policy_client.infer(request_data)["reasoning"]
                             delta_base, grip_actions = self.get_action_from_reasoning(pred)
                             # Build absolute target from current state
                             curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
@@ -196,9 +196,10 @@ class BaseEvalRunner:
                             # Linearly interpolate to CHUNK_STEPS actions
                             positions = np.linspace(curr_pos, next_pos, self.CHUNK_STEPS, endpoint=True)
                             rpy_arr = np.tile(curr_rpy, (self.CHUNK_STEPS, 1))
-                            grip_vals = np.linspace(curr_grip, next_grip, self.CHUNK_STEPS, endpoint=True).reshape(
-                                -1, 1
-                            )
+                            # grip_vals = np.linspace(curr_grip, next_grip, self.CHUNK_STEPS, endpoint=True).reshape(
+                            #     -1, 1
+                            # ) # no interpolation for gripper
+                            grip_vals = np.full((self.CHUNK_STEPS, 1), next_grip)
                             pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
                             et = time.time()
                             print(f"Time taken for inference: {et - st}")
@@ -251,7 +252,7 @@ class BaseEvalRunner:
                     )
                     video.append(curr_obs[f"{self.args.external_camera}_image"])
                     # Predict a new chunk if needed
-                    if pred_action_chunk is None or actions_from_chunk_completed >= self.args.open_loop_horizon:
+                    if actions_from_chunk_completed == 0  or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0
                         print("running inference again....*****")
                         request_data = self.obs_to_request(curr_obs, instruction)

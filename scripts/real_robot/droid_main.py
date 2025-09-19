@@ -55,17 +55,27 @@ class DroidEvalRunner(BaseEvalRunner):
         )
 
     def obs_to_request(self, curr_obs, instruction):
+        state = np.concatenate(
+            [
+                curr_obs["cartesian_position"],
+                curr_obs["gripper_position"],
+            ]
+        )
         request = {
-            "observation/exterior_image_1_left": image_tools.resize_with_pad(
-                curr_obs[f"{self.args.external_camera}_image"], 224, 224
-            ),
-            "observation/cartesian_position": curr_obs["cartesian_position"],
-            "observation/gripper_position": curr_obs["gripper_position"],
+            "observation": {
+                "exterior_image_1_left": image_tools.resize_with_pad(
+                    curr_obs[f"{self.args.external_camera}_image"], 224, 224
+                ),
+                "cartesian_position": curr_obs["cartesian_position"],
+                "gripper_position": curr_obs["gripper_position"],
+                "joint_position": curr_obs["joint_position"],
+                "state": state,
+            },
             "prompt": instruction,
             "batch_size": None,
         }
         if self.args.use_wrist_camera:
-            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
+            request["observation"]["wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
         return request
 
     def binarize_gripper(self, action):
@@ -137,16 +147,44 @@ class DroidExtrEvalRunner(DroidEvalRunner):
         cam_to_base_extrinsics_matrix[:3, :3] = rot_mat
         cam_to_base_extrinsics_matrix[:3, 3] = pos
         return cam_to_base_extrinsics_matrix
+    
+class DroidUpstreamEvalRunner(DroidEvalRunner):
+    def __init__(self, args):
+        super().__init__(args)
+
+    def init_env(self):
+        return RobotEnv(
+            action_space="joint_velocity",
+            gripper_action_space="position",
+        )
+    
+    def obs_to_request(self, curr_obs, instruction):
+        request = {
+            "observation/exterior_image_1_left": image_tools.resize_with_pad(
+                curr_obs[f"{self.args.external_camera}_image"], 224, 224
+            ),
+            "observation/cartesian_position": curr_obs["cartesian_position"],
+            "observation/gripper_position": curr_obs["gripper_position"],
+            "observation/joint_position": curr_obs["joint_position"],
+            "prompt": instruction,
+            "batch_size": None,
+        }
+        if self.args.use_wrist_camera:
+            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
+        return request
 
 
 if __name__ == "__main__":
     args: Args = tyro.cli(Args)
     print(args)
-    if args.in_camera_frame:
-        eval_runner = DroidExtrEvalRunner(args)
-    else:
-        eval_runner = DroidEvalRunner(args)
     if args.run_upstream:
+        eval_runner = DroidUpstreamEvalRunner(args)
         eval_runner.run_upstream()
     else:
+        if args.in_camera_frame:
+            print("Running in camera frame")
+            eval_runner = DroidExtrEvalRunner(args)
+        else:
+            print("Running in base frame")
+            eval_runner = DroidEvalRunner(args)
         eval_runner.run()
