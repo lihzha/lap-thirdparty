@@ -2,7 +2,6 @@ import logging
 import os
 
 import dlimp as dl
-import jax
 import numpy as np
 from openpi.shared import normalize as _normalize
 import tensorflow as tf
@@ -18,16 +17,17 @@ def save(directory: str, norm_stats: dict[str, _normalize.NormStats]) -> None:
     logging.info(f"Saved stats to: {path}")
 
 
-def load(directory: str) -> dict:
+def load(directory: str) -> dict[str, _normalize.NormStats]:
     """Load the normalization stats from a directory (supports gs:// and local)."""
     path = tf.io.gfile.join(directory, "norm_stats.json")
     if not tf.io.gfile.exists(path):
         raise FileNotFoundError(f"Norm stats file not found at: {path}")
     with tf.io.gfile.GFile(path, "r") as f:
-        norm_stats = _normalize.deserialize_json(f.read())
-        # Turn into a dict of [str, numpy.ndarray]
-        norm_stats = {k: v.model_dump() for k, v in norm_stats.items()}
-        return norm_stats
+        return _normalize.deserialize_json(f.read())
+
+
+def norm_stats_to_dict(norm_stats: dict[str, _normalize.NormStats]) -> dict[str, np.ndarray]:
+    return {k: v.model_dump() for k, v in norm_stats.items()}
 
 
 def check_dataset_statistics(save_dir: str | None = None) -> dict:
@@ -84,11 +84,11 @@ def get_dataset_statistics(
     # )
 
     cardinality = dataset.cardinality().numpy()
-    if cardinality == tf.data.INFINITE_CARDINALITY:
+    if cardinality == tf.data.INFINITE_CARDINALITY or cardinality == tf.data.UNKNOWN_CARDINALITY:
         raise ValueError("Cannot compute dataset statistics for infinite datasets.")
 
     actions, proprios, num_transitions, num_trajectories = [], [], 0, 0
-    for traj in tqdm(dataset.iterator(), total=cardinality if cardinality != tf.data.UNKNOWN_CARDINALITY else None):
+    for traj in tqdm(dataset.iterator(), total=cardinality):
         actions.append(traj[action_key])
         proprios.append(traj["observation"][state_key])
         num_transitions += traj[action_key].shape[0]
@@ -109,31 +109,14 @@ def get_dataset_statistics(
             q01=np.asarray(np.quantile(actions, 0.01, axis=0)),
             q99=np.asarray(np.quantile(actions, 0.99, axis=0)),
         ),
-        "num_transitions": num_transitions,
-        "num_trajectories": num_trajectories,
     }
 
-    if jax.process_index() == 0:
-        print(f"Writing stats to: {output_dir}")
-        save(output_dir, norm_stats_for_save)
+    # if jax.process_index() == 0:
+    #     print(f"Writing stats to: {output_dir}")
+    #     save(output_dir, norm_stats_for_save)
 
     norm_stats = {
-        "actions": {
-            "mean": actions.mean(0).tolist(),
-            "std": actions.std(0).tolist(),
-            "max": actions.max(0).tolist(),
-            "min": actions.min(0).tolist(),
-            "q01": np.quantile(actions, 0.01, axis=0).tolist(),
-            "q99": np.quantile(actions, 0.99, axis=0).tolist(),
-        },
-        "state": {
-            "mean": proprios.mean(0).tolist(),
-            "std": proprios.std(0).tolist(),
-            "max": proprios.max(0).tolist(),
-            "min": proprios.min(0).tolist(),
-            "q01": np.quantile(proprios, 0.01, axis=0).tolist(),
-            "q99": np.quantile(proprios, 0.99, axis=0).tolist(),
-        },
+        **norm_stats_for_save,
         "num_transitions": num_transitions,
         "num_trajectories": num_trajectories,
     }

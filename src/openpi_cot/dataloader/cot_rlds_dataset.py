@@ -1,8 +1,9 @@
 from collections.abc import Callable
 import contextlib
+from dataclasses import dataclass
+from dataclasses import field
 from enum import Enum
 from enum import auto
-from functools import partial
 import inspect
 import json
 import logging
@@ -21,12 +22,13 @@ from openpi_cot.dataloader.helpers import extract_episode_path_from_file_path
 from openpi_cot.dataloader.helpers import project_in_bounds
 from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
-from openpi_cot.dataloader.oxe_utils.data_utils import normalize_action_and_proprio
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.data_utils import tree_map
 from openpi_cot.dataloader.oxe_utils.materialize import get_oxe_dataset_kwargs_and_weights
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
+from openpi_cot.transforms import NormalizeActionAndProprio
 
 
 def print_memory_usage(label):
@@ -127,12 +129,50 @@ def _filter_kwargs_for(fn: Callable, provided: dict) -> tuple[dict, list[str]]:
     return filtered, missing
 
 
+def compute_window_indices(sequence_length: tf.Tensor, window_size: int) -> tf.Tensor:
+    """Return [T, window] indices for gathering sliding windows with end padding.
+
+    Builds indices for each timestep t to gather the next `window_size` steps,
+    clamped to the final index so the tail windows repeat the last element.
+    """
+    # Shape: [T, window]
+    base = tf.broadcast_to(tf.range(window_size)[None], [sequence_length, window_size])
+    offsets = tf.broadcast_to(tf.range(sequence_length)[:, None], [sequence_length, window_size])
+    indices = base + offsets
+    # Cap to the last valid index to repeat the final element
+    return tf.minimum(indices, sequence_length - 1)
+
+
 class DroidActionSpace(Enum):
     """Action space for DROID dataset."""
 
     JOINT_POSITION = auto()
     JOINT_VELOCITY = auto()
     CARTESIAN_POSITION = auto()
+
+
+@dataclass(frozen=True)
+class DroidDatasetSpec:
+    lang_action_tfrecord_pattern: str = "tfds_language_actions-*.tfrecord.gz"
+    lang_action_dir_name: str = "droid-lang-actions"
+    lang_action_dir_name_base: str = "droid-base-lang-actions"
+    metadata_path_name: str = "metadata"
+    episode_id_to_path_file: str = "episode_id_to_path.json"
+    cam2base_extrinsics_file: str = "cam2base_extrinsics.json"
+    camera_serials_file: str = "camera_serials.json"
+    intrinsics_file: str = "intrinsics.json"
+    droid_instructions_file: str = "droid_instructions.json"
+    droid_language_annotations_file: str = "droid_language_annotations.json"
+    keep_ranges_file: str = "keep_ranges_1_0_1.json"
+    images_list: tuple[str, str] = ("exterior_image_1_left", "exterior_image_2_left")
+    default_lang_value: tf.Tensor = field(
+        default_factory=lambda: tf.io.serialize_tensor(tf.constant([], dtype=tf.string))
+    )
+    default_ep_value: tf.Tensor = field(default_factory=lambda: tf.constant("", dtype=tf.string))
+    default_intr_ser: tf.Tensor = field(default_factory=lambda: tf.io.serialize_tensor(tf.zeros([4], tf.float32)))
+    default_extr_ser: tf.Tensor = field(
+        default_factory=lambda: tf.io.serialize_tensor(tf.reshape(tf.eye(4, dtype=tf.float32), [-1]))
+    )
 
 
 class SingleCoTRldsDatasetRaw:
@@ -224,28 +264,27 @@ class SingleCoTRldsDatasetRaw:
         # Flatten: map from trajectory dataset to dataset of individual action chunks
         self.dataset = self.dataset.flatten(num_parallel_calls=self.num_parallel_calls)
 
+    # Template hook: subclasses must provide a stable per-trajectory anchor used for splitting
+    def get_split_anchor(self, traj):
+        """Return a tf.string key used to deterministically split train/val."""
+        raise NotImplementedError
+
+    # Shared split implementation using the anchor returned by get_split_anchor
+    def split_val(self, split_seed):
+        def _split_filter(traj):
+            salt = tf.strings.as_string(split_seed)
+            anchor = self.get_split_anchor(traj)
+            key = tf.strings.join([salt, anchor])
+            bucket = tf.strings.to_hash_bucket_fast(key, 1000)
+            thr = tf.cast(int(self.val_fraction * 1000), tf.int64)
+            is_val = bucket < thr
+            return is_val if self.want_val else tf.logical_not(is_val)
+
+        self.dataset = self.dataset.filter(_split_filter)
+
 
 class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
-    lang_action_tfrecord_pattern = "tfds_language_actions-*.tfrecord.gz"
-    lang_action_dir_name = "droid-lang-actions"
-    lang_action_dir_name_base = "droid-base-lang-actions"
-    metadata_path_name = "metadata"
-    episode_id_to_path_file = "episode_id_to_path.json"
-    cam2base_extrinsics_file = "cam2base_extrinsics.json"
-    camera_serials_file = "camera_serials.json"
-    intrinsics_file = "intrinsics.json"
-    droid_instructions_file = "droid_instructions.json"
-    droid_language_annotations_file = "droid_language_annotations.json"
-    keep_ranges_file = "keep_ranges_1_0_1.json"
-    # Use a serialized empty tf.string tensor as default to keep tf.io.parse_tensor safe
-    default_lang_value = tf.io.serialize_tensor(tf.constant([], dtype=tf.string))
-    default_ep_value = tf.constant("", dtype=tf.string)
-    default_intr_ser = tf.io.serialize_tensor(tf.zeros([4], tf.float32))
-    default_extr_ser = tf.io.serialize_tensor(tf.reshape(tf.eye(4, dtype=tf.float32), [-1]))
-    images_list: ClassVar[tuple[str, str]] = (
-        "exterior_image_1_left",
-        "exterior_image_2_left",
-    )
+    spec: ClassVar[DroidDatasetSpec] = DroidDatasetSpec()
 
     def _episode_id_from_traj(self, traj, ep_table):
         """Lookup episode_id from trajectory metadata using regex extraction."""
@@ -267,7 +306,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             lang = tf.io.parse_tensor(ex["lang_ser"], out_type=tf.string)  # shape: [T+1]
             return ex["episode_id"], lang
 
-        files = tf.io.gfile.glob(f"{language_action_dir}/{self.lang_action_tfrecord_pattern}")
+        files = tf.io.gfile.glob(f"{language_action_dir}/{self.spec.lang_action_tfrecord_pattern}")
         ds = (
             tf.data.TFRecordDataset(files, compression_type="GZIP", num_parallel_reads=self.num_parallel_reads)
             .map(_parse, num_parallel_calls=self.num_parallel_calls)
@@ -282,7 +321,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         values = tf.constant(lang_serialized, dtype=tf.string)
         lang_table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(keys, values),
-            default_value=self.default_lang_value,
+            default_value=self.spec.default_lang_value,
         )
         print_memory_usage("After building lang_table")
         return lang_table
@@ -291,7 +330,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         # ---------------------------------------------------------------------
         # 2. Episode-path ↔ Episode-ID table
         # ---------------------------------------------------------------------
-        with tf.io.gfile.GFile(f"{metadata_path}/{self.episode_id_to_path_file}", "r") as fp:
+        with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.episode_id_to_path_file}", "r") as fp:
             episode_id_to_path = json.load(fp)
         episode_path_to_id = {v: k for k, v in episode_id_to_path.items()}
 
@@ -299,7 +338,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         values = tf.constant(list(episode_path_to_id.values()), dtype=tf.string)
         ep_table = tf.lookup.StaticHashTable(
             tf.lookup.KeyValueTensorInitializer(keys, values),
-            default_value=self.default_ep_value,
+            default_value=self.spec.default_ep_value,
         )
         print_memory_usage("After building ep_table")
         return ep_table
@@ -308,12 +347,12 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         # ---------------------------------------------------------------------
         # 3. Camera-index table  (episode_id → ext-cam idx)
         # ---------------------------------------------------------------------
-        with tf.io.gfile.GFile(f"{metadata_path}/{self.cam2base_extrinsics_file}", "r") as fp:
+        with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.cam2base_extrinsics_file}", "r") as fp:
             cam2base_extrinsics = json.load(fp)
-        with tf.io.gfile.GFile(f"{metadata_path}/{self.camera_serials_file}", "r") as fp:
+        with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.camera_serials_file}", "r") as fp:
             camera_serials = json.load(fp)
         if need_calib:
-            with tf.io.gfile.GFile(f"{metadata_path}/{self.intrinsics_file}", "r") as fp:
+            with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.intrinsics_file}", "r") as fp:
                 intrinsics_json = json.load(fp)
             eid_to_intr_vec = {}
             eid_to_extr_mat = {}
@@ -335,7 +374,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             else:
                 raise ValueError(f"Unknown camera name: {calib_camera_name}")
 
-            calib_image_idx = self.images_list.index(calib_image_name)
+            calib_image_idx = self.spec.images_list.index(calib_image_name)
             eid_to_cam_dict[eid] = calib_image_idx
 
             if need_calib:
@@ -383,11 +422,11 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             extr_vals = tf.constant(extr_ser, dtype=tf.string)
             intr_table = tf.lookup.StaticHashTable(
                 tf.lookup.KeyValueTensorInitializer(calib_keys, intr_vals),
-                default_value=self.default_intr_ser,
+                default_value=self.spec.default_intr_ser,
             )
             extr_table = tf.lookup.StaticHashTable(
                 tf.lookup.KeyValueTensorInitializer(calib_keys, extr_vals),
-                default_value=self.default_extr_ser,
+                default_value=self.spec.default_extr_ser,
             )
             print_memory_usage("After building intr_table and extr_table")
         return cam_table, intr_table, extr_table
@@ -396,7 +435,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         # ---------------------------------------------------------------------
         # 6. Language-instruction table (merged; episode_id → serialized [K])
         # ---------------------------------------------------------------------
-        instr_cache_path = f"{metadata_path}/{self.droid_instructions_file}"
+        instr_cache_path = f"{metadata_path}/{self.spec.droid_instructions_file}"
         _instr_keys_py = []
         _instr_vals_ser = []
         if tf.io.gfile.exists(instr_cache_path):
@@ -409,11 +448,12 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                     _arr = []
                 _arr = [s for s in _arr if isinstance(s, str) and len(s) > 0]
                 if len(_arr) == 0:
-                    _instr_vals_ser.append(self.default_lang_value)
+                    # Use truly empty bytes for missing-instruction episodes so we can detect and fallback later
+                    _instr_vals_ser.append(b"")
                 else:
                     _instr_vals_ser.append(tf.io.serialize_tensor(tf.constant(_arr, dtype=tf.string)).numpy())
         else:
-            with tf.io.gfile.GFile(f"{metadata_path}/{self.droid_language_annotations_file}", "r") as fp:
+            with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.droid_language_annotations_file}", "r") as fp:
                 language_annotations = json.load(fp)
             _instr_keys_py = list(language_annotations.keys())
             for _eid in _instr_keys_py:
@@ -441,60 +481,40 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
     def build_filter_table(self, metadata_path, use_idle_filter: bool):
         filter_table = None
         if use_idle_filter:
-            # with tf.io.gfile.GFile(f"{metadata_path}/{self.keep_ranges_file}", "r") as f:
-            #     filter_dict = json.load(f)
-
-            # logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
-
-            # ep_keys = []
-            # ranges_ser = []
-            # for episode_key, ranges in filter_dict.items():
-            #     arr = np.array(ranges, dtype=np.int32)  # shape [M, 2]
-            #     ep_keys.append(episode_key)
-            #     ranges_ser.append(tf.io.serialize_tensor(tf.constant(arr)).numpy())
-
-            # keys = tf.constant(ep_keys, dtype=tf.string)
-            # vals = tf.constant(ranges_ser, dtype=tf.string)
-            # filter_table = tf.lookup.StaticHashTable(
-            #     tf.lookup.KeyValueTensorInitializer(keys, vals),
-            #     default_value=tf.constant(b"", dtype=tf.string),
-            # )
-            # print_memory_usage("After building filter_table")
-            with tf.io.gfile.GFile(f"{metadata_path}/{self.keep_ranges_file}", "r") as f:
+            # Store per-trajectory ranges, not per-step flags
+            with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.keep_ranges_file}", "r") as f:
                 filter_dict = json.load(f)
 
             logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
 
-            keys_tensor = []
-            values_tensor = []
-
+            ep_keys = []
+            ranges_ser = []
             for episode_key, ranges in filter_dict.items():
-                for start, end in ranges:
-                    for t in range(start, end):
-                        frame_key = f"{episode_key}--{t}"
-                        keys_tensor.append(frame_key)
-                        values_tensor.append(True)
+                # Ensure serialized ranges are always 2D [M, 2]
+                # Some entries may be a single [start, end] list → shape (2,)
+                arr = np.array(ranges, dtype=np.int32).reshape(-1, 2)
+                ep_keys.append(episode_key)
+                ranges_ser.append(tf.io.serialize_tensor(tf.constant(arr)).numpy())
+
+            keys = tf.constant(ep_keys, dtype=tf.string)
+            vals = tf.constant(ranges_ser, dtype=tf.string)
             filter_table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(keys_tensor, values_tensor),
-                default_value=False,
+                tf.lookup.KeyValueTensorInitializer(keys, vals),
+                default_value=tf.constant(b"", dtype=tf.string),
             )
-            print_memory_usage("After building filter_table")
+            print_memory_usage("After building filter_table (per-trajectory)")
 
         return filter_table
 
-    def apply_restructure(
-        self,
-        lang_table: tf.lookup.StaticHashTable,
-        ep_table: tf.lookup.StaticHashTable,
-        instr_table: tf.lookup.StaticHashTable,
-        cam_table: tf.lookup.StaticHashTable,
-        intr_table: tf.lookup.StaticHashTable,
-        extr_table: tf.lookup.StaticHashTable,
-        filter_table: tf.lookup.StaticHashTable,
-        use_wrist_image: bool,
-        use_idle_filter: bool,
-        need_calib: bool,
-    ):
+    def get_split_anchor(self, traj):
+        episode_id = self._episode_id_from_traj(traj, self.ep_table)
+        if self.validation_mode == "hard":
+            # Environment-level split: hold out entire labs
+            lab_name = tf.strings.regex_replace(episode_id, r"\+.*$", "")
+            return lab_name
+        return episode_id
+
+    def apply_restructure(self):
         def restructure(traj):
             """Reformat observation and action keys, sample language instruction."""
             # Important: we use joint *position* action space -- easier to simulate!
@@ -507,13 +527,13 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             )
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
-            episode_id = self._episode_id_from_traj(traj, ep_table)
-            lang_bytes = lang_table.lookup(episode_id)
+            episode_id = self._episode_id_from_traj(traj, self.ep_table)
+            lang_bytes = self.lang_table.lookup(episode_id)
             lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
             # Language actions may include an extra terminal step; crop to match action length
             lang_tensor = lang_tensor[:traj_len]
             # Sample instruction from merged table or fallback
-            instr_bytes = instr_table.lookup(episode_id)
+            instr_bytes = self.instr_table.lookup(episode_id)
             fallback_index = tf.random.uniform(
                 (),
                 minval=0,
@@ -525,7 +545,12 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
             def _sample_from_table():
                 arr = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
-                return tf.random.shuffle(arr, seed=self.seed)[0]
+                # Guard against empty instruction arrays
+                return tf.cond(
+                    tf.greater(tf.shape(arr)[0], 0),
+                    lambda: tf.random.shuffle(arr, seed=self.seed)[0],
+                    lambda: fallback_instruction,
+                )
 
             instruction = tf.cond(
                 tf.greater(tf.strings.length(instr_bytes), 0),
@@ -535,7 +560,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
 
-            cam_idx = cam_table.lookup(episode_id)
+            cam_idx = self.cam_table.lookup(episode_id)
             cam_images = [
                 traj["observation"]["exterior_image_1_left"],
                 traj["observation"]["exterior_image_2_left"],
@@ -553,59 +578,58 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             # )
             episode_id_vec = tf.fill([traj_len], episode_id)
 
-            state = tf.concat(
-                [
-                    traj["observation"]["cartesian_position"],
-                    traj["observation"]["gripper_position"],
-                ],
-                axis=-1,
+            cartesian = traj["observation"]["cartesian_position"]
+            gripper = traj["observation"]["gripper_position"]
+
+            gripper = tf.cond(
+                tf.equal(tf.rank(cartesian), tf.rank(gripper)),
+                lambda: gripper,  # same rank → no change
+                lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
             )
+
+            state = tf.concat([cartesian, gripper], axis=-1)
+            # state = cartesian
 
             _return_dict = {
                 "actions": actions,
                 "observation": {
-                    "image": exterior_img,
+                    "exterior_image_1_left": exterior_img,
                     "state": state,
                     "cartesian_position": traj["observation"]["cartesian_position"],  # for need_calib
                 },
                 "prompt": instruction_vec,
                 "language_actions": lang_tensor,
                 "episode_id": episode_id_vec,
-                "metadata": traj["traj_metadata"],
+                "traj_metadata": traj["traj_metadata"],
             }
 
-            if use_idle_filter:
-                # # episode_id: scalar tf.string; traj_len: int
-                # ranges_bytes = filter_table.lookup(episode_id)
+            if self.use_idle_filter:
+                # episode-level ranges lookup; compute per-step mask
+                # Ensure scalar episode key (metadata fields may be length-1 vectors)
+                rec_path = traj["traj_metadata"]["episode_metadata"]["recording_folderpath"][0]
+                file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+                episode_key = rec_path + "--" + file_path
+                ranges_bytes = self.filter_table.lookup(episode_key)
 
-                # def _compute_mask():
-                #     ranges = tf.io.parse_tensor(ranges_bytes, out_type=tf.int32)  # [M, 2]
-                #     t = tf.range(traj_len)[:, None]  # [T, 1]
-                #     starts = tf.cast(ranges[:, 0][None, :], tf.int32)  # [1, M]
-                #     ends = tf.cast(ranges[:, 1][None, :], tf.int32)  # [1, M]
-                #     in_any = tf.reduce_any((t >= starts) & (t < ends), axis=1)  # [T]
-                #     return in_any
+                def _compute_mask():
+                    ranges = tf.io.parse_tensor(ranges_bytes, out_type=tf.int32)  # [M, 2]
+                    t = tf.range(traj_len)[:, None]  # [T, 1]
+                    starts = tf.cast(ranges[:, 0][None, :], tf.int32)  # [1, M]
+                    ends = tf.cast(ranges[:, 1][None, :], tf.int32)  # [1, M]
+                    in_any = tf.reduce_any((t >= starts) & (t < ends), axis=1)  # [T]
+                    return in_any
 
-                # passes_filter = tf.cond(
-                #     tf.greater(tf.strings.length(ranges_bytes), 0),
-                #     _compute_mask,
-                #     lambda: tf.zeros([traj_len], dtype=tf.bool),
-                # )
-                # _return_dict["passes_filter"] = passes_filter
-                step_id = (
-                    traj["traj_metadata"]["episode_metadata"]["recording_folderpath"]
-                    + "--"
-                    + traj["traj_metadata"]["episode_metadata"]["file_path"]
-                    + "--"
-                    + tf.as_string(tf.range(traj_len))
+                passes_filter = tf.cond(
+                    tf.greater(tf.strings.length(ranges_bytes), 0),
+                    _compute_mask,
+                    lambda: tf.zeros([traj_len], dtype=tf.bool),
                 )
-                passes_filter = filter_table.lookup(step_id)
                 _return_dict["passes_filter"] = passes_filter
 
-            if need_calib:
-                intr = tf.io.parse_tensor(intr_table.lookup(episode_id), out_type=tf.float32)  # [4]
+            if self.need_calib:
+                intr = tf.io.parse_tensor(self.intr_table.lookup(episode_id), out_type=tf.float32)  # [4]
                 extr = tf.reshape(
-                    tf.io.parse_tensor(extr_table.lookup(episode_id), out_type=tf.float32),
+                    tf.io.parse_tensor(self.extr_table.lookup(episode_id), out_type=tf.float32),
                     [4, 4],
                 )  # [4,4]
                 intr_b = tf.broadcast_to(intr[None, :], [traj_len, 4])
@@ -613,8 +637,8 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                 _return_dict["camera_intrinsics"] = intr_b  # [traj_len, 4]
                 _return_dict["camera_extrinsics"] = extr_b  # [traj_len, 4, 4]
 
-            if use_wrist_image:
-                _return_dict["observation"]["wrist_image"] = traj["observation"]["wrist_image_left"]
+            if self.use_wrist_image:
+                _return_dict["observation"]["wrist_image_left"] = traj["observation"]["wrist_image_left"]
             return _return_dict
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
@@ -623,15 +647,11 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self,
         action_chunk_size: int,
         summation_steps: int,
-        need_calib: bool,
-        drop_gripper_oob: bool,
-        action_proprio_normalization_type: NormalizationType,
     ):
         self.dataset = self.dataset.traj_map(
-            partial(
-                normalize_action_and_proprio,
+            NormalizeActionAndProprio(
                 norm_stats=self.dataset_statistics,
-                normalization_type=action_proprio_normalization_type,
+                normalization_type=self.action_proprio_normalization_type,
                 action_key="actions",
                 state_key="state",
             ),
@@ -639,23 +659,9 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         )
 
         def chunk_actions(traj):
-            """Splits episode into action chunks."""
+            """Splits episode into action chunks using shared indexing utility."""
             traj_len = tf.shape(traj["actions"])[0]
-
-            # For each step in the trajectory, construct indices for the next n actions
-            action_chunk_indices = tf.broadcast_to(
-                tf.range(action_chunk_size)[None],
-                [traj_len, action_chunk_size],
-            ) + tf.broadcast_to(
-                tf.range(traj_len)[:, None],
-                [traj_len, action_chunk_size],
-            )
-
-            # Cap to length of the sequence --> final chunks will repeat the last action
-            # This makes sense, since we are using absolute joint + gripper position actions
-            action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
-
-            # Gather the actions for each chunk
+            action_chunk_indices = compute_window_indices(traj_len, action_chunk_size)
             traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
             return traj
 
@@ -670,18 +676,8 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             have a single language string aligned to its action chunk.
             """
             traj_len = tf.shape(traj["language_actions"])[0]
-
             # First, create indices for summation (current + future steps)
-            summation_indices = tf.broadcast_to(
-                tf.range(summation_steps)[None],
-                [traj_len, summation_steps],
-            ) + tf.broadcast_to(
-                tf.range(traj_len)[:, None],
-                [traj_len, summation_steps],
-            )
-
-            # Cap to length of the sequence (same as chunk_actions)
-            summation_indices = tf.minimum(summation_indices, traj_len - 1)
+            summation_indices = compute_window_indices(traj_len, summation_steps)
 
             # Gather the language actions for summation
             language_actions_to_sum = tf.gather(traj["language_actions"], summation_indices)
@@ -697,7 +693,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             #         traj["observation"]["wrist_image"] = grouped_wrist_images
 
             # Group cartesian positions for start/end projection when needed
-            if need_calib:
+            if self.need_calib:
                 grouped_cart = tf.gather(traj["observation"]["cartesian_position"], summation_indices)
                 traj["observation"]["cartesian_position_window"] = grouped_cart
                 # camera_intrinsics: [traj_len, 4] -> [traj_len, summation_steps, 4]
@@ -710,7 +706,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
                 traj["camera_extrinsics"] = tf.gather(extrinsics_tensor, idx)
 
             # Optional: compute in-view mask using calibration if requested
-            if drop_gripper_oob:
+            if self.drop_gripper_oob:
                 # Expect calibration present; if missing, mark as False to be safe
 
                 # Use start and end positions per window
@@ -730,8 +726,8 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
-    def apply_frame_filters(self, use_idle_filter: bool, drop_gripper_oob: bool):
-        if use_idle_filter:
+    def apply_frame_filters(self):
+        if self.use_idle_filter:
 
             def filter_from_dict(frame):
                 return frame["passes_filter"]
@@ -746,7 +742,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             self.dataset = self.dataset.map(remove_passes_filter)
 
         # Optional filter: drop samples where gripper projects out of the view
-        if drop_gripper_oob:
+        if self.drop_gripper_oob:
 
             def _filter_in_view(frame):
                 return frame["gripper_in_view"]
@@ -759,22 +755,22 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
             self.dataset = self.dataset.map(_remove_in_view)
 
-    def apply_traj_filters(self, lang_table, ep_table):
+    def apply_traj_filters(self):
         # ------------------------------------------------------------------
         # Regex helpers for robust path/id extraction
         # ------------------------------------------------------------------
 
         def _id_ok(traj):
-            episode_id = self._episode_id_from_traj(traj, ep_table)
-            if tf.equal(episode_id, self.default_ep_value):
+            episode_id = self._episode_id_from_traj(traj, self.ep_table)
+            if tf.equal(episode_id, self.spec.default_ep_value):
                 return tf.constant(value=False, dtype=tf.bool)
             # Look up by episode_id (NOT episode_path). Using episode_path here would filter everything out.
-            lang = lang_table.lookup(episode_id)
-            if tf.equal(lang, self.default_lang_value):
+            lang = self.lang_table.lookup(episode_id)
+            if tf.equal(lang, self.spec.default_lang_value):
                 return tf.constant(value=False, dtype=tf.bool)
             return tf.logical_and(
-                tf.not_equal(episode_id, self.default_ep_value),
-                tf.not_equal(lang, self.default_lang_value),
+                tf.not_equal(episode_id, self.spec.default_ep_value),
+                tf.not_equal(lang, self.spec.default_lang_value),
             )
 
         def _path_ok(traj):
@@ -785,33 +781,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         # Prefer cheap regex path filter first, then id/lang checks
         self.dataset = self.dataset.filter(_path_ok).filter(_id_ok)
 
-    def split_val(self, ep_table, split_seed):
-        def _lab_from_episode_id(episode_id):
-            """Extract lab/environment name from an episode_id.
-
-            Example episode_id: "AUTOLab+5d05c5aa+2023-07-07-10h-18m-41s" -> "AUTOLab".
-            Uses regex to avoid RaggedTensor outputs from tf.strings.split.
-            """
-            return tf.strings.regex_replace(episode_id, r"\+.*$", "")
-
-        def _split_filter(traj):
-            episode_id = self._episode_id_from_traj(traj, ep_table)  # scalar tf.string
-
-            # --- Deterministic hash split ---
-            salt = tf.strings.as_string(split_seed)
-            if self.validation_mode == "hard":
-                # Environment-level split: hold out entire labs
-                lab_name = _lab_from_episode_id(episode_id)
-                key = tf.strings.join([salt, lab_name])
-            else:  # "easy": per-trajectory split within seen labs
-                key = tf.strings.join([salt, episode_id])
-            bucket = tf.strings.to_hash_bucket_fast(key, 1000)
-            thr = tf.cast(int(self.val_fraction * 1000), tf.int64)
-            is_val = bucket < thr
-
-            return is_val if self.want_val else tf.logical_not(is_val)
-
-        self.dataset = self.dataset.filter(_split_filter)
+    # split_val is now provided by base class via get_split_anchor
 
     def __init__(
         self,
@@ -820,7 +790,6 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         config,
         *,  # Force keyword-only arguments
         action_chunk_size: int = 16,
-        action_space: DroidActionSpace = DroidActionSpace.CARTESIAN_POSITION,
         # Reduce this if you are running out of memory, but careful -- below ~100k shuffling is not sufficiently random.
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
@@ -843,67 +812,61 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         )
         summation_steps = getattr(self.config, "summation_steps", 15)
         vis_dataset = getattr(self.config, "vis_dataset", False)
-        use_wrist_image = getattr(self.config, "use_wrist_image", False)
-        use_idle_filter = getattr(self.config, "use_idle_filter", True)
-        drop_gripper_oob = getattr(self.config, "drop_gripper_oob", False)
-        need_calib = bool(vis_dataset or drop_gripper_oob)
+        self.use_wrist_image = bool(getattr(self.config, "use_wrist_image", False))
+        self.use_idle_filter = bool(getattr(self.config, "use_idle_filter", True))
+        self.drop_gripper_oob = bool(getattr(self.config, "drop_gripper_oob", False))
+        self.need_calib = bool(vis_dataset or self.drop_gripper_oob)
+        self.action_proprio_normalization_type = action_proprio_normalization_type
         logging.info(
-            f"validation_mode: {self.validation_mode}, val_fraction: {self.val_fraction}, need_calib: {need_calib}, \
-                use_wrist_image: {use_wrist_image}, summation_steps: {summation_steps}, \
+            f"validation_mode: {self.validation_mode}, val_fraction: {self.val_fraction}, need_calib: {self.need_calib}, \
+                use_wrist_image: {self.use_wrist_image}, summation_steps: {summation_steps}, \
                     sum_decimal: {self.config.sum_decimal}"
         )
-        assert action_space == DroidActionSpace.CARTESIAN_POSITION, "CoT only supports EEF actions for now"
 
-        if self.lang_action_dir_name in language_action_dir:
-            metadata_path = language_action_dir.replace(self.lang_action_dir_name, self.metadata_path_name)
-        elif self.lang_action_dir_name_base in language_action_dir:
-            metadata_path = language_action_dir.replace(self.lang_action_dir_name_base, self.metadata_path_name)
+        if self.spec.lang_action_dir_name in language_action_dir:
+            metadata_path = language_action_dir.replace(self.spec.lang_action_dir_name, self.spec.metadata_path_name)
+        elif self.spec.lang_action_dir_name_base in language_action_dir:
+            metadata_path = language_action_dir.replace(
+                self.spec.lang_action_dir_name_base, self.spec.metadata_path_name
+            )
         else:
             raise ValueError(f"Unknown language action directory: {language_action_dir}")
 
-        lang_table = self.build_lang_action_table(language_action_dir)
-        ep_table = self.build_lookup_table(metadata_path)
-        cam_table, intr_table, extr_table = self.build_cam_tables(metadata_path, need_calib=need_calib)
-        instr_table = self.build_instr_table(metadata_path)
-        filter_table = self.build_filter_table(metadata_path, use_idle_filter=use_idle_filter)
-        self.apply_traj_filters(lang_table=lang_table, ep_table=ep_table)
-
-        self.apply_restructure(
-            lang_table=lang_table,
-            ep_table=ep_table,
-            instr_table=instr_table,
-            cam_table=cam_table,
-            intr_table=intr_table,
-            extr_table=extr_table,
-            filter_table=filter_table,
-            use_wrist_image=use_wrist_image,
-            use_idle_filter=use_idle_filter,
-            need_calib=need_calib,
+        self.lang_table = self.build_lang_action_table(language_action_dir)
+        self.ep_table = self.build_lookup_table(metadata_path)
+        self.cam_table, self.intr_table, self.extr_table = self.build_cam_tables(
+            metadata_path, need_calib=self.need_calib
         )
-        dataset_statistics = get_dataset_statistics(
-            self.dataset,
-            save_dir=self.builder.data_dir,
-            action_key="actions",
-            state_key="state",
-        )
-        self.dataset_statistics = tree_map(np.array, dataset_statistics)
-        self.dataset_statistics = dataset_statistics
+        self.instr_table = self.build_instr_table(metadata_path)
+        self.filter_table = self.build_filter_table(metadata_path, use_idle_filter=self.use_idle_filter)
 
-        self.split_val(ep_table=ep_table, split_seed=split_seed)
+        cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
+        if cached_stats is not None:
+            # Prefer early filtering when stats are already available to reduce downstream work.
+            self.apply_traj_filters()
+            self.split_val(split_seed=split_seed)
+            self.apply_restructure()
+            self.dataset_statistics = cached_stats
+        else:
+            # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
+            self.apply_restructure()
+            self.dataset_statistics = get_dataset_statistics(
+                self.dataset,
+                save_dir=self.builder.data_dir,
+                action_key="actions",
+                state_key="state",
+            )
+            self.apply_traj_filters()
+            self.split_val(split_seed=split_seed)
 
         self.apply_traj_transforms(
             action_chunk_size=action_chunk_size,
             summation_steps=summation_steps,
-            use_wrist_image=use_wrist_image,
-            use_idle_filter=use_idle_filter,
-            need_calib=need_calib,
-            drop_gripper_oob=drop_gripper_oob,
-            action_proprio_normalization_type=action_proprio_normalization_type,
         )
 
         self.apply_flatten()
 
-        self.apply_frame_filters(use_idle_filter=use_idle_filter, drop_gripper_oob=drop_gripper_oob)
+        self.apply_frame_filters()
 
 
 class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
@@ -914,7 +877,6 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
         batch_size,
         shuffle,
         action_chunk_size,
-        action_space,
         shuffle_buffer_size,
         split_seed,
         max_samples,
@@ -928,7 +890,6 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
             language_action_dir,
             config,
             action_chunk_size=action_chunk_size,
-            action_space=action_space,
             shuffle_buffer_size=shuffle_buffer_size,
             split_seed=split_seed,
             max_samples=max_samples,
@@ -955,8 +916,8 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
     def apply_frame_transforms(self, use_wrist_image: bool):
         # Retained for compatibility; use shared helper
         decode_fn = make_decode_images_fn(
-            primary_key="image",
-            wrist_key="wrist_image",
+            primary_key="exterior_image_1_left",
+            wrist_key="wrist_image_left",
             use_wrist_image=use_wrist_image,
         )
         self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
@@ -1045,7 +1006,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=summation_steps)
         self.apply_repack_transforms()
         self.apply_flatten()
-        self.apply_per_dataset_frame_filters(**dataset_frame_transform_kwargs)
+        self.apply_frame_filters(**dataset_frame_transform_kwargs)
 
     def apply_restructure(self):
         def restructure(traj):
@@ -1172,19 +1133,9 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
         self.dataset = self.dataset.filter(is_nonzero_length)
 
-    def split_val(self, split_seed):
-        def _split_filter(traj):
-            salt = tf.strings.as_string(split_seed)
-            # Use the per-trajectory identifier (constant along time) to split deterministically
-            traj_id = traj["trajectory_id"][0]
-            key = tf.strings.join([salt, traj_id])
-            bucket = tf.strings.to_hash_bucket_fast(key, 1000)
-            thr = tf.cast(int(self.val_fraction * 1000), tf.int64)
-            is_val = bucket < thr
-
-            return is_val if self.want_val else tf.logical_not(is_val)
-
-        self.dataset = self.dataset.filter(_split_filter)
+    def get_split_anchor(self, traj):
+        # Use the per-trajectory identifier (constant along time) to split deterministically
+        return traj["trajectory_id"][0]
 
     def apply_traj_transforms(self, action_chunk_size: int, summation_steps: int):
         """
@@ -1197,8 +1148,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         - subsample_length
         """
         self.dataset = self.dataset.traj_map(
-            partial(
-                normalize_action_and_proprio,
+            NormalizeActionAndProprio(
                 norm_stats=self.dataset_statistics,
                 normalization_type=self.action_proprio_normalization_type,
                 action_key="action",
@@ -1208,23 +1158,11 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         )
 
         def chunk_actions(traj):
-            """Splits episode into action chunks."""
+            """Splits episode into action chunks using shared indexing utility."""
             traj_len = tf.shape(traj["action"])[0]
 
-            # For each step in the trajectory, construct indices for the next n actions
-            action_chunk_indices = tf.broadcast_to(
-                tf.range(action_chunk_size)[None],
-                [traj_len, action_chunk_size],
-            ) + tf.broadcast_to(
-                tf.range(traj_len)[:, None],
-                [traj_len, action_chunk_size],
-            )
-
-            # Cap to length of the sequence --> final chunks will repeat the last action
-            # This makes sense, since we are using absolute joint + gripper position actions
-            action_chunk_indices = tf.minimum(action_chunk_indices, traj_len - 1)
-
-            # Gather the actions for each chunk
+            action_chunk_indices = compute_window_indices(traj_len, action_chunk_size)
+            traj["raw_action"] = traj["action"]
             traj["action"] = tf.gather(traj["action"], action_chunk_indices)
             return traj
 
@@ -1248,22 +1186,12 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             chunk the language actions; after flattening, each sample will
             have a single language string aligned to its action chunk.
             """
-            traj_len = tf.shape(traj["action"])[0]
-
+            traj_len = tf.shape(traj["raw_action"])[0]
             # First, create indices for summation (current + future steps)
-            summation_indices = tf.broadcast_to(
-                tf.range(summation_steps)[None],
-                [traj_len, summation_steps],
-            ) + tf.broadcast_to(
-                tf.range(traj_len)[:, None],
-                [traj_len, summation_steps],
-            )
-
-            # Cap to length of the sequence (same as chunk_actions)
-            summation_indices = tf.minimum(summation_indices, traj_len - 1)
+            summation_indices = compute_window_indices(traj_len, summation_steps)
 
             # Gather the language actions for summation
-            language_actions_to_sum = tf.gather(traj["action"], summation_indices)
+            language_actions_to_sum = tf.gather(traj["raw_action"], summation_indices)
             # Keep unsummed window for debugging: shape [traj_len, summation_steps]
             traj["language_actions"] = language_actions_to_sum
 
@@ -1271,7 +1199,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
-    def apply_per_dataset_frame_filters(
+    def apply_frame_filters(
         self,
         chunk_filter_fn: Callable | None = None,
     ):
@@ -1289,9 +1217,9 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             return {
                 "actions": traj["action"],
                 "observation": {
-                    "image": traj["observation"]["image_primary"],
+                    "exterior_image_1_left": traj["observation"]["image_primary"],
                     "state": traj["observation"]["proprio"],
-                    "wrist_image": traj["observation"]["image_wrist"],
+                    "wrist_image_left": traj["observation"]["image_wrist"],
                 },
                 "prompt": traj["task"]["language_instruction"],
                 "language_actions": traj["language_actions"],
@@ -1478,8 +1406,8 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
         )
 
         decode_fn = make_decode_images_fn(
-            primary_key="image",
-            wrist_key="wrist_image",
+            primary_key="exterior_image_1_left",
+            wrist_key="wrist_image_left",
             use_wrist_image=config.use_wrist_image,
         )
         self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
@@ -1503,56 +1431,50 @@ class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
 class CombinedCoTRldsDataset:
     def __init__(
         self,
-        **kwargs,
+        data_dir,
+        batch_size,
+        shuffle,
+        action_chunk_size,
+        shuffle_buffer_size,
+        split_seed,
+        max_samples,
+        seed,
+        config,
+        split,
+        # DROID-specific (Raw)
+        language_action_dir,
+        # OXE-specific (Raw)
+        data_mix,
+        # shared
+        action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
+        droid_weight: float = 1.0,
     ):
-        # Filter using inspect
-        def _top_sig(
-            *,
-            batch_size,
-            droid_weight,
-            shuffle=True,
-            max_samples=None,
-            shuffle_buffer_size=250_000,
-            seed=0,
-            split="train",
-            use_wrist_image=False,
-        ):
-            return None
-
-        top_kwargs, _ = _filter_kwargs_for(_top_sig, kwargs)
-        for req in ("batch_size", "droid_weight"):
-            if req not in top_kwargs:
-                raise ValueError(f"Missing required arguments: ['{req}']")
-
-        droid_kwargs, _ = _filter_kwargs_for(DroidCoTRldsDatasetRaw.__init__, kwargs)
-        for req in ("data_dir", "language_action_dir", "config"):
-            if req not in droid_kwargs:
-                raise ValueError(f"Missing required arguments: ['{req}']")
-
-        oxe_kwargs, _ = _filter_kwargs_for(OXECoTRldsDatasetsRaw.__init__, kwargs)
-        for req in ("config", "rlds_data_dir", "data_mix", "resize_resolution", "action_chunk_size", "seed", "split"):
-            if req not in oxe_kwargs:
-                raise ValueError(f"Missing required arguments: ['{req}']")
-
-        consumed_keys = set(top_kwargs.keys()) | set(droid_kwargs.keys()) | set(oxe_kwargs.keys())
-        unexpected = set(kwargs.keys()) - consumed_keys
-        if unexpected:
-            raise ValueError(f"Unexpected arguments for CombinedCoTRldsDataset: {sorted(unexpected)}")
-
-        use_wrist_image = bool(top_kwargs.get("use_wrist_image", False))
-        batch_size = int(top_kwargs["batch_size"])  # required
-        shuffle = bool(top_kwargs.get("shuffle", True))
-        max_samples = top_kwargs.get("max_samples")
-        shuffle_buffer_size = int(top_kwargs.get("shuffle_buffer_size", 250_000))
-        seed = int(top_kwargs.get("seed", 0))
-        split = top_kwargs.get("split", oxe_kwargs.get("split", droid_kwargs.get("split", "train")))
-        want_val = split == "val"
-        droid_weight = float(top_kwargs["droid_weight"])  # required
-
         # Build sub-datasets with only their required args
-        droid = DroidCoTRldsDatasetRaw(**droid_kwargs)
-        oxe = OXECoTRldsDatasetsRaw(**oxe_kwargs)
+        droid = DroidCoTRldsDatasetRaw(
+            data_dir=data_dir,
+            language_action_dir=language_action_dir,
+            config=config,
+            action_chunk_size=action_chunk_size,
+            shuffle_buffer_size=shuffle_buffer_size,
+            split_seed=split_seed,
+            seed=seed,
+            split=split,
+            action_proprio_normalization_type=action_proprio_normalization_type,
+        )
 
+        oxe = OXECoTRldsDatasetsRaw(
+            config=config,
+            data_dir=data_dir,
+            data_mix=data_mix,
+            action_chunk_size=action_chunk_size,
+            split_seed=split_seed,
+            seed=seed,
+            split=split,
+            shuffle_buffer_size=shuffle_buffer_size,
+        )
+
+        want_val = split == "val"
+        use_wrist_image = config.use_wrist_image
         all_datasets = [*oxe.datasets, droid.dataset]
         sample_weights = [*oxe.unnormalized_sample_weights, droid_weight * droid.dataset_statistics["num_transitions"]]
 
@@ -1572,8 +1494,8 @@ class CombinedCoTRldsDataset:
         # Apply frame transforms via shared helper
         logging.info("Applying frame transforms on dataset...")
         decode_fn = make_decode_images_fn(
-            primary_key="image",
-            wrist_key="wrist_image",
+            primary_key="exterior_image_1_left",
+            wrist_key="wrist_image_left",
             use_wrist_image=use_wrist_image,
         )
         self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
@@ -1589,9 +1511,9 @@ class CombinedCoTRldsDataset:
             def _decode_single(img_bytes):
                 return tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8)
 
-            traj["observation"]["image"] = _decode_single(traj["observation"]["image"])
+            traj["observation"]["exterior_image_1_left"] = _decode_single(traj["observation"]["exterior_image_1_left"])
             if use_wrist_image:
-                traj["observation"]["wrist_image"] = _decode_single(traj["observation"]["wrist_image"])
+                traj["observation"]["wrist_image_left"] = _decode_single(traj["observation"]["wrist_image_left"])
             return traj
 
         self.dataset = self.dataset.frame_map(decode_images, tf.data.AUTOTUNE)

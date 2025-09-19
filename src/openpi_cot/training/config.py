@@ -15,7 +15,6 @@ import openpi.transforms as upstream_transforms
 from typing_extensions import override
 import tyro
 
-import openpi_cot.dataloader.cot_rlds_dataset as cot_rlds_dataset
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
@@ -78,91 +77,43 @@ def build_cosine_lr(
     )
 
 
-def build_droid_cot_data(
-    *,
-    rlds_data_dir: str,
-    language_action_dir: str,
-    assets_dir: str,
-    asset_id: str = "droid",
-    prompt_from_task: bool = True,
-    shuffle_buffer_size: int = 250_000,
-    summation_steps: int = 15,
-    sum_decimal: str = "0f",
-    left_pad: bool = True,
-    include_decimal_point: bool = False,
-    validation_mode: str = "easy",
-    vis_dataset: bool = False,
-    use_wrist_image: bool = False,
-    val_max_samples: int | None = 60000,
-    val_fraction: float | None = 0.02,
-    use_idle_filter: bool = True,
-    drop_gripper_oob: bool = False,
-) -> "RLDSCoTDataConfig":
-    """Helper to build a standard DROID CoT RLDS data config."""
-    return RLDSCoTDataConfig(
-        repo_id="droid",
-        rlds_data_dir=rlds_data_dir,
-        language_action_dir=language_action_dir,
-        action_space=cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION,
-        base_config=CoTDataConfig(
-            prompt_from_task=prompt_from_task,
-        ),
-        shuffle_buffer_size=shuffle_buffer_size,
-        assets=upstream_config.AssetsConfig(
-            assets_dir=assets_dir,
-            asset_id=asset_id,
-        ),
-        summation_steps=summation_steps,
-        sum_decimal=sum_decimal,
-        left_pad=left_pad,
-        include_decimal_point=include_decimal_point,
-        validation_mode=validation_mode,
-        vis_dataset=vis_dataset,
-        use_wrist_image=use_wrist_image,
-        val_max_samples=val_max_samples,
-        val_fraction=val_fraction,
-        use_idle_filter=use_idle_filter,
-        drop_gripper_oob=drop_gripper_oob,
-        dataset_type="droid",
-    )
+def build_droid_cfg(tpu_version: str, fsdp_devices: int, batch_size: int):
+    language_action_dir = None
+    ckpt_base_dir = None
+    match tpu_version:
+        case "v4":
+            rlds_data_dir = "gs://pi0-cot/OXE"
+        case "v5":
+            rlds_data_dir = "gs://v5_central1_a/OXE"
+        case "v6":
+            rlds_data_dir = "gs://v6_east1d/OXE"
+        case "local":
+            rlds_data_dir = "/n/fs/robot-data/data/"
+            language_action_dir = "/n/fs/robot-data/vlm-syn/droid-lang-actions"
+            ckpt_base_dir = "/n/fs/robot-data/pi0-cot/checkpoints"
+        case _:
+            raise ValueError(f"Invalid TPU version: {tpu_version}")
 
+    if language_action_dir is None:
+        language_action_dir = rlds_data_dir.replace("OXE", "droid-lang-actions")
+    if ckpt_base_dir is None:
+        ckpt_base_dir = rlds_data_dir.replace("OXE", "checkpoints")
 
-def build_oxe_cot_data(
-    *,
-    rlds_data_dir: str,
-    data_mix: str,
-    assets_dir: str,
-    asset_id: str = "oxe",
-    shuffle_buffer_size: int = 250_000,
-    sum_decimal: str = "0f",
-    left_pad: bool = True,
-    include_decimal_point: bool = False,
-    val_max_samples: int | None = 60000,
-    val_fraction: float | None = 0.02,
-    validation_mode: str = "easy",
-    vis_dataset: bool = False,
-    use_wrist_image: bool = False,
-) -> "RLDSCoTDataConfig":
-    """Helper to build an OXE CoT RLDS data config."""
-    return RLDSCoTDataConfig(
-        repo_id="oxe",
-        rlds_data_dir=rlds_data_dir,
-        data_mix=data_mix,
-        shuffle_buffer_size=shuffle_buffer_size,
-        max_samples=None,
-        left_pad=left_pad,
-        include_decimal_point=include_decimal_point,
-        sum_decimal=sum_decimal,
-        val_max_samples=val_max_samples,
-        val_fraction=val_fraction,
-        validation_mode=validation_mode,
-        vis_dataset=vis_dataset,
-        use_wrist_image=use_wrist_image,
-        assets=upstream_config.AssetsConfig(
-            assets_dir=assets_dir,
-            asset_id=asset_id,
+    return (
+        TrainConfig(
+            name=f"pi_droid_cot_{tpu_version}",
+            data=RLDSCoTDataConfig(
+                repo_id="droid",
+                asset_id="droid",
+                dataset_type="droid",
+                rlds_data_dir=rlds_data_dir,
+                language_action_dir=language_action_dir,
+            ),
+            fsdp_devices=fsdp_devices,
+            batch_size=batch_size,
+            checkpoint_base_dir=ckpt_base_dir,
+            weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         ),
-        dataset_type="oxe",
     )
 
 
@@ -170,22 +121,21 @@ def build_oxe_cot_data(
 class CoTDataConfig(upstream_config.DataConfig):
     # TODO: remove the cot argument
     cot: bool = False
-    language_action_dir: str | None = None
     shuffle_buffer_size: int = 250_000
     # For CoT-style datasets (e.g., DROID-CoT): number of future steps to sum over for language actions
     summation_steps: int = 15
     # Optional cap on number of unique flattened samples for overfitting tests
     max_samples: int | None = None
     # Tokenization / formatting controls for CoT numeric aggregation
-    sum_decimal: str = "2f"
+    sum_decimal: str = "0f"
     left_pad: bool = True
     include_decimal_point: bool = True
     # Validation controls for RLDS-CoT dataset splitting/visualization
-    val_max_samples: int | None = None
-    val_fraction: float | None = None
+    val_max_samples: int | None = 60000
+    val_fraction: float | None = 0.02
     validation_mode: str = "easy"
     vis_dataset: bool = False
-    use_wrist_image: bool = False
+    use_wrist_image: bool = True
     use_idle_filter: bool = True
     wrist_image_dropout_prob: float = 0.0
     # If true, will drop samples where projected gripper is outside the resized image bounds.
@@ -194,6 +144,8 @@ class CoTDataConfig(upstream_config.DataConfig):
     # Dataset selection and OXE/Combined-specific knobs
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
     dataset_type: Literal["droid", "oxe", "combined"] = "droid"
+    # DROID fields (used when dataset_type == "droid")
+    language_action_dir: str | None = None
     # OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_pi_magic_soup"
     # Combined-only: weight for DROID when interleaving with OXE
@@ -243,8 +195,6 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
     """
 
-    dataset_type: Literal["droid", "oxe", "combined"] = "droid"
-
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
         cot_fields = CoTDataConfig.__dataclass_fields__.keys()
         data = {k: getattr(self, k) for k in cot_fields}
@@ -254,7 +204,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
             repo_id=repo_id,
             asset_id=asset_id,
             # norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
-            norm_stats=None,
+            norm_stats=None,  # Note: Normalization is handled on dataset level
             use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
         return CoTDataConfig(**data)
@@ -276,21 +226,22 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
         base_cfg = self.create_base_config(assets_dirs, model_config)
-        repack_dict = {
-            # always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
-            "observation/exterior_image_1_left": "observation/image",
-            "observation/state": "observation/state",
-            "actions": "actions",
-            "prompt": "prompt",
-            "language_actions": "language_actions",
-        }
-        if base_cfg.vis_dataset:
-            repack_dict["camera_intrinsics"] = "camera_intrinsics"
-            repack_dict["camera_extrinsics"] = "camera_extrinsics"
-            repack_dict["observation/cartesian_position_window"] = "observation/cartesian_position_window"
-        if base_cfg.use_wrist_image:
-            repack_dict["observation/wrist_image_left"] = "observation/wrist_image"
-        repack_transform = upstream_transforms.Group(inputs=[upstream_transforms.RepackTransform(repack_dict)])
+        ## Note: Repack is handled on dataset level
+        # repack_dict = {
+        #     # always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
+        #     "observation/exterior_image_1_left": "observation/image",
+        #     "observation/state": "observation/state",
+        #     "actions": "actions",
+        #     "prompt": "prompt",
+        #     "language_actions": "language_actions",
+        # }
+        # if base_cfg.vis_dataset:
+        #     repack_dict["camera_intrinsics"] = "camera_intrinsics"
+        #     repack_dict["camera_extrinsics"] = "camera_extrinsics"
+        #     repack_dict["observation/cartesian_position_window"] = "observation/cartesian_position_window"
+        # if base_cfg.use_wrist_image:
+        #     repack_dict["observation/wrist_image_left"] = "observation/wrist_image"
+        # repack_transform = upstream_transforms.Group(inputs=[upstream_transforms.RepackTransform(repack_dict)])
 
         data_transforms = upstream_transforms.Group(
             inputs=[
@@ -320,7 +271,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
         return dataclasses.replace(
             base_cfg,
-            repack_transforms=repack_transform,
+            # repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
@@ -334,8 +285,14 @@ class TrainConfig(upstream_config.TrainConfig):
     weight_loader: weight_loaders.WeightLoaderChoice = dataclasses.field(
         default_factory=weight_loaders.WeightLoaderChoice
     )
+    model: _model.BaseModelConfig = dataclasses.field(default_factory=build_picot_model)
+    lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=build_cosine_lr)
+    num_train_steps = 100_000
+    save_interval = 500
+    log_interval = 50
+    keep_period = 10000
     # New field
-    do_val: bool = False
+    do_val: bool = True
 
     @property
     @override
@@ -354,108 +311,69 @@ class TrainConfig(upstream_config.TrainConfig):
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
-    TrainConfig(
-        name="pi_droid_cot_v4",
-        do_val=True,
-        model=build_picot_model(pi05=True, discrete_state_input=True),
-        data=build_droid_cot_data(
-            rlds_data_dir="gs://pi0-cot",
-            language_action_dir="gs://pi0-cot/droid-lang-actions",
-            assets_dir="gs://pi0-cot/assets/pi0_droid_cot_v4",
-        ),
-        num_train_steps=100_000,
-        fsdp_devices=4,
-        batch_size=256,
-        log_interval=50,
-        save_interval=500,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        keep_period=10000,
-        assets_base_dir="gs://pi0-cot/assets",
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        lr_schedule=build_cosine_lr(),
-    ),
-    TrainConfig(
-        name="pi_droid_cot_v6",
-        do_val=True,
-        model=build_picot_model(pi05=True, discrete_state_input=True),
-        data=build_droid_cot_data(
-            rlds_data_dir="gs://v6_east1d",
-            language_action_dir="gs://v6_east1d/droid-lang-actions",
-            assets_dir="gs://v6_east1d/assets/pi0_droid_cot_v4",
-        ),
-        num_train_steps=100_000,
-        fsdp_devices=8,
-        batch_size=256,
-        save_interval=500,
-        log_interval=50,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        assets_base_dir="gs://v6_east1d/assets",
-        checkpoint_base_dir="gs://v6_east1d/checkpoints",
-        lr_schedule=build_cosine_lr(),
-        keep_period=10000,
-    ),
-    TrainConfig(
-        name="pi_droid_cot_v5",
-        do_val=True,
-        model=build_picot_model(pi05=True, discrete_state_input=True),
-        data=build_droid_cot_data(
-            rlds_data_dir="gs://v5_central1_a",
-            language_action_dir="gs://v5_central1_a/droid-lang-actions",
-            assets_dir="gs://v5_central1_a/assets/pi0_droid_cot_v4",
-        ),
-        num_train_steps=100_000,
-        fsdp_devices=8,
-        batch_size=256,
-        save_interval=500,
-        log_interval=50,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        assets_base_dir="gs://v5_central1_a/assets",
-        checkpoint_base_dir="gs://v5_central1_a/checkpoints",
-        lr_schedule=build_cosine_lr(),
-        keep_period=10000,
-    ),
-    TrainConfig(
-        name="pi_droid_cot_local",
-        do_val=True,
-        model=build_picot_model(pi05=False, discrete_state_input=False),
-        data=build_droid_cot_data(
-            rlds_data_dir="/n/fs/robot-data/data/",
-            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
-            assets_dir="/n/fs/robot-data/pi0-cot/assets/pi0_droid_cot_v4",
-        ),
-        num_train_steps=100_000,
-        fsdp_devices=8,
-        batch_size=1,
-        save_interval=1000,
-        log_interval=50,
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint",
-            params_path="/n/fs/robot-data/cache/openpi/openpi-assets/checkpoints/pi0_base/params",
-        ),
-        assets_base_dir="/n/fs/robot-data/pi0-cot/assets",
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        lr_schedule=build_cosine_lr(),
-        # keep_period=20_000,
-    ),
+    build_droid_cfg("v4", fsdp_devices=4, batch_size=256),
+    build_droid_cfg("v5", fsdp_devices=8, batch_size=256),
+    build_droid_cfg("v6", fsdp_devices=8, batch_size=256),
+    build_droid_cfg("local", fsdp_devices=4, batch_size=256),
     TrainConfig(
         name="pi_oxe_cot_v4",
-        do_val=True,
-        model=build_picot_model(pi05=True, discrete_state_input=True),
-        data=build_oxe_cot_data(
+        data=RLDSCoTDataConfig(
+            repo_id="oxe",
+            asset_id="oxe",
+            dataset_type="oxe",
             rlds_data_dir="gs://pi0-cot/OXE",
             data_mix="oxe_pi_magic_soup",
-            assets_dir="gs://pi0-cot/assets/pi0_oxe_cot_v4",
         ),
-        num_train_steps=100_000,
         fsdp_devices=4,
         batch_size=256,
-        save_interval=500,
-        log_interval=50,
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        assets_base_dir="gs://pi0-cot/assets",
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        lr_schedule=build_cosine_lr(),
-        keep_period=10000,
+    ),
+    TrainConfig(
+        name="pi_oxe_cot_local",
+        data=RLDSCoTDataConfig(
+            repo_id="oxe",
+            asset_id="oxe",
+            dataset_type="oxe",
+            rlds_data_dir="/n/fs/vla-mi/datasets/OXE",
+            data_mix="oxe_pi_magic_soup",
+        ),
+        fsdp_devices=4,
+        batch_size=256,
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+    ),
+    TrainConfig(
+        name="pi_combined_cot_v4",
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            rlds_data_dir="gs://pi0-cot",
+            language_action_dir="gs://pi0-cot/droid-lang-actions",
+            data_mix="oxe_pi_magic_soup",
+            droid_weight=2.0,
+        ),
+        fsdp_devices=4,
+        batch_size=256,
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+    ),
+    TrainConfig(
+        name="pi_combined_cot_local",
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            rlds_data_dir="/n/fs/vla-mi/datasets/OXE",
+            language_action_dir="gs://pi0-cot/droid-lang-actions",
+            data_mix="oxe_pi_magic_soup",
+            droid_weight=2.0,
+        ),
+        fsdp_devices=4,
+        batch_size=256,
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]

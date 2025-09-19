@@ -32,15 +32,16 @@ def _create_rlds_dataset(
 
     # Some configs may expose an optional `dataset_type` attribute.
     dataset_type = getattr(data_cfg, "dataset_type", "droid")
+    rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
+    assert rlds_data_dir is not None, "rlds_data_dir is required"
 
     if dataset_type == "droid":
         return DroidCoTRldsDataset(
-            data_dir=data_cfg.rlds_data_dir,
+            data_dir=rlds_data_dir,
             language_action_dir=data_cfg.language_action_dir,
             batch_size=local_bsz,
             shuffle=shuffle,
             action_chunk_size=action_horizon,
-            action_space=data_cfg.action_space,
             shuffle_buffer_size=data_cfg.shuffle_buffer_size,
             split_seed=split_seed,
             max_samples=max_samples,
@@ -51,54 +52,43 @@ def _create_rlds_dataset(
     if dataset_type == "oxe":
         # OXE requires additional fields; only proceed if present, else fall back upstream.
         oxe_required = hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
-        rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
-        if oxe_required and rlds_data_dir is not None:
-            return OXECoTRldsDatasets(
-                data_dir=rlds_data_dir,
-                data_mix=data_cfg.data_mix,
-                batch_size=local_bsz,
-                shuffle=shuffle,
-                action_chunk_size=action_horizon,
-                shuffle_buffer_size=data_cfg.shuffle_buffer_size,
-                split_seed=split_seed,
-                max_samples=max_samples,
-                seed=seed,
-                config=data_cfg,
-                split=split,
-            )
-        logging.warning(
-            "dataset_type='oxe' selected but required fields missing; falling back to upstream RLDS loader."
+        assert oxe_required, "data_mix is required"
+        return OXECoTRldsDatasets(
+            data_dir=rlds_data_dir,
+            data_mix=data_cfg.data_mix,
+            batch_size=local_bsz,
+            shuffle=shuffle,
+            action_chunk_size=action_horizon,
+            shuffle_buffer_size=data_cfg.shuffle_buffer_size,
+            split_seed=split_seed,
+            max_samples=max_samples,
+            seed=seed,
+            config=data_cfg,
+            split=split,
         )
     if dataset_type == "combined":
         # Combined requires both DROID and OXE fields; validate and proceed if present.
-        rlds_data_dir = getattr(data_cfg, "rlds_data_dir", None)
-        has_droid = (
-            getattr(data_cfg, "rlds_data_dir", None) is not None
-            and getattr(data_cfg, "language_action_dir", None) is not None
-        )
-        has_oxe = rlds_data_dir is not None and hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
-        if has_droid and has_oxe:
-            return CombinedCoTRldsDataset(
-                # Top-level
-                batch_size=local_bsz,
-                shuffle=shuffle,
-                shuffle_buffer_size=data_cfg.shuffle_buffer_size,
-                max_samples=max_samples,
-                seed=seed,
-                split=split,
-                # DROID-specific (Raw)
-                data_dir=data_cfg.rlds_data_dir,
-                language_action_dir=data_cfg.language_action_dir,
-                config=data_cfg,
-                action_chunk_size=action_horizon,
-                action_space=data_cfg.action_space,
-                split_seed=split_seed,
-                # OXE-specific (Raw)
-                rlds_data_dir=rlds_data_dir,
-                data_mix=data_cfg.data_mix,
-            )
-        logging.warning(
-            "dataset_type='combined' selected but required fields missing; falling back to upstream RLDS loader."
+        oxe_required = hasattr(data_cfg, "data_mix") and data_cfg.data_mix is not None
+        assert oxe_required, "data_mix is required"
+        droid_required = hasattr(data_cfg, "language_action_dir") and data_cfg.language_action_dir is not None
+        assert droid_required, "language_action_dir is required"
+        return CombinedCoTRldsDataset(
+            data_dir=rlds_data_dir,
+            batch_size=local_bsz,
+            shuffle=shuffle,
+            action_chunk_size=action_horizon,
+            shuffle_buffer_size=data_cfg.shuffle_buffer_size,
+            split_seed=split_seed,
+            max_samples=max_samples,
+            seed=seed,
+            config=data_cfg,
+            split=split,
+            # DROID-specific (Raw)
+            language_action_dir=data_cfg.language_action_dir,
+            # OXE-specific (Raw)
+            data_mix=data_cfg.data_mix,
+            # Combined-specific (Raw)
+            droid_weight=data_cfg.droid_weight,
         )
 
     return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)

@@ -283,6 +283,10 @@ def main(config: _config.TrainConfig):
         or ("v5" in config.name and config.fsdp_devices > 8)
     ):
         jax.distributed.initialize()
+    if "local" in config.name:
+        os.environ["CURL_CA_BUNDLE"] = (
+            "/etc/pki/tls/certs/ca-bundle.crt"  # Ensure the CA bundle is set for SSL verification
+        )
     data_dir = save_dir = config.data.rlds_data_dir
     cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
     if _is_tpu_runtime() and (str(data_dir).startswith("gs://") or str(save_dir).startswith("gs://")):
