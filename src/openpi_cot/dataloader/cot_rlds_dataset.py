@@ -1005,10 +1005,10 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.global_state_encoding = global_state_encoding
         self.global_action_encoding = global_action_encoding
         dataset_frame_transform_kwargs = dataset_kwargs.get("dataset_frame_transform_kwargs", {})
-        if self.image_obs_keys is None:
-            self.image_obs_keys = {}
-        if self.language_key is not None:
-            self.REQUIRED_KEYS.add(self.language_key)
+        assert "primary" in self.image_obs_keys, "primary image is required"
+        assert "wrist" in self.image_obs_keys, "wrist image is required"
+        assert self.language_key is not None, "language key is required"
+        self.REQUIRED_KEYS.add(self.language_key)
 
         logging.info(f"Dataset kwargs: {dataset_kwargs}")
 
@@ -1025,8 +1025,8 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             self.dataset_statistics = get_dataset_statistics(
                 self.dataset,
                 save_dir=self.builder.data_dir,
-                action_key="action",
-                state_key="proprio",
+                action_key="actions",
+                state_key="state",
             )
             self.apply_traj_filters()
             self.split_val(split_seed=split_seed)
@@ -1057,38 +1057,32 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
             # extracts images, depth images and proprio from the "observation" dict
             traj_len = tf.shape(traj["action"])[0]
-            old_obs = traj["observation"]
-            new_obs = {}
-
-            traj["action"] = convert_action_encoding(
+            traj["actions"] = convert_action_encoding(
                 action=traj["action"],
                 from_encoding=self.action_encoding,
                 to_encoding=self.global_action_encoding,
             )
 
-            for new, old in self.image_obs_keys.items():
-                img_key = f"image_{new}"
-                if not use_wrist_image and new == "wrist":
-                    continue
-                if old is None:
-                    new_obs[img_key] = tf.repeat("", traj_len)  # padding
-                else:
-                    new_obs[img_key] = old_obs[old]
+            new_obs = {}
+
+            new_obs["exterior_image_1_left"] = traj["observation"]["primary"]
+            if use_wrist_image:
+                new_obs["wrist_image_left"] = traj["observation"]["wrist"]
 
             if self.state_obs_keys:
-                new_obs["proprio"] = tf.concat(
+                new_obs["state"] = tf.concat(
                     [
                         (
                             tf.zeros((traj_len, 1), dtype=tf.float32)  # padding
                             if key is None
-                            else tf.cast(old_obs[key], tf.float32)
+                            else tf.cast(traj["observation"][key], tf.float32)
                         )
                         for key in self.state_obs_keys
                     ],
                     axis=1,
                 )
-                new_obs["proprio"] = convert_state_encoding(
-                    new_obs["proprio"],
+                new_obs["state"] = convert_state_encoding(
+                    new_obs["state"],
                     from_encoding=self.state_encoding,
                     to_encoding=self.global_state_encoding,
                 )
@@ -1097,41 +1091,39 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             # new_obs["timestep"] = tf.range(traj_len)
 
             # extracts `language_key` into the "task" dict
-            task = {}
-            if self.language_key is not None:
-                if traj[self.language_key].dtype != tf.string:
-                    raise ValueError(
-                        f"Language key {self.language_key} has dtype {traj[self.language_key].dtype}, but it must be tf.string."
-                    )
-                raw_language_instruction = traj.pop(self.language_key)
-
-                # episode_id = self._episode_id_from_traj(traj, ep_table)
-                # lang_bytes = lang_table.lookup(episode_id)
-                # lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-                # # Language actions may include an extra terminal step; crop to match action length
-                # lang_tensor = lang_tensor[:traj_len]
-                # # Sample instruction from merged table or fallback
-                fallback_index = tf.random.uniform(
-                    (),
-                    minval=0,
-                    maxval=tf.shape(self.fallback_instructions)[0],
-                    dtype=tf.int32,
-                    seed=self.seed,
+            if traj[self.language_key].dtype != tf.string:
+                raise ValueError(
+                    f"Language key {self.language_key} has dtype {traj[self.language_key].dtype}, but it must be tf.string."
                 )
-                fallback_instruction = self.fallback_instructions[fallback_index]
+            raw_language_instruction = traj.pop(self.language_key)
 
-                def _sample_from_table():
-                    arr = tf.reshape(raw_language_instruction, [-1])
-                    return tf.random.shuffle(arr, seed=self.seed)[0]
+            # episode_id = self._episode_id_from_traj(traj, ep_table)
+            # lang_bytes = lang_table.lookup(episode_id)
+            # lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
+            # # Language actions may include an extra terminal step; crop to match action length
+            # lang_tensor = lang_tensor[:traj_len]
+            # # Sample instruction from merged table or fallback
+            fallback_index = tf.random.uniform(
+                (),
+                minval=0,
+                maxval=tf.shape(self.fallback_instructions)[0],
+                dtype=tf.int32,
+                seed=self.seed,
+            )
+            fallback_instruction = self.fallback_instructions[fallback_index]
 
-                has_any_instruction = tf.reduce_any(
-                    tf.greater(tf.strings.length(tf.reshape(raw_language_instruction, [-1])), 0)
-                )
+            def _sample_from_table():
+                arr = tf.reshape(raw_language_instruction, [-1])
+                return tf.random.shuffle(arr, seed=self.seed)[0]
 
-                instruction = tf.cond(has_any_instruction, _sample_from_table, lambda: fallback_instruction)
+            has_any_instruction = tf.reduce_any(
+                tf.greater(tf.strings.length(tf.reshape(raw_language_instruction, [-1])), 0)
+            )
 
-                instruction_vec = tf.fill([tf.shape(traj["action"])[0]], instruction)
-                task["language_instruction"] = instruction_vec
+            instruction = tf.cond(has_any_instruction, _sample_from_table, lambda: fallback_instruction)
+
+            instruction_vec = tf.fill([tf.shape(traj["actions"])[0]], instruction)
+            prompt = instruction_vec
 
             # Build a deterministic per-trajectory identifier using a strong hash
             # of the dataset name and the serialized action tensor. This avoids
@@ -1139,8 +1131,8 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             max_steps = 128
             action_for_hash = tf.cond(
                 max_steps >= traj_len,
-                lambda: traj["action"],
-                lambda: tf.concat([traj["action"][:64], traj["action"][-64:]], axis=0),
+                lambda: traj["actions"],
+                lambda: tf.concat([traj["actions"][:64], traj["actions"][-64:]], axis=0),
             )
             serialized_action = tf.io.serialize_tensor(action_for_hash)
             name_tensor = tf.constant(self.dataset_name, dtype=tf.string)
@@ -1152,11 +1144,11 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
             traj = {
                 "observation": new_obs,
-                "task": task,
-                "action": tf.cast(traj["action"], tf.float32),
+                "actions": tf.cast(traj["actions"], tf.float32),
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": tf.repeat(traj_uid, traj_len),
-                "raw_action": tf.cast(traj["action"], tf.float32),
+                "raw_action": tf.cast(traj["actions"], tf.float32),
+                "prompt": prompt,
             }
 
             return traj
@@ -1190,18 +1182,18 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             NormalizeActionAndProprio(
                 norm_stats=self.dataset_statistics,
                 normalization_type=self.action_proprio_normalization_type,
-                action_key="action",
-                state_key="proprio",
+                action_key="actions",
+                state_key="state",
             ),
             self.num_parallel_calls,
         )
 
         def chunk_actions(traj):
             """Splits episode into action chunks using shared indexing utility."""
-            traj_len = tf.shape(traj["action"])[0]
+            traj_len = tf.shape(traj["actions"])[0]
 
             action_chunk_indices = compute_window_indices(traj_len, action_chunk_size)
-            traj["action"] = tf.gather(traj["action"], action_chunk_indices)
+            traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
             return traj
 
         # self.dataset = self.dataset.traj_map(traj_transforms.add_pad_mask_dict, self.num_parallel_calls)
@@ -1248,6 +1240,14 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
+        def pop_keys(traj):
+            traj.pop("raw_action")
+            traj.pop("trajectory_id")
+            traj.pop("dataset_name")
+            return traj
+
+        self.dataset = self.dataset.traj_map(pop_keys, self.num_parallel_calls)
+
     def apply_frame_filters(
         self,
         chunk_filter_fn: Callable | None = None,
@@ -1262,21 +1262,22 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             self.dataset = self.dataset.filter(chunk_filter_fn)
 
     def apply_repack_transforms(self, use_wrist_image: bool):
-        def repack_transforms(traj):
-            return_dict = {
-                "actions": traj["action"],
-                "observation": {
-                    "exterior_image_1_left": traj["observation"]["image_primary"],
-                    "state": traj["observation"]["proprio"],
-                },
-                "prompt": traj["task"]["language_instruction"],
-                "language_actions": traj["language_actions"],
-            }
-            if use_wrist_image:
-                return_dict["observation"]["wrist_image_left"] = traj["observation"]["image_wrist"]
-            return return_dict
+        # def repack_transforms(traj):
+        #     return_dict = {
+        #         "actions": traj["action"],
+        #         "observation": {
+        #             "exterior_image_1_left": traj["observation"]["image_primary"],
+        #             "state": traj["observation"]["proprio"],
+        #         },
+        #         "prompt": traj["task"]["language_instruction"],
+        #         "language_actions": traj["language_actions"],
+        #     }
+        #     if use_wrist_image:
+        #         return_dict["observation"]["wrist_image_left"] = traj["observation"]["image_wrist"]
+        #     return return_dict
 
-        self.dataset = self.dataset.traj_map(repack_transforms, self.num_parallel_calls)
+        # self.dataset = self.dataset.traj_map(repack_transforms, self.num_parallel_calls)
+        return
 
 
 class OXECoTRldsDatasetsRaw:
