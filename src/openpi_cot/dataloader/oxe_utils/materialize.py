@@ -12,6 +12,7 @@ from typing import Any
 
 from openpi_cot.dataloader.oxe_utils.configs import OXE_DATASET_CONFIGS
 from openpi_cot.dataloader.oxe_utils.configs import ActionEncoding
+from openpi_cot.dataloader.oxe_utils.configs import StateEncoding
 from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
 from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
 
@@ -42,6 +43,9 @@ def make_oxe_dataset_kwargs(
         pass
     else:
         raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
+
+    if dataset_kwargs["state_encoding"] not in [StateEncoding.POS_EULER, StateEncoding.POS_QUAT, StateEncoding.EEF_R6]:
+        raise ValueError(f"Cannot load `{dataset_name}`; only POS_EULER, POS_QUAT & EEF_R6 state encodings supported!")
 
     dataset_kwargs["action_proprio_normalization_type"] = action_proprio_normalization_type
 
