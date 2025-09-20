@@ -1010,15 +1010,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
 
-        logging.info(f"Image obs keys: {self.image_obs_keys}")
-        logging.info(f"State obs keys: {self.state_obs_keys}")
-        logging.info(f"Language key: {self.language_key}")
-        logging.info(f"Action encoding: {self.action_encoding}")
-        logging.info(f"State encoding: {self.state_encoding}")
-        logging.info(f"Global state encoding: {self.global_state_encoding}")
-        logging.info(f"Global action encoding: {self.global_action_encoding}")
-        logging.info(f"Dataset frame transform kwargs: {dataset_frame_transform_kwargs}")
-        breakpoint()
+        logging.info(f"Dataset kwargs: {dataset_kwargs}")
 
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
         if cached_stats is not None:
@@ -1173,14 +1165,9 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
 
     def apply_traj_filters(self):
         def is_nonzero_length(traj):
-            #     return tf.shape(traj["action"])[0] > 0
+            return tf.shape(traj["action"])[0] > 0
 
-            # # # self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
-
-            action = traj["action"]
-            if tf.ragged.is_ragged(action):  # evaluated at trace-time, safe to use here
-                return tf.greater(tf.size(action.flat_values), 0)
-            return tf.greater(tf.size(action), 0)
+        # self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
 
         self.dataset = self.dataset.filter(is_nonzero_length)
 
