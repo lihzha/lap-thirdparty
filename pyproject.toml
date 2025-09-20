@@ -41,6 +41,7 @@ dependencies = [
     "dlimp",
     "tensorflow-cpu==2.15.0",
     "tensorflow-datasets==4.9.9",
+    "tensorflow-graphics"
 ]
 
 [[tool.uv.index]]
