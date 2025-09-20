@@ -1150,6 +1150,10 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             hashed = tf.strings.to_hash_bucket_strong(to_hash, 2147483647, key=[self.seed, 1337])
             traj_uid = tf.strings.join([name_tensor, sep2, tf.strings.as_string(hashed)])
 
+            assert ["depth_gripper", "depth_primary", "depth_secondary"] not in new_obs, (
+                "depth images are not supported"
+            )
+
             traj = {
                 "observation": new_obs,
                 "task": task,
