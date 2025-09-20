@@ -1035,6 +1035,16 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
 
+        logging.info(f"Image obs keys: {self.image_obs_keys}")
+        logging.info(f"State obs keys: {self.state_obs_keys}")
+        logging.info(f"Language key: {self.language_key}")
+        logging.info(f"Action encoding: {self.action_encoding}")
+        logging.info(f"State encoding: {self.state_encoding}")
+        logging.info(f"Global state encoding: {self.global_state_encoding}")
+        logging.info(f"Global action encoding: {self.global_action_encoding}")
+        logging.info(f"Dataset frame transform kwargs: {dataset_frame_transform_kwargs}")
+        breakpoint()
+
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
         if cached_stats is not None:
             # Prefer early filtering when stats are already available to reduce downstream work.
@@ -1090,12 +1100,6 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             )
 
             for new, old in self.image_obs_keys.items():
-                # if new == "primary":
-                #     img_key = "image"
-                # elif new == "wrist":
-                #     img_key = "wrist_image"
-                # else:
-                #     raise ValueError(f"Unknown image key: {new}")
                 img_key = f"image_{new}"
                 if not use_wrist_image and new == "wrist":
                     continue
