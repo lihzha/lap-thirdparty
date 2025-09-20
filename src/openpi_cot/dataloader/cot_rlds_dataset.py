@@ -1038,15 +1038,16 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
         if cached_stats is not None:
             # Prefer early filtering when stats are already available to reduce downstream work.
-            self.apply_traj_filters()
             self.apply_restructure(use_wrist_image=config.use_wrist_image)
+            self.apply_traj_filters()
             self.split_val(split_seed=split_seed)
             self.dataset_statistics = cached_stats
         else:
             # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
             self.apply_restructure(use_wrist_image=config.use_wrist_image)
+            tmp_dataset = self.build_dataset(self.builder)
             self.dataset_statistics = get_dataset_statistics(
-                self.dataset,
+                tmp_dataset,
                 save_dir=self.builder.data_dir,
                 action_key="action",
                 state_key="proprio",
