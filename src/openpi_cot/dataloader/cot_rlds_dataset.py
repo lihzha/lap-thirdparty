@@ -2,7 +2,6 @@ from collections.abc import Callable
 import contextlib
 from dataclasses import dataclass
 from dataclasses import field
-import inspect
 import json
 import logging
 import os
@@ -152,30 +151,6 @@ def make_decode_images_fn(
         return traj
 
     return _decode_frame
-
-
-def _param_info(fn: Callable):
-    """Return (accepted_param_names, required_param_names, has_var_kwargs) for a callable.
-
-    - Skips `self`.
-    - Considers parameters without defaults (and not varargs) as required.
-    """
-    sig = inspect.signature(fn)
-    accepted: set[str] = set()
-    required: set[str] = set()
-    has_var_kwargs = False
-    for name, param in sig.parameters.items():
-        if name == "self":
-            continue
-        if param.kind == inspect.Parameter.VAR_KEYWORD:
-            has_var_kwargs = True
-            continue
-        if param.kind == inspect.Parameter.VAR_POSITIONAL:
-            continue
-        accepted.add(name)
-        if param.default is inspect.Signature.empty:
-            required.add(name)
-    return accepted, required, has_var_kwargs
 
 
 def compute_window_indices(sequence_length: tf.Tensor, window_size: int) -> tf.Tensor:
@@ -1197,12 +1172,16 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
 
     def apply_traj_filters(self):
-        def is_nonzero_length(traj):
-            return tf.shape(traj["action"])[0] > 0
+        # def is_nonzero_length(traj):
+        #     return tf.shape(traj["action"])[0] > 0
 
-        # # self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
+        # # # self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
 
-        self.dataset = self.dataset.filter(is_nonzero_length)
+        # self.dataset = self.dataset.filter(is_nonzero_length)
+        action = traj["action"]
+        if tf.ragged.is_ragged(action):  # evaluated at trace-time, safe to use here
+            return tf.greater(tf.size(action.flat_values), 0)
+        return tf.greater(tf.size(action), 0)
 
     def get_split_anchor(self, traj):
         # Use the per-trajectory identifier (constant along time) to split deterministically
