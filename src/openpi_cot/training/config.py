@@ -155,6 +155,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
     use_idle_filter: bool = True
+    use_per_traj_filter: bool = True
     # If true, will drop samples where projected gripper is outside the resized image bounds.
     drop_gripper_oob: bool = False
     language_action_dir: str | None = None

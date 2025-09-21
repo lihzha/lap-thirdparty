@@ -492,28 +492,46 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
     def build_filter_table(self, metadata_path, use_idle_filter: bool):
         filter_table = None
         if use_idle_filter:
-            # Store per-trajectory ranges, not per-step flags
-            with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.keep_ranges_file}", "r") as f:
-                filter_dict = json.load(f)
+            if self.use_per_traj_filter:
+                # Store per-trajectory ranges, not per-step flags
+                with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.keep_ranges_file}", "r") as f:
+                    filter_dict = json.load(f)
 
-            logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
+                logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
 
-            ep_keys = []
-            ranges_ser = []
-            for episode_key, ranges in filter_dict.items():
-                # Ensure serialized ranges are always 2D [M, 2]
-                # Some entries may be a single [start, end] list → shape (2,)
-                arr = np.array(ranges, dtype=np.int32).reshape(-1, 2)
-                ep_keys.append(episode_key)
-                ranges_ser.append(tf.io.serialize_tensor(tf.constant(arr)).numpy())
+                ep_keys = []
+                ranges_ser = []
+                for episode_key, ranges in filter_dict.items():
+                    # Ensure serialized ranges are always 2D [M, 2]
+                    # Some entries may be a single [start, end] list → shape (2,)
+                    arr = np.array(ranges, dtype=np.int32).reshape(-1, 2)
+                    ep_keys.append(episode_key)
+                    ranges_ser.append(tf.io.serialize_tensor(tf.constant(arr)).numpy())
 
-            keys = tf.constant(ep_keys, dtype=tf.string)
-            vals = tf.constant(ranges_ser, dtype=tf.string)
-            filter_table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(keys, vals),
-                default_value=tf.constant(b"", dtype=tf.string),
-            )
-            print_memory_usage("After building filter_table (per-trajectory)")
+                keys = tf.constant(ep_keys, dtype=tf.string)
+                vals = tf.constant(ranges_ser, dtype=tf.string)
+                filter_table = tf.lookup.StaticHashTable(
+                    tf.lookup.KeyValueTensorInitializer(keys, vals),
+                    default_value=tf.constant(b"", dtype=tf.string),
+                )
+                print_memory_usage("After building filter_table (per-trajectory)")
+
+            else:
+                keys_tensor = []
+                values_tensor = []
+
+                for episode_key, ranges in filter_dict.items():
+                    for start, end in ranges:
+                        for t in range(start, end):
+                            frame_key = f"{episode_key}--{t}"
+                            keys_tensor.append(frame_key)
+                            values_tensor.append(True)
+                filter_table = tf.lookup.StaticHashTable(
+                    tf.lookup.KeyValueTensorInitializer(keys_tensor, values_tensor),
+                    default_value=False,
+                )
+                print_memory_usage("After building filter_table (per-step)")
+        logging.info("Filter hash table initialized")
 
         return filter_table
 
@@ -622,27 +640,38 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             }
 
             if self.use_idle_filter:
-                # episode-level ranges lookup; compute per-step mask
-                # Ensure scalar episode key (metadata fields may be length-1 vectors)
-                rec_path = traj["traj_metadata"]["episode_metadata"]["recording_folderpath"][0]
-                file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
-                episode_key = rec_path + "--" + file_path
-                ranges_bytes = self.filter_table.lookup(episode_key)
+                if self.use_per_traj_filter:
+                    # episode-level ranges lookup; compute per-step mask
+                    # Ensure scalar episode key (metadata fields may be length-1 vectors)
+                    rec_path = traj["traj_metadata"]["episode_metadata"]["recording_folderpath"][0]
+                    file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+                    episode_key = rec_path + "--" + file_path
+                    ranges_bytes = self.filter_table.lookup(episode_key)
 
-                def _compute_mask():
-                    ranges = tf.io.parse_tensor(ranges_bytes, out_type=tf.int32)  # [M, 2]
-                    t = tf.range(traj_len)[:, None]  # [T, 1]
-                    starts = tf.cast(ranges[:, 0][None, :], tf.int32)  # [1, M]
-                    ends = tf.cast(ranges[:, 1][None, :], tf.int32)  # [1, M]
-                    in_any = tf.reduce_any((t >= starts) & (t < ends), axis=1)  # [T]
-                    return in_any
+                    def _compute_mask():
+                        ranges = tf.io.parse_tensor(ranges_bytes, out_type=tf.int32)  # [M, 2]
+                        t = tf.range(traj_len)[:, None]  # [T, 1]
+                        starts = tf.cast(ranges[:, 0][None, :], tf.int32)  # [1, M]
+                        ends = tf.cast(ranges[:, 1][None, :], tf.int32)  # [1, M]
+                        in_any = tf.reduce_any((t >= starts) & (t < ends), axis=1)  # [T]
+                        return in_any
 
-                passes_filter = tf.cond(
-                    tf.greater(tf.strings.length(ranges_bytes), 0),
-                    _compute_mask,
-                    lambda: tf.zeros([traj_len], dtype=tf.bool),
-                )
-                _return_dict["passes_filter"] = passes_filter
+                    passes_filter = tf.cond(
+                        tf.greater(tf.strings.length(ranges_bytes), 0),
+                        _compute_mask,
+                        lambda: tf.zeros([traj_len], dtype=tf.bool),
+                    )
+                    _return_dict["passes_filter"] = passes_filter
+                else:
+                    step_id = (
+                        traj["traj_metadata"]["episode_metadata"]["recording_folderpath"]
+                        + "--"
+                        + traj["traj_metadata"]["episode_metadata"]["file_path"]
+                        + "--"
+                        + tf.as_string(tf.range(traj_len))
+                    )
+                    passes_filter = self.filter_table.lookup(step_id)
+                    _return_dict["passes_filter"] = passes_filter
 
             if self.need_calib:
                 intr = tf.io.parse_tensor(self.intr_table.lookup(episode_id), out_type=tf.float32)  # [4]
@@ -844,6 +873,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.need_calib = bool(config.vis_dataset or self.drop_gripper_oob)
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.skip_norm = bool(config.skip_norm)
+        self.use_per_traj_filter = bool(config.use_per_traj_filter)
 
         if self.spec.lang_action_dir_name in language_action_dir:
             metadata_path = language_action_dir.replace(self.spec.lang_action_dir_name, self.spec.metadata_path_name)
@@ -897,73 +927,6 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.apply_flatten()
 
         self.apply_frame_filters()
-
-
-class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
-    def __init__(
-        self,
-        data_dir: str,
-        batch_size: int,
-        shuffle: bool,  # noqa: FBT001
-        max_samples: int | None,
-        seed: int,
-        config: "CoTDataConfig",
-        split: str,
-        action_horizon: int,
-        action_normalization_type: NormalizationType = NormalizationType.NORMAL,
-    ):
-        # Initialize the base class with only the raw kwargs
-        super().__init__(
-            data_dir=data_dir,
-            language_action_dir=config.language_action_dir,
-            config=config,
-            split_seed=seed,
-            seed=seed,
-            split=split,
-            action_normalization_type=action_normalization_type,
-            action_chunk_size=action_horizon,
-        )
-
-        # Apply common shuffling/take/cache behavior
-        self.dataset = maybe_shuffle_and_take(
-            self.dataset,
-            want_val=self.want_val,
-            shuffle=shuffle,
-            shuffle_buffer_size=config.shuffle_buffer_size,
-            seed=seed,
-            max_samples=max_samples,
-        )
-
-        # Apply frame transforms via shared decode helper
-        self.apply_frame_transforms(use_wrist_image=config.use_wrist_image, resize_resolution=config.resize_resolution)
-
-        # Batch and prefetch
-        self.dataset = batch_prefetch(self.dataset, batch_size)
-
-    def apply_frame_transforms(self, use_wrist_image: bool, resize_resolution: tuple[int, int]):  # noqa: FBT001
-        # Retained for compatibility; use shared helper
-        decode_fn = make_decode_images_fn(
-            primary_key="exterior_image_1_left",
-            wrist_key="wrist_image_left",
-            use_wrist_image=use_wrist_image,
-            resize_to=resize_resolution,
-        )
-        self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
-
-    def __iter__(self):
-        it = self.dataset.as_numpy_iterator()
-        while True:
-            try:
-                batch = next(it)
-            except StopIteration:
-                logging.info("StopIteration")
-                return
-            yield batch
-
-    def __len__(self):
-        if not self.skip_norm:
-            return self.dataset_statistics["state"].num_transitions
-        return 2000000
 
 
 class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
@@ -1432,6 +1395,73 @@ class _OXECoTRldsDatasetsRaw:
     #         self.dataset = self.dataset.frame_map(aug, num_parallel_calls)
 
 
+class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
+    def __init__(
+        self,
+        data_dir: str,
+        batch_size: int,
+        shuffle: bool,  # noqa: FBT001
+        max_samples: int | None,
+        seed: int,
+        config: "CoTDataConfig",
+        split: str,
+        action_horizon: int,
+        action_normalization_type: NormalizationType = NormalizationType.NORMAL,
+    ):
+        # Initialize the base class with only the raw kwargs
+        super().__init__(
+            data_dir=data_dir,
+            language_action_dir=config.language_action_dir,
+            config=config,
+            split_seed=seed,
+            seed=seed,
+            split=split,
+            action_normalization_type=action_normalization_type,
+            action_chunk_size=action_horizon,
+        )
+
+        # Apply common shuffling/take/cache behavior
+        self.dataset = maybe_shuffle_and_take(
+            self.dataset,
+            want_val=self.want_val,
+            shuffle=shuffle,
+            shuffle_buffer_size=config.shuffle_buffer_size,
+            seed=seed,
+            max_samples=max_samples,
+        )
+
+        # Apply frame transforms via shared decode helper
+        self.apply_frame_transforms(use_wrist_image=config.use_wrist_image, resize_resolution=config.resize_resolution)
+
+        # Batch and prefetch
+        self.dataset = batch_prefetch(self.dataset, batch_size)
+
+    def apply_frame_transforms(self, use_wrist_image: bool, resize_resolution: tuple[int, int]):  # noqa: FBT001
+        # Retained for compatibility; use shared helper
+        decode_fn = make_decode_images_fn(
+            primary_key="exterior_image_1_left",
+            wrist_key="wrist_image_left",
+            use_wrist_image=use_wrist_image,
+            resize_to=resize_resolution,
+        )
+        self.dataset = self.dataset.frame_map(decode_fn, self.num_parallel_calls)
+
+    def __iter__(self):
+        it = self.dataset.as_numpy_iterator()
+        while True:
+            try:
+                batch = next(it)
+            except StopIteration:
+                logging.info("StopIteration")
+                return
+            yield batch
+
+    def __len__(self):
+        if not self.skip_norm:
+            return self.dataset_statistics["state"].num_transitions
+        return 2000000
+
+
 class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
     def __init__(
         self,
@@ -1522,8 +1552,6 @@ class CombinedCoTRldsDataset:
             action_proprio_normalization_type=action_proprio_normalization_type,
             align_oxe_fmt=True,
         )
-
-        breakpoint()
 
         oxe = _OXECoTRldsDatasetsRaw(
             config=config,
