@@ -5,3 +5,4 @@ tpu_scripts/
 most_similar_out/
 *.mp4
 .vscode/
+uv.lock

@@ -21,6 +21,7 @@ import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
+import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
 import openpi_cot.training.weight_loaders as weight_loaders
@@ -293,6 +294,38 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class VQADataConfig(RLDSCoTDataConfig):
+    """
+    Config for VQA evaluation.
+    """
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        base_cfg = self.create_base_config(assets_dirs, model_config)
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                vqa_policy.VQAInputs(
+                    model_type=model_config.model_type,
+                )
+            ],
+            outputs=[vqa_policy.VQAOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory(
+            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
+        )(model_config)
+
+        return dataclasses.replace(
+            base_cfg,
+            # repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig(upstream_config.TrainConfig):
     # Overide
     project_name: str = "openpi-cot"
@@ -305,6 +338,7 @@ class TrainConfig(upstream_config.TrainConfig):
     save_interval = 500
     log_interval = 50
     keep_period = 10000
+    resume = True
     # New field
     do_val: bool = True
 
@@ -328,7 +362,7 @@ _CONFIGS = [
     build_droid_cfg("v4", fsdp_devices=4, batch_size=256),
     build_droid_cfg("v5", fsdp_devices=8, batch_size=256),
     build_droid_cfg("v6", fsdp_devices=8, batch_size=256),
-    build_droid_cfg("local", fsdp_devices=4, batch_size=256),
+    build_droid_cfg("local", fsdp_devices=1, batch_size=4),
     TrainConfig(
         name="pi_oxe_cot_v4",
         data=RLDSCoTDataConfig(
@@ -406,6 +440,23 @@ _CONFIGS = [
             asset_id="droid",
             dataset_type="droid",
         ),
+    ),
+    TrainConfig(
+        name="pi05_vqa_local",
+        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=360),
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="/n/fs/robot-data/data/",
+            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="/n/fs/robot-data/data/",
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]

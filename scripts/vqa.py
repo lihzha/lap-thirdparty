@@ -9,13 +9,71 @@ try:
     import tensorflow_datasets as tfds  # type: ignore
 except Exception:  # pragma: no cover - optional at runtime
     tfds = None  # type: ignore
+from typing import Any
+
+import flax.nnx as nnx
+import flax.traverse_util as traverse_util
+import jax
+import jax.numpy as jnp
 from openpi.policies import policy as _policy
-from openpi.policies import policy_config as upstream_policy_config
+import openpi.shared.array_typing as at
+import openpi.shared.nnx_utils as nnx_utils
 from tqdm import tqdm
 import tyro
 
 import openpi_cot.policies.adapters.policy_config_adapter as _policy_config
 from openpi_cot.training import config as _config
+import openpi_cot.training.weight_loaders as _weight_loaders
+
+
+def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
+    """Loads and validates the weights. Returns a loaded subset of the weights."""
+    loaded_params = loader.load(params_shape)
+    at.check_pytree_equality(expected=params_shape, got=loaded_params, check_shapes=True, check_dtypes=True)
+
+    # Remove jax.ShapeDtypeStruct from the loaded params. This makes sure that only the loaded params are returned.
+    return traverse_util.unflatten_dict(
+        {k: v for k, v in traverse_util.flatten_dict(loaded_params).items() if not isinstance(v, jax.ShapeDtypeStruct)}
+    )
+
+
+def init_model(
+    config: _config.TrainConfig,
+    init_rng: at.KeyArrayLike,
+) -> Any:
+    rng, model_rng = jax.random.split(init_rng)
+    # initialize the model (and its parameters).
+    model = config.model.create(model_rng)
+
+    # Get the state and load partial params
+    graphdef, state = nnx.split(model)
+    partial_params = _load_weights_and_validate(config.weight_loader, state.to_pure_dict())
+
+    # Replace the state with partial params (this modifies state in place)
+    state.replace_by_pure_dict(partial_params)
+
+    # Merge the updated state back into the model
+    model = nnx.merge(graphdef, state)
+
+    # Apply frozen param conversion to bfloat16 (replicating train.py behavior)
+    params = nnx.state(model)
+    params = nnx_utils.state_map(
+        params,
+        config.freeze_filter,
+        lambda p: p.replace(p.value.astype(jnp.bfloat16)),
+    )
+
+    # Update the model with the converted params
+    nnx.update(model, params)
+
+    return model
+
+
+def create_model(config):
+    rng = jax.random.key(config.seed)
+    _, init_rng = jax.random.split(rng)
+    model = init_model(config, init_rng)
+    return model
 
 
 class EnvMode(enum.Enum):
@@ -65,7 +123,6 @@ class Args:
     droid_data_dir: str = "/n/fs/robot-data/data"
     droid_split: str = "all"
     droid_max_examples: int = 100
-    paligemma_path: str | None = None
 
 
 # Default checkpoints that should be used for each environment.
@@ -98,26 +155,15 @@ def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) ->
     raise ValueError(f"Unsupported environment mode: {env}")
 
 
-def create_policy(args: Args) -> _policy.Policy:
+def create_policy(args: Args, model=None) -> _policy.Policy:
     """Create a policy from the given arguments."""
-    match args.policy:
-        case Checkpoint():
-            if "cot" in args.policy.config:
-                if args.paligemma_path:
-                    return _policy_config.create_trained_policy_cot_paligemma(
-                        _config.get_config(args.policy.config),
-                        args.policy.dir,
-                        default_prompt=args.default_prompt,
-                        paligemma_path=args.paligemma_path,
-                    )
-                return _policy_config.create_trained_policy_cot(
-                    _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
-                )
-            return upstream_policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
-            )
-        case Default():
-            return create_default_policy(args.env, default_prompt=args.default_prompt)
+    if model is not None:
+        return _policy_config.create_trained_policy_from_model(
+            model, _config.get_config(args.policy.config), default_prompt=args.default_prompt
+        )
+    return _policy_config.create_trained_policy_cot(
+        _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+    )
 
 
 def _iter_droid_request_data(data_dir: str, split: str, *, prompt: str | None = None) -> Iterator[dict]:
@@ -167,7 +213,8 @@ def _iter_droid_request_data(data_dir: str, split: str, *, prompt: str | None = 
 
 
 def main(args: Args) -> None:
-    policy = create_policy(args)
+    # model = create_model(_config.get_config(args.policy.config))
+    policy = create_policy(args, model=None)
 
     if tfds is None:
         raise ImportError("Please install tensorflow_datasets to use the DROID dataloader.")
@@ -185,18 +232,6 @@ def main(args: Args) -> None:
         print({"request_keys": list(req.keys()), "text": outputs.get("reasoning")})
         if idx + 1 >= args.droid_max_examples:
             break
-    # else:
-    #     image = imageio.imread("obs_0.jpg")
-    #     request_data = {
-    #         "observation/exterior_image_1_left": image,
-    #         "observation/wrist_image_left": image,
-    #         "observation/joint_position": np.zeros(7),
-    #         "observation/gripper_position": np.random.rand(1),
-    #         "prompt": args.default_prompt or "what is in the image?",
-    #     }
-
-    #     outputs = policy.vqa_infer(request_data)
-    #     print(outputs)
 
 
 if __name__ == "__main__":
