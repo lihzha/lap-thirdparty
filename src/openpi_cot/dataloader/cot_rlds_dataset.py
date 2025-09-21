@@ -1523,6 +1523,8 @@ class CombinedCoTRldsDataset:
             align_oxe_fmt=True,
         )
 
+        breakpoint()
+
         oxe = _OXECoTRldsDatasetsRaw(
             config=config,
             data_dir=data_dir,
