@@ -193,7 +193,7 @@ class DroidDatasetSpec:
     default_action_encoding: ActionEncoding = ActionEncoding.ABS_EEF_POS
 
 
-class SingleCoTRldsDatasetRaw:
+class _SingleCoTRldsDatasetRaw:
     fallback_instructions = tf.constant(
         [
             "Do something useful.",
@@ -301,7 +301,7 @@ class SingleCoTRldsDatasetRaw:
         self.dataset = self.dataset.filter(_split_filter)
 
 
-class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
+class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
     spec: ClassVar[DroidDatasetSpec] = DroidDatasetSpec()
 
     def _episode_id_from_traj(self, traj, ep_table):
@@ -609,10 +609,10 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
             )
 
             _return_dict = {
-                "actions": actions,
+                "actions": tf.cast(actions, tf.float32),
                 "observation": {
                     "exterior_image_1_left": exterior_img,
-                    "state": state,
+                    "state": tf.cast(state, tf.float32),
                     "cartesian_position": traj["observation"]["cartesian_position"],  # for need_calib
                 },
                 "prompt": instruction_vec,
@@ -899,7 +899,7 @@ class DroidCoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.apply_frame_filters()
 
 
-class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
+class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
     def __init__(
         self,
         data_dir: str,
@@ -966,7 +966,7 @@ class DroidCoTRldsDataset(DroidCoTRldsDatasetRaw):
         return 2000000
 
 
-class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
+class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
     """
 
     New features:
@@ -1297,7 +1297,7 @@ class SingleOXECoTRldsDatasetRaw(SingleCoTRldsDatasetRaw):
         self.dataset = self.dataset.traj_map(repack_transforms, self.num_parallel_calls)
 
 
-class OXECoTRldsDatasetsRaw:
+class _OXECoTRldsDatasetsRaw:
     def __init__(
         self,
         config: "CoTDataConfig",
@@ -1352,7 +1352,7 @@ class OXECoTRldsDatasetsRaw:
                 reads_per_dataset,
             ):
             # Pass only accepted args to SingleOXECoTRldsDataset
-            ds = SingleOXECoTRldsDatasetRaw(
+            ds = _SingleOXECoTRldsDatasetRaw(
                 dataset_name=dataset_kwargs["name"],
                 data_dir=dataset_kwargs["data_dir"],
                 config=config,
@@ -1432,7 +1432,7 @@ class OXECoTRldsDatasetsRaw:
     #         self.dataset = self.dataset.frame_map(aug, num_parallel_calls)
 
 
-class OXECoTRldsDatasets(OXECoTRldsDatasetsRaw):
+class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
     def __init__(
         self,
         data_dir: str,
@@ -1511,7 +1511,7 @@ class CombinedCoTRldsDataset:
         balance_weights: bool = False,  # noqa: FBT001, FBT002
     ):
         # Build sub-datasets with only their required args
-        droid = DroidCoTRldsDatasetRaw(
+        droid = _DroidCoTRldsDatasetRaw(
             data_dir=config.droid_rlds_data_dir if config.droid_rlds_data_dir is not None else data_dir,
             language_action_dir=config.language_action_dir,
             config=config,
@@ -1523,7 +1523,7 @@ class CombinedCoTRldsDataset:
             align_oxe_fmt=True,
         )
 
-        oxe = OXECoTRldsDatasetsRaw(
+        oxe = _OXECoTRldsDatasetsRaw(
             config=config,
             data_dir=data_dir,
             data_mix=config.data_mix,
