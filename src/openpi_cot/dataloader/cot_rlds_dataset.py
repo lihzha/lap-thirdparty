@@ -492,13 +492,12 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
     def build_filter_table(self, metadata_path, use_idle_filter: bool):
         filter_table = None
         if use_idle_filter:
+            # Store per-trajectory ranges, not per-step flags
+            with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.keep_ranges_file}", "r") as f:
+                filter_dict = json.load(f)
+            logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
+
             if self.use_per_traj_filter:
-                # Store per-trajectory ranges, not per-step flags
-                with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.keep_ranges_file}", "r") as f:
-                    filter_dict = json.load(f)
-
-                logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
-
                 ep_keys = []
                 ranges_ser = []
                 for episode_key, ranges in filter_dict.items():
