@@ -404,7 +404,7 @@ _CONFIGS = [
             language_action_dir="gs://pi0-cot/droid-base-lang-actions",
             data_mix="oxe_pi_magic_soup",
             droid_weight=2.0,
-            shuffle_buffer_size=400_000,
+            shuffle_buffer_size=300_000,
         ),
         fsdp_devices=4,
         batch_size=256,
