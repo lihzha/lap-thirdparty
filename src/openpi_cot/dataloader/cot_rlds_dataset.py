@@ -1186,6 +1186,18 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 self.num_parallel_calls,
             )
 
+        def pad_action_state(traj):
+            # pad actions to action_dim
+            traj["action"] = tf.pad(traj["action"], [[0, 0], [0, self.action_dim - tf.shape(traj["action"])[-1]]])
+            # pad state to action_dim
+            traj["observation"]["proprio"] = tf.pad(
+                traj["observation"]["proprio"],
+                [[0, 0], [0, self.action_dim - tf.shape(traj["observation"]["proprio"])[-1]]],
+            )
+            return traj
+
+        self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
+
         def chunk_actions(traj):
             """Splits episode into action chunks using shared indexing utility."""
             traj_len = tf.shape(traj["action"])[0]
@@ -1237,18 +1249,6 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             return traj
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
-
-        def pad_action_state(traj):
-            # pad actions to action_dim
-            traj["action"] = tf.pad(traj["action"], [[0, 0], [0, self.action_dim - tf.shape(traj["action"])[-1]]])
-            # pad state to action_dim
-            traj["observation"]["proprio"] = tf.pad(
-                traj["observation"]["proprio"],
-                [[0, 0], [0, self.action_dim - tf.shape(traj["observation"]["proprio"])[-1]]],
-            )
-            return traj
-
-        self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
 
     def apply_frame_filters(
         self,
