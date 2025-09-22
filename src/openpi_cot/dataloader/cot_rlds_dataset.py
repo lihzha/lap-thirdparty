@@ -773,6 +773,18 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
+        def pad_action_state(traj):
+            # pad actions to action_dim
+            traj["actions"] = tf.pad(traj["actions"], [[0, 0], [0, self.action_dim - tf.shape(traj["actions"])[-1]]])
+            # pad state to action_dim
+            traj["observation"]["state"] = tf.pad(
+                traj["observation"]["state"],
+                [[0, 0], [0, self.action_dim - tf.shape(traj["observation"]["state"])[-1]]],
+            )
+            return traj
+
+        self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
+
     def apply_frame_filters(self):
         if self.use_idle_filter:
 
@@ -845,6 +857,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         config: "CoTDataConfig",
         *,  # Force keyword-only arguments
         action_chunk_size: int = 16,
+        action_dim: int = 32,
         # Reduce this if you are running out of memory, but careful -- below ~100k shuffling is not sufficiently random.
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
@@ -866,6 +879,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             seed=seed,
             split=split,
         )
+        self.action_dim = action_dim
         self.use_wrist_image = bool(config.use_wrist_image)
         self.use_idle_filter = bool(config.use_idle_filter)
         self.drop_gripper_oob = bool(config.drop_gripper_oob)
@@ -948,6 +962,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         dataset_kwargs: dict,
         *,  # Force keyword-only arguments
         action_chunk_size: int = 16,
+        action_dim: int = 32,
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         split_seed: int = 0,
@@ -965,6 +980,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             seed=seed,
             split=split,
         )
+        self.action_dim = action_dim
         self.standardize_fn = dataset_kwargs["standardize_fn"]
         self.image_obs_keys = dataset_kwargs["image_obs_keys"]
         self.state_obs_keys = dataset_kwargs["state_obs_keys"]
@@ -1222,6 +1238,18 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
+        def pad_action_state(traj):
+            # pad actions to action_dim
+            traj["action"] = tf.pad(traj["action"], [[0, 0], [0, self.action_dim - tf.shape(traj["action"])[-1]]])
+            # pad state to action_dim
+            traj["observation"]["proprio"] = tf.pad(
+                traj["observation"]["proprio"],
+                [[0, 0], [0, self.action_dim - tf.shape(traj["observation"]["proprio"])[-1]]],
+            )
+            return traj
+
+        self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
+
     def apply_frame_filters(
         self,
         chunk_filter_fn: Callable | None = None,
@@ -1259,6 +1287,7 @@ class _OXECoTRldsDatasetsRaw:
         config: "CoTDataConfig",
         data_dir: str,
         data_mix: str,
+        action_dim: int = 32,
         action_chunk_size: int = 16,
         split_seed: int = 0,
         seed: int = 0,
@@ -1321,6 +1350,7 @@ class _OXECoTRldsDatasetsRaw:
                 split=split,
                 global_state_encoding=config.state_encoding,
                 global_action_encoding=config.action_encoding,
+                action_dim=action_dim,
             )
             datasets.append(ds.dataset)
             if not ds.skip_norm:
@@ -1399,6 +1429,7 @@ class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
         config: "CoTDataConfig",
         split: str,
         action_horizon: int,
+        action_dim: int,
         action_normalization_type: NormalizationType = NormalizationType.NORMAL,
     ):
         # Initialize the base class with only the raw kwargs
@@ -1411,6 +1442,7 @@ class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
             split=split,
             action_normalization_type=action_normalization_type,
             action_chunk_size=action_horizon,
+            action_dim=action_dim,
         )
 
         # Apply common shuffling/take/cache behavior
@@ -1466,6 +1498,7 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
         config: "CoTDataConfig",
         split: str,
         action_horizon: int,
+        action_dim: int = 32,
         balance_weights: bool = True,  # noqa: FBT001, FBT002
     ):
         super().__init__(
@@ -1475,6 +1508,7 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
             batch_size=batch_size,
             shuffle=shuffle,
             action_chunk_size=action_horizon,
+            action_dim=action_dim,
             split_seed=seed,
             seed=seed,
             split=split,
@@ -1530,6 +1564,7 @@ class CombinedCoTRldsDataset:
         config: "CoTDataConfig",
         split: str,
         action_horizon: int,
+        action_dim: int = 32,
         action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
         balance_weights: bool = False,  # noqa: FBT001, FBT002
     ):
@@ -1539,6 +1574,7 @@ class CombinedCoTRldsDataset:
             language_action_dir=config.language_action_dir,
             config=config,
             action_chunk_size=action_horizon,
+            action_dim=action_dim,
             split_seed=seed,
             seed=seed,
             split=split,
@@ -1551,6 +1587,7 @@ class CombinedCoTRldsDataset:
             data_dir=data_dir,
             data_mix=config.data_mix,
             action_chunk_size=action_horizon,
+            action_dim=action_dim,
             split_seed=seed,
             seed=seed,
             split=split,

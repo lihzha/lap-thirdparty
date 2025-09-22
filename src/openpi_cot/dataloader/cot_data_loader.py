@@ -20,6 +20,7 @@ def _create_rlds_dataset(
     data_cfg: _config.CoTDataConfig,
     batch_size: int,
     action_horizon: int,
+    action_dim: int,
     *,
     shuffle: bool,
     seed: int,
@@ -59,6 +60,7 @@ def _create_rlds_dataset(
         config=data_cfg,
         split=split,
         action_horizon=action_horizon,
+        action_dim=action_dim,
     )
 
 
@@ -115,7 +117,7 @@ def create_data_loader(
     if config.data.repo_id not in (None, "fake") and config.data.rlds_data_dir is None:
         os.environ.pop("LEROBOT_HOME", None)
 
-    data_cfg = config.data.create(config.assets_dirs, config.model)
+    data_cfg: _config.CoTDataConfig = config.data.create(config.assets_dirs, config.model)
     logging.info("data_config: %s", data_cfg)
 
     # If RLDS, follow the RLDS path with our two hooks; else, fall back to upstream torch loader
@@ -125,9 +127,10 @@ def create_data_loader(
 
         # 1) dataset
         ds = _create_rlds_dataset(
-            data_cfg,
-            config.batch_size,
-            config.model.action_horizon,
+            data_cfg=data_cfg,
+            batch_size=config.batch_size,
+            action_horizon=config.model.action_horizon,
+            action_dim=config.model.action_dim,
             shuffle=shuffle,
             seed=seed,
             max_samples=max_samples if max_samples is not None else getattr(data_cfg, "max_samples", None),

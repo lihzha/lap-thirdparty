@@ -1,4 +1,5 @@
 from enum import IntEnum
+import logging
 
 import numpy as np
 import tensorflow as tf
@@ -127,7 +128,9 @@ def convert_state_encoding(state: tf.Tensor, from_encoding: StateEncoding, to_en
         return _convert_pos_to_eef_r6(state, from_encoding)
     if from_encoding == StateEncoding.EEF_R6 and to_encoding in {StateEncoding.POS_EULER, StateEncoding.POS_QUAT}:
         return _convert_eef_r6_to_pos(state, to_encoding)
-    raise ValueError(f"Unsupported state encoding conversion: {from_encoding} -> {to_encoding}")
+    # raise ValueError(f"Unsupported state encoding conversion: {from_encoding} -> {to_encoding}")
+    logging.warning(f"Unsupported state encoding conversion: {from_encoding} -> {to_encoding}")
+    return state
 
 
 def convert_action_encoding(action: tf.Tensor, from_encoding: ActionEncoding, to_encoding: ActionEncoding) -> tf.Tensor:
