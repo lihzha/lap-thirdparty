@@ -74,7 +74,7 @@ def preprocess_observation(
     train: bool = False,
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = _model.IMAGE_RESOLUTION,
-    aug_wrist: bool = True,
+    aug_wrist: bool = False,
 ) -> CoTObservation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).

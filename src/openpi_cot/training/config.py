@@ -154,7 +154,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
     use_idle_filter: bool = True
-    use_per_traj_filter: bool = True
+    use_per_traj_filter: bool = False
     # If true, will drop samples where projected gripper is outside the resized image bounds.
     drop_gripper_oob: bool = False
     language_action_dir: str | None = None
@@ -444,7 +444,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_vqa_local",
-        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=360),
+        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
         data=VQADataConfig(
             repo_id="droid",
             asset_id="droid",
