@@ -150,7 +150,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     state_encoding: StateEncoding = StateEncoding.POS_EULER
     action_encoding: ActionEncoding = ActionEncoding.ABS_EEF_POS
     resize_resolution: tuple[int, int] = (224, 224)
-    skip_norm: bool = True
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False

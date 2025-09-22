@@ -694,16 +694,15 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         action_chunk_size: int,
         summation_steps: int,
     ):
-        if not self.skip_norm:
-            self.dataset = self.dataset.traj_map(
-                NormalizeActionAndProprio(
-                    norm_stats=self.dataset_statistics,
-                    normalization_type=self.action_proprio_normalization_type,
-                    action_key="actions",
-                    state_key="state",
-                ),
-                self.num_parallel_calls,
-            )
+        self.dataset = self.dataset.traj_map(
+            NormalizeActionAndProprio(
+                norm_stats=self.dataset_statistics,
+                normalization_type=self.action_proprio_normalization_type,
+                action_key="actions",
+                state_key="state",
+            ),
+            self.num_parallel_calls,
+        )
 
         def pad_action_state(traj):
             # pad actions to action_dim
@@ -885,7 +884,6 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.drop_gripper_oob = bool(config.drop_gripper_oob)
         self.need_calib = bool(config.vis_dataset or self.drop_gripper_oob)
         self.action_proprio_normalization_type = action_proprio_normalization_type
-        self.skip_norm = bool(config.skip_norm)
         self.use_per_traj_filter = bool(config.use_per_traj_filter)
 
         if self.spec.lang_action_dir_name in language_action_dir:
@@ -905,29 +903,24 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.instr_table = self.build_instr_table(metadata_path)
         self.filter_table = self.build_filter_table(metadata_path, use_idle_filter=self.use_idle_filter)
 
-        if not self.skip_norm:
-            cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
-            if cached_stats is not None:
-                # Prefer early filtering when stats are already available to reduce downstream work.
-                self.apply_traj_filters()
-                self.split_val(split_seed=split_seed)
-                self.apply_restructure()
-                self.dataset_statistics = cached_stats
-            else:
-                # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
-                self.apply_restructure()
-                self.dataset_statistics = get_dataset_statistics(
-                    self.dataset,
-                    save_dir=self.builder.data_dir,
-                    action_key="actions",
-                    state_key="state",
-                )
-                self.apply_traj_filters()
-                self.split_val(split_seed=split_seed)
-        else:
+        cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
+        if cached_stats is not None:
+            # Prefer early filtering when stats are already available to reduce downstream work.
             self.apply_traj_filters()
             self.split_val(split_seed=split_seed)
             self.apply_restructure()
+            self.dataset_statistics = cached_stats
+        else:
+            # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
+            self.apply_restructure()
+            self.dataset_statistics = get_dataset_statistics(
+                self.dataset,
+                save_dir=self.builder.data_dir,
+                action_key="actions",
+                state_key="state",
+            )
+            self.apply_traj_filters()
+            self.split_val(split_seed=split_seed)
 
         self.apply_traj_transforms(
             action_chunk_size=action_chunk_size,
@@ -996,32 +989,26 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         assert "wrist" in self.image_obs_keys, "wrist image is required"
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
-        self.skip_norm = bool(config.skip_norm)
 
         logging.info(f"Dataset kwargs: {dataset_kwargs}")
 
-        if not self.skip_norm:
-            cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
-            if cached_stats is not None:
-                # Prefer early filtering when stats are already available to reduce downstream work.
-                self.apply_traj_filters()
-                self.apply_restructure(use_wrist_image=config.use_wrist_image)
-                self.split_val(split_seed=split_seed)
-                self.dataset_statistics = cached_stats
-            else:
-                # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
-                self.apply_restructure(use_wrist_image=config.use_wrist_image)
-                self.dataset_statistics = get_dataset_statistics(
-                    self.dataset,
-                    save_dir=self.builder.data_dir,
-                    action_key="action",
-                    state_key="proprio",
-                )
-                self.apply_traj_filters()
-                self.split_val(split_seed=split_seed)
-        else:
+        cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
+        if cached_stats is not None:
+            # Prefer early filtering when stats are already available to reduce downstream work.
             self.apply_traj_filters()
             self.apply_restructure(use_wrist_image=config.use_wrist_image)
+            self.split_val(split_seed=split_seed)
+            self.dataset_statistics = cached_stats
+        else:
+            # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
+            self.apply_restructure(use_wrist_image=config.use_wrist_image)
+            self.dataset_statistics = get_dataset_statistics(
+                self.dataset,
+                save_dir=self.builder.data_dir,
+                action_key="action",
+                state_key="proprio",
+            )
+            self.apply_traj_filters()
             self.split_val(split_seed=split_seed)
 
         # dataset_statistics = tree_map(np.array, dataset_statistics)
@@ -1175,16 +1162,15 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         - drop_goal_or_instruction
         - subsample_length
         """
-        if not self.skip_norm:
-            self.dataset = self.dataset.traj_map(
-                NormalizeActionAndProprio(
-                    norm_stats=self.dataset_statistics,
-                    normalization_type=self.action_proprio_normalization_type,
-                    action_key="action",
-                    state_key="proprio",
-                ),
-                self.num_parallel_calls,
-            )
+        self.dataset = self.dataset.traj_map(
+            NormalizeActionAndProprio(
+                norm_stats=self.dataset_statistics,
+                normalization_type=self.action_proprio_normalization_type,
+                action_key="action",
+                state_key="proprio",
+            ),
+            self.num_parallel_calls,
+        )
 
         def pad_action_state(traj):
             # pad actions to action_dim
@@ -1353,10 +1339,9 @@ class _OXECoTRldsDatasetsRaw:
                 action_dim=action_dim,
             )
             datasets.append(ds.dataset)
-            if not ds.skip_norm:
-                dataset_statistics = ds.dataset_statistics
-                dataset_sizes.append(dataset_statistics["state"].num_transitions)
-                all_dataset_statistics[dataset_kwargs["name"]] = dataset_statistics
+            dataset_statistics = ds.dataset_statistics
+            dataset_sizes.append(dataset_statistics["state"].num_transitions)
+            all_dataset_statistics[dataset_kwargs["name"]] = dataset_statistics
 
         # Get the indices of the "primary" datasets (i.e., datasets with sample_weight == 1.0)
         # primary_dataset_indices = np.array([idx for idx in range(len(sample_weights)) if sample_weights[idx] == 1.0])
@@ -1370,17 +1355,11 @@ class _OXECoTRldsDatasetsRaw:
 
         # Effective Dataset Length = Number of samples until each dataset has completed at least one epoch
         #   =>> Note :: Only counting the "primary" datasets (i.e., datasets with sample_weight == 1.0)
-        if not config.skip_norm:
-            dataset_len = int((np.array(dataset_sizes) / sample_weights)[primary_dataset_indices].max())
-        else:
-            dataset_len = 2000000
+        dataset_len = int((np.array(dataset_sizes) / sample_weights)[primary_dataset_indices].max())
 
         self.sample_weights = sample_weights
         self.unnormalized_sample_weights = unnormalized_sample_weights
-        if not config.skip_norm:
-            self.dataset_statistics = all_dataset_statistics
-        else:
-            self.dataset_statistics = {}
+        self.dataset_statistics = all_dataset_statistics
         self.dataset_length = dataset_len
         self.datasets = datasets
 
@@ -1482,9 +1461,7 @@ class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
             yield batch
 
     def __len__(self):
-        if not self.skip_norm:
-            return self.dataset_statistics["state"].num_transitions
-        return 2000000
+        return self.dataset_statistics["state"].num_transitions
 
 
 class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
@@ -1566,7 +1543,7 @@ class CombinedCoTRldsDataset:
         action_horizon: int,
         action_dim: int = 32,
         action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
-        balance_weights: bool = False,  # noqa: FBT001, FBT002
+        balance_weights: bool = True,  # noqa: FBT001, FBT002
     ):
         # Build sub-datasets with only their required args
 
@@ -1600,14 +1577,10 @@ class CombinedCoTRldsDataset:
         want_val = split == "val"
         use_wrist_image = config.use_wrist_image
         all_datasets = [*oxe.datasets, droid.dataset]
-        if not config.skip_norm:
-            sample_weights = [
-                *oxe.unnormalized_sample_weights,
-                config.droid_weight * droid.dataset_statistics["state"].num_transitions,
-            ]
-        else:
-            assert balance_weights is False, "balance_weights must be False when skip_norm is True"
-            sample_weights = [*oxe.unnormalized_sample_weights, config.droid_weight]
+        sample_weights = [
+            *oxe.unnormalized_sample_weights,
+            config.droid_weight * droid.dataset_statistics["state"].num_transitions,
+        ]
         pprint_data_mixture([*oxe.dataset_names, "droid"], sample_weights)
 
         logging.info("Interleaving datasets...")
