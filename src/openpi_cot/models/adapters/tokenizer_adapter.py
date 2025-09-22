@@ -23,8 +23,28 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
         if state is not None:
             # This is the Pi05 format, where the state is part of the discrete language input.
-            discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-            state_str = " ".join(map(str, discretized_state))
+            # State vectors are padded with trailing zeros to action_dim in the dataset pipeline.
+            # Only include up to the last unpadded (non-zero) dimension when discretizing.
+            state_arr = np.asarray(state)
+            # Compute last non-zero column along the final axis (robust to 1D or ND inputs)
+            eps = 1e-8
+            if state_arr.ndim == 1:
+                non_zero_mask = np.abs(state_arr) > eps
+                last_idx = int(np.nonzero(non_zero_mask)[0][-1]) + 1 if np.any(non_zero_mask) else 0
+                last_idx = max(last_idx, 7)  # 7 is the smallest number of dimensions that is not padded
+                trimmed = state_arr[:last_idx]
+            else:
+                flat = state_arr.reshape(-1, state_arr.shape[-1])
+                non_zero_cols = np.any(np.abs(flat) > eps, axis=0)
+                last_idx = int(np.nonzero(non_zero_cols)[0][-1]) + 1 if np.any(non_zero_cols) else 0
+                last_idx = max(last_idx, 7)
+                trimmed = state_arr[..., :last_idx].reshape(-1)
+
+            if trimmed.size > 0:
+                discretized_state = np.digitize(trimmed, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
+                state_str = " ".join(map(str, discretized_state))
+            else:
+                state_str = ""
             cleaned_prompt = f"Task: {cleaned_prompt}, State: {state_str};\nAction: "
         # eos_id = self._tokenizer.eos_id()
         pad_id = self._tokenizer.pad_id()
