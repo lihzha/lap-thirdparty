@@ -26,40 +26,41 @@ from openpi_cot.dataloader.oxe_utils.data_utils import invert_gripper_actions
 from openpi_cot.dataloader.oxe_utils.data_utils import rel2abs_gripper_actions
 from openpi_cot.dataloader.oxe_utils.data_utils import relabel_bridge_actions
 
-# def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-#     """
-#     Applies to version of Bridge V2 in Open X-Embodiment mixture.
-
-#     Note =>> In original Bridge V2 dataset, the first timestep has an all-zero action, so we remove it!
-#     """
-#     for key in trajectory:
-#         if key == "traj_metadata":
-#             continue
-#         if key in ["observation", "action"]:
-#             for key2 in trajectory[key]:
-#                 trajectory[key][key2] = trajectory[key][key2][1:]
-#         else:
-#             trajectory[key] = trajectory[key][1:]
-
-#     trajectory["action"] = tf.concat(
-#         (
-#             trajectory["action"]["world_vector"],
-#             trajectory["action"]["rotation_delta"],
-#             tf.cast(trajectory["action"]["open_gripper"][:, None], tf.float32),
-#         ),
-#         axis=-1,
-#     )
-#     # print(trajectory.keys(), trajectory['observation'].keys())
-#     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
-#     trajectory = relabel_bridge_actions(trajectory)
-#     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
-#     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
-
-#     print("bridge", trajectory.keys())
-#     return trajectory
-
 
 def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    """
+    Applies to version of Bridge V2 in Open X-Embodiment mixture.
+
+    Note =>> In original Bridge V2 dataset, the first timestep has an all-zero action, so we remove it!
+    """
+    for key in trajectory:
+        if key == "traj_metadata":
+            continue
+        if key in ["observation", "action"]:
+            for key2 in trajectory[key]:
+                trajectory[key][key2] = trajectory[key][key2][1:]
+        else:
+            trajectory[key] = trajectory[key][1:]
+
+    trajectory["action"] = tf.concat(
+        (
+            trajectory["action"]["world_vector"],
+            trajectory["action"]["rotation_delta"],
+            tf.cast(trajectory["action"]["open_gripper"][:, None], tf.float32),
+        ),
+        axis=-1,
+    )
+    # print(trajectory.keys(), trajectory['observation'].keys())
+    trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
+    trajectory = relabel_bridge_actions(trajectory)
+    trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
+    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
+
+    print("bridge", trajectory.keys())
+    return trajectory
+
+
+def bridge_orig_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     """
     Applies to original version of Bridge V2 from the official project website.
 
@@ -880,8 +881,8 @@ def human_dataset_transform(sample: dict[str, Any]) -> dict[str, Any]:
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,
-    # "bridge_orig": bridge_orig_dataset_transform,
-    # "bridge_dataset": bridge_orig_dataset_transform,
+    "bridge_orig": bridge_orig_dataset_transform,
+    "bridge_dataset": bridge_orig_dataset_transform,
     "ppgm": ppgm_dataset_transform,
     "ppgm_static": ppgm_dataset_transform,
     "ppgm_wrist": ppgm_dataset_transform,
