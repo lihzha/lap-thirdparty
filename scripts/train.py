@@ -196,6 +196,7 @@ def train_step(
         actions: _model.Actions,
     ):
         per_sample_loss = model.compute_loss(rng, observation, actions, train=True)
+        breakpoint()
         # If model returns time/horizon dims, reduce to per-example
         while per_sample_loss.ndim > 1:
             per_sample_loss = jnp.mean(per_sample_loss, axis=-1)
