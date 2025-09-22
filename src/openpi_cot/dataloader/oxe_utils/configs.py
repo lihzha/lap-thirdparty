@@ -106,7 +106,7 @@ OXE_DATASET_CONFIGS = {
             "secondary": None,
             "wrist": "depth_gripper",
         },
-        "state_obs_keys": ["state_eef", None, "state_gripper"],
+        "state_obs_keys": ["state_eef", "state_gripper"],  # done
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },

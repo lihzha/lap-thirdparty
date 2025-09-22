@@ -1053,15 +1053,9 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                     new_obs[img_key] = old_obs[old]
 
             if self.state_obs_keys:
+                # Note: instead of padding with zeros, we drop the key if it is None
                 new_obs["proprio"] = tf.concat(
-                    [
-                        (
-                            tf.zeros((traj_len, 1), dtype=tf.float32)  # padding
-                            if key is None
-                            else tf.cast(old_obs[key], tf.float32)
-                        )
-                        for key in self.state_obs_keys
-                    ],
+                    [tf.cast(old_obs[key], tf.float32) for key in self.state_obs_keys if key is not None],
                     axis=1,
                 )
                 new_obs["proprio"] = convert_state_encoding(
