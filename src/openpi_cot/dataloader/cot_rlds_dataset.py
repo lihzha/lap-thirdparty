@@ -1569,18 +1569,6 @@ class CombinedCoTRldsDataset:
         balance_weights: bool = False,  # noqa: FBT001, FBT002
     ):
         # Build sub-datasets with only their required args
-        droid = _DroidCoTRldsDatasetRaw(
-            data_dir=config.droid_rlds_data_dir if config.droid_rlds_data_dir is not None else data_dir,
-            language_action_dir=config.language_action_dir,
-            config=config,
-            action_chunk_size=action_horizon,
-            action_dim=action_dim,
-            split_seed=seed,
-            seed=seed,
-            split=split,
-            action_proprio_normalization_type=action_proprio_normalization_type,
-            align_oxe_fmt=True,
-        )
 
         oxe = _OXECoTRldsDatasetsRaw(
             config=config,
@@ -1594,6 +1582,19 @@ class CombinedCoTRldsDataset:
             balance_weights=balance_weights,
             # TODO: support different normalization type within combined dataset
             # action_proprio_normalization_type=action_proprio_normalization_type,
+        )
+
+        droid = _DroidCoTRldsDatasetRaw(
+            data_dir=config.droid_rlds_data_dir if config.droid_rlds_data_dir is not None else data_dir,
+            language_action_dir=config.language_action_dir,
+            config=config,
+            action_chunk_size=action_horizon,
+            action_dim=action_dim,
+            split_seed=seed,
+            seed=seed,
+            split=split,
+            action_proprio_normalization_type=action_proprio_normalization_type,
+            align_oxe_fmt=True,
         )
 
         want_val = split == "val"
