@@ -27,7 +27,7 @@ from openpi_cot.dataloader.oxe_utils.data_utils import rel2abs_gripper_actions
 from openpi_cot.dataloader.oxe_utils.data_utils import relabel_bridge_actions
 
 
-def bridge_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     """
     Applies to version of Bridge V2 in Open X-Embodiment mixture.
 
@@ -880,7 +880,7 @@ def human_dataset_transform(sample: dict[str, Any]) -> dict[str, Any]:
 
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
-    "bridge_oxe": bridge_oxe_dataset_transform,
+    "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,
     "bridge_orig": bridge_orig_dataset_transform,
     "bridge_dataset": bridge_orig_dataset_transform,
     "ppgm": ppgm_dataset_transform,

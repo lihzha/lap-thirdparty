@@ -1,7 +1,7 @@
 OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     # === Bridge V2 Dataset ===
     "bridge": [
-        ("bridge_oxe", 1.0),  # Version of Bridge V2 in Open-X GCP Bucket
+        ("bridge_v2_oxe", 1.0),  # Version of Bridge V2 in Open-X GCP Bucket
         # ("bridge_orig", 1.0),                                   # Original Version of Bridge V2 from Project Website
     ],
     "droid": [
@@ -11,7 +11,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "omni_magic_soup_plus": [
         ("fractal20220817_data", 0.5),
         ("kuka", 0.1),
-        ("bridge_oxe", 1.0),
+        ("bridge_v2_oxe", 1.0),
         ("taco_play", 2.0),
         ("jaco_play", 1.0),
         ("berkeley_cable_routing", 1.0),
@@ -43,7 +43,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "oxe_pi_magic_soup": [
         # ("droid", 2.0),
         # ("aloha", 0.4),
-        # ("bridge_oxe", 0.1),
+        ("bridge_v2_oxe", 0.1),
         # ("fmb", 0.071),
         ("kuka", 0.05),
         ("taco_play", 0.030),
@@ -57,5 +57,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("jaco_play", 0.004),
         ("berkeley_cable_routing", 0.002),
         ("cmu_stretch", 0.002),
+        # New
+        ("fractal20220817_data", 0.1),
     ],
 }

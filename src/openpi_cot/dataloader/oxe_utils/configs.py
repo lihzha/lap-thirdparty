@@ -46,7 +46,7 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_QUAT,
         "action_encoding": ActionEncoding.EEF_POS,
     },
-    "bridge_oxe": {  # Version of Bridge V2 in Open X-Embodiment mixture
+    "bridge_v2_oxe": {  # Version of Bridge V2 in Open X-Embodiment mixture
         "image_obs_keys": {"primary": "image", "secondary": "image_1", "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["EEF_state", None, "gripper_state"],
