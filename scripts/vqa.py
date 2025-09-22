@@ -228,7 +228,6 @@ def main(args: Args) -> None:
         )
     ):
         outputs = policy.vqa_infer(req)
-        breakpoint()
         print({"request_keys": list(req.keys()), "text": outputs.get("reasoning")})
         if idx + 1 >= args.droid_max_examples:
             break
