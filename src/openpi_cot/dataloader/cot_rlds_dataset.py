@@ -1481,7 +1481,7 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
         action_dim: int = 32,
         balance_weights: bool = True,  # noqa: FBT001, FBT002
     ):
-        totoal_threads = len(os.sched_getaffinity(0))
+        total_threads = len(os.sched_getaffinity(0))
         want_val = split == "val"
         super().__init__(
             config=config,
@@ -1495,8 +1495,8 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
             seed=seed,
             split=split,
             balance_weights=balance_weights,
-            traj_transform_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
-            traj_read_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
+            traj_transform_threads=int(total_threads * 0.3) if not want_val else int(total_threads * 0.1),
+            traj_read_threads=int(total_threads * 0.3) if not want_val else int(total_threads * 0.1),
         )
         pprint_data_mixture(self.dataset_names, self.sample_weights)
 
@@ -1553,7 +1553,7 @@ class CombinedCoTRldsDataset:
         balance_weights: bool = True,  # noqa: FBT001, FBT002
     ):
         # Build sub-datasets with only their required args
-        totoal_threads = len(os.sched_getaffinity(0))
+        total_threads = len(os.sched_getaffinity(0))
         want_val = split == "val"
         
 
@@ -1569,8 +1569,8 @@ class CombinedCoTRldsDataset:
             balance_weights=balance_weights,
             # TODO: support different normalization type within combined dataset
             # action_proprio_normalization_type=action_proprio_normalization_type,
-            traj_transform_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
-            traj_read_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
+            traj_transform_threads=int(total_threads * 0.3) if not want_val else int(total_threads * 0.1),
+            traj_read_threads=int(total_threads * 0.3) if not want_val else int(total_threads * 0.1),
         )
         
 
@@ -1585,8 +1585,8 @@ class CombinedCoTRldsDataset:
             split=split,
             action_proprio_normalization_type=action_proprio_normalization_type,
             align_oxe_fmt=True,
-            num_parallel_reads=int(totoal_threads * 0.2) if not want_val else int(totoal_threads * 0.1),
-            num_parallel_calls=int(totoal_threads * 0.2) if not want_val else int(totoal_threads * 0.1),
+            num_parallel_reads=int(total_threads * 0.2) if not want_val else int(total_threads * 0.1),
+            num_parallel_calls=int(total_threads * 0.2) if not want_val else int(total_threads * 0.1),
         )
 
         use_wrist_image = config.use_wrist_image
@@ -1619,7 +1619,7 @@ class CombinedCoTRldsDataset:
             use_wrist_image=use_wrist_image,
             resize_to=config.resize_resolution,
         )
-        self.dataset = self.dataset.frame_map(decode_fn, totoal_threads * 0.5 if not want_val else totoal_threads * 0.1)
+        self.dataset = self.dataset.frame_map(decode_fn, int(total_threads * 0.5) if not want_val else int(total_threads * 0.1))
         
         self.dataset.sample_weights = sample_weights
         self.dataset_length = oxe.dataset_length
