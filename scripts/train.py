@@ -366,12 +366,6 @@ def main(config: _config.TrainConfig):
     effective_fsdp_devices = config.fsdp_devices
 
     logging.info(f"Running on: {platform.node()}")
-    ram = get_mem()
-    logging.info(f"Before init: RAM: {ram:.2f}GB")
-    wandb.log({
-        "sys/ram_gb": ram,
-        "sys/event": "start",
-    }, step=0)
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
 
@@ -398,6 +392,12 @@ def main(config: _config.TrainConfig):
         enabled=config.wandb_enabled,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
+    ram = get_mem()
+    logging.info(f"Before init: RAM: {ram:.2f}GB")
+    wandb.log({
+        "sys/ram_gb": ram,
+        "sys/event": "start",
+    }, step=0)
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
