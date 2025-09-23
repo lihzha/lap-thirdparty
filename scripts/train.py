@@ -45,35 +45,36 @@ def get_mem():
     proc = psutil.Process(os.getpid())
     ram_gb = proc.memory_info().rss / (1024 ** 3)  # RSS in GB
 
-    # --- TPU HBM (High Bandwidth Memory) ---
-    try:
-        # jax-smi CLI call (fast) - returns total HBM used across all TPU devices
-        out = subprocess.check_output(
-            ["jax-smi", "--bytes"], stderr=subprocess.DEVNULL
-        ).decode("utf-8")
+    # # --- TPU HBM (High Bandwidth Memory) ---
+    # try:
+    #     # jax-smi CLI call (fast) - returns total HBM used across all TPU devices
+    #     out = subprocess.check_output(
+    #         ["jax-smi", "--bytes"], stderr=subprocess.DEVNULL
+    #     ).decode("utf-8")
 
-        # Parse lines like: "TPU:0 | MEM: 12.34 GB"
-        tpu_mem_gb = 0.0
-        for line in out.splitlines():
-            if "HBM" in line or "MEM" in line:
-                parts = line.split()
-                for i, p in enumerate(parts):
-                    if p.upper() in ["HBM:", "MEM:"] and i + 1 < len(parts):
-                        try:
-                            val = float(parts[i+1])
-                            if "GB" in parts[i+2]:
-                                tpu_mem_gb += val
-                            elif "MB" in parts[i+2]:
-                                tpu_mem_gb += val / 1024
-                        except:
-                            continue
-        if tpu_mem_gb == 0:
-            raise ValueError("No TPU memory parsed.")
-    except Exception:
-        # Fallback: estimate using JAX runtime (less accurate but no external calls)
-        tpu_mem_gb = sum(d.memory_stats()['bytes_in_use'] for d in jax.devices()) / (1024 ** 3)
+    #     # Parse lines like: "TPU:0 | MEM: 12.34 GB"
+    #     tpu_mem_gb = 0.0
+    #     for line in out.splitlines():
+    #         if "HBM" in line or "MEM" in line:
+    #             parts = line.split()
+    #             for i, p in enumerate(parts):
+    #                 if p.upper() in ["HBM:", "MEM:"] and i + 1 < len(parts):
+    #                     try:
+    #                         val = float(parts[i+1])
+    #                         if "GB" in parts[i+2]:
+    #                             tpu_mem_gb += val
+    #                         elif "MB" in parts[i+2]:
+    #                             tpu_mem_gb += val / 1024
+    #                     except:
+    #                         continue
+    #     if tpu_mem_gb == 0:
+    #         raise ValueError("No TPU memory parsed.")
+    # except Exception:
+    #     # Fallback: estimate using JAX runtime (less accurate but no external calls)
+    #     tpu_mem_gb = sum(d.memory_stats()['bytes_in_use'] for d in jax.devices()) / (1024 ** 3)
 
-    return ram_gb, tpu_mem_gb
+    # return ram_gb, tpu_mem_gb
+    return ram_gb
 
 def init_logging():
     """Custom logging format for better readability."""
@@ -365,6 +366,11 @@ def main(config: _config.TrainConfig):
     effective_fsdp_devices = config.fsdp_devices
 
     logging.info(f"Running on: {platform.node()}")
+    ram = get_mem()
+    wandb.log({
+        "sys/ram_gb": ram,
+        "sys/event": "start",
+    }, step=0)
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
 
@@ -401,10 +407,9 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     
     
-    ram, tpu_mem = get_mem()
+    ram = get_mem()
     wandb.log({
         "sys/ram_gb": ram,
-        "sys/tpu_hbm_gb": tpu_mem,
         "sys/event": "before_get_batch",
     }, step=0)
     # if resuming and start_step > 0:
@@ -420,10 +425,9 @@ def main(config: _config.TrainConfig):
     # ]
     # wandb.log({"camera_views": images_to_log}, step=0)
     
-    ram, tpu_mem = get_mem()
+    ram = get_mem()
     wandb.log({
         "sys/ram_gb": ram,
-        "sys/tpu_hbm_gb": tpu_mem,
         "sys/event": "after_get_batch",
     }, step=0)
     
@@ -437,10 +441,9 @@ def main(config: _config.TrainConfig):
     jax.block_until_ready(train_state)
     
     
-    ram, tpu_mem = get_mem()
+    ram = get_mem()
     wandb.log({
         "sys/ram_gb": ram,
-        "sys/tpu_hbm_gb": tpu_mem,
         "sys/event": "after_init_train_state",
     }, step=0)
     
@@ -597,19 +600,17 @@ def main(config: _config.TrainConfig):
                 val_iter = iter(val_loader)
                 for val_step_idx in val_pbar:
                     if step == 0:
-                        ram, tpu_mem = get_mem()
+                        ram = get_mem()
                         wandb.log({
                             "sys/ram_gb": ram,
-                            "sys/tpu_hbm_gb": tpu_mem,
                             "sys/event": "val_before_next_iter",
                         }, step=step)
                     val_batch = next(val_iter)
                     val_info = pval_step(train_rng, train_state, val_batch)
                     if step == 0:
-                        ram, tpu_mem = get_mem()
+                        ram = get_mem()
                         wandb.log({
                             "sys/ram_gb": ram,
-                            "sys/tpu_hbm_gb": tpu_mem,
                             "sys/event": "val_after_pval_step",
                         }, step=step)
                     val_infos.append(val_info)
