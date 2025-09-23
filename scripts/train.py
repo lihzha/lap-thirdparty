@@ -367,6 +367,7 @@ def main(config: _config.TrainConfig):
 
     logging.info(f"Running on: {platform.node()}")
     ram = get_mem()
+    logging.info(f"Before init: RAM: {ram:.2f}GB")
     wandb.log({
         "sys/ram_gb": ram,
         "sys/event": "start",
@@ -408,6 +409,7 @@ def main(config: _config.TrainConfig):
     
     
     ram = get_mem()
+    logging.info(f"Before getting batch: RAM: {ram:.2f}GB")
     wandb.log({
         "sys/ram_gb": ram,
         "sys/event": "before_get_batch",
@@ -426,6 +428,7 @@ def main(config: _config.TrainConfig):
     # wandb.log({"camera_views": images_to_log}, step=0)
     
     ram = get_mem()
+    logging.info(f"After getting batch: RAM: {ram:.2f}GB")
     wandb.log({
         "sys/ram_gb": ram,
         "sys/event": "after_get_batch",
@@ -442,6 +445,7 @@ def main(config: _config.TrainConfig):
     
     
     ram = get_mem()
+    logging.info(f"After init train state: RAM: {ram:.2f}GB")
     wandb.log({
         "sys/ram_gb": ram,
         "sys/event": "after_init_train_state",
@@ -601,6 +605,7 @@ def main(config: _config.TrainConfig):
                 for val_step_idx in val_pbar:
                     if step == 0:
                         ram = get_mem()
+                        logging.info(f"Before first pval_step: RAM: {ram:.2f}GB")
                         wandb.log({
                             "sys/ram_gb": ram,
                             "sys/event": "val_before_next_iter",
@@ -609,6 +614,7 @@ def main(config: _config.TrainConfig):
                     val_info = pval_step(train_rng, train_state, val_batch)
                     if step == 0:
                         ram = get_mem()
+                        logging.info(f"After first pval_step: RAM: {ram:.2f}GB")
                         wandb.log({
                             "sys/ram_gb": ram,
                             "sys/event": "val_after_pval_step",
