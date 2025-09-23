@@ -65,7 +65,7 @@ def maybe_shuffle_and_take(
     takes that many samples and repeats indefinitely.
     """
     if (not want_val) and shuffle and max_samples is None:
-        return dataset.shuffle(shuffle_buffer_size, seed=seed)
+        return dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
     if max_samples is not None:
         return dataset.take(int(max_samples)).cache().repeat()
     return dataset
@@ -314,6 +314,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # ---------------------------------------------------------------------
         # 1. Language-action table (episode_id → serialized tensor)
         # ---------------------------------------------------------------------
+        print_memory_usage("Before building lang_action_table")
         features = {
             "episode_id": tf.io.FixedLenFeature([], tf.string),
             "lang_ser": tf.io.FixedLenFeature([], tf.string),
@@ -1309,8 +1310,8 @@ class _OXECoTRldsDatasetsRaw:
 
 
         # Allocate Threads based on Weights
-        threads_per_dataset = allocate_threads(traj_transform_threads, sample_weights)
-        reads_per_dataset = allocate_threads(traj_read_threads, sample_weights)
+        threads_per_dataset = allocate_threads(traj_transform_threads, np.array(sample_weights))
+        reads_per_dataset = allocate_threads(traj_read_threads, np.array(sample_weights))
 
         logging.info("Threads per Dataset: %s", threads_per_dataset)
         logging.info("Reads per Dataset: %s", reads_per_dataset)
@@ -1322,6 +1323,8 @@ class _OXECoTRldsDatasetsRaw:
                 threads_per_dataset,
                 reads_per_dataset,
             ):
+            assert threads != tf.data.AUTOTUNE, "threads should not be AUTOTUNE"
+            assert reads != tf.data.AUTOTUNE, "reads should not be AUTOTUNE"
             # Pass only accepted args to SingleOXECoTRldsDataset
             ds = _SingleOXECoTRldsDatasetRaw(
                 dataset_name=dataset_kwargs["name"],
@@ -1329,7 +1332,7 @@ class _OXECoTRldsDatasetsRaw:
                 config=config,
                 dataset_kwargs=dataset_kwargs,
                 action_chunk_size=action_chunk_size,
-                num_parallel_reads=reads,
+                num_parallel_reads=threads,
                 num_parallel_calls=threads,
                 split_seed=split_seed,
                 seed=seed,
@@ -1338,7 +1341,7 @@ class _OXECoTRldsDatasetsRaw:
                 global_action_encoding=config.action_encoding,
                 action_dim=action_dim,
             )
-            datasets.append(ds.dataset)
+            datasets.append(ds.dataset.with_ram_budget(1))
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_kwargs["name"]] = dataset_statistics
@@ -1478,6 +1481,8 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
         action_dim: int = 32,
         balance_weights: bool = True,  # noqa: FBT001, FBT002
     ):
+        totoal_threads = len(os.sched_getaffinity(0))
+        want_val = split == "val"
         super().__init__(
             config=config,
             data_dir=data_dir,
@@ -1490,12 +1495,14 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
             seed=seed,
             split=split,
             balance_weights=balance_weights,
+            traj_transform_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
+            traj_read_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
         )
         pprint_data_mixture(self.dataset_names, self.sample_weights)
 
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(self.datasets, self.sample_weights)
 
-        want_val = split == "val"
+        
 
         self.dataset = maybe_shuffle_and_take(
             self.dataset,
@@ -1546,6 +1553,9 @@ class CombinedCoTRldsDataset:
         balance_weights: bool = True,  # noqa: FBT001, FBT002
     ):
         # Build sub-datasets with only their required args
+        totoal_threads = len(os.sched_getaffinity(0))
+        want_val = split == "val"
+        
 
         oxe = _OXECoTRldsDatasetsRaw(
             config=config,
@@ -1559,7 +1569,10 @@ class CombinedCoTRldsDataset:
             balance_weights=balance_weights,
             # TODO: support different normalization type within combined dataset
             # action_proprio_normalization_type=action_proprio_normalization_type,
+            traj_transform_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
+            traj_read_threads=int(totoal_threads * 0.3) if not want_val else int(totoal_threads * 0.1),
         )
+        
 
         droid = _DroidCoTRldsDatasetRaw(
             data_dir=config.droid_rlds_data_dir if config.droid_rlds_data_dir is not None else data_dir,
@@ -1572,15 +1585,17 @@ class CombinedCoTRldsDataset:
             split=split,
             action_proprio_normalization_type=action_proprio_normalization_type,
             align_oxe_fmt=True,
+            num_parallel_reads=int(totoal_threads * 0.2) if not want_val else int(totoal_threads * 0.1),
+            num_parallel_calls=int(totoal_threads * 0.2) if not want_val else int(totoal_threads * 0.1),
         )
 
-        want_val = split == "val"
         use_wrist_image = config.use_wrist_image
         all_datasets = [*oxe.datasets, droid.dataset]
-        sample_weights = [
+        unnormalized_sample_weights = [
             *oxe.unnormalized_sample_weights,
             config.droid_weight * droid.dataset_statistics["state"].num_transitions,
         ]
+        sample_weights = unnormalized_sample_weights / np.sum(unnormalized_sample_weights)
         pprint_data_mixture([*oxe.dataset_names, "droid"], sample_weights)
 
         logging.info("Interleaving datasets...")
@@ -1602,26 +1617,15 @@ class CombinedCoTRldsDataset:
             primary_key="exterior_image_1_left",
             wrist_key="wrist_image_left",
             use_wrist_image=use_wrist_image,
+            resize_to=config.resize_resolution,
         )
-        self.dataset = self.dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
+        self.dataset = self.dataset.frame_map(decode_fn, totoal_threads * 0.5 if not want_val else totoal_threads * 0.1)
+        
         self.dataset.sample_weights = sample_weights
         self.dataset_length = oxe.dataset_length
         self.dataset_statistics = oxe.dataset_statistics
 
         self.dataset = batch_prefetch(self.dataset, batch_size)
-
-    def apply_frame_transforms(self, use_wrist_image: bool):  # noqa: FBT001
-        # Decode images: RLDS saves encoded images, only decode now for efficiency
-        def decode_images(traj):
-            def _decode_single(img_bytes):
-                return tf.io.decode_image(img_bytes, expand_animations=False, dtype=tf.uint8)
-
-            traj["observation"]["exterior_image_1_left"] = _decode_single(traj["observation"]["exterior_image_1_left"])
-            if use_wrist_image:
-                traj["observation"]["wrist_image_left"] = _decode_single(traj["observation"]["wrist_image_left"])
-            return traj
-
-        self.dataset = self.dataset.frame_map(decode_images, tf.data.AUTOTUNE)
 
     def __len__(self):
         return self.dataset_length

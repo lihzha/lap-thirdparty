@@ -30,7 +30,50 @@ import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.training.weight_loaders as _weight_loaders
+import psutil
+import subprocess
 
+
+def get_mem():
+    """
+    Returns:
+        ram (float): Host RAM usage in GB (RSS).
+        tpu_mem (float): TPU HBM memory usage in GB (sum across devices).
+    """
+
+    # --- Host RAM (Resident Set Size) ---
+    proc = psutil.Process(os.getpid())
+    ram_gb = proc.memory_info().rss / (1024 ** 3)  # RSS in GB
+
+    # --- TPU HBM (High Bandwidth Memory) ---
+    try:
+        # jax-smi CLI call (fast) - returns total HBM used across all TPU devices
+        out = subprocess.check_output(
+            ["jax-smi", "--bytes"], stderr=subprocess.DEVNULL
+        ).decode("utf-8")
+
+        # Parse lines like: "TPU:0 | MEM: 12.34 GB"
+        tpu_mem_gb = 0.0
+        for line in out.splitlines():
+            if "HBM" in line or "MEM" in line:
+                parts = line.split()
+                for i, p in enumerate(parts):
+                    if p.upper() in ["HBM:", "MEM:"] and i + 1 < len(parts):
+                        try:
+                            val = float(parts[i+1])
+                            if "GB" in parts[i+2]:
+                                tpu_mem_gb += val
+                            elif "MB" in parts[i+2]:
+                                tpu_mem_gb += val / 1024
+                        except:
+                            continue
+        if tpu_mem_gb == 0:
+            raise ValueError("No TPU memory parsed.")
+    except Exception:
+        # Fallback: estimate using JAX runtime (less accurate but no external calls)
+        tpu_mem_gb = sum(d.memory_stats()['bytes_in_use'] for d in jax.devices()) / (1024 ** 3)
+
+    return ram_gb, tpu_mem_gb
 
 def init_logging():
     """Custom logging format for better readability."""
@@ -174,6 +217,9 @@ def init_train_state(
         in_shardings=replicated_sharding,
         out_shardings=state_sharding,
     )(init_rng, partial_params)
+    
+    del partial_params
+    import gc; gc.collect()
 
     return train_state, state_sharding
 
@@ -197,8 +243,7 @@ def train_step(
     ):
         per_sample_loss = model.compute_loss(rng, observation, actions, train=True)
         # If model returns time/horizon dims, reduce to per-example
-        while per_sample_loss.ndim > 1:
-            per_sample_loss = jnp.mean(per_sample_loss, axis=-1)
+        # assert per_sample_loss.ndim < 1, "per_sample_loss should be a scalar"
         return jnp.mean(per_sample_loss), per_sample_loss
 
     train_rng = jax.random.fold_in(rng, state.step)
@@ -287,6 +332,7 @@ def main(config: _config.TrainConfig):
         os.environ["CURL_CA_BUNDLE"] = (
             "/etc/pki/tls/certs/ca-bundle.crt"  # Ensure the CA bundle is set for SSL verification
         )
+    
     data_dir = save_dir = config.data.rlds_data_dir
     cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
     if _is_tpu_runtime() and (str(data_dir).startswith("gs://") or str(save_dir).startswith("gs://")):
@@ -301,7 +347,7 @@ def main(config: _config.TrainConfig):
     logging.info(f"Local devices: {local_devices}, Global devices: {global_devices}, Process count: {process_count}")
     if process_count == 1:
         # Choose the largest divisor of available devices not exceeding configured fsdp_devices
-        target = min(config.fsdp_devices, max(1, local_devices))
+        target = min(config.fsdp_devices, local_devices)
         effective_fsdp_devices = 1
         for d in range(target, 0, -1):
             if global_devices % d == 0:
@@ -315,7 +361,8 @@ def main(config: _config.TrainConfig):
             )
     else:
         effective_fsdp_devices = config.fsdp_devices
-        assert global_devices % effective_fsdp_devices == 0
+    #     assert global_devices % effective_fsdp_devices == 0
+    effective_fsdp_devices = config.fsdp_devices
 
     logging.info(f"Running on: {platform.node()}")
 
@@ -344,17 +391,22 @@ def main(config: _config.TrainConfig):
         enabled=config.wandb_enabled,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
-
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
         shuffle=True,
         seed=config.seed,
     )
-
+    
     data_iter = iter(data_loader)
-    # Fetch the correct first batch, advancing the iterator on resume
-    logging.info("Before getting batch")
+    
+    
+    ram, tpu_mem = get_mem()
+    wandb.log({
+        "sys/ram_gb": ram,
+        "sys/tpu_hbm_gb": tpu_mem,
+        "sys/event": "before_get_batch",
+    }, step=0)
     # if resuming and start_step > 0:
     #     # Fast-forward the iterator so that step `start_step` uses batch index `start_step`.
     #     for _ in range(start_step):
@@ -367,13 +419,31 @@ def main(config: _config.TrainConfig):
     #     for i in range(min(5, len(next(iter(batch[0].images.values())))))
     # ]
     # wandb.log({"camera_views": images_to_log}, step=0)
+    
+    ram, tpu_mem = get_mem()
+    wandb.log({
+        "sys/ram_gb": ram,
+        "sys/tpu_hbm_gb": tpu_mem,
+        "sys/event": "after_get_batch",
+    }, step=0)
+    
+    
     logging.info("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     # Sharding details for the first batch
     sharding.log_batch_sharding(batch)
-
+    
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
+    
+    
+    ram, tpu_mem = get_mem()
+    wandb.log({
+        "sys/ram_gb": ram,
+        "sys/tpu_hbm_gb": tpu_mem,
+        "sys/event": "after_init_train_state",
+    }, step=0)
+    
     logging.info(f"Initialized train state (param shapes):\n{training_utils.array_tree_to_info(train_state.params)}")
     # Planned vs actual parameter sharding
     sharding.log_param_sharding_planned(train_state_sharding)
@@ -390,7 +460,6 @@ def main(config: _config.TrainConfig):
     )
 
     if config.do_val:
-        # Validation data loader (non-shuffled, val split)
         val_loader = _data_loader.create_data_loader(
             config,
             sharding=data_sharding,
@@ -527,8 +596,22 @@ def main(config: _config.TrainConfig):
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
                 for val_step_idx in val_pbar:
+                    if step == 0:
+                        ram, tpu_mem = get_mem()
+                        wandb.log({
+                            "sys/ram_gb": ram,
+                            "sys/tpu_hbm_gb": tpu_mem,
+                            "sys/event": "val_before_next_iter",
+                        }, step=step)
                     val_batch = next(val_iter)
                     val_info = pval_step(train_rng, train_state, val_batch)
+                    if step == 0:
+                        ram, tpu_mem = get_mem()
+                        wandb.log({
+                            "sys/ram_gb": ram,
+                            "sys/tpu_hbm_gb": tpu_mem,
+                            "sys/event": "val_after_pval_step",
+                        }, step=step)
                     val_infos.append(val_info)
 
                     if config.data.vis_dataset and val_step_idx == img_log_step_idx:

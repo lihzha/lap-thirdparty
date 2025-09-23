@@ -46,7 +46,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("bridge_v2_oxe", 0.1),
         # ("fmb", 0.071),
         ("kuka", 0.05),
-        ("taco_play", 0.030),
+        ("taco_play", 2.000),
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.024),
         ("toto", 0.020),
         ("austin_sirius_dataset_converted_externally_to_rlds", 0.017),
