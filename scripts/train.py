@@ -394,10 +394,10 @@ def main(config: _config.TrainConfig):
     )
     ram = get_mem()
     logging.info(f"Before init: RAM: {ram:.2f}GB")
-    wandb.log({
-        "sys/ram_gb": ram,
-        "sys/event": "start",
-    }, step=0)
+    # wandb.log({
+    #     "sys/ram_gb": ram,
+    #     "sys/event": "start",
+    # }, step=0)
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
@@ -410,10 +410,10 @@ def main(config: _config.TrainConfig):
     
     ram = get_mem()
     logging.info(f"Before getting batch: RAM: {ram:.2f}GB")
-    wandb.log({
-        "sys/ram_gb": ram,
-        "sys/event": "before_get_batch",
-    }, step=0)
+    # wandb.log({
+    #     "sys/ram_gb": ram,
+    #     "sys/event": "before_get_batch",
+    # }, step=0)
     # if resuming and start_step > 0:
     #     # Fast-forward the iterator so that step `start_step` uses batch index `start_step`.
     #     for _ in range(start_step):
@@ -429,10 +429,10 @@ def main(config: _config.TrainConfig):
     
     ram = get_mem()
     logging.info(f"After getting batch: RAM: {ram:.2f}GB")
-    wandb.log({
-        "sys/ram_gb": ram,
-        "sys/event": "after_get_batch",
-    }, step=0)
+    # wandb.log({
+    #     "sys/ram_gb": ram,
+    #     "sys/event": "after_get_batch",
+    # }, step=0)
     
     
     logging.info("After getting batch")
@@ -443,13 +443,12 @@ def main(config: _config.TrainConfig):
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
     
-    
     ram = get_mem()
     logging.info(f"After init train state: RAM: {ram:.2f}GB")
-    wandb.log({
-        "sys/ram_gb": ram,
-        "sys/event": "after_init_train_state",
-    }, step=0)
+    # wandb.log({
+    #     "sys/ram_gb": ram,
+    #     "sys/event": "after_init_train_state",
+    # }, step=0)
     
     logging.info(f"Initialized train state (param shapes):\n{training_utils.array_tree_to_info(train_state.params)}")
     # Planned vs actual parameter sharding
@@ -473,6 +472,7 @@ def main(config: _config.TrainConfig):
             shuffle=False,
             split="val",
             max_samples=getattr(config.data, "val_max_samples", None),
+            train_dataset=data_loader.dataset,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
         tok = data_loader._dataset._transform.transforms[-2].tokenizer  # type: ignore[attr-defined]
@@ -606,19 +606,19 @@ def main(config: _config.TrainConfig):
                     if step == 0:
                         ram = get_mem()
                         logging.info(f"Before first pval_step: RAM: {ram:.2f}GB")
-                        wandb.log({
-                            "sys/ram_gb": ram,
-                            "sys/event": "val_before_next_iter",
-                        }, step=step)
+                        # wandb.log({
+                        #     "sys/ram_gb": ram,
+                        #     "sys/event": "val_before_next_iter",
+                        # }, step=step)
                     val_batch = next(val_iter)
                     val_info = pval_step(train_rng, train_state, val_batch)
                     if step == 0:
                         ram = get_mem()
                         logging.info(f"After first pval_step: RAM: {ram:.2f}GB")
-                        wandb.log({
-                            "sys/ram_gb": ram,
-                            "sys/event": "val_after_pval_step",
-                        }, step=step)
+                        # wandb.log({
+                        #     "sys/ram_gb": ram,
+                        #     "sys/event": "val_after_pval_step",
+                        # }, step=step)
                     val_infos.append(val_info)
 
                     if config.data.vis_dataset and val_step_idx == img_log_step_idx:

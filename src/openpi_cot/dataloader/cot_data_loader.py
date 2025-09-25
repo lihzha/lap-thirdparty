@@ -26,6 +26,7 @@ def _create_rlds_dataset(
     seed: int,
     max_samples: int | None,
     split: str,
+    train_dataset: up.Dataset | None = None,
 ) -> up.Dataset:
     # Per-host batching; avoids redundant slicing work in multi-process setups
     local_bsz = max(1, batch_size // jax.process_count())
@@ -51,7 +52,9 @@ def _create_rlds_dataset(
 
     if dataset_cls is None:
         return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)
-    return dataset_cls(
+    
+    # Build kwargs dynamically
+    kwargs = dict(
         data_dir=rlds_data_dir,
         batch_size=local_bsz,
         shuffle=shuffle,
@@ -62,6 +65,11 @@ def _create_rlds_dataset(
         action_horizon=action_horizon,
         action_dim=action_dim,
     )
+
+    if dataset_type == "droid":
+        kwargs["train_dataset"] = train_dataset
+
+    return dataset_cls(**kwargs)
 
 
 def _make_iterable_transforms(
@@ -111,6 +119,7 @@ def create_data_loader(
     max_samples: int | None = None,
     split: str = "train",
     framework: Literal["jax", "pytorch"] = "jax",
+    train_dataset: up.Dataset | None = None,
 ) -> up.DataLoader[tuple[CoTObservation, _model.Actions]]:
     # Avoid import-time side effects:
     # Only clear LEROBOT_HOME if we are about to construct a LeRobot dataset.
@@ -135,6 +144,7 @@ def create_data_loader(
             seed=seed,
             max_samples=max_samples if max_samples is not None else getattr(data_cfg, "max_samples", None),
             split=split,
+            train_dataset=train_dataset,
         )
 
         # 2) transforms (split-aware)
@@ -255,3 +265,7 @@ class CoTRLDSDataLoader:
 
     def data_config(self) -> _config.CoTDataConfig:
         return self._data_cfg
+    
+    @property
+    def dataset(self) -> up.Dataset:
+        return self._dataset._dataset

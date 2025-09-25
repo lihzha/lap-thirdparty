@@ -34,7 +34,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("cmu_stretch", 1.0),
         ("bc_z", 0.2),
         ("fmb", 1.0),
-        ("dobbe", 0.2),
+        ("dobbe", 0.2),  # question
         ## Datasets for Navigation
         ("berkeley_gnm_recon", 1.0),
         ("berkeley_gnm_cory_hall", 1.0),
@@ -44,21 +44,25 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("droid", 2.0),
         # ("aloha", 0.4),
         # ("bridge_v2_oxe", 0.1),
-        # ("fmb", 0.071),
-        ("kuka", 0.05),  # No annotation
-        ("taco_play", 2.000),
-        ("furniture_bench_dataset_converted_externally_to_rlds", 0.024),
-        ("toto", 0.020),
-        ("austin_sirius_dataset_converted_externally_to_rlds", 0.017),
-        ("berkeley_autolab_ur5", 0.012),  # 5
-        ("viola", 0.009),
-        ("nyu_franka_play_dataset_converted_externally_to_rlds", 0.008),  # 3
-        ("berkeley_fanuc_manipulation", 0.007),
-        ("jaco_play", 0.004),
-        ("berkeley_cable_routing", 0.002),  # No annotation
-        ("cmu_stretch", 0.002),
-        # New
-        ("fractal20220817_data", 0.1),  # 3
+        ("fmb", 0.071),
+        # ("kuka", 0.05),
+        # ("taco_play", 2.000),
+        # ("furniture_bench_dataset_converted_externally_to_rlds", 0.024),
+        # ("toto", 0.020),
+        # ("austin_sirius_dataset_converted_externally_to_rlds", 0.017),
+        # ("berkeley_autolab_ur5", 0.012),
+        # ("viola", 0.009),
+        # ("nyu_franka_play_dataset_converted_externally_to_rlds", 0.008),
+        # ("berkeley_fanuc_manipulation", 0.007),
+        # ("jaco_play", 0.004),
+        # ("berkeley_cable_routing", 0.002),
+        # ("cmu_stretch", 0.002),
+        # # New
+        # ("fractal20220817_data", 0.05),
+        ("bc_z", 0.05),
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),
+        ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),
+        ("roboturk", 2.0),
     ],
 }
 

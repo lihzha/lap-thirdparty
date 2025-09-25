@@ -33,30 +33,56 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     Note =>> In original Bridge V2 dataset, the first timestep has an all-zero action, so we remove it!
     """
+    # for key in trajectory:
+    #     if key == "traj_metadata":
+    #         continue
+    #     if key in ["observation", "action"]:
+    #         for key2 in trajectory[key]:
+    #             trajectory[key][key2] = trajectory[key][key2][1:]
+    #     else:
+    #         trajectory[key] = trajectory[key][1:]
+
+    # trajectory["action"] = tf.concat(
+    #     (
+    #         trajectory["action"]["world_vector"],
+    #         trajectory["action"]["rotation_delta"],
+    #         tf.cast(trajectory["action"]["open_gripper"][:, None], tf.float32),
+    #     ),
+    #     axis=-1,
+    # )
+    # # print(trajectory.keys(), trajectory['observation'].keys())
+    # trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
+    # trajectory = relabel_bridge_actions(trajectory)
+    # trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
+    # trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
+
+    # print("bridge", trajectory.keys())
+    # return trajectory
+    """
+    Applies to original version of Bridge V2 from the official project website.
+
+    Note =>> In original Bridge V2 dataset, the first timestep has an all-zero action, so we remove it!
+    """
     for key in trajectory:
         if key == "traj_metadata":
             continue
-        if key in ["observation", "action"]:
+        if key == "observation":
             for key2 in trajectory[key]:
                 trajectory[key][key2] = trajectory[key][key2][1:]
         else:
             trajectory[key] = trajectory[key][1:]
 
     trajectory["action"] = tf.concat(
-        (
-            trajectory["action"]["world_vector"],
-            trajectory["action"]["rotation_delta"],
-            tf.cast(trajectory["action"]["open_gripper"][:, None], tf.float32),
-        ),
-        axis=-1,
+        [
+            trajectory["action"][:, :6],
+            binarize_gripper_actions(trajectory["action"][:, -1])[:, None],
+        ],
+        axis=1,
     )
     # print(trajectory.keys(), trajectory['observation'].keys())
-    trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
     trajectory = relabel_bridge_actions(trajectory)
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
-
-    print("bridge", trajectory.keys())
     return trajectory
 
 

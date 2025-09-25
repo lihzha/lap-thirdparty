@@ -4,6 +4,7 @@ import os
 
 import dlimp as dl
 import jax
+from jax.experimental import multihost_utils as mh
 import numpy as np
 from openpi.shared import normalize as _normalize
 import pydantic
@@ -114,28 +115,130 @@ def get_dataset_statistics(
         num_trajectories += 1
 
     actions, proprios = np.concatenate(actions), np.concatenate(proprios)
+    mask = np.isfinite(actions).all(axis=1)
+    actions = actions[mask]
+    mask = np.isfinite(proprios).all(axis=1)
+    proprios = proprios[mask]
+
+    # ------------------------------------------------------------
+    # Multi-host aggregation: compute exact global mean/std and counts
+    # ------------------------------------------------------------
+    def _gather_and_reduce(x: np.ndarray, op: str) -> np.ndarray:
+        if getattr(jax, "process_count", lambda: 1)() == 1:
+            return x
+        xs = mh.process_allgather(np.asarray(x), tiled=False)  # shape: [P, ...]
+        xs = np.asarray(xs)
+        if op == "sum":
+            return xs.sum(axis=0)
+        if op == "min":
+            return xs.min(axis=0)
+        if op == "max":
+            return xs.max(axis=0)
+        raise ValueError(f"Unsupported op: {op}")
+
+    # Per-host sufficient stats
+    a_sum = actions.sum(axis=0)
+    a_sumsq = np.square(actions).sum(axis=0)
+    a_min = actions.min(axis=0)
+    a_max = actions.max(axis=0)
+    a_n = np.array(actions.shape[0], dtype=np.int64)
+
+    s_sum = proprios.sum(axis=0)
+    s_sumsq = np.square(proprios).sum(axis=0)
+    s_min = proprios.min(axis=0)
+    s_max = proprios.max(axis=0)
+    s_n = np.array(proprios.shape[0], dtype=np.int64)
+
+    traj_n = np.array(num_trajectories, dtype=np.int64)
+
+    # All-gather + reduce
+    a_sum = _gather_and_reduce(a_sum, "sum")
+    a_sumsq = _gather_and_reduce(a_sumsq, "sum")
+    a_min = _gather_and_reduce(a_min, "min")
+    a_max = _gather_and_reduce(a_max, "max")
+    a_n = int(_gather_and_reduce(a_n, "sum"))
+
+    s_sum = _gather_and_reduce(s_sum, "sum")
+    s_sumsq = _gather_and_reduce(s_sumsq, "sum")
+    s_min = _gather_and_reduce(s_min, "min")
+    s_max = _gather_and_reduce(s_max, "max")
+    s_n = int(_gather_and_reduce(s_n, "sum"))
+
+    traj_n = int(_gather_and_reduce(traj_n, "sum"))
+
+    # Exact global mean/std
+    a_mean = a_sum / max(a_n, 1)
+    a_var = a_sumsq / max(a_n, 1) - np.square(a_mean)
+    a_std = np.sqrt(np.maximum(a_var, 0.0))
+
+    s_mean = s_sum / max(s_n, 1)
+    s_var = s_sumsq / max(s_n, 1) - np.square(s_mean)
+    s_std = np.sqrt(np.maximum(s_var, 0.0))
+
+    # ------------------------------------------------------------
+    # Approximate global quantiles via distributed histograms
+    # ------------------------------------------------------------
+    def _distributed_quantiles(local_data: np.ndarray, g_min: np.ndarray, g_max: np.ndarray, q: float,
+                               num_bins: int = 4096) -> np.ndarray:
+        # Build identical bin edges per-dimension using global min/max
+        dims = g_min.shape[0]
+        edges = np.stack([
+            np.linspace(g_min[d] - 1e-12, g_max[d] + 1e-12, num_bins + 1) for d in range(dims)
+        ], axis=0)  # [D, B+1]
+        local_hist = np.zeros((dims, num_bins), dtype=np.int64)
+        for d in range(dims):
+            # Guard against degenerate range
+            if not np.isfinite(g_min[d]) or not np.isfinite(g_max[d]) or g_min[d] == g_max[d]:
+                continue
+            h, _ = np.histogram(local_data[:, d], bins=edges[d])
+            local_hist[d] = h
+        global_hist = _gather_and_reduce(local_hist, "sum")  # [D, B]
+        # Compute q-quantile as left edge where cumsum crosses q * total
+        q_vals = np.zeros((dims,), dtype=np.float64)
+        for d in range(dims):
+            counts = global_hist[d]
+            total = counts.sum()
+            if total == 0 or g_min[d] == g_max[d]:
+                q_vals[d] = g_min[d]
+                continue
+            c = np.cumsum(counts)
+            target = q * total
+            idx = int(np.searchsorted(c, target, side="left"))
+            if idx >= num_bins:
+                idx = num_bins - 1
+            q_vals[d] = edges[d, idx]
+        return q_vals.astype(np.float32)
+
+    a_q01 = _distributed_quantiles(actions, a_min, a_max, 0.01)
+    a_q99 = _distributed_quantiles(actions, a_min, a_max, 0.99)
+    s_q01 = _distributed_quantiles(proprios, s_min, s_max, 0.01)
+    s_q99 = _distributed_quantiles(proprios, s_min, s_max, 0.99)
 
     norm_stats = {
         "state": ExtendedNormStats(
-            mean=np.asarray(proprios.mean(0)),
-            std=np.asarray(proprios.std(0)),
-            q01=np.asarray(np.quantile(proprios, 0.01, axis=0)),
-            q99=np.asarray(np.quantile(proprios, 0.99, axis=0)),
-            num_transitions=num_transitions,
-            num_trajectories=num_trajectories,
+            mean=np.asarray(s_mean),
+            std=np.asarray(s_std),
+            q01=np.asarray(s_q01),
+            q99=np.asarray(s_q99),
+            num_transitions=int(s_n),
+            num_trajectories=int(traj_n),
         ),
         "actions": ExtendedNormStats(
-            mean=np.asarray(actions.mean(0)),
-            std=np.asarray(actions.std(0)),
-            q01=np.asarray(np.quantile(actions, 0.01, axis=0)),
-            q99=np.asarray(np.quantile(actions, 0.99, axis=0)),
-            num_transitions=num_transitions,
-            num_trajectories=num_trajectories,
+            mean=np.asarray(a_mean),
+            std=np.asarray(a_std),
+            q01=np.asarray(a_q01),
+            q99=np.asarray(a_q99),
+            num_transitions=int(a_n),
+            num_trajectories=int(traj_n),
         ),
     }
 
     if jax.process_index() == 0:
         print(f"Writing stats to: {output_dir}")
         save(output_dir, norm_stats)
+    
+    assert int(a_n) == num_transitions
+    assert int(s_n) == num_transitions
+    assert int(traj_n) == num_trajectories
 
     return norm_stats
