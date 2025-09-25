@@ -45,20 +45,20 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("aloha", 0.4),
         # ("bridge_v2_oxe", 0.1),
         # ("fmb", 0.071),
-        ("kuka", 0.05),
+        ("kuka", 0.05),  # No annotation
         ("taco_play", 2.000),
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.024),
         ("toto", 0.020),
         ("austin_sirius_dataset_converted_externally_to_rlds", 0.017),
-        ("berkeley_autolab_ur5", 0.012),
+        ("berkeley_autolab_ur5", 0.012),  # 5
         ("viola", 0.009),
-        ("nyu_franka_play_dataset_converted_externally_to_rlds", 0.008),
+        ("nyu_franka_play_dataset_converted_externally_to_rlds", 0.008),  # 3
         ("berkeley_fanuc_manipulation", 0.007),
         ("jaco_play", 0.004),
-        ("berkeley_cable_routing", 0.002),
+        ("berkeley_cable_routing", 0.002),  # No annotation
         ("cmu_stretch", 0.002),
         # New
-        ("fractal20220817_data", 0.1),
+        ("fractal20220817_data", 0.1),  # 3
     ],
 }
 
