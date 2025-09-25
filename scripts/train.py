@@ -553,7 +553,7 @@ def main(config: _config.TrainConfig):
 
                 # After warmup, log a few hardest samples with image and language action
                 warmup_steps = getattr(config.lr_schedule, "warmup_steps", 0)
-                if step >= warmup_steps and "per_sample_loss" in reduced_info:
+                if step >= 10 and "per_sample_loss" in reduced_info:
                     # Use the most recent (non-averaged) per-example losses for ranking
                     per_ex = latest_info.get("per_sample_loss", None)
                     assert per_ex is not None
