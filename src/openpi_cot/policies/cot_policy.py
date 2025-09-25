@@ -33,6 +33,13 @@ def _parse_image(image) -> np.ndarray:
     return image
 
 
+def _safe_decode_bytes(value: bytes | np.bytes_) -> str:
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("utf-8", errors="replace")
+
+
 def _to_str_list(x):
     if isinstance(x, (list, tuple)):
         seq = x
@@ -43,7 +50,7 @@ def _to_str_list(x):
     out = []
     for item in seq:
         if isinstance(item, (bytes, np.bytes_)):
-            out.append(item.decode("utf-8"))
+            out.append(_safe_decode_bytes(item))
         else:
             out.append(str(item))
     return out
@@ -107,7 +114,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             if value is None:
                 return None
             if isinstance(value, bytes):
-                return value.decode("utf-8")
+                return _safe_decode_bytes(value)
             if isinstance(value, str):
                 return value
             if isinstance(value, (list, tuple, np.ndarray)):
