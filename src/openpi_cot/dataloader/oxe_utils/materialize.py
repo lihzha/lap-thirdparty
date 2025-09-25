@@ -30,6 +30,20 @@ def make_oxe_dataset_kwargs(
     if dataset_kwargs["action_encoding"] not in [ActionEncoding.EEF_POS, ActionEncoding.EEF_R6]:
         raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
 
+    language_annotations = dataset_kwargs.get("language_annotations")
+    if not language_annotations or language_annotations.lower() == "none":
+        raise ValueError(f"Cannot load `{dataset_name}`; language annotations required!")
+
+    robot_morphology = dataset_kwargs.get("robot_morphology", "")
+    if robot_morphology.lower() == "bi-manual":
+        raise ValueError(f"Cannot load `{dataset_name}`; bi-manual datasets are not supported!")
+
+    has_suboptimal = dataset_kwargs.get("has_suboptimal")
+    if isinstance(has_suboptimal, str):
+        has_suboptimal = has_suboptimal.lower() == "yes"
+    if has_suboptimal:
+        raise ValueError(f"Cannot load `{dataset_name}`; suboptimal datasets are not supported!")
+
     # [Contract] For EEF_POS & EEF_R6 actions, only the last action dimension (gripper) is absolute!
     # Normalize all action dimensions *except* the gripper
     if dataset_kwargs["action_encoding"] is ActionEncoding.EEF_POS:

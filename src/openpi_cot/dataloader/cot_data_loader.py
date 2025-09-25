@@ -273,4 +273,4 @@ class CoTRLDSDataLoader:
 
     @property
     def tokenizer(self) -> PaligemmaCoTTokenizer:
-        return self._dataset._transform.transforms[-2].tokenizer  # type: ignore[attr-defined]
+        return self._dataset._transform.transforms[-2].tokenizer

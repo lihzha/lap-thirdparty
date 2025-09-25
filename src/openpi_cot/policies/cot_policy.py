@@ -3,6 +3,7 @@ import dataclasses
 import einops
 import numpy as np
 from openpi import transforms as upstream_transforms
+import wandb
 
 from openpi_cot.dataloader.lang_action_util import sum_language_actions
 from openpi_cot.dataloader.lang_action_util import summarize_numeric_actions
@@ -66,6 +67,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         assert "observation" in data
         assert "exterior_image_1_left" in data["observation"]
         base_image = _parse_image(data["observation"]["exterior_image_1_left"])
+        if base_image is None:
+            raise ValueError("Base image missing from observation")
         if "wrist_image_left" in data["observation"]:
             wrist_image = _parse_image(data["observation"]["wrist_image_left"])
             if wrist_image is None:
@@ -76,6 +79,40 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         else:
             wrist_image = np.zeros_like(base_image)
             wrist_image_mask = np.False_
+
+        def _is_trivial_image(img: np.ndarray) -> bool:
+            if img is None:
+                return True
+            return np.all(img == 0) or np.all(img == 255)
+
+        prompt_val = data.get("prompt")
+        prompt_str = None
+        if prompt_val is not None:
+            if isinstance(prompt_val, bytes):
+                prompt_str = prompt_val.decode("utf-8")
+            elif isinstance(prompt_val, str):
+                prompt_str = prompt_val
+            else:
+                prompt_item = np.asarray(prompt_val).item()
+                prompt_str = (
+                    prompt_item.decode("utf-8") if isinstance(prompt_item, (bytes, np.bytes_)) else str(prompt_item)
+                )
+
+        images_for_check = {
+            "base_0_rgb": base_image,
+            "left_wrist_0_rgb": wrist_image,
+        }
+
+        if any(_is_trivial_image(img) for img in images_for_check.values()) or (
+            prompt_str is None or prompt_str.strip() == ""
+        ):
+            log_payload = {
+                "policy/anomaly_base": wandb.Image(base_image) if base_image is not None else None,
+                "policy/anomaly_wrist": wandb.Image(wrist_image) if wrist_image is not None else None,
+                "policy/anomaly_prompt": prompt_str,
+            }
+            wandb.log({k: v for k, v in log_payload.items() if v is not None})
+            raise ValueError("Invalid policy inputs: trivial image or missing prompt")
 
         # Optional dropout: randomly mask out wrist image
         if self.wrist_image_dropout_prob > 0.0:
@@ -99,24 +136,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             "image_mask": dict(zip(names, image_masks, strict=True)),
         }
 
+        if prompt_str is not None:
+            inputs["prompt"] = prompt_str
+
         if "actions" in data:
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
-
-        if "prompt" in data:
-            # Normalize prompt to python str
-            prompt_val = data["prompt"]
-            if isinstance(prompt_val, bytes):
-                prompt_str = prompt_val.decode("utf-8")
-            elif isinstance(prompt_val, str):
-                prompt_str = prompt_val
-            else:
-                prompt_item = np.asarray(prompt_val).item()
-                prompt_str = (
-                    prompt_item.decode("utf-8") if isinstance(prompt_item, (bytes, np.bytes_)) else str(prompt_item)
-                )
-
-            inputs["prompt"] = prompt_str
 
         if "language_actions" in data:
             la = data["language_actions"]
