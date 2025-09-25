@@ -1,3 +1,4 @@
+from collections.abc import Iterable, Mapping, Sequence
 import logging
 import re
 
@@ -188,6 +189,100 @@ def _draw_line(
 def get_language_actions(batch, tok):
     texts = _decode_reasoning_strings(batch[0], tok)
     return texts
+
+
+def visualize_language_actions(
+    batch: tuple[CoTObservation, _model.Actions],
+    tok: PaligemmaCoTTokenizer,
+    *,
+    indices: Sequence[int] | None = None,
+    max_examples: int = 5,
+    image_keys: Iterable[str] | None = None,
+) -> list[Mapping[str, object]]:
+    """Return combined RGB images and decoded language actions for selected examples.
+
+    Args:
+        batch: A tuple of (`CoTObservation`, actions) as produced by the dataloader.
+        tok: Tokenizer used for decoding language tokens.
+        indices: Optional iterable of batch indices to visualize.
+        max_examples: Maximum number of examples to return.
+        image_keys: Optional iterable specifying the order of image keys to concatenate.
+
+    Returns:
+        A list of dictionaries with keys:
+            ``image`` (np.ndarray uint8 HxWx3), ``language_action`` (str), ``index`` (int).
+    """
+
+    obs, _ = batch
+    images = {key: _utils.to_local_array(value) for key, value in obs.images.items() if value is not None}
+    if not images:
+        return []
+
+    order = list(image_keys) if image_keys is not None else sorted(images.keys())
+
+    batch_sizes = [arr.shape[0] for arr in images.values() if arr is not None and arr.ndim >= 1]
+    if not batch_sizes:
+        return []
+    batch_size = min(batch_sizes)
+
+    texts = get_language_actions(batch, tok)
+
+    if indices is None:
+        indices_list = list(range(batch_size))
+    else:
+        indices_list = [i for i in indices if 0 <= i < batch_size]
+
+    if max_examples is not None:
+        indices_list = indices_list[:max_examples]
+
+    visuals: list[Mapping[str, object]] = []
+    for idx in indices_list:
+        per_cam: list[np.ndarray] = []
+        for key in order:
+            arr = images.get(key)
+            if arr is None or idx >= arr.shape[0]:
+                continue
+            frame = np.asarray(arr[idx])
+            if frame.ndim > 3:
+                frame = frame[0]
+            if np.issubdtype(frame.dtype, np.floating):
+                frame = ((frame + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+            else:
+                frame = np.clip(frame, 0, 255).astype(np.uint8)
+            per_cam.append(frame)
+
+        if not per_cam:
+            continue
+
+        if len(per_cam) == 1:
+            combined = per_cam[0]
+        else:
+            try:
+                combined = np.concatenate(per_cam, axis=1)
+            except ValueError:
+                # Pad images to match the maximum height before concatenation
+                max_h = max(img.shape[0] for img in per_cam)
+                padded: list[np.ndarray] = []
+                for img in per_cam:
+                    if img.shape[0] == max_h:
+                        padded.append(img)
+                        continue
+                    pad_total = max_h - img.shape[0]
+                    pad_top = pad_total // 2
+                    pad_bottom = pad_total - pad_top
+                    pad_spec = ((pad_top, pad_bottom), (0, 0), (0, 0))
+                    padded_img = np.pad(img, pad_spec, mode="constant")
+                    padded.append(padded_img)
+                try:
+                    combined = np.concatenate(padded, axis=1)
+                except ValueError:
+                    logging.warning("Failed to concatenate images for index %d due to incompatible shapes", idx)
+                    combined = per_cam[0]
+
+        text = texts[idx] if idx < len(texts) else ""
+        visuals.append({"image": combined, "language_action": text, "index": idx})
+
+    return visuals
 
 
 def prepare_eval_batch(batch):

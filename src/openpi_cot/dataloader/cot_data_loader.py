@@ -13,6 +13,7 @@ from openpi_cot.dataloader.cot_rlds_dataset import CombinedCoTRldsDataset
 from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTRldsDataset
 from openpi_cot.dataloader.cot_rlds_dataset import OXECoTRldsDatasets
 from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
 
 
@@ -52,7 +53,7 @@ def _create_rlds_dataset(
 
     if dataset_cls is None:
         return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)
-    
+
     # Build kwargs dynamically
     kwargs = dict(
         data_dir=rlds_data_dir,
@@ -265,7 +266,11 @@ class CoTRLDSDataLoader:
 
     def data_config(self) -> _config.CoTDataConfig:
         return self._data_cfg
-    
+
     @property
     def dataset(self) -> up.Dataset:
         return self._dataset._dataset
+
+    @property
+    def tokenizer(self) -> PaligemmaCoTTokenizer:
+        return self._dataset._transform.transforms[-2].tokenizer  # type: ignore[attr-defined]

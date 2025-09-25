@@ -967,21 +967,12 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             self.instr_table = self.build_instr_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path, use_idle_filter=self.use_idle_filter)
 
-        pre_filter_n = self.builder.info.splits[split].num_examples
-        logging.info(f"Pre-filter examples (from TFDS metadata): {pre_filter_n}")
-
-        for traj in self.dataset.take(1):
-            breakpoint()
-
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
         if cached_stats is not None:
             # Prefer early filtering when stats are already available to reduce downstream work.
             self.apply_traj_filters()
-            logging.info(f"Post TRAJ filter examples: {dataset_size(self.dataset)}")
             self.split_val(split_seed=split_seed)
-            logging.info(f"Post split val examples: {dataset_size(self.dataset)}")
             self.apply_restructure()
-            logging.info(f"Post restructure examples: {dataset_size(self.dataset)}")
             self.dataset_statistics = cached_stats
         else:
             # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
@@ -999,16 +990,13 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             action_chunk_size=action_chunk_size,
             summation_steps=config.summation_steps,
         )
-        logging.info(f"Post traj transform examples: {dataset_size(self.dataset)}")
 
         if align_oxe_fmt:
             self.apply_align_oxe_fmt()
 
         self.apply_flatten()
-        logging.info(f"Before frame filters examples: {dataset_size(self.dataset)}")
 
         self.apply_frame_filters()
-        logging.info(f"Post frame filters examples: {dataset_size(self.dataset)}")
 
 
 class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):

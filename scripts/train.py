@@ -18,6 +18,7 @@ import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.optimizer as _optimizer
 import optax
+import psutil
 from rail_tpu_utils import prevent_cross_region
 import tqdm_loggable.auto as tqdm
 import wandb
@@ -30,8 +31,6 @@ import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.training.weight_loaders as _weight_loaders
-import psutil
-import subprocess
 
 
 def get_mem():
@@ -43,7 +42,7 @@ def get_mem():
 
     # --- Host RAM (Resident Set Size) ---
     proc = psutil.Process(os.getpid())
-    ram_gb = proc.memory_info().rss / (1024 ** 3)  # RSS in GB
+    ram_gb = proc.memory_info().rss / (1024**3)  # RSS in GB
 
     # # --- TPU HBM (High Bandwidth Memory) ---
     # try:
@@ -75,6 +74,7 @@ def get_mem():
 
     # return ram_gb, tpu_mem_gb
     return ram_gb
+
 
 def init_logging():
     """Custom logging format for better readability."""
@@ -218,9 +218,11 @@ def init_train_state(
         in_shardings=replicated_sharding,
         out_shardings=state_sharding,
     )(init_rng, partial_params)
-    
+
     del partial_params
-    import gc; gc.collect()
+    import gc
+
+    gc.collect()
 
     return train_state, state_sharding
 
@@ -333,7 +335,7 @@ def main(config: _config.TrainConfig):
         os.environ["CURL_CA_BUNDLE"] = (
             "/etc/pki/tls/certs/ca-bundle.crt"  # Ensure the CA bundle is set for SSL verification
         )
-    
+
     data_dir = save_dir = config.data.rlds_data_dir
     cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
     if _is_tpu_runtime() and (str(data_dir).startswith("gs://") or str(save_dir).startswith("gs://")):
@@ -404,10 +406,9 @@ def main(config: _config.TrainConfig):
         shuffle=True,
         seed=config.seed,
     )
-    
+
     data_iter = iter(data_loader)
-    
-    
+
     ram = get_mem()
     logging.info(f"Before getting batch: RAM: {ram:.2f}GB")
     # wandb.log({
@@ -426,30 +427,29 @@ def main(config: _config.TrainConfig):
     #     for i in range(min(5, len(next(iter(batch[0].images.values())))))
     # ]
     # wandb.log({"camera_views": images_to_log}, step=0)
-    
+
     ram = get_mem()
     logging.info(f"After getting batch: RAM: {ram:.2f}GB")
     # wandb.log({
     #     "sys/ram_gb": ram,
     #     "sys/event": "after_get_batch",
     # }, step=0)
-    
-    
+
     logging.info("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     # Sharding details for the first batch
     sharding.log_batch_sharding(batch)
-    
+
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
-    
+
     ram = get_mem()
     logging.info(f"After init train state: RAM: {ram:.2f}GB")
     # wandb.log({
     #     "sys/ram_gb": ram,
     #     "sys/event": "after_init_train_state",
     # }, step=0)
-    
+
     logging.info(f"Initialized train state (param shapes):\n{training_utils.array_tree_to_info(train_state.params)}")
     # Planned vs actual parameter sharding
     sharding.log_param_sharding_planned(train_state_sharding)
@@ -475,7 +475,7 @@ def main(config: _config.TrainConfig):
             train_dataset=data_loader.dataset,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
-        tok = data_loader._dataset._transform.transforms[-2].tokenizer  # type: ignore[attr-defined]
+        tok = data_loader.tokenizer
         pval_step = jax.jit(
             functools.partial(val_step, config),
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
@@ -527,61 +527,32 @@ def main(config: _config.TrainConfig):
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
                 # After warmup, log a few hardest samples with image and language action
-                # warmup_steps = getattr(config.lr_schedule, "warmup_steps", 0)
-                # if step >= warmup_steps and "per_sample_loss" in reduced_info:
-                #     try:
-                #         # Use the most recent info (non-averaged across the window) for ranking
-                #         per_ex = info.get("per_sample_loss", None)
-                #         if per_ex is not None:
-                #             per_ex_np = np.asarray(training_utils.to_local_array(per_ex))
-                #             # Threshold: only consider samples > 2x the step's average loss
-                #             try:
-                #                 step_mean = float(np.asarray(training_utils.to_local_array(info.get("loss", None))))
-                #             except Exception:
-                #                 step_mean = float(per_ex_np.mean())
-                #             threshold = 2.0 * step_mean
-                #             # Prepare images and decoded reasoning
-                #             first_cam_key = next(iter(batch[0].images))
-                #             imgs = training_utils.to_local_array(batch[0].images[first_cam_key])
-                #             imgs_u8 = ((np.asarray(imgs) + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
-                #             # Decode reasoning if available
-                #             lang_texts = []
-                #             try:
-                #                 if (
-                #                     getattr(batch[0], "tokenized_prompt", None) is not None
-                #                     and getattr(batch[0], "tokenized_reasoning_mask", None) is not None
-                #                 ):
-                #                     lang_texts = _eval_helper._decode_reasoning_strings(batch[0], tok)
-                #             except Exception:
-                #                 lang_texts = []
-
-                #             k = int(min(8, per_ex_np.shape[0], imgs_u8.shape[0]))
-                #             if k > 0:
-                #                 candidates = np.where(per_ex_np > threshold)[0]
-                #                 if candidates.size > 0:
-                #                     if candidates.size > k:
-                #                         cand_vals = per_ex_np[candidates]
-                #                         sel = np.argpartition(-cand_vals, kth=k - 1)[:k]
-                #                         top_idx = candidates[sel]
-                #                         order = np.argsort(-per_ex_np[top_idx])
-                #                         top_idx = top_idx[order]
-                #                     else:
-                #                         top_idx = candidates[np.argsort(-per_ex_np[candidates])]
-                #                 else:
-                #                     top_idx = np.array([], dtype=int)
-                #                 images_to_log = []
-                #                 for i in top_idx:
-                #                     cap = f"loss={float(per_ex_np[i]):.4f}"
-                #                     if lang_texts and i < len(lang_texts):
-                #                         cap = cap + "\n" + str(lang_texts[i])
-                #                     images_to_log.append(wandb.Image(imgs_u8[i], caption=cap))
-                #                 if images_to_log:
-                #                     wandb.log(
-                #                         {"train/hard_examples": images_to_log},
-                #                         step=step,
-                #                     )
-                #     except Exception:
-                #         pass
+                warmup_steps = getattr(config.lr_schedule, "warmup_steps", 0)
+                if step >= warmup_steps and "per_sample_loss" in reduced_info:
+                    # Use the most recent info (non-averaged across the window) for ranking
+                    per_ex = info.get("per_sample_loss", None)
+                    assert per_ex is not None
+                    per_ex_np = np.asarray(training_utils.to_local_array(per_ex))
+                    # Threshold: only consider samples > 2x the step's average loss
+                    step_mean = float(np.asarray(training_utils.to_local_array(info.get("loss", None))))
+                    threshold = 2.0 * step_mean
+                    hard_idx = np.where(per_ex_np > threshold)[0]
+                    if hard_idx.size > 0:
+                        # Bring the underlying batch to host memory for visualization
+                        host_batch = jax.tree.map(training_utils.to_local_array, batch)
+                        visuals = _eval_helper.visualize_language_actions(
+                            host_batch,
+                            data_loader.tokenizer,
+                            indices=hard_idx.tolist(),
+                        )
+                        if visuals:
+                            images_to_log = []
+                            for vis in visuals:
+                                caption = vis.get("language_action", "")
+                                caption = caption if caption else f"idx={vis.get('index')}"
+                                images_to_log.append(wandb.Image(vis["image"], caption=caption))
+                            if images_to_log:
+                                wandb.log({"train/hard_examples": images_to_log}, step=step)
             infos = []
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
