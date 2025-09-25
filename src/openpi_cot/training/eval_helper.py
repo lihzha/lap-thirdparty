@@ -196,8 +196,9 @@ def visualize_language_actions(
     tok: PaligemmaCoTTokenizer,
     *,
     indices: Sequence[int] | None = None,
-    max_examples: int = 5,
+    max_examples: int | None = 5,
     image_keys: Iterable[str] | None = None,
+    resize_hw: tuple[int, int] | None = None,
 ) -> list[Mapping[str, object]]:
     """Return combined RGB images and decoded language actions for selected examples.
 
@@ -249,6 +250,10 @@ def visualize_language_actions(
                 frame = ((frame + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
             else:
                 frame = np.clip(frame, 0, 255).astype(np.uint8)
+            if resize_hw is not None and frame.shape[:2] != resize_hw:
+                import cv2
+
+                frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
             per_cam.append(frame)
 
         if not per_cam:

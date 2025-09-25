@@ -103,6 +103,22 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             "left_wrist_0_rgb": wrist_image,
         }
 
+        def _language_actions_to_str(value) -> str | None:
+            if value is None:
+                return None
+            if isinstance(value, bytes):
+                return value.decode("utf-8")
+            if isinstance(value, str):
+                return value
+            if isinstance(value, (list, tuple, np.ndarray)):
+                seq = _to_str_list(value)
+                if seq is None:
+                    return None
+                return "\n".join(seq)
+            return str(value)
+
+        la_str = _language_actions_to_str(data.get("language_actions"))
+
         if any(_is_trivial_image(img) for img in images_for_check.values()) or (
             prompt_str is None or prompt_str.strip() == ""
         ):
@@ -110,6 +126,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 "policy/anomaly_base": wandb.Image(base_image) if base_image is not None else None,
                 "policy/anomaly_wrist": wandb.Image(wrist_image) if wrist_image is not None else None,
                 "policy/anomaly_prompt": prompt_str,
+                "policy/anomaly_language_actions_text": la_str,
             }
             wandb.log({k: v for k, v in log_payload.items() if v is not None})
             raise ValueError("Invalid policy inputs: trivial image or missing prompt")
