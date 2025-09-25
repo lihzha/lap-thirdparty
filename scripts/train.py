@@ -565,7 +565,7 @@ def main(config: _config.TrainConfig):
                         step_mean = float(loss_np.mean())
                     else:
                         step_mean = float(np.mean(per_ex_np))
-                    threshold = 2.0 * step_mean
+                    threshold = 1.2 * step_mean
                     host_batch, local_size = ensure_host_batch()
                     if local_size > 0 and per_ex_np.size > 0:
                         process_count = getattr(jax, "process_count", lambda: 1)()
