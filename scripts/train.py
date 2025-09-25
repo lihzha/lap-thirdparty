@@ -524,6 +524,7 @@ def main(config: _config.TrainConfig):
             # Extract forward/backward/opt durations from callbacks
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
+            breakpoint()
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
                 # After warmup, log a few hardest samples with image and language action
