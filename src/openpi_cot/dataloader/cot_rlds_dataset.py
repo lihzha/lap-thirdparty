@@ -122,45 +122,26 @@ def make_decode_images_fn(
         return padded
 
     def _decode_single(img_bytes):
-        # Already-decoded path (works for [H,W,C] or [T,H,W,C])
+        # If already numeric, cast to uint8 and return
         if img_bytes.dtype != tf.string:
             img = tf.cast(img_bytes, tf.uint8)
-        # String input: handle scalar vs. vector of strings
-        elif img_bytes.shape.rank == 0:
+        else:
+            # Guard against empty placeholders (e.g., padding "")
             has_data = tf.greater(tf.strings.length(img_bytes), 0)
             img = tf.cond(
                 has_data,
-                lambda: tf.io.decode_image(img_bytes, channels=3, expand_animations=False, dtype=tf.uint8),
+                lambda: tf.io.decode_image(
+                    img_bytes,
+                    channels=3,
+                    expand_animations=False,
+                    dtype=tf.uint8,
+                ),
                 lambda: tf.zeros([1, 1, 3], dtype=tf.uint8),
             )
-        else:
-            flat = tf.reshape(img_bytes, [-1])  # [T]
-
-            def _dec_one(b):
-                has = tf.greater(tf.strings.length(b), 0)
-                return tf.cond(
-                    has,
-                    lambda: tf.io.decode_image(b, channels=3, expand_animations=False, dtype=tf.uint8),
-                    lambda: tf.zeros([1, 1, 3], dtype=tf.uint8),
-                )
-
-            # Decode each frame; outputs a stacked 4-D tensor after resizing below
-            imgs = tf.map_fn(_dec_one, flat, fn_output_signature=tf.uint8)
-            # imgs is a ragged-like stack because frames can have different H,W;
-            # do resizing after to make them uniform.
-            img = imgs
-
-        # Optional resize/pad
+        # Optional resize-with-pad to ensure batching shape compatibility
         if resize_to is not None:
             h, w = resize_to
-            # Ensure we support both 3-D and 4-D inputs
-            if tf.rank(img) == 3:
-                img = _tf_resize_with_pad(img, h, w)  # [H,W,C] -> [h,w,C]
-            elif tf.rank(img) == 4:
-                # Treat leading dim as batch/time: [N,H,W,C] -> [N,h,w,C]
-                img = tf.map_fn(lambda x: _tf_resize_with_pad(x, h, w), img, fn_output_signature=tf.uint8)
-            else:
-                raise ValueError("Unsupported image rank for resizing.")
+            img = _tf_resize_with_pad(img, h, w)
         return img
 
     def _decode_frame(traj: dict) -> dict:
