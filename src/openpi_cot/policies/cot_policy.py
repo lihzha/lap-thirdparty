@@ -130,10 +130,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             prompt_str is None or prompt_str.strip() == ""
         ):
             log_payload = {
-                "policy/anomaly_base": wandb.Image(base_image) if base_image is not None else None,
-                "policy/anomaly_wrist": wandb.Image(wrist_image) if wrist_image is not None else None,
-                "policy/anomaly_prompt": prompt_str,
-                "policy/anomaly_language_actions_text": la_str,
+                "policy/anomaly_base": wandb.Image(
+                    base_image, caption=f"Dataset: {data['dataset_name']}, prompt: {prompt_str}"
+                )
+                if base_image is not None
+                else None,
+                "policy/anomaly_wrist": wandb.Image(wrist_image, caption=f"language actions: {la_str}")
+                if wrist_image is not None
+                else None,
             }
             wandb.log({k: v for k, v in log_payload.items() if v is not None})
             raise ValueError("Invalid policy inputs: trivial image or missing prompt")
