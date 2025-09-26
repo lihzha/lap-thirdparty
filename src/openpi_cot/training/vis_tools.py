@@ -118,6 +118,7 @@ class HardExampleTracker:
                 "global_idx": int(local_idx + idx_offset),
                 "image": vis["image"],
                 "language_action": vis.get("language_action", "") or "",
+                "dataset_name": vis.get("dataset_name", "") or "",
             }
             self._hard_example_buffer.append(entry)
             self._hard_example_keys.add((step_idx, entry["global_idx"]))
@@ -148,13 +149,13 @@ class HardExampleTracker:
         if hard_to_log:
             log_images = []
             for entry in hard_to_log:
-                caption_text = entry.get("language_action", "") or ""
+                caption_text = entry.get("language_action", "") or "" + f" | {entry.get('dataset_name', '')}"
                 caption = f"loss={entry['loss']:.4f}"
                 panel_caption = caption
                 log_images.append(
                     wandb.Image(
                         entry["image"],
-                        caption=f"{panel_caption} |{caption_text}",
+                        caption=f"{panel_caption} | {caption_text}",
                     )
                 )
             wandb_payload = {
@@ -477,7 +478,7 @@ def log_random_examples(
         return
     images_to_log = []
     for vis in random_visuals:
-        caption_text = vis.get("language_action", "") or ""
+        caption_text = vis.get("language_action", "") or "" + f" | {vis.get('dataset_name', '')}"
         caption = f"{caption_text}"
         images_to_log.append(wandb.Image(vis["image"], caption=caption))
     if images_to_log:

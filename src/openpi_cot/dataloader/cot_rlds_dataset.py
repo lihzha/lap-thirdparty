@@ -570,13 +570,23 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 from_encoding=self.spec.default_action_encoding,
                 to_encoding=self.config.action_encoding,
             )
+            cartesian_obs = tf.cast(traj["observation"]["cartesian_position"], actions.dtype)
+            cartesian_dim = tf.shape(cartesian_obs)[-1]
+            action_dim = tf.shape(actions)[-1]
+            split_sizes = tf.stack([cartesian_dim, action_dim - cartesian_dim])
+            cartesian_actions, remaining_actions = tf.split(actions, split_sizes, axis=-1)
+            delta_cartesian = cartesian_actions - cartesian_obs
+            actions = tf.concat([delta_cartesian, remaining_actions], axis=-1)
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
             episode_id = self._episode_id_from_traj(traj, self.ep_table)
-            lang_bytes = self.lang_table.lookup(episode_id)
-            lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-            # Language actions may include an extra terminal step; crop to match action length
-            lang_tensor = lang_tensor[:traj_len]
+            if not self.use_base_actions:
+                lang_bytes = self.lang_table.lookup(episode_id)
+                lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
+                # Language actions may include an extra terminal step; crop to match action length
+                lang_tensor = lang_tensor[:traj_len]
+            else:
+                lang_tensor = tf.fill([traj_len], tf.constant(""))
             # Sample instruction from merged table or fallback
             instr_bytes = self.instr_table.lookup(episode_id)
             fallback_index = tf.random.uniform(
@@ -650,6 +660,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 "language_actions": lang_tensor,
                 "episode_id": episode_id_vec,
                 "traj_metadata": traj["traj_metadata"],
+                "raw_action": tf.cast(actions, tf.float32),
+                "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
             }
 
             if self.use_idle_filter:
@@ -752,9 +764,26 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             summation_indices = compute_window_indices(traj_len, summation_steps)
 
             # Gather the language actions for summation
-            language_actions_to_sum = tf.gather(traj["language_actions"], summation_indices)
-            # Keep unsummed window for debugging: shape [traj_len, summation_steps]
-            traj["language_actions"] = language_actions_to_sum
+            if not self.use_base_actions:
+                language_actions_to_sum = tf.gather(traj["language_actions"], summation_indices)
+                # Keep unsummed window for debugging: shape [traj_len, summation_steps]
+                traj["language_actions"] = language_actions_to_sum
+            else:
+                # Gather numeric actions for the future window: [T, W, A]
+                actions_window = tf.gather(traj["raw_action"], summation_indices)
+
+                # Unify spec with DROID by converting per-step numeric rows to tf.string via serialization.
+                # Result shape: [T, W] tf.string (each element is a serialized [A] float32 tensor)
+                flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
+                serialized_flat = tf.map_fn(
+                    lambda v: tf.io.serialize_tensor(v),
+                    flat_rows,
+                    fn_output_signature=tf.string,
+                )
+                traj["language_actions"] = tf.reshape(
+                    serialized_flat,
+                    [tf.shape(actions_window)[0], tf.shape(actions_window)[1]],
+                )
 
             # if vis_dataset:
             #     grouped_images = tf.gather(traj["observation"]["image"], summation_indices)
@@ -827,6 +856,12 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
 
             self.dataset = self.dataset.map(_remove_in_view)
 
+        def _remove_raw_action(frame):
+            frame.pop("raw_action")
+            return frame
+
+        self.dataset = self.dataset.map(_remove_raw_action)
+
     def apply_traj_filters(self):
         # ------------------------------------------------------------------
         # Regex helpers for robust path/id extraction
@@ -858,8 +893,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # Prefer cheap regex path filter first, then id/lang checks
         self.dataset = self.dataset.filter(_path_ok)
         self.dataset = self.dataset.filter(_has_instruction)
-        # if not self.use_base_actions:
-        self.dataset = self.dataset.filter(_id_ok)
+        if not self.use_base_actions:
+            self.dataset = self.dataset.filter(_id_ok)
 
     def apply_align_oxe_fmt(self):
         def _to_oxe_spec(traj):
@@ -958,9 +993,6 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             )
             self.apply_traj_filters()
             self.split_val(split_seed=split_seed)
-
-        logging.info(f"Number of trajs left after filtering: {dataset_size(self.dataset)}")
-        breakpoint()
 
         self.apply_traj_transforms(
             action_chunk_size=action_chunk_size,
@@ -1302,6 +1334,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 },
                 "prompt": traj["task"]["language_instruction"],
                 "language_actions": traj["language_actions"],
+                "dataset_name": traj["dataset_name"],
             }
             if use_wrist_image:
                 return_dict["observation"]["wrist_image_left"] = traj["observation"]["image_wrist"]
