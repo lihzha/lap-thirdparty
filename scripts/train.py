@@ -568,8 +568,17 @@ def main(config: _config.TrainConfig):
         if step % config.log_interval == 0:
             # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
-            breakpoint()
-            reduced_info = jax.device_get(jax.tree.map(jnp.max, stacked_infos))
+            reduce_overrides = {
+                "grad_norm": jnp.mean,
+                "loss": jnp.mean,
+                "param_norm": jnp.mean,
+                "per_sample_loss": jnp.max,
+            }
+            reduced_info = {
+                key if key != "per_sample_loss" else "max_per_sample_loss": reduce_overrides.get(key, jnp.mean)(value)
+                for key, value in stacked_infos.items()
+            }
+            reduced_info = jax.device_get(reduced_info)
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             if jax.process_index() == 0:
