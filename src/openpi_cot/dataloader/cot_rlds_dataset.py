@@ -959,6 +959,9 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             self.apply_traj_filters()
             self.split_val(split_seed=split_seed)
 
+        logging.info(f"Number of trajs left after filtering: {dataset_size(self.dataset)}")
+        breakpoint()
+
         self.apply_traj_transforms(
             action_chunk_size=action_chunk_size,
             summation_steps=config.summation_steps,
