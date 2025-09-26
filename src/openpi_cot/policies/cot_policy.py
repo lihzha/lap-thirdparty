@@ -175,6 +175,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if any(_is_trivial_image(img, mask) for img, mask in images_for_check.values()) or (
             prompt_str is None or prompt_str.strip() == ""
         ):
+            breakpoint()
             log_payload = {
                 "policy/anomaly_base": wandb.Image(
                     base_image, caption=f"Dataset: {data['dataset_name']}, prompt: {prompt_str}"
