@@ -227,11 +227,14 @@ def _ensure_color(img: np.ndarray | None) -> np.ndarray | None:
         return None
     if img.ndim == 2:
         return np.repeat(img[..., None], 3, axis=-1)
-    if img.ndim == 3:
-        if img.shape[0] == 3 and img.shape[-1] != 3:
-            return np.transpose(img, (1, 2, 0))
-        if img.shape[-1] == 1:
-            return np.repeat(img, 3, axis=-1)
+    if img.ndim != 3:
+        return img
+    if img.shape[-1] == 3:
+        return img
+    if img.shape[0] == 3:
+        return np.transpose(img, (1, 2, 0))
+    if img.shape[-1] == 1:
+        return np.repeat(img, 3, axis=-1)
     return img
 
 
@@ -460,15 +463,15 @@ def main(config: _config.TrainConfig):
         B = start_imgs.shape[0]
         vis_rows = []
         for i in range(B):
-            start_u8 = ((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
-            end_u8 = ((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+            start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+            end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             wrist_start_u8 = (
-                ((wrist_start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+                np.asarray(((wrist_start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
                 if wrist_start_imgs is not None
                 else None
             )
             wrist_end_u8 = (
-                ((wrist_end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+                np.asarray(((wrist_end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
                 if wrist_end_imgs is not None
                 else None
             )
@@ -519,7 +522,7 @@ def main(config: _config.TrainConfig):
                 col1 = _draw_dot(col1, pred_end_xy, (0, 0, 255))  # Pred end on start frame for side-by-side comparison
             col2 = _draw_dot(end_u8, pred_end_xy, (0, 0, 255)) if pred_end_xy is not None else end_u8  # Pred end
             col3 = _draw_dot(end_u8, end_true_xy, (0, 255, 0)) if end_true_xy is not None else end_u8  # GT end
-            panels = [_ensure_color(col1)]
+            panels = [_ensure_color(start_u8)]
             if wrist_start_u8 is not None:
                 panels.append(_ensure_color(wrist_start_u8))
             panels.append(_ensure_color(col2))
@@ -530,6 +533,22 @@ def main(config: _config.TrainConfig):
             if not panels:
                 continue
             row = np.concatenate(panels, axis=1)
+            # Re-apply overlays on performance copies to avoid affecting raw panel references
+            row = row.copy()
+            panels_widths = [p.shape[1] for p in panels]
+            offsets = np.cumsum([0] + panels_widths)
+            col1 = _draw_dot(row[:, offsets[0]:offsets[1]], start_xy, (0, 255, 255))
+            if pred_end_xy is not None:
+                col1 = _draw_dot(col1, pred_end_xy, (0, 0, 255))
+            row[:, offsets[0]:offsets[1]] = col1
+            col2_region = row[:, offsets[-2]:offsets[-1]]
+            if pred_end_xy is not None:
+                col2_region = _draw_dot(col2_region, pred_end_xy, (0, 0, 255))
+                row[:, offsets[-2]:offsets[-1]] = col2_region
+            col3_region = row[:, offsets[-1]-panels_widths[-1]:offsets[-1]]
+            if end_true_xy is not None:
+                col3_region = _draw_dot(col3_region, end_true_xy, (0, 255, 0))
+                row[:, offsets[-1]-panels_widths[-1]:offsets[-1]] = col3_region
             # Single bottom overlay spanning the entire row
             band_h_row = max(16, row.shape[0] // 14)
             row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
