@@ -811,13 +811,13 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 )
                 traj["language_actions"] = tf.reshape(serialized_flat, [tf.shape(actions_window)[0], summation_steps])
 
-            if self.vis_dataset:
-                grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)
-                traj["observation"]["exterior_image_1_left"] = grouped_images
+            # if self.vis_dataset:
+            grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)
+            traj["observation"]["exterior_image_1_left"] = grouped_images
 
-                if self.use_wrist_image:
-                    grouped_wrist_images = tf.gather(traj["observation"]["wrist_image_left"], summation_indices)
-                    traj["observation"]["wrist_image_left"] = grouped_wrist_images
+            if self.use_wrist_image:
+                grouped_wrist_images = tf.gather(traj["observation"]["wrist_image_left"], summation_indices)
+                traj["observation"]["wrist_image_left"] = grouped_wrist_images
 
             # Group cartesian positions for start/end projection when needed
             if self.need_calib:
