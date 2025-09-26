@@ -61,6 +61,9 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         # Construct subclass using base fields
         base_dict = dataclasses.asdict(base)
         base_dict["image"] = getk("image")
+        base_dict["image"] = {
+            k: v.astype(np.float32) / 255.0 * 2.0 - 1.0 for k, v in base_dict["image"].items() if v is not None
+        }
         return cls(
             **base_dict,
             tokenized_reasoning_mask=getk("tokenized_reasoning_mask"),
