@@ -572,7 +572,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             # Important: we use joint *position* action space -- easier to simulate!
             actions = tf.concat(
                 (
-                    traj["action_dict"]["cartesian_position"],
+                    traj["observation"]["cartesian_position"],
                     traj["action_dict"]["gripper_position"],
                 ),
                 axis=-1,
@@ -581,14 +581,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 action=actions,
                 from_encoding=self.spec.default_action_encoding,
                 to_encoding=self.config.action_encoding,
+                to_delta_cartesian_pos=True,
             )
-            cartesian_obs = tf.cast(traj["observation"]["cartesian_position"], actions.dtype)
-            cartesian_dim = tf.shape(cartesian_obs)[-1]
-            action_dim = tf.shape(actions)[-1]
-            split_sizes = tf.stack([cartesian_dim, action_dim - cartesian_dim])
-            cartesian_actions, remaining_actions = tf.split(actions, split_sizes, axis=-1)
-            delta_cartesian = cartesian_actions - cartesian_obs
-            actions = tf.concat([delta_cartesian, remaining_actions], axis=-1)
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
             episode_id = self._episode_id_from_traj(traj, self.ep_table)
@@ -811,13 +805,13 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 )
                 traj["language_actions"] = tf.reshape(serialized_flat, [tf.shape(actions_window)[0], summation_steps])
 
-            # if self.vis_dataset:
-            grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)
-            traj["observation"]["exterior_image_1_left"] = grouped_images
+            if self.vis_dataset:
+                grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)
+                traj["observation"]["exterior_image_1_left"] = grouped_images
 
-            if self.use_wrist_image:
-                grouped_wrist_images = tf.gather(traj["observation"]["wrist_image_left"], summation_indices)
-                traj["observation"]["wrist_image_left"] = grouped_wrist_images
+                if self.use_wrist_image:
+                    grouped_wrist_images = tf.gather(traj["observation"]["wrist_image_left"], summation_indices)
+                    traj["observation"]["wrist_image_left"] = grouped_wrist_images
 
             # Group cartesian positions for start/end projection when needed
             if self.need_calib:

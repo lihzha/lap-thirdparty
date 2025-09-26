@@ -133,7 +133,9 @@ def convert_state_encoding(state: tf.Tensor, from_encoding: StateEncoding, to_en
     return state
 
 
-def convert_action_encoding(action: tf.Tensor, from_encoding: ActionEncoding, to_encoding: ActionEncoding) -> tf.Tensor:
+def convert_action_encoding(
+    action: tf.Tensor, from_encoding: ActionEncoding, to_encoding: ActionEncoding, to_delta_cartesian_pos: bool = False
+) -> tf.Tensor:
     """
     Convert action representation between different encodings.
 
@@ -145,6 +147,8 @@ def convert_action_encoding(action: tf.Tensor, from_encoding: ActionEncoding, to
     Returns:
         Converted action tensor
     """
+    if to_delta_cartesian_pos:
+        action = _convert_abs_eef_pos_to_delta_eef_pos(action)
     if from_encoding == to_encoding:
         return action
 
@@ -158,6 +162,34 @@ def convert_action_encoding(action: tf.Tensor, from_encoding: ActionEncoding, to
     if from_encoding == ActionEncoding.EEF_POS and to_encoding == ActionEncoding.ABS_EEF_POS:
         return action
     raise ValueError(f"Unsupported action encoding conversion: {from_encoding} -> {to_encoding}")
+
+
+def _convert_abs_eef_pos_to_delta_eef_pos(action: tf.Tensor) -> tf.Tensor:
+    """Convert absolute EEF pose [pos(3), euler(3)] to delta EEF pose.
+    Assumes action shape [..., 6] = [x,y,z,roll,pitch,yaw].
+    Pads last timestep with zeros so output has same shape as input.
+    Works in TF graph mode.
+    """
+
+    # Positions: simple difference
+    delta_pos = action[1:, ..., :3] - action[:-1, ..., :3]
+
+    # Euler angles: use tf.atan2(sin, cos) to handle wrap-around correctly
+    e1 = action[1:, ..., 3:6]
+    e2 = action[:-1, ..., 3:6]
+    raw_delta = e1 - e2
+    delta_euler = tf.atan2(tf.sin(raw_delta), tf.cos(raw_delta))  # wrap to [-pi, pi]
+
+    # Concatenate delta position + delta euler
+    delta_eef = tf.concat([delta_pos, delta_euler], axis=-1)
+
+    # Pad last timestep with zeros so output shape == input shape
+    pad_shape = tf.concat([[1], tf.shape(delta_eef)[1:]], axis=0)
+    last_zero = tf.zeros(pad_shape, dtype=delta_eef.dtype)
+    delta_eef = tf.concat([delta_eef, last_zero], axis=0)
+    delta_eef = tf.concat([delta_eef, action[..., -1:]], axis=-1)
+
+    return delta_eef
 
 
 def _convert_pos_euler_quat(state: tf.Tensor, from_encoding: StateEncoding, to_encoding: StateEncoding) -> tf.Tensor:
