@@ -522,7 +522,8 @@ def main(config: _config.TrainConfig):
     buffer_min = 32
     buffer_slack = 32
     warmup_steps = getattr(config.lr_schedule, "warmup_steps", 0)
-    hard_logging_start_step = max(10, warmup_steps)
+    # hard_logging_start_step = max(10, warmup_steps)
+    hard_logging_start_step = 0
     host_batch_cache: tuple[CoTObservation, _model.Actions] | None = None
     local_batch_size_cache: int | None = None
     host_batch_step: int | None = None
@@ -631,68 +632,34 @@ def main(config: _config.TrainConfig):
         infos.append(info)
         if jax.process_index() == 0 and step >= hard_logging_start_step:
             per_sample_loss = info.get("per_sample_loss")
-            if per_sample_loss is not None:
-                per_sample_np = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
-                if per_sample_np.size > 0:
-                    hard_interval_losses.append(per_sample_np.astype(np.float32))
-                    hard_interval_total_samples += int(per_sample_np.size)
-                    host_batch_local, local_size = ensure_host_batch(step)
-                    if local_size > 0:
-                        process_count = getattr(jax, "process_count", lambda: 1)()
-                        total_examples = per_sample_np.shape[0]
-                        if process_count > 1 and total_examples == local_size * process_count:
-                            process_idx = getattr(jax, "process_index", lambda: 0)()
-                            start = process_idx * local_size
-                            end = start + local_size
-                            local_losses = per_sample_np[start:end]
-                            idx_offset = start
-                        else:
-                            local_losses = per_sample_np[:local_size]
-                            idx_offset = 0
-                        if local_losses.size > 0:
-                            update_hard_buffer(step, host_batch_local, local_losses, idx_offset)
+            assert per_sample_loss is not None
+            per_sample_np = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
+            if per_sample_np.size > 0:
+                hard_interval_losses.append(per_sample_np.astype(np.float32))
+                hard_interval_total_samples += int(per_sample_np.size)
+                host_batch_local, local_size = ensure_host_batch(step)
+                if local_size > 0:
+                    total_examples = per_sample_np.shape[0]
+                    if process_count > 1 and total_examples == local_size * process_count:
+                        process_idx = getattr(jax, "process_index", lambda: 0)()
+                        start = process_idx * local_size
+                        end = start + local_size
+                        local_losses = per_sample_np[start:end]
+                        idx_offset = start
+                    else:
+                        local_losses = per_sample_np[:local_size]
+                        idx_offset = 0
+                    if local_losses.size > 0:
+                        update_hard_buffer(step, host_batch_local, local_losses, idx_offset)
         if step % config.log_interval == 0:
             # infos.append(info)
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            latest_info = jax.tree.map(lambda x: x[-1], stacked_infos)
             # Extract forward/backward/opt durations from callbacks
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
-
-                # After warmup, log a few hardest samples with image and language action
-                if step >= hard_logging_start_step and "per_sample_loss" in reduced_info:
-                    per_ex = latest_info.get("per_sample_loss", None)
-                    if per_ex is not None:
-                        per_ex_np = np.asarray(training_utils.to_local_array(per_ex), dtype=np.float32).reshape(-1)
-                    else:
-                        per_ex_np = np.empty((0,), dtype=np.float32)
-                    # Threshold: only consider samples > 2x the step's average loss
-                    latest_loss = latest_info.get("loss", None)
-                    if latest_loss is not None:
-                        loss_np = np.asarray(training_utils.to_local_array(latest_loss), dtype=np.float32).reshape(-1)
-                        step_mean = float(loss_np.mean())
-                    else:
-                        step_mean = float(np.mean(per_ex_np)) if per_ex_np.size > 0 else 0.0
-                    threshold = 1.2 * step_mean
-                    host_batch, local_size = ensure_host_batch(step)
-                    if local_size > 0 and per_ex_np.size > 0:
-                        process_count = getattr(jax, "process_count", lambda: 1)()
-                        total_examples = per_ex_np.shape[0]
-                        if process_count > 1 and total_examples == local_size * process_count:
-                            process_idx = getattr(jax, "process_index", lambda: 0)()
-                            start = process_idx * local_size
-                            end = start + local_size
-                            local_losses = per_ex_np[start:end]
-                            idx_offset = start
-                        else:
-                            local_losses = per_ex_np[:local_size]
-                            idx_offset = 0
-                        hard_idx_local = np.where(local_losses > threshold)[0]
-                        if hard_idx_local.size > 0:
-                            update_hard_buffer(step, host_batch, local_losses, idx_offset)
 
                 quantile_threshold = float("nan")
                 if hard_interval_losses:
@@ -704,46 +671,23 @@ def main(config: _config.TrainConfig):
                 hard_to_log.sort(key=lambda e: e["loss"], reverse=True)
                 if hard_to_log:
                     log_images = []
-                    log_example_ids: list[int] = []
-                    log_captions: list[str] = []
                     loss_values = []
                     for entry in hard_to_log:
                         loss_val = entry["loss"]
                         caption_text = entry.get("language_action", "")
-                        caption = f"loss={loss_val:.4f} | local={entry['local_idx']} | global={entry['global_idx']} | step={entry['step']}"
+                        caption = f"loss={loss_val:.4f}"
                         panel_caption = caption
                         log_images.append(
                             wandb.Image(
                                 entry["image"],
-                                caption=f"{panel_caption}\n{caption_text}",
+                                caption=f"{panel_caption} |{caption_text}",
                             )
                         )
-                        log_example_ids.append(entry["global_idx"])
-                        log_captions.append(caption_text)
                         loss_values.append(loss_val)
-                    loss_array = (
-                        np.asarray(loss_values, dtype=np.float32) if loss_values else np.empty((0,), dtype=np.float32)
-                    )
                     wandb_payload = {
                         "train/hard_examples": log_images,
                         "train/hard_examples_loss_quantile": quantile_threshold,
                         "train/hard_examples_count": len(log_images),
-                        "train/hard_examples_steps": [entry["step"] for entry in hard_to_log],
-                        "train/hard_examples_global_idx": log_example_ids,
-                        "train/hard_examples_language": log_captions,
-                        "train/hard_examples_threshold": float(quantile_threshold)
-                        if np.isfinite(quantile_threshold)
-                        else float("nan"),
-                        "train/hard_examples_loss_mean": float(loss_array.mean())
-                        if loss_array.size > 0
-                        else float("nan"),
-                        "train/hard_examples_loss_max": float(loss_array.max())
-                        if loss_array.size > 0
-                        else float("nan"),
-                        "train/hard_examples_loss_min": float(loss_array.min())
-                        if loss_array.size > 0
-                        else float("nan"),
-                        "train/hard_examples_interval_samples": int(hard_interval_total_samples),
                     }
                     wandb.log(wandb_payload, step=step)
                 reset_hard_interval_state()
@@ -756,8 +700,6 @@ def main(config: _config.TrainConfig):
                         rng_seed = int(step + 997 * process_idx)
                         rng_local = np.random.default_rng(rng_seed)
                         rand_idx = rng_local.choice(local_size, size=num_random, replace=False)
-                        process_count = getattr(jax, "process_count", lambda: 1)()
-                        idx_offset_rand = process_idx * local_size if process_count > 1 else 0
                         random_visuals = _eval_helper.visualize_language_actions(
                             host_batch,
                             data_loader.tokenizer,
@@ -766,25 +708,14 @@ def main(config: _config.TrainConfig):
                         )
                         if random_visuals:
                             images_to_log = []
-                            captions: list[str] = []
-                            table_rows: list[list[object]] = []
-                            for vis, idx_local in zip(random_visuals, rand_idx):
+                            for vis in random_visuals:
                                 caption_text = vis.get("language_action", "") or ""
-                                global_idx = int(idx_local + idx_offset_rand)
-                                caption = f"local={int(idx_local)}, global={global_idx}: {caption_text}"
-                                captions.append(caption)
+                                caption = f"{caption_text}"
                                 images_to_log.append(wandb.Image(vis["image"], caption=caption))
-                                table_rows.append([global_idx, int(idx_local), caption_text])
                             if images_to_log:
                                 wandb.log(
                                     {
                                         "train/random_examples": images_to_log,
-                                        "train/random_examples_count": len(images_to_log),
-                                        "train/random_examples_captions_text": "\n".join(captions),
-                                        "train/random_examples_table": wandb.Table(
-                                            columns=["global_idx", "local_idx", "caption"],
-                                            data=table_rows,
-                                        ),
                                     },
                                     step=step,
                                 )

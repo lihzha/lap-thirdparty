@@ -1083,7 +1083,10 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         #             f"does not match action dimension ({dataset_statistics['action']['mean'].shape[-1]})."
         #         )
         #     dataset_statistics["action"]["mask"] = np.array(self.action_normalization_mask)
-        self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=config.summation_steps)
+        # self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=config.summation_steps)
+        self.apply_traj_transforms(
+            action_chunk_size=action_chunk_size, summation_steps=dataset_kwargs["control_frequency"]
+        )
         self.apply_repack_transforms(use_wrist_image=config.use_wrist_image)
         self.apply_flatten()
         self.apply_frame_filters(**dataset_frame_transform_kwargs)

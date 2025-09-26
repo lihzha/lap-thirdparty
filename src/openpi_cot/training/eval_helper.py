@@ -2,6 +2,7 @@ from collections.abc import Iterable, Mapping, Sequence
 import logging
 import re
 
+import cv2
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -58,6 +59,7 @@ def _parse_language_delta_cm(text: str) -> np.ndarray | None:
             value = value / 10.0
         elif unit == "m" or (unit.startswith("m") and not unit.startswith("mm")):
             value = value * 100.0
+        breakpoint()
         totals[direction] = totals.get(direction, 0.0) + value
         any_valid = True
     if "set gripper to" in text:
@@ -251,8 +253,6 @@ def visualize_language_actions(
             else:
                 frame = np.clip(frame, 0, 255).astype(np.uint8)
             if resize_hw is not None and frame.shape[:2] != resize_hw:
-                import cv2
-
                 frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
             per_cam.append(frame)
 
