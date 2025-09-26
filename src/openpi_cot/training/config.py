@@ -402,7 +402,7 @@ _CONFIGS = [
             rlds_data_dir="gs://pi0-cot/OXE",
             language_action_dir="gs://pi0-cot/droid-base-lang-actions",
             data_mix="oxe_pi_magic_soup",
-            droid_weight=2.0,
+            droid_weight=10.0,
             shuffle_buffer_size=300_000,
         ),
         fsdp_devices=4,
