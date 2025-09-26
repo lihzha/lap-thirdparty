@@ -49,7 +49,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
         # Build the base Observation first (handles images, masks, dtype fixes, etc.)
         data_dict = dict(data)
-        data_dict["images"] = {k: v[:, 0] for k, v in data_dict["images"].items() if v is not None}
+        data_dict["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
         base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict)
         # Pull CoT extras from either flat keys or a namespaced location.
         cot_src = data.get("extras", {}).get("cot", {})
