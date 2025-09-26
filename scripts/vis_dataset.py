@@ -517,38 +517,26 @@ def main(config: _config.TrainConfig):
                     pred_end_xy = _project_point(pred_xyz, extr, intr, (H, W))
             # Build three-column row and annotate text overlay
             la_text = reasoning_texts[i] if i < len(reasoning_texts) else ""
-            col1 = _draw_dot(start_u8, start_xy, (0, 255, 255))  # GT start
+            col1 = _draw_dot(np.copy(_ensure_color(start_u8)), start_xy, (0, 255, 255))  # GT start
             if pred_end_xy is not None:
                 col1 = _draw_dot(col1, pred_end_xy, (0, 0, 255))  # Pred end on start frame for side-by-side comparison
-            col2 = _draw_dot(end_u8, pred_end_xy, (0, 0, 255)) if pred_end_xy is not None else end_u8  # Pred end
-            col3 = _draw_dot(end_u8, end_true_xy, (0, 255, 0)) if end_true_xy is not None else end_u8  # GT end
-            panels = [_ensure_color(start_u8)]
+            col2 = np.copy(_ensure_color(end_u8))
+            if pred_end_xy is not None:
+                col2 = _draw_dot(col2, pred_end_xy, (0, 0, 255))  # Pred end
+            col3 = np.copy(_ensure_color(end_u8))
+            if end_true_xy is not None:
+                col3 = _draw_dot(col3, end_true_xy, (0, 255, 0))  # GT end
+            panels = [col1]
             if wrist_start_u8 is not None:
                 panels.append(_ensure_color(wrist_start_u8))
-            panels.append(_ensure_color(col2))
+            panels.append(col2)
             if wrist_end_u8 is not None:
                 panels.append(_ensure_color(wrist_end_u8))
-            panels.append(_ensure_color(col3))
+            panels.append(col3)
             panels = [p for p in panels if p is not None]
             if not panels:
                 continue
             row = np.concatenate(panels, axis=1)
-            # Re-apply overlays on performance copies to avoid affecting raw panel references
-            row = row.copy()
-            panels_widths = [p.shape[1] for p in panels]
-            offsets = np.cumsum([0] + panels_widths)
-            col1 = _draw_dot(row[:, offsets[0]:offsets[1]], start_xy, (0, 255, 255))
-            if pred_end_xy is not None:
-                col1 = _draw_dot(col1, pred_end_xy, (0, 0, 255))
-            row[:, offsets[0]:offsets[1]] = col1
-            col2_region = row[:, offsets[-2]:offsets[-1]]
-            if pred_end_xy is not None:
-                col2_region = _draw_dot(col2_region, pred_end_xy, (0, 0, 255))
-                row[:, offsets[-2]:offsets[-1]] = col2_region
-            col3_region = row[:, offsets[-1]-panels_widths[-1]:offsets[-1]]
-            if end_true_xy is not None:
-                col3_region = _draw_dot(col3_region, end_true_xy, (0, 255, 0))
-                row[:, offsets[-1]-panels_widths[-1]:offsets[-1]] = col3_region
             # Single bottom overlay spanning the entire row
             band_h_row = max(16, row.shape[0] // 14)
             row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
