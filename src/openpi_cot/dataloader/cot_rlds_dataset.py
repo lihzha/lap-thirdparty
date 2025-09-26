@@ -575,8 +575,21 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             episode_id = self._episode_id_from_traj(traj, self.ep_table)
             lang_bytes = self.lang_table.lookup(episode_id)
             lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-            # Language actions may include an extra terminal step; crop to match action length
-            lang_tensor = lang_tensor[:traj_len]
+            lang_len = tf.shape(lang_tensor)[0]
+
+            def _truncate_lang():
+                return lang_tensor[:traj_len]
+
+            def _pad_lang():
+                pad_len = tf.maximum(traj_len - lang_len, 0)
+                padding = tf.fill([pad_len], tf.constant("", dtype=tf.string))
+                return tf.concat([lang_tensor, padding], axis=0)
+
+            lang_tensor = tf.cond(
+                tf.greater_equal(lang_len, traj_len),
+                _truncate_lang,
+                _pad_lang,
+            )
             # Sample instruction from merged table or fallback
             instr_bytes = self.instr_table.lookup(episode_id)
             fallback_index = tf.random.uniform(
