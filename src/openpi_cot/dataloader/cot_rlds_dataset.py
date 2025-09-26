@@ -122,26 +122,45 @@ def make_decode_images_fn(
         return padded
 
     def _decode_single(img_bytes):
-        # If already numeric, cast to uint8 and return
+        # Already-decoded path (works for [H,W,C] or [T,H,W,C])
         if img_bytes.dtype != tf.string:
             img = tf.cast(img_bytes, tf.uint8)
-        else:
-            # Guard against empty placeholders (e.g., padding "")
+        # String input: handle scalar vs. vector of strings
+        elif img_bytes.shape.rank == 0:
             has_data = tf.greater(tf.strings.length(img_bytes), 0)
             img = tf.cond(
                 has_data,
-                lambda: tf.io.decode_image(
-                    img_bytes,
-                    channels=3,
-                    expand_animations=False,
-                    dtype=tf.uint8,
-                ),
+                lambda: tf.io.decode_image(img_bytes, channels=3, expand_animations=False, dtype=tf.uint8),
                 lambda: tf.zeros([1, 1, 3], dtype=tf.uint8),
             )
-        # Optional resize-with-pad to ensure batching shape compatibility
+        else:
+            flat = tf.reshape(img_bytes, [-1])  # [T]
+
+            def _dec_one(b):
+                has = tf.greater(tf.strings.length(b), 0)
+                return tf.cond(
+                    has,
+                    lambda: tf.io.decode_image(b, channels=3, expand_animations=False, dtype=tf.uint8),
+                    lambda: tf.zeros([1, 1, 3], dtype=tf.uint8),
+                )
+
+            # Decode each frame; outputs a stacked 4-D tensor after resizing below
+            imgs = tf.map_fn(_dec_one, flat, fn_output_signature=tf.uint8)
+            # imgs is a ragged-like stack because frames can have different H,W;
+            # do resizing after to make them uniform.
+            img = imgs
+
+        # Optional resize/pad
         if resize_to is not None:
             h, w = resize_to
-            img = _tf_resize_with_pad(img, h, w)
+            # Ensure we support both 3-D and 4-D inputs
+            if tf.rank(img) == 3:
+                img = _tf_resize_with_pad(img, h, w)  # [H,W,C] -> [h,w,C]
+            elif tf.rank(img) == 4:
+                # Treat leading dim as batch/time: [N,H,W,C] -> [N,h,w,C]
+                img = tf.map_fn(lambda x: _tf_resize_with_pad(x, h, w), img, fn_output_signature=tf.uint8)
+            else:
+                raise ValueError("Unsupported image rank for resizing.")
         return img
 
     def _decode_frame(traj: dict) -> dict:
@@ -662,6 +681,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 "traj_metadata": traj["traj_metadata"],
                 "raw_action": tf.cast(actions, tf.float32),
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
+                # Attach control_frequency per step for downstream windowing/summarization
+                "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
             }
 
             if self.use_idle_filter:
@@ -763,35 +784,46 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             # First, create indices for summation (current + future steps)
             summation_indices = compute_window_indices(traj_len, summation_steps)
 
-            # Gather the language actions for summation
+            # Trim window to control_frequency and pad to fixed length (summation_steps)
+            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
             if not self.use_base_actions:
-                language_actions_to_sum = tf.gather(traj["language_actions"], summation_indices)
-                # Keep unsummed window for debugging: shape [traj_len, summation_steps]
-                traj["language_actions"] = language_actions_to_sum
-            else:
-                # Gather numeric actions for the future window: [T, W, A]
-                actions_window = tf.gather(traj["raw_action"], summation_indices)
+                la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
+                pad_len = summation_steps - trimmed_len
 
-                # Unify spec with DROID by converting per-step numeric rows to tf.string via serialization.
-                # Result shape: [T, W] tf.string (each element is a serialized [A] float32 tensor)
+                def _pad_text():
+                    pad = tf.fill([tf.shape(la_window)[0], pad_len], tf.constant("", dtype=tf.string))
+                    return tf.concat([la_window, pad], axis=1)
+
+                traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
+            else:
+                # Gather numeric actions for the future window: [T, trimmed_len, A]
+                actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
+                pad_len = summation_steps - trimmed_len
+
+                def _pad_numeric():
+                    zeros_pad = tf.zeros(
+                        [tf.shape(actions_window_trim)[0], pad_len, tf.shape(actions_window_trim)[-1]],
+                        dtype=actions_window_trim.dtype,
+                    )
+                    return tf.concat([actions_window_trim, zeros_pad], axis=1)
+
+                actions_window = tf.cond(pad_len > 0, _pad_numeric, lambda: actions_window_trim)
+
+                # Convert per-step numeric rows to tf.string via serialization -> [T, summation_steps]
                 flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
                 serialized_flat = tf.map_fn(
                     lambda v: tf.io.serialize_tensor(v),
                     flat_rows,
                     fn_output_signature=tf.string,
                 )
-                traj["language_actions"] = tf.reshape(
-                    serialized_flat,
-                    [tf.shape(actions_window)[0], tf.shape(actions_window)[1]],
-                )
+                traj["language_actions"] = tf.reshape(serialized_flat, [tf.shape(actions_window)[0], summation_steps])
 
-            # if vis_dataset:
-            #     grouped_images = tf.gather(traj["observation"]["image"], summation_indices)
-            #     traj["observation"]["image"] = grouped_images
+            grouped_images = tf.gather(traj["observation"]["image"], summation_indices)
+            traj["observation"]["image"] = grouped_images
 
-            #     if use_wrist_image:
-            #         grouped_wrist_images = tf.gather(traj["observation"]["wrist_image"], summation_indices)
-            #         traj["observation"]["wrist_image"] = grouped_wrist_images
+            # if use_wrist_image:
+            #     grouped_wrist_images = tf.gather(traj["observation"]["wrist_image"], summation_indices)
+            #     traj["observation"]["wrist_image"] = grouped_wrist_images
 
             # Group cartesian positions for start/end projection when needed
             if self.need_calib:
@@ -945,6 +977,9 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.use_per_traj_filter = bool(config.use_per_traj_filter)
         self.use_base_actions = use_base_actions
+        # Persist per-dataset control frequency for later padding and policy use
+        # Default to 15 for DROID datasets
+        self.control_frequency: int = 15
 
         if train_dataset is not None:
             self.lang_table = train_dataset.lang_table
@@ -996,7 +1031,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
 
         self.apply_traj_transforms(
             action_chunk_size=action_chunk_size,
-            summation_steps=config.summation_steps,
+            summation_steps=30,
         )
 
         if align_oxe_fmt:
@@ -1062,6 +1097,9 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
 
+        # Persist per-dataset control frequency for later padding and policy use
+        self.control_frequency: int = int(dataset_kwargs["control_frequency"])  # constant for this dataset
+
         logging.info(f"Dataset kwargs: {dataset_kwargs}")
 
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
@@ -1092,9 +1130,8 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         #         )
         #     dataset_statistics["action"]["mask"] = np.array(self.action_normalization_mask)
         # self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=config.summation_steps)
-        self.apply_traj_transforms(
-            action_chunk_size=action_chunk_size, summation_steps=dataset_kwargs["control_frequency"]
-        )
+        # Use a fixed summation window across datasets to enable interleaving
+        self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=30)
         self.apply_repack_transforms(use_wrist_image=config.use_wrist_image)
         self.apply_flatten()
         self.apply_frame_filters(**dataset_frame_transform_kwargs)
@@ -1208,6 +1245,8 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": tf.repeat(traj_uid, traj_len),
                 "raw_action": tf.cast(traj["action"], tf.float32),
+                # Attach control_frequency per step for downstream windowing/summarization
+                "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
             }
 
             return traj
@@ -1291,11 +1330,27 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             # First, create indices for summation (current + future steps)
             summation_indices = compute_window_indices(traj_len, summation_steps)
 
-            # Gather numeric actions for the future window: [T, W, A]
-            actions_window = tf.gather(traj["raw_action"], summation_indices)
+            # Trim to dataset control frequency and pad to fixed window length (summation_steps)
+            # Note: self.control_frequency is a Python int constant per dataset instance
+            trimmed_len = min(self.control_frequency, int(summation_steps))
+            # Gather numeric actions for the future window up to control frequency: [T, trimmed_len, A]
+            actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
+            pad_len = int(summation_steps) - trimmed_len
+            if pad_len > 0:
+                zeros_pad = tf.zeros(
+                    [
+                        tf.shape(actions_window_trim)[0],
+                        pad_len,
+                        tf.shape(actions_window_trim)[-1],
+                    ],
+                    dtype=actions_window_trim.dtype,
+                )
+                actions_window = tf.concat([actions_window_trim, zeros_pad], axis=1)
+            else:
+                actions_window = actions_window_trim
 
             # Unify spec with DROID by converting per-step numeric rows to tf.string via serialization.
-            # Result shape: [T, W] tf.string (each element is a serialized [A] float32 tensor)
+            # Result shape: [T, summation_steps] tf.string (each element is a serialized [A] float32 tensor)
             flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
             serialized_flat = tf.map_fn(
                 lambda v: tf.io.serialize_tensor(v),
@@ -1304,7 +1359,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             )
             traj["language_actions"] = tf.reshape(
                 serialized_flat,
-                [tf.shape(actions_window)[0], tf.shape(actions_window)[1]],
+                [tf.shape(actions_window)[0], int(summation_steps)],
             )
 
             return traj
@@ -1335,6 +1390,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 "prompt": traj["task"]["language_instruction"],
                 "language_actions": traj["language_actions"],
                 "dataset_name": traj["dataset_name"],
+                "control_frequency": traj["control_frequency"],
             }
             if use_wrist_image:
                 return_dict["observation"]["wrist_image_left"] = traj["observation"]["image_wrist"]

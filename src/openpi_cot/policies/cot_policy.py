@@ -171,7 +171,17 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             la = data["language_actions"]
             assert isinstance(la[0], bytes)
             if _maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
-                raw_array = [_maybe_parse_serialized_tensor_to_ndarray(x) for x in la]
+                # Only use the non-padded portion according to control_frequency, if present
+                cf_val = data.get("control_frequency")
+                try:
+                    cf = int(np.asarray(cf_val).item()) if cf_val is not None else None
+                except Exception:
+                    cf = None
+                if cf is not None:
+                    la_used = la[: int(cf)]
+                else:
+                    la_used = la
+                raw_array = [_maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
                 summed = summarize_numeric_actions(raw_array, self.sum_decimal)
                 inputs["language_actions"] = summed
             else:
