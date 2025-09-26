@@ -586,13 +586,13 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
             episode_id = self._episode_id_from_traj(traj, self.ep_table)
-            if not self.use_base_actions:
-                lang_bytes = self.lang_table.lookup(episode_id)
-                lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-                # Language actions may include an extra terminal step; crop to match action length
-                lang_tensor = lang_tensor[:traj_len]
-            else:
-                lang_tensor = tf.fill([traj_len], tf.constant(""))
+            # if not self.use_base_actions:
+            lang_bytes = self.lang_table.lookup(episode_id)
+            lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
+            # Language actions may include an extra terminal step; crop to match action length
+            lang_tensor = lang_tensor[:traj_len]
+            # else:
+            #     lang_tensor = tf.fill([traj_len], tf.constant(""))
             # Sample instruction from merged table or fallback
             instr_bytes = self.instr_table.lookup(episode_id)
             fallback_index = tf.random.uniform(
@@ -773,37 +773,37 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
 
             # Trim window to control_frequency and pad to fixed length (summation_steps)
             trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
-            if not self.use_base_actions:
-                la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
-                pad_len = summation_steps - trimmed_len
+            # if not self.use_base_actions:
+            la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
+            pad_len = summation_steps - trimmed_len
 
-                def _pad_text():
-                    pad = tf.fill([tf.shape(la_window)[0], pad_len], tf.constant("", dtype=tf.string))
-                    return tf.concat([la_window, pad], axis=1)
+            def _pad_text():
+                pad = tf.fill([tf.shape(la_window)[0], pad_len], tf.constant("", dtype=tf.string))
+                return tf.concat([la_window, pad], axis=1)
 
-                traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
-            else:
-                # Gather numeric actions for the future window: [T, trimmed_len, A]
-                actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
-                pad_len = summation_steps - trimmed_len
+            traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
+            # else:
+            # Gather numeric actions for the future window: [T, trimmed_len, A]
+            actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
+            pad_len = summation_steps - trimmed_len
 
-                def _pad_numeric():
-                    zeros_pad = tf.zeros(
-                        [tf.shape(actions_window_trim)[0], pad_len, tf.shape(actions_window_trim)[-1]],
-                        dtype=actions_window_trim.dtype,
-                    )
-                    return tf.concat([actions_window_trim, zeros_pad], axis=1)
-
-                actions_window = tf.cond(pad_len > 0, _pad_numeric, lambda: actions_window_trim)
-
-                # Convert per-step numeric rows to tf.string via serialization -> [T, summation_steps]
-                flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
-                serialized_flat = tf.map_fn(
-                    lambda v: tf.io.serialize_tensor(v),
-                    flat_rows,
-                    fn_output_signature=tf.string,
+            def _pad_numeric():
+                zeros_pad = tf.zeros(
+                    [tf.shape(actions_window_trim)[0], pad_len, tf.shape(actions_window_trim)[-1]],
+                    dtype=actions_window_trim.dtype,
                 )
-                traj["language_actions"] = tf.reshape(serialized_flat, [tf.shape(actions_window)[0], summation_steps])
+                return tf.concat([actions_window_trim, zeros_pad], axis=1)
+
+            actions_window = tf.cond(pad_len > 0, _pad_numeric, lambda: actions_window_trim)
+
+            # Convert per-step numeric rows to tf.string via serialization -> [T, summation_steps]
+            flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
+            serialized_flat = tf.map_fn(
+                lambda v: tf.io.serialize_tensor(v),
+                flat_rows,
+                fn_output_signature=tf.string,
+            )
+            traj["language_actions_raw"] = tf.reshape(serialized_flat, [tf.shape(actions_window)[0], summation_steps])
 
             if self.vis_dataset:
                 grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)

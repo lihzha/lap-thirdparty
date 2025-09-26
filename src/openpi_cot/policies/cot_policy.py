@@ -167,6 +167,38 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                         raise ValueError(f"Language actions is not a bytes string: {la}")
                     inputs["language_actions"] = la
 
+        if "language_actions_raw" in data:
+            la = data["language_actions_raw"]
+            assert isinstance(la[0], bytes)
+            if _maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
+                # Only use the non-padded portion according to control_frequency, if present
+                cf_val = data.get("control_frequency")
+                try:
+                    cf = int(np.asarray(cf_val).item()) if cf_val is not None else None
+                except Exception:
+                    cf = None
+                if cf is not None:
+                    la_used = la[: int(cf)]
+                else:
+                    la_used = la
+                raw_array = [_maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
+                summed = summarize_numeric_actions(raw_array, self.sum_decimal)
+                inputs["language_actions_raw"] = summed
+            else:
+                seq = _to_str_list(la)
+                if seq is not None:
+                    summed = sum_language_actions(seq, self.sum_decimal)
+                    if summed is not None and len(summed) > 0:
+                        inputs["language_actions_raw"] = summed
+                else:
+                    # Scalar/bytes case
+                    if isinstance(la, bytes):
+                        la = la.decode("utf-8")
+                    else:
+                        raise ValueError(f"Language actions is not a bytes string: {la}")
+                    inputs["language_actions_raw"] = la
+        breakpoint()
+
         images_for_check = {
             "base_0_rgb": [base_image, image_masks[0]],
             "left_wrist_0_rgb": [wrist_image, image_masks[1]],
