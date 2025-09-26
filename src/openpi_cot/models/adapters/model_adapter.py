@@ -37,7 +37,7 @@ class ExtendedModelType(str, Enum):
 @struct.dataclass
 class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
-    images: dict[str, at.Float[ArrayT, "*b t h w c"]] | None = None
+    images: dict[str, at.Float[ArrayT, "*b t h w c"]]
     tokenized_reasoning_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_numeric_mask: at.Bool[ArrayT, "*b l"] | None = None
     example_mask: at.Bool[ArrayT, "*b"] | None = None
