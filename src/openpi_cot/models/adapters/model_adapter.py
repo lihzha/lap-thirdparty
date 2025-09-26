@@ -37,7 +37,7 @@ class ExtendedModelType(str, Enum):
 @struct.dataclass
 class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
-    image: dict[str, at.Float[ArrayT, "*b t h w c"]] | None = None
+    images: dict[str, at.Float[ArrayT, "*b t h w c"]] | None = None
     tokenized_reasoning_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_numeric_mask: at.Bool[ArrayT, "*b l"] | None = None
     example_mask: at.Bool[ArrayT, "*b"] | None = None
@@ -60,9 +60,8 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
 
         # Construct subclass using base fields
         base_dict = dataclasses.asdict(base)
-        base_dict["image"] = getk("image")
-        base_dict["image"] = {
-            k: v.astype(np.float32) / 255.0 * 2.0 - 1.0 for k, v in base_dict["image"].items() if v is not None
+        base_dict["images"] = {
+            k: v.astype(np.float32) / 255.0 * 2.0 - 1.0 for k, v in data_dict["image"].items() if v is not None
         }
         return cls(
             **base_dict,
