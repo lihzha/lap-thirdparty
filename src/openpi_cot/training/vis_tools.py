@@ -45,6 +45,7 @@ class HardExampleTracker:
     buffer_ratio: float = 0.07
     buffer_min: int = 32
     buffer_slack: int = 32
+    max_hard_examples: int = 50
     resize_hw: tuple[int, int] | None = (128, 128)
     _interval_losses: list[np.ndarray] = field(default_factory=list, init=False)
     _interval_total_samples: int = field(default=0, init=False)
@@ -132,13 +133,18 @@ class HardExampleTracker:
             self.reset()
             return
         interval_all = np.concatenate(self._interval_losses, axis=0)
-        if interval_all.size == 0:
+        total_samples = int(interval_all.size)
+        hard_to_log = sorted(self._hard_example_buffer, key=lambda e: e["loss"], reverse=True)[: self.max_hard_examples]
+        if total_samples == 0 or not hard_to_log:
             quantile_threshold = float("nan")
         else:
-            quantile_threshold = float(np.quantile(interval_all, self.hard_quantile))
-        cutoff = quantile_threshold if np.isfinite(quantile_threshold) else -np.inf
-        hard_to_log = [entry for entry in self._hard_example_buffer if entry["loss"] >= cutoff]
-        hard_to_log.sort(key=lambda e: e["loss"], reverse=True)
+            target = min(self.max_hard_examples, total_samples)
+            quantile_prob = 1.0 - target / total_samples
+            quantile_prob = float(np.clip(quantile_prob, 0.0, 1.0))
+            quantile_threshold = float(np.quantile(interval_all, quantile_prob))
+            min_logged_loss = float(hard_to_log[-1]["loss"])
+            if not np.isfinite(quantile_threshold) or quantile_threshold < min_logged_loss:
+                quantile_threshold = min_logged_loss
         if hard_to_log:
             log_images = []
             for entry in hard_to_log:
@@ -167,7 +173,8 @@ class HardExampleTracker:
 
     def _compute_buffer_capacity(self) -> int:
         approx = int(np.ceil(self._interval_total_samples * self.buffer_ratio))
-        return max(self.buffer_min, approx + self.buffer_slack)
+        capacity = max(self.buffer_min, approx + self.buffer_slack)
+        return min(capacity, self.max_hard_examples)
 
 
 def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:

@@ -650,7 +650,6 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 "language_actions": lang_tensor,
                 "episode_id": episode_id_vec,
                 "traj_metadata": traj["traj_metadata"],
-                "raw_action": tf.cast(actions, tf.float32),
             }
 
             if self.use_idle_filter:
@@ -827,12 +826,6 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 return frame
 
             self.dataset = self.dataset.map(_remove_in_view)
-
-        def _remove_raw_action(frame):
-            frame.pop("raw_action")
-            return frame
-
-        self.dataset = self.dataset.map(_remove_raw_action)
 
     def apply_traj_filters(self):
         # ------------------------------------------------------------------

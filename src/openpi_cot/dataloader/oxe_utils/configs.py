@@ -747,7 +747,7 @@ OXE_DATASET_METADATA = {
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
-    "bridge": {
+    "bridge_v2_oxe": {
         "control_frequency": 5,
         "language_annotations": "Natural",
         "robot_morphology": "Single Arm",
