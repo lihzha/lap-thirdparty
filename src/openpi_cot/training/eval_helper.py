@@ -59,7 +59,6 @@ def _parse_language_delta_cm(text: str) -> np.ndarray | None:
             value = value / 10.0
         elif unit == "m" or (unit.startswith("m") and not unit.startswith("mm")):
             value = value * 100.0
-        breakpoint()
         totals[direction] = totals.get(direction, 0.0) + value
         any_valid = True
     if "set gripper to" in text:

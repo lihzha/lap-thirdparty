@@ -660,6 +660,7 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
+                breakpoint()
 
                 quantile_threshold = float("nan")
                 if hard_interval_losses:
