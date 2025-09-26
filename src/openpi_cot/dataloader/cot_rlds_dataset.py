@@ -405,6 +405,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             serial_to_name = {v: k for k, v in cams.items()}
             if camera_serial not in serial_to_name:
                 continue
+            if eid not in intrinsics_json:
+                continue
 
             calib_camera_name = serial_to_name[camera_serial]
             if calib_camera_name == "ext1_cam_serial":
@@ -917,8 +919,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # Prefer cheap regex path filter first, then id/lang checks
         self.dataset = self.dataset.filter(_path_ok)
         self.dataset = self.dataset.filter(_has_instruction)
-        if not self.use_base_actions:
-            self.dataset = self.dataset.filter(_id_ok)
+        # if not self.use_base_actions:
+        self.dataset = self.dataset.filter(_id_ok)
 
     def apply_align_oxe_fmt(self):
         def _to_oxe_spec(traj):
