@@ -409,7 +409,7 @@ def main(config: _config.TrainConfig):
         shuffle=True,
         seed=config.seed,
     )
-    tok = data_loader._data_loader._dataset._transform.transforms[-2].tokenizer
+    tok = data_loader.tokenizer
 
     data_iter = iter(data_loader)
     logging.info("Before getting batch")
