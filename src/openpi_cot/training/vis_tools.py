@@ -149,7 +149,8 @@ class HardExampleTracker:
         if hard_to_log:
             log_images = []
             for entry in hard_to_log:
-                caption_text = entry.get("language_action", "") or "" + f" | {entry.get('dataset_name', '')}"
+                caption_text = entry.get("language_action", "") or ""
+                caption_text += entry.get("dataset_name", "") or ""
                 caption = f"loss={entry['loss']:.4f}"
                 panel_caption = caption
                 log_images.append(
@@ -191,6 +192,240 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
         text = tokenizer.decode(sel.astype(np.int32))
         out.append(text)
     return out
+
+
+def get_language_actions(batch, tok):
+    texts = _decode_reasoning_strings(batch[0], tok)
+    return texts
+
+
+def visualize_language_actions(
+    batch: tuple[CoTObservation, _model.Actions],
+    tok: PaligemmaCoTTokenizer,
+    *,
+    indices: Sequence[int] | None = None,
+    max_examples: int | None = 5,
+    image_keys: Iterable[str] | None = None,
+    resize_hw: tuple[int, int] | None = None,
+) -> list[Mapping[str, object]]:
+    """Return combined RGB images and decoded language actions for selected examples.
+
+    Args:
+        batch: A tuple of (`CoTObservation`, actions) as produced by the dataloader.
+        tok: Tokenizer used for decoding language tokens.
+        indices: Optional iterable of batch indices to visualize.
+        max_examples: Maximum number of examples to return.
+        image_keys: Optional iterable specifying the order of image keys to concatenate.
+
+    Returns:
+        A list of dictionaries with keys:
+            ``image`` (np.ndarray uint8 HxWx3), ``language_action`` (str), ``index`` (int).
+    """
+
+    obs, _ = batch
+    images = {key: _utils.to_local_array(value) for key, value in obs.images.items() if value is not None}
+    if not images:
+        return []
+
+    order = list(image_keys) if image_keys is not None else sorted(images.keys())
+
+    batch_sizes = [arr.shape[0] for arr in images.values() if arr is not None and arr.ndim >= 1]
+    if not batch_sizes:
+        return []
+    batch_size = min(batch_sizes)
+
+    texts = get_language_actions(batch, tok)
+
+    if indices is None:
+        indices_list = list(range(batch_size))
+    else:
+        indices_list = [i for i in indices if 0 <= i < batch_size]
+
+    if max_examples is not None:
+        indices_list = indices_list[:max_examples]
+
+    visuals: list[Mapping[str, object]] = []
+    for idx in indices_list:
+        per_cam: list[np.ndarray] = []
+        for key in order:
+            arr = images.get(key)
+            if arr is None or idx >= arr.shape[0]:
+                continue
+            frame = np.asarray(arr[idx])
+            if frame.ndim > 3:
+                frame = frame[0]
+            if np.issubdtype(frame.dtype, np.floating):
+                frame = ((frame + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
+            else:
+                frame = np.clip(frame, 0, 255).astype(np.uint8)
+            if resize_hw is not None and frame.shape[:2] != resize_hw:
+                frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
+            per_cam.append(frame)
+
+        if not per_cam:
+            continue
+
+        if len(per_cam) == 1:
+            combined = per_cam[0]
+        else:
+            try:
+                combined = np.concatenate(per_cam, axis=1)
+            except ValueError:
+                # Pad images to match the maximum height before concatenation
+                max_h = max(img.shape[0] for img in per_cam)
+                padded: list[np.ndarray] = []
+                for img in per_cam:
+                    if img.shape[0] == max_h:
+                        padded.append(img)
+                        continue
+                    pad_total = max_h - img.shape[0]
+                    pad_top = pad_total // 2
+                    pad_bottom = pad_total - pad_top
+                    pad_spec = ((pad_top, pad_bottom), (0, 0), (0, 0))
+                    padded_img = np.pad(img, pad_spec, mode="constant")
+                    padded.append(padded_img)
+                try:
+                    combined = np.concatenate(padded, axis=1)
+                except ValueError:
+                    logging.warning("Failed to concatenate images for index %d due to incompatible shapes", idx)
+                    combined = per_cam[0]
+
+        text = texts[idx] if idx < len(texts) else ""
+        visuals.append({"image": combined, "language_action": text, "index": idx})
+
+    return visuals
+
+
+def log_random_examples(
+    step: int,
+    host_batch: tuple[CoTObservation, _model.Actions] | None,
+    tokenizer: PaligemmaCoTTokenizer,
+    *,
+    local_batch_size: int,
+    num_random: int = 5,
+) -> None:
+    if host_batch is None or local_batch_size <= 0:
+        return
+    count = min(num_random, local_batch_size)
+    if count <= 0:
+        return
+    process_idx = getattr(jax, "process_index", lambda: 0)()
+    rng_seed = int(step + 997 * process_idx)
+    rng_local = np.random.default_rng(rng_seed)
+    rand_idx = rng_local.choice(local_batch_size, size=count, replace=False)
+    random_visuals = visualize_language_actions(
+        host_batch,
+        tokenizer,
+        indices=rand_idx.tolist(),
+        max_examples=count,
+    )
+    if not random_visuals:
+        return
+    images_to_log = []
+    for vis in random_visuals:
+        caption_text = vis.get("language_action", "") or ""
+        caption_text += vis.get("dataset_name", "") or ""
+        caption = f"{caption_text}"
+        images_to_log.append(wandb.Image(vis["image"], caption=caption))
+    if images_to_log:
+        wandb.log({"train/random_examples": images_to_log}, step=step)
+
+
+def prepare_eval_batch(batch):
+    # Process the batch to remove reasoning and update masks
+    obs, actions = batch
+
+    # Find position 108 (start of reasoning) in each batch item
+    batch_size = obs.tokenized_prompt.shape[0]
+    new_tokenized_prompts = []
+    new_tokenized_prompt_masks = []
+    new_tokenized_reasoning_masks = []
+
+    for i in range(batch_size):
+        prompt_tokens = obs.tokenized_prompt[i]
+
+        # Find position of token 108 (start of reasoning)
+        # Ensure prompt_tokens is int32 for the comparison
+        prompt_tokens_int32 = prompt_tokens.astype(jnp.int32)
+        pos_108 = jnp.where(prompt_tokens_int32 == 108, size=1, fill_value=-1)[0]
+
+        if pos_108[0] >= 0:
+            # Remove everything after token 108 (inclusive)
+            prompt_without_reasoning = prompt_tokens[: pos_108[0] + 1]
+            original_length = prompt_tokens.shape[0]
+
+            # Left pad to maintain the same length
+            padding_length = original_length - prompt_without_reasoning.shape[0]
+            # Ensure consistent dtype for concatenation
+            padding_zeros = jnp.zeros(padding_length, dtype=prompt_tokens.dtype)
+            prompt_without_reasoning = prompt_without_reasoning.astype(prompt_tokens.dtype)
+            padded_prompt = jnp.concatenate([padding_zeros, prompt_without_reasoning])
+
+            # Create new mask: True for non-zero tokens, False for padding
+            new_mask = (padded_prompt != 0).astype(jnp.bool_)
+
+            # Create reasoning mask: all False - ensure consistent dtype
+            reasoning_mask = jnp.zeros(original_length, dtype=jnp.bool_)
+
+        else:
+            # No token 108 found, keep original
+            padded_prompt = prompt_tokens
+            # Ensure consistent dtype for the mask
+            if obs.tokenized_prompt_mask is not None:
+                new_mask = obs.tokenized_prompt_mask[i].astype(jnp.bool_)
+            else:
+                # Create a boolean mask of the same length as prompt_tokens
+                new_mask = jnp.ones(prompt_tokens.shape[0], dtype=jnp.bool_)
+            # Create reasoning mask with consistent dtype - use original length instead of zeros_like
+            reasoning_mask = jnp.zeros(prompt_tokens.shape[0], dtype=jnp.bool_)
+
+            logging.info(f"Batch {i}: No token 108 found, keeping original prompt")
+
+        new_tokenized_prompts.append(padded_prompt)
+        new_tokenized_prompt_masks.append(new_mask)
+        new_tokenized_reasoning_masks.append(reasoning_mask)
+
+    # Ensure all tensors have consistent types before stacking
+    # All masks should be boolean, all prompts should be int32
+    new_tokenized_prompts = [p.astype(jnp.int32) for p in new_tokenized_prompts]
+    new_tokenized_prompt_masks = [m.astype(jnp.bool_) for m in new_tokenized_prompt_masks]
+    new_tokenized_reasoning_masks = [r.astype(jnp.bool_) for r in new_tokenized_reasoning_masks]
+
+    # Stack the processed tensors
+    new_tokenized_prompt = jnp.stack(new_tokenized_prompts)
+    new_tokenized_prompt_mask = jnp.stack(new_tokenized_prompt_masks)
+    new_tokenized_reasoning_mask = jnp.stack(new_tokenized_reasoning_masks)
+
+    # Create new observation with modified prompts and masks
+    new_obs = CoTObservation(
+        images=obs.images,
+        image_masks=obs.image_masks,
+        state=obs.state,
+        tokenized_prompt=new_tokenized_prompt,
+        tokenized_prompt_mask=new_tokenized_prompt_mask,
+        tokenized_reasoning_mask=new_tokenized_reasoning_mask,
+        token_ar_mask=obs.token_ar_mask,
+        token_loss_mask=obs.token_loss_mask,
+        example_mask=obs.example_mask,
+    )
+
+    # Create new batch with modified observation
+    new_batch = (new_obs, actions)
+    return new_batch
+
+
+def subsample_batch(
+    batch: tuple[CoTObservation, _model.Actions],
+    idx: jax.Array,
+) -> tuple[CoTObservation, _model.Actions]:
+    obs, acts = batch
+
+    def take0(x):
+        return jnp.take(x, idx, axis=0)
+
+    obs_k = jax.tree.map(take0, obs)
+    acts_k = jax.tree.map(take0, acts)
+    return obs_k, acts_k
 
 
 def _parse_language_delta_cm(text: str) -> np.ndarray | None:
@@ -347,239 +582,6 @@ def _draw_line(
         if 0 <= y < H and 0 <= x < W:
             out[y, x] = color
     return out
-
-
-def get_language_actions(batch, tok):
-    texts = _decode_reasoning_strings(batch[0], tok)
-    return texts
-
-
-def visualize_language_actions(
-    batch: tuple[CoTObservation, _model.Actions],
-    tok: PaligemmaCoTTokenizer,
-    *,
-    indices: Sequence[int] | None = None,
-    max_examples: int | None = 5,
-    image_keys: Iterable[str] | None = None,
-    resize_hw: tuple[int, int] | None = None,
-) -> list[Mapping[str, object]]:
-    """Return combined RGB images and decoded language actions for selected examples.
-
-    Args:
-        batch: A tuple of (`CoTObservation`, actions) as produced by the dataloader.
-        tok: Tokenizer used for decoding language tokens.
-        indices: Optional iterable of batch indices to visualize.
-        max_examples: Maximum number of examples to return.
-        image_keys: Optional iterable specifying the order of image keys to concatenate.
-
-    Returns:
-        A list of dictionaries with keys:
-            ``image`` (np.ndarray uint8 HxWx3), ``language_action`` (str), ``index`` (int).
-    """
-
-    obs, _ = batch
-    images = {key: _utils.to_local_array(value) for key, value in obs.images.items() if value is not None}
-    if not images:
-        return []
-
-    order = list(image_keys) if image_keys is not None else sorted(images.keys())
-
-    batch_sizes = [arr.shape[0] for arr in images.values() if arr is not None and arr.ndim >= 1]
-    if not batch_sizes:
-        return []
-    batch_size = min(batch_sizes)
-
-    texts = get_language_actions(batch, tok)
-
-    if indices is None:
-        indices_list = list(range(batch_size))
-    else:
-        indices_list = [i for i in indices if 0 <= i < batch_size]
-
-    if max_examples is not None:
-        indices_list = indices_list[:max_examples]
-
-    visuals: list[Mapping[str, object]] = []
-    for idx in indices_list:
-        per_cam: list[np.ndarray] = []
-        for key in order:
-            arr = images.get(key)
-            if arr is None or idx >= arr.shape[0]:
-                continue
-            frame = np.asarray(arr[idx])
-            if frame.ndim > 3:
-                frame = frame[0]
-            if np.issubdtype(frame.dtype, np.floating):
-                frame = ((frame + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
-            else:
-                frame = np.clip(frame, 0, 255).astype(np.uint8)
-            if resize_hw is not None and frame.shape[:2] != resize_hw:
-                frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
-            per_cam.append(frame)
-
-        if not per_cam:
-            continue
-
-        if len(per_cam) == 1:
-            combined = per_cam[0]
-        else:
-            try:
-                combined = np.concatenate(per_cam, axis=1)
-            except ValueError:
-                # Pad images to match the maximum height before concatenation
-                max_h = max(img.shape[0] for img in per_cam)
-                padded: list[np.ndarray] = []
-                for img in per_cam:
-                    if img.shape[0] == max_h:
-                        padded.append(img)
-                        continue
-                    pad_total = max_h - img.shape[0]
-                    pad_top = pad_total // 2
-                    pad_bottom = pad_total - pad_top
-                    pad_spec = ((pad_top, pad_bottom), (0, 0), (0, 0))
-                    padded_img = np.pad(img, pad_spec, mode="constant")
-                    padded.append(padded_img)
-                try:
-                    combined = np.concatenate(padded, axis=1)
-                except ValueError:
-                    logging.warning("Failed to concatenate images for index %d due to incompatible shapes", idx)
-                    combined = per_cam[0]
-
-        text = texts[idx] if idx < len(texts) else ""
-        visuals.append({"image": combined, "language_action": text, "index": idx})
-
-    return visuals
-
-
-def log_random_examples(
-    step: int,
-    host_batch: tuple[CoTObservation, _model.Actions] | None,
-    tokenizer: PaligemmaCoTTokenizer,
-    *,
-    local_batch_size: int,
-    num_random: int = 5,
-) -> None:
-    if host_batch is None or local_batch_size <= 0:
-        return
-    count = min(num_random, local_batch_size)
-    if count <= 0:
-        return
-    process_idx = getattr(jax, "process_index", lambda: 0)()
-    rng_seed = int(step + 997 * process_idx)
-    rng_local = np.random.default_rng(rng_seed)
-    rand_idx = rng_local.choice(local_batch_size, size=count, replace=False)
-    random_visuals = visualize_language_actions(
-        host_batch,
-        tokenizer,
-        indices=rand_idx.tolist(),
-        max_examples=count,
-    )
-    if not random_visuals:
-        return
-    images_to_log = []
-    for vis in random_visuals:
-        caption_text = vis.get("language_action", "") or "" + f" | {vis.get('dataset_name', '')}"
-        caption = f"{caption_text}"
-        images_to_log.append(wandb.Image(vis["image"], caption=caption))
-    if images_to_log:
-        wandb.log({"train/random_examples": images_to_log}, step=step)
-
-
-def prepare_eval_batch(batch):
-    # Process the batch to remove reasoning and update masks
-    obs, actions = batch
-
-    # Find position 108 (start of reasoning) in each batch item
-    batch_size = obs.tokenized_prompt.shape[0]
-    new_tokenized_prompts = []
-    new_tokenized_prompt_masks = []
-    new_tokenized_reasoning_masks = []
-
-    for i in range(batch_size):
-        prompt_tokens = obs.tokenized_prompt[i]
-
-        # Find position of token 108 (start of reasoning)
-        # Ensure prompt_tokens is int32 for the comparison
-        prompt_tokens_int32 = prompt_tokens.astype(jnp.int32)
-        pos_108 = jnp.where(prompt_tokens_int32 == 108, size=1, fill_value=-1)[0]
-
-        if pos_108[0] >= 0:
-            # Remove everything after token 108 (inclusive)
-            prompt_without_reasoning = prompt_tokens[: pos_108[0] + 1]
-            original_length = prompt_tokens.shape[0]
-
-            # Left pad to maintain the same length
-            padding_length = original_length - prompt_without_reasoning.shape[0]
-            # Ensure consistent dtype for concatenation
-            padding_zeros = jnp.zeros(padding_length, dtype=prompt_tokens.dtype)
-            prompt_without_reasoning = prompt_without_reasoning.astype(prompt_tokens.dtype)
-            padded_prompt = jnp.concatenate([padding_zeros, prompt_without_reasoning])
-
-            # Create new mask: True for non-zero tokens, False for padding
-            new_mask = (padded_prompt != 0).astype(jnp.bool_)
-
-            # Create reasoning mask: all False - ensure consistent dtype
-            reasoning_mask = jnp.zeros(original_length, dtype=jnp.bool_)
-
-        else:
-            # No token 108 found, keep original
-            padded_prompt = prompt_tokens
-            # Ensure consistent dtype for the mask
-            if obs.tokenized_prompt_mask is not None:
-                new_mask = obs.tokenized_prompt_mask[i].astype(jnp.bool_)
-            else:
-                # Create a boolean mask of the same length as prompt_tokens
-                new_mask = jnp.ones(prompt_tokens.shape[0], dtype=jnp.bool_)
-            # Create reasoning mask with consistent dtype - use original length instead of zeros_like
-            reasoning_mask = jnp.zeros(prompt_tokens.shape[0], dtype=jnp.bool_)
-
-            logging.info(f"Batch {i}: No token 108 found, keeping original prompt")
-
-        new_tokenized_prompts.append(padded_prompt)
-        new_tokenized_prompt_masks.append(new_mask)
-        new_tokenized_reasoning_masks.append(reasoning_mask)
-
-    # Ensure all tensors have consistent types before stacking
-    # All masks should be boolean, all prompts should be int32
-    new_tokenized_prompts = [p.astype(jnp.int32) for p in new_tokenized_prompts]
-    new_tokenized_prompt_masks = [m.astype(jnp.bool_) for m in new_tokenized_prompt_masks]
-    new_tokenized_reasoning_masks = [r.astype(jnp.bool_) for r in new_tokenized_reasoning_masks]
-
-    # Stack the processed tensors
-    new_tokenized_prompt = jnp.stack(new_tokenized_prompts)
-    new_tokenized_prompt_mask = jnp.stack(new_tokenized_prompt_masks)
-    new_tokenized_reasoning_mask = jnp.stack(new_tokenized_reasoning_masks)
-
-    # Create new observation with modified prompts and masks
-    new_obs = CoTObservation(
-        images=obs.images,
-        image_masks=obs.image_masks,
-        state=obs.state,
-        tokenized_prompt=new_tokenized_prompt,
-        tokenized_prompt_mask=new_tokenized_prompt_mask,
-        tokenized_reasoning_mask=new_tokenized_reasoning_mask,
-        token_ar_mask=obs.token_ar_mask,
-        token_loss_mask=obs.token_loss_mask,
-        example_mask=obs.example_mask,
-    )
-
-    # Create new batch with modified observation
-    new_batch = (new_obs, actions)
-    return new_batch
-
-
-def subsample_batch(
-    batch: tuple[CoTObservation, _model.Actions],
-    idx: jax.Array,
-) -> tuple[CoTObservation, _model.Actions]:
-    obs, acts = batch
-
-    def take0(x):
-        return jnp.take(x, idx, axis=0)
-
-    obs_k = jax.tree.map(take0, obs)
-    acts_k = jax.tree.map(take0, acts)
-    return obs_k, acts_k
 
 
 def eval_step(
