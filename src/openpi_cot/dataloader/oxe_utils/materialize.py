@@ -42,7 +42,7 @@ def make_oxe_dataset_kwargs(
     if isinstance(has_suboptimal, str):
         has_suboptimal = has_suboptimal.lower() == "yes"
     if has_suboptimal:
-        raise ValueError(f"Cannot load `{dataset_name}`; suboptimal datasets are not supported!")
+        logging.warning(f"Cannot load `{dataset_name}`; suboptimal datasets are not supported!")
 
     # [Contract] For EEF_POS & EEF_R6 actions, only the last action dimension (gripper) is absolute!
     # Normalize all action dimensions *except* the gripper
