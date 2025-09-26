@@ -6,11 +6,11 @@ import cv2
 import etils.epath as epath
 import jax
 import numpy as np
-import openpi_cot.training.sharding as sharding
 from rail_tpu_utils import prevent_cross_region
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 import openpi_cot.training.config as _config
+import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 
 try:
