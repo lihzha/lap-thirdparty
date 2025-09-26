@@ -858,8 +858,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # Prefer cheap regex path filter first, then id/lang checks
         self.dataset = self.dataset.filter(_path_ok)
         self.dataset = self.dataset.filter(_has_instruction)
-        if not self.use_base_actions:
-            self.dataset = self.dataset.filter(_id_ok)
+        # if not self.use_base_actions:
+        self.dataset = self.dataset.filter(_id_ok)
 
     def apply_align_oxe_fmt(self):
         def _to_oxe_spec(traj):
