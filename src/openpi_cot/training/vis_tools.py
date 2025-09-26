@@ -1,12 +1,16 @@
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from dataclasses import field
 import logging
 import re
+from typing import Any
 
 import cv2
 import jax
 import jax.numpy as jnp
 import numpy as np
 from openpi.models import model as _model
+import wandb
 
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
@@ -14,6 +18,156 @@ from openpi_cot.training import utils as _utils
 
 AXIS_PERM = np.array([0, 2, 1], dtype=np.int32)
 AXIS_SIGN = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+
+
+def infer_local_batch_size(obs_local: CoTObservation | None) -> int:
+    if obs_local is None:
+        return 0
+    candidate_sizes: list[int] = []
+    state_local = getattr(obs_local, "state", None)
+    if state_local is not None:
+        candidate_sizes.append(int(np.shape(state_local)[0]))
+    prompt_local = getattr(obs_local, "tokenized_prompt", None)
+    if prompt_local is not None:
+        candidate_sizes.append(int(np.shape(prompt_local)[0]))
+    image_values = list(getattr(obs_local, "images", {}).values())
+    for img in image_values:
+        if img is not None:
+            candidate_sizes.append(int(np.shape(img)[0]))
+            break
+    return candidate_sizes[0] if candidate_sizes else 0
+
+
+@dataclass
+class HardExampleTracker:
+    tokenizer: PaligemmaCoTTokenizer
+    hard_quantile: float = 0.99
+    buffer_ratio: float = 0.07
+    buffer_min: int = 32
+    buffer_slack: int = 32
+    resize_hw: tuple[int, int] | None = (128, 128)
+    _interval_losses: list[np.ndarray] = field(default_factory=list, init=False)
+    _interval_total_samples: int = field(default=0, init=False)
+    _hard_example_buffer: list[dict[str, Any]] = field(default_factory=list, init=False)
+    _hard_example_keys: set[tuple[int, int]] = field(default_factory=set, init=False)
+
+    def update(self, per_sample_losses: np.ndarray | None) -> None:
+        if per_sample_losses is None:
+            return
+        arr = np.asarray(per_sample_losses, dtype=np.float32).reshape(-1)
+        if arr.size == 0:
+            return
+        self._interval_losses.append(arr)
+        self._interval_total_samples += int(arr.size)
+
+    def add_hard_examples(
+        self,
+        step_idx: int,
+        host_batch_local: tuple[CoTObservation, _model.Actions] | None,
+        local_losses: np.ndarray | None,
+        idx_offset: int,
+    ) -> None:
+        if host_batch_local is None or local_losses is None:
+            return
+        losses = np.asarray(local_losses, dtype=np.float32).reshape(-1)
+        if losses.size == 0:
+            return
+        capacity = self._compute_buffer_capacity()
+        if capacity <= 0:
+            return
+        buffer_len = len(self._hard_example_buffer)
+        if buffer_len < capacity:
+            k_needed = min(losses.size, capacity - buffer_len)
+            if k_needed <= 0:
+                candidate_indices: list[int] = []
+            elif k_needed >= losses.size:
+                candidate_indices = list(range(losses.size))
+            else:
+                candidate_indices = np.argpartition(losses, -k_needed)[-k_needed:].tolist()
+        else:
+            threshold_loss = self._hard_example_buffer[-1]["loss"]
+            candidate_indices = np.flatnonzero(losses >= threshold_loss).tolist()
+        if not candidate_indices:
+            return
+        candidate_indices = sorted({int(idx) for idx in candidate_indices})
+        new_indices = [
+            idx for idx in candidate_indices if (step_idx, int(idx_offset + idx)) not in self._hard_example_keys
+        ]
+        if not new_indices:
+            return
+        visuals = visualize_language_actions(
+            host_batch_local,
+            self.tokenizer,
+            indices=new_indices,
+            max_examples=len(new_indices),
+            resize_hw=self.resize_hw,
+        )
+        if not visuals:
+            return
+        vis_by_index = {int(vis.get("index", idx)): vis for vis, idx in zip(visuals, new_indices)}
+        for local_idx in new_indices:
+            vis = vis_by_index.get(local_idx)
+            if vis is None:
+                continue
+            loss_val = float(losses[local_idx])
+            entry = {
+                "loss": loss_val,
+                "step": step_idx,
+                "local_idx": int(local_idx),
+                "global_idx": int(local_idx + idx_offset),
+                "image": vis["image"],
+                "language_action": vis.get("language_action", "") or "",
+            }
+            self._hard_example_buffer.append(entry)
+            self._hard_example_keys.add((step_idx, entry["global_idx"]))
+        self._hard_example_buffer.sort(key=lambda e: e["loss"], reverse=True)
+        capacity = self._compute_buffer_capacity()
+        if len(self._hard_example_buffer) > capacity:
+            for removed in self._hard_example_buffer[capacity:]:
+                self._hard_example_keys.discard((removed["step"], removed["global_idx"]))
+            del self._hard_example_buffer[capacity:]
+
+    def log_if_ready(self, step_idx: int) -> None:
+        if not self._interval_losses:
+            self.reset()
+            return
+        interval_all = np.concatenate(self._interval_losses, axis=0)
+        if interval_all.size == 0:
+            quantile_threshold = float("nan")
+        else:
+            quantile_threshold = float(np.quantile(interval_all, self.hard_quantile))
+        cutoff = quantile_threshold if np.isfinite(quantile_threshold) else -np.inf
+        hard_to_log = [entry for entry in self._hard_example_buffer if entry["loss"] >= cutoff]
+        hard_to_log.sort(key=lambda e: e["loss"], reverse=True)
+        if hard_to_log:
+            log_images = []
+            for entry in hard_to_log:
+                caption_text = entry.get("language_action", "") or ""
+                caption = f"loss={entry['loss']:.4f}"
+                panel_caption = caption
+                log_images.append(
+                    wandb.Image(
+                        entry["image"],
+                        caption=f"{panel_caption} |{caption_text}",
+                    )
+                )
+            wandb_payload = {
+                "train/hard_examples": log_images,
+                "train/hard_examples_loss_quantile": quantile_threshold,
+                "train/hard_examples_count": len(log_images),
+            }
+            wandb.log(wandb_payload, step=step_idx)
+        self.reset()
+
+    def reset(self) -> None:
+        self._interval_losses.clear()
+        self._interval_total_samples = 0
+        self._hard_example_buffer.clear()
+        self._hard_example_keys.clear()
+
+    def _compute_buffer_capacity(self) -> int:
+        approx = int(np.ceil(self._interval_total_samples * self.buffer_ratio))
+        return max(self.buffer_min, approx + self.buffer_slack)
 
 
 def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
@@ -287,6 +441,40 @@ def visualize_language_actions(
         visuals.append({"image": combined, "language_action": text, "index": idx})
 
     return visuals
+
+
+def log_random_examples(
+    step: int,
+    host_batch: tuple[CoTObservation, _model.Actions] | None,
+    tokenizer: PaligemmaCoTTokenizer,
+    *,
+    local_batch_size: int,
+    num_random: int = 5,
+) -> None:
+    if host_batch is None or local_batch_size <= 0:
+        return
+    count = min(num_random, local_batch_size)
+    if count <= 0:
+        return
+    process_idx = getattr(jax, "process_index", lambda: 0)()
+    rng_seed = int(step + 997 * process_idx)
+    rng_local = np.random.default_rng(rng_seed)
+    rand_idx = rng_local.choice(local_batch_size, size=count, replace=False)
+    random_visuals = visualize_language_actions(
+        host_batch,
+        tokenizer,
+        indices=rand_idx.tolist(),
+        max_examples=count,
+    )
+    if not random_visuals:
+        return
+    images_to_log = []
+    for vis in random_visuals:
+        caption_text = vis.get("language_action", "") or ""
+        caption = f"{caption_text}"
+        images_to_log.append(wandb.Image(vis["image"], caption=caption))
+    if images_to_log:
+        wandb.log({"train/random_examples": images_to_log}, step=step)
 
 
 def prepare_eval_batch(batch):

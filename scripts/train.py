@@ -1,5 +1,4 @@
 import dataclasses
-import functools
 import logging
 import math
 import os
@@ -25,11 +24,11 @@ import wandb
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 from openpi_cot.models.adapters.model_adapter import CoTObservation
-from openpi_cot.training import eval_helper as _eval_helper
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
+import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.weight_loaders as _weight_loaders
 
 
@@ -151,6 +150,26 @@ def _is_tpu_runtime() -> bool:
         return False
 
 
+@dataclasses.dataclass
+class HostBatchCache:
+    host_batch: tuple[CoTObservation, _model.Actions] | None = None
+    local_batch_size: int = 0
+    step: int | None = None
+
+    def ensure(
+        self,
+        *,
+        step: int,
+        batch: tuple[CoTObservation, _model.Actions],
+    ) -> tuple[tuple[CoTObservation, _model.Actions] | None, int]:
+        if self.step != step:
+            self.host_batch = jax.tree.map(training_utils.to_local_array, batch)
+            obs_local = self.host_batch[0] if self.host_batch else None
+            self.local_batch_size = vis_tools.infer_local_batch_size(obs_local)
+            self.step = step
+        return self.host_batch, self.local_batch_size
+
+
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
     """Loads and validates the weights. Returns a loaded subset of the weights."""
     loaded_params = loader.load(params_shape)
@@ -227,101 +246,101 @@ def init_train_state(
     return train_state, state_sharding
 
 
-@at.typecheck
-def train_step(
-    config: _config.TrainConfig,
-    rng: at.KeyArrayLike,
-    state: training_utils.TrainState,
-    batch: tuple[CoTObservation, _model.Actions],
-) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
-    model = nnx.merge(state.model_def, state.params)
-    model.train()
+class TrainingStepRunner:
+    def __init__(self, config: _config.TrainConfig):
+        self.config = config
 
     @at.typecheck
-    def loss_fn(
-        model: _model.BaseModel,
+    def __call__(
+        self,
         rng: at.KeyArrayLike,
-        observation: CoTObservation,
-        actions: _model.Actions,
-    ):
-        per_sample_loss = model.compute_loss(rng, observation, actions, train=True)
-        # If model returns time/horizon dims, reduce to per-example
-        # assert per_sample_loss.ndim < 1, "per_sample_loss should be a scalar"
-        return jnp.mean(per_sample_loss), per_sample_loss
+        state: training_utils.TrainState,
+        batch: tuple[CoTObservation, _model.Actions],
+    ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
+        model = nnx.merge(state.model_def, state.params)
+        model.train()
 
-    train_rng = jax.random.fold_in(rng, state.step)
-    observation, actions = batch
+        @at.typecheck
+        def loss_fn(
+            model: _model.BaseModel,
+            rng: at.KeyArrayLike,
+            observation: CoTObservation,
+            actions: _model.Actions,
+        ):
+            per_sample_loss = model.compute_loss(rng, observation, actions, train=True)
+            return jnp.mean(per_sample_loss), per_sample_loss
 
-    # Filter out frozen params.
-    diff_state = nnx.DiffState(0, config.trainable_filter)
-    (loss, per_sample_loss), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
-        model, train_rng, observation, actions
-    )
-
-    params = state.params.filter(config.trainable_filter)
-    updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
-    new_params = optax.apply_updates(params, updates)
-
-    # Update the model in place and return the new full state.
-    nnx.update(model, new_params)
-    new_params = nnx.state(model)
-
-    new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
-    if state.ema_decay is not None:
-        new_state = dataclasses.replace(
-            new_state,
-            ema_params=jax.tree.map(
-                lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
-                state.ema_params,
-                new_params,
-            ),
+        train_rng = jax.random.fold_in(rng, state.step)
+        observation, actions = batch
+        diff_state = nnx.DiffState(0, self.config.trainable_filter)
+        (loss, per_sample_loss), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+            model, train_rng, observation, actions
         )
 
-    # Filter out params that aren't kernels.
-    kernel_params = nnx.state(
-        model,
-        nnx.All(
-            nnx.Param,
-            nnx.Not(nnx_utils.PathRegex(".*/(bias|scale|pos_embedding|input_embedding)")),
-            lambda _, x: x.value.ndim > 1,
-        ),
-    )
-    info = {
-        "loss": loss,
-        "per_sample_loss": per_sample_loss,
-        "grad_norm": optax.global_norm(grads),
-        "param_norm": optax.global_norm(kernel_params),
-    }
-    return new_state, info
+        params = state.params.filter(self.config.trainable_filter)
+        updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
+        new_params = optax.apply_updates(params, updates)
+        nnx.update(model, new_params)
+        new_params = nnx.state(model)
+
+        new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
+        if state.ema_decay is not None:
+            new_state = dataclasses.replace(
+                new_state,
+                ema_params=jax.tree.map(
+                    lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
+                    state.ema_params,
+                    new_params,
+                ),
+            )
+
+        kernel_params = nnx.state(
+            model,
+            nnx.All(
+                nnx.Param,
+                nnx.Not(nnx_utils.PathRegex(".*/(bias|scale|pos_embedding|input_embedding)")),
+                lambda _, x: x.value.ndim > 1,
+            ),
+        )
+        info = {
+            "loss": loss,
+            "per_sample_loss": per_sample_loss,
+            "grad_norm": optax.global_norm(grads),
+            "param_norm": optax.global_norm(kernel_params),
+        }
+        return new_state, info
 
 
-@at.typecheck
-def val_step(
-    config: _config.TrainConfig,
-    rng: at.KeyArrayLike,
-    state: training_utils.TrainState,
-    batch: tuple[CoTObservation, _model.Actions],
-) -> dict[str, at.Array]:
-    model = nnx.merge(state.model_def, state.params)
-    model.eval()
+class ValidationStepRunner:
+    def __init__(self, config: _config.TrainConfig):
+        self.config = config
 
     @at.typecheck
-    def loss_fn(
-        model: _model.BaseModel,
+    def __call__(
+        self,
         rng: at.KeyArrayLike,
-        observation: CoTObservation,
-        actions: _model.Actions,
-    ):
-        # compute_loss may return per-example; reduce to scalar
-        val_loss = model.compute_loss(rng, observation, actions, train=False)
-        return jnp.mean(val_loss)
+        state: training_utils.TrainState,
+        batch: tuple[CoTObservation, _model.Actions],
+    ) -> dict[str, at.Array]:
+        model = nnx.merge(state.model_def, state.params)
+        model.eval()
 
-    eval_rng = jax.random.fold_in(rng, state.step)
-    observation, actions = batch
-    if hasattr(model, "compute_eval_metrics"):
-        return model.compute_eval_metrics(eval_rng, observation, actions)
-    loss = loss_fn(model, eval_rng, observation, actions)
-    return {"val_loss": loss}
+        @at.typecheck
+        def loss_fn(
+            model: _model.BaseModel,
+            rng: at.KeyArrayLike,
+            observation: CoTObservation,
+            actions: _model.Actions,
+        ):
+            val_loss = model.compute_loss(rng, observation, actions, train=False)
+            return jnp.mean(val_loss)
+
+        eval_rng = jax.random.fold_in(rng, state.step)
+        observation, actions = batch
+        if hasattr(model, "compute_eval_metrics"):
+            return model.compute_eval_metrics(eval_rng, observation, actions)
+        loss = loss_fn(model, eval_rng, observation, actions)
+        return {"val_loss": loss}
 
 
 def main(config: _config.TrainConfig):
@@ -458,8 +477,9 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
+    train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
-        functools.partial(train_step, config),
+        train_runner,
         in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
@@ -476,8 +496,9 @@ def main(config: _config.TrainConfig):
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
         tok = data_loader.tokenizer
+        val_runner = ValidationStepRunner(config)
         pval_step = jax.jit(
-            functools.partial(val_step, config),
+            val_runner,
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         )
 
@@ -513,131 +534,24 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    hard_interval_losses: list[np.ndarray] = []
-    hard_interval_total_samples = 0
-    hard_example_buffer: list[dict[str, object]] = []
-    hard_example_keys: set[tuple[int, int]] = set()
-    hard_quantile = 0.975
-    buffer_ratio = max(0.05, 1.0 - hard_quantile + 0.02)
-    buffer_min = 32
-    buffer_slack = 32
-    warmup_steps = getattr(config.lr_schedule, "warmup_steps", 0)
-    # hard_logging_start_step = max(10, warmup_steps)
+    hard_example_tracker = vis_tools.HardExampleTracker(
+        tokenizer=data_loader.tokenizer,
+        hard_quantile=0.99,
+    )
     hard_logging_start_step = 0
-    host_batch_cache: tuple[CoTObservation, _model.Actions] | None = None
-    local_batch_size_cache: int | None = None
-    host_batch_step: int | None = None
-
-    def infer_local_batch_size(obs_local: CoTObservation) -> int:
-        candidate_sizes: list[int] = []
-        state_local = getattr(obs_local, "state", None)
-        if state_local is not None:
-            candidate_sizes.append(int(np.shape(state_local)[0]))
-        prompt_local = getattr(obs_local, "tokenized_prompt", None)
-        if prompt_local is not None:
-            candidate_sizes.append(int(np.shape(prompt_local)[0]))
-        image_values = list(getattr(obs_local, "images", {}).values())
-        for img in image_values:
-            if img is not None:
-                candidate_sizes.append(int(np.shape(img)[0]))
-                break
-        return candidate_sizes[0] if candidate_sizes else 0
-
-    def ensure_host_batch(current_step: int) -> tuple[tuple[CoTObservation, _model.Actions] | None, int]:
-        nonlocal host_batch_cache, local_batch_size_cache, host_batch_step
-        if host_batch_cache is None or host_batch_step != current_step:
-            host_batch_cache = jax.tree.map(training_utils.to_local_array, batch)
-            obs_local = host_batch_cache[0]
-            local_batch_size_cache = infer_local_batch_size(obs_local)
-            host_batch_step = current_step
-        return host_batch_cache, local_batch_size_cache or 0
-
-    def compute_buffer_capacity(total_samples: int) -> int:
-        approx = int(math.ceil(total_samples * buffer_ratio))
-        return max(buffer_min, approx + buffer_slack)
-
-    def reset_hard_interval_state() -> None:
-        nonlocal hard_interval_losses, hard_interval_total_samples, hard_example_buffer, hard_example_keys
-        hard_interval_losses = []
-        hard_interval_total_samples = 0
-        hard_example_buffer = []
-        hard_example_keys = set()
-
-    def update_hard_buffer(
-        step_idx: int,
-        host_batch_local: tuple[CoTObservation, _model.Actions],
-        local_losses: np.ndarray,
-        idx_offset: int,
-    ) -> None:
-        nonlocal hard_example_buffer, hard_example_keys
-        if local_losses.size == 0:
-            return
-        capacity = compute_buffer_capacity(hard_interval_total_samples)
-        if capacity <= 0:
-            return
-        buffer_len = len(hard_example_buffer)
-        candidate_indices: list[int]
-        if buffer_len < capacity:
-            k_needed = min(local_losses.size, capacity - buffer_len)
-            if k_needed <= 0:
-                candidate_indices = []
-            elif k_needed >= local_losses.size:
-                candidate_indices = list(range(local_losses.size))
-            else:
-                candidate_indices = np.argpartition(local_losses, -k_needed)[-k_needed:].tolist()
-        else:
-            threshold_loss = hard_example_buffer[-1]["loss"]
-            candidate_indices = np.flatnonzero(local_losses >= threshold_loss).tolist()
-        if not candidate_indices:
-            return
-        candidate_indices = sorted({int(idx) for idx in candidate_indices})
-        new_indices = [idx for idx in candidate_indices if (step_idx, int(idx_offset + idx)) not in hard_example_keys]
-        if not new_indices:
-            return
-        visuals = _eval_helper.visualize_language_actions(
-            host_batch_local,
-            data_loader.tokenizer,
-            indices=new_indices,
-            max_examples=len(new_indices),
-            resize_hw=(128, 128),
-        )
-        if not visuals:
-            return
-        vis_by_index = {int(vis.get("index", idx)): vis for vis, idx in zip(visuals, new_indices)}
-        for local_idx in new_indices:
-            vis = vis_by_index.get(local_idx)
-            if vis is None:
-                continue
-            loss_val = float(local_losses[local_idx])
-            entry = {
-                "loss": loss_val,
-                "step": step_idx,
-                "local_idx": int(local_idx),
-                "global_idx": int(local_idx + idx_offset),
-                "image": vis["image"],
-                "language_action": vis.get("language_action", "") or "",
-            }
-            hard_example_buffer.append(entry)
-            hard_example_keys.add((step_idx, entry["global_idx"]))
-        hard_example_buffer.sort(key=lambda e: e["loss"], reverse=True)
-        capacity = compute_buffer_capacity(hard_interval_total_samples)
-        if len(hard_example_buffer) > capacity:
-            for removed in hard_example_buffer[capacity:]:
-                hard_example_keys.discard((removed["step"], removed["global_idx"]))
-            del hard_example_buffer[capacity:]
+    host_batch_cache = HostBatchCache()
 
     for step in pbar:
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
         if jax.process_index() == 0 and step >= hard_logging_start_step:
-            per_sample_loss = info.get("per_sample_loss")
+            per_sample_loss = info.get("per_sample_loss")  # global loss from all hosts
             assert per_sample_loss is not None
             per_sample_np = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
             if per_sample_np.size > 0:
-                hard_interval_losses.append(per_sample_np.astype(np.float32))
-                hard_interval_total_samples += int(per_sample_np.size)
-                host_batch_local, local_size = ensure_host_batch(step)
+                hard_example_tracker.update(per_sample_np)
+                host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
                 if local_size > 0:
                     total_examples = per_sample_np.shape[0]
                     if process_count > 1 and total_examples == local_size * process_count:
@@ -650,76 +564,23 @@ def main(config: _config.TrainConfig):
                         local_losses = per_sample_np[:local_size]
                         idx_offset = 0
                     if local_losses.size > 0:
-                        update_hard_buffer(step, host_batch_local, local_losses, idx_offset)
+                        hard_example_tracker.add_hard_examples(step, host_batch_local, local_losses, idx_offset)
         if step % config.log_interval == 0:
-            # infos.append(info)
+            # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            # Extract forward/backward/opt durations from callbacks
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
-                breakpoint()
-
-                quantile_threshold = float("nan")
-                if hard_interval_losses:
-                    interval_all = np.concatenate(hard_interval_losses, axis=0)
-                    if interval_all.size > 0:
-                        quantile_threshold = float(np.quantile(interval_all, hard_quantile))
-                cutoff = quantile_threshold if np.isfinite(quantile_threshold) else -np.inf
-                hard_to_log = [entry for entry in hard_example_buffer if entry["loss"] >= cutoff]
-                hard_to_log.sort(key=lambda e: e["loss"], reverse=True)
-                if hard_to_log:
-                    log_images = []
-                    loss_values = []
-                    for entry in hard_to_log:
-                        loss_val = entry["loss"]
-                        caption_text = entry.get("language_action", "")
-                        caption = f"loss={loss_val:.4f}"
-                        panel_caption = caption
-                        log_images.append(
-                            wandb.Image(
-                                entry["image"],
-                                caption=f"{panel_caption} |{caption_text}",
-                            )
-                        )
-                        loss_values.append(loss_val)
-                    wandb_payload = {
-                        "train/hard_examples": log_images,
-                        "train/hard_examples_loss_quantile": quantile_threshold,
-                        "train/hard_examples_count": len(log_images),
-                    }
-                    wandb.log(wandb_payload, step=step)
-                reset_hard_interval_state()
-
-                if step > 0 and step % 100 == 0:
-                    host_batch, local_size = ensure_host_batch(step)
-                    if local_size > 0:
-                        num_random = min(5, local_size)
-                        process_idx = getattr(jax, "process_index", lambda: 0)()
-                        rng_seed = int(step + 997 * process_idx)
-                        rng_local = np.random.default_rng(rng_seed)
-                        rand_idx = rng_local.choice(local_size, size=num_random, replace=False)
-                        random_visuals = _eval_helper.visualize_language_actions(
-                            host_batch,
-                            data_loader.tokenizer,
-                            indices=rand_idx.tolist(),
-                            max_examples=5,
-                        )
-                        if random_visuals:
-                            images_to_log = []
-                            for vis in random_visuals:
-                                caption_text = vis.get("language_action", "") or ""
-                                caption = f"{caption_text}"
-                                images_to_log.append(wandb.Image(vis["image"], caption=caption))
-                            if images_to_log:
-                                wandb.log(
-                                    {
-                                        "train/random_examples": images_to_log,
-                                    },
-                                    step=step,
-                                )
+                hard_example_tracker.log_if_ready(step)
+                host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+                vis_tools.log_random_examples(
+                    step,
+                    host_batch_local,
+                    data_loader.tokenizer,
+                    local_batch_size=local_size,
+                )
             infos = []
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
@@ -761,20 +622,20 @@ def main(config: _config.TrainConfig):
 
                     if config.data.vis_dataset and val_step_idx == img_log_step_idx:
                         k_local = int(min(num_images_to_log, val_batch[0].state.shape[0]))
-                        eval_batch = _eval_helper.prepare_eval_batch(val_batch)
+                        eval_batch = vis_tools.prepare_eval_batch(val_batch)
                         eval_idx = jax.random.choice(
                             rng,
                             eval_batch[0].state.shape[0],
                             shape=(k_local,),
                             replace=False,
                         )
-                        eval_batch = _eval_helper.subsample_batch(eval_batch, eval_idx)
-                        gt_batch = _eval_helper.subsample_batch(val_batch, eval_idx)
+                        eval_batch = vis_tools.subsample_batch(eval_batch, eval_idx)
+                        gt_batch = vis_tools.subsample_batch(val_batch, eval_idx)
                         # Ensure observation for sampling is replicated across devices
                         obs_local = jax.device_put(eval_batch[0], replicated_sharding)
                         id_buf, t_final = psample_reasoning(train_state, obs_local)
                         if jax.process_index() == 0:
-                            l2_cm_values, to_log = _eval_helper.eval_step(gt_batch, id_buf, t_final, tok, k_local)
+                            l2_cm_values, to_log = vis_tools.eval_step(gt_batch, id_buf, t_final, tok, k_local)
                         if to_log and jax.process_index() == 0:
                             images_to_log = [wandb.Image(img) for img in to_log]
                             wandb.log({"val/annotated": images_to_log}, step=step)
