@@ -238,8 +238,7 @@ def get_dataset_statistics(
         print(f"Writing stats to: {output_dir}")
         save(output_dir, norm_stats)
 
-    assert int(a_n) == num_transitions, f"a_n: {a_n}, num_transitions: {num_transitions}"
-    assert int(s_n) == num_transitions, f"s_n: {s_n}, num_transitions: {num_transitions}"
-    assert int(traj_n) == num_trajectories, f"traj_n: {traj_n}, num_trajectories: {num_trajectories}"
+    assert int(a_n) == traj_n, f"a_n: {a_n}, num_transitions: {traj_n}"
+    assert int(s_n) == traj_n, f"s_n: {s_n}, num_transitions: {traj_n}"
 
     return norm_stats
