@@ -178,13 +178,14 @@ def get_dataset_statistics(
     # ------------------------------------------------------------
     # Approximate global quantiles via distributed histograms
     # ------------------------------------------------------------
-    def _distributed_quantiles(local_data: np.ndarray, g_min: np.ndarray, g_max: np.ndarray, q: float,
-                               num_bins: int = 4096) -> np.ndarray:
+    def _distributed_quantiles(
+        local_data: np.ndarray, g_min: np.ndarray, g_max: np.ndarray, q: float, num_bins: int = 4096
+    ) -> np.ndarray:
         # Build identical bin edges per-dimension using global min/max
         dims = g_min.shape[0]
-        edges = np.stack([
-            np.linspace(g_min[d] - 1e-12, g_max[d] + 1e-12, num_bins + 1) for d in range(dims)
-        ], axis=0)  # [D, B+1]
+        edges = np.stack(
+            [np.linspace(g_min[d] - 1e-12, g_max[d] + 1e-12, num_bins + 1) for d in range(dims)], axis=0
+        )  # [D, B+1]
         local_hist = np.zeros((dims, num_bins), dtype=np.int64)
         for d in range(dims):
             # Guard against degenerate range
@@ -236,9 +237,9 @@ def get_dataset_statistics(
     if jax.process_index() == 0:
         print(f"Writing stats to: {output_dir}")
         save(output_dir, norm_stats)
-    
-    assert int(a_n) == num_transitions
-    assert int(s_n) == num_transitions
-    assert int(traj_n) == num_trajectories
+
+    assert int(a_n) == num_transitions, f"a_n: {a_n}, num_transitions: {num_transitions}"
+    assert int(s_n) == num_transitions, f"s_n: {s_n}, num_transitions: {num_transitions}"
+    assert int(traj_n) == num_trajectories, f"traj_n: {traj_n}, num_trajectories: {num_trajectories}"
 
     return norm_stats
