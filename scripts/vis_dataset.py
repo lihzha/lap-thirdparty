@@ -222,6 +222,19 @@ def _draw_dot(img_u8: np.ndarray, xy: tuple[int, int], color: tuple[int, int, in
     return out
 
 
+def _ensure_color(img: np.ndarray | None) -> np.ndarray | None:
+    if img is None:
+        return None
+    if img.ndim == 2:
+        return np.repeat(img[..., None], 3, axis=-1)
+    if img.ndim == 3:
+        if img.shape[0] == 3 and img.shape[-1] != 3:
+            return np.transpose(img, (1, 2, 0))
+        if img.shape[-1] == 1:
+            return np.repeat(img, 3, axis=-1)
+    return img
+
+
 def _wrap_text_to_lines(text: str, max_chars_per_line: int) -> list[str]:
     words = text.split()
     lines: list[str] = []
@@ -506,13 +519,16 @@ def main(config: _config.TrainConfig):
                 col1 = _draw_dot(col1, pred_end_xy, (0, 0, 255))  # Pred end on start frame for side-by-side comparison
             col2 = _draw_dot(end_u8, pred_end_xy, (0, 0, 255)) if pred_end_xy is not None else end_u8  # Pred end
             col3 = _draw_dot(end_u8, end_true_xy, (0, 255, 0)) if end_true_xy is not None else end_u8  # GT end
-            panels = [col1]
+            panels = [_ensure_color(col1)]
             if wrist_start_u8 is not None:
-                panels.append(wrist_start_u8)
-            panels.append(col2)
+                panels.append(_ensure_color(wrist_start_u8))
+            panels.append(_ensure_color(col2))
             if wrist_end_u8 is not None:
-                panels.append(wrist_end_u8)
-            panels.append(col3)
+                panels.append(_ensure_color(wrist_end_u8))
+            panels.append(_ensure_color(col3))
+            panels = [p for p in panels if p is not None]
+            if not panels:
+                continue
             row = np.concatenate(panels, axis=1)
             # Single bottom overlay spanning the entire row
             band_h_row = max(16, row.shape[0] // 14)
