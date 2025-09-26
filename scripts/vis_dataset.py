@@ -541,6 +541,7 @@ def main(config: _config.TrainConfig):
             band_h_row = max(16, row.shape[0] // 14)
             row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
             vis_rows.append(row)
+            breakpoint()
         if vis_rows:
             pages = _compose_pages(vis_rows, target_max_height=1600)
             if wandb_enabled and wandb is not None:
