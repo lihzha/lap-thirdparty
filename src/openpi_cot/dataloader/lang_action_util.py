@@ -48,13 +48,13 @@ def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
 
     if sum_decimal == "no_number":
         if dx_m > 0:
-            parts.append("move right")
-        elif dx_m < 0:
-            parts.append("move left")
-        if dy_m > 0:
             parts.append("move forward")
+        elif dx_m < 0:
+            parts.append("move back")
+        if dy_m > 0:
+            parts.append("move left")
         elif dy_m < 0:
-            parts.append("move backward")
+            parts.append("move right")
         if dz_m > 0:
             parts.append("move up")
         elif dz_m < 0:
@@ -63,18 +63,18 @@ def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
         fmt_dx = _format_numeric(dx, sum_decimal)
         fmt_dy = _format_numeric(dy, sum_decimal)
         fmt_dz = _format_numeric(dz, sum_decimal)
-        if dx_m > 0 and dx > 0:
-            parts.append(f"move right {fmt_dx} cm")
-        elif dx_m < 0 and dx > 0:
-            parts.append(f"move left {fmt_dx} cm")
-        if dz_m > 0 and dz > 0:
+        if dx_m > 0:
+            parts.append(f"move forward {fmt_dx} cm")
+        elif dx_m < 0:
+            parts.append(f"move back {fmt_dx} cm")
+        if dz_m > 0:
             parts.append(f"move up {fmt_dz} cm")
-        elif dz_m < 0 and dz > 0:
+        elif dz_m < 0:
             parts.append(f"move down {fmt_dz} cm")
-        if dy_m > 0 and dy > 0:
-            parts.append(f"move forward {fmt_dy} cm")
-        elif dy_m < 0 and dy > 0:
-            parts.append(f"move backward {fmt_dy} cm")
+        if dy_m > 0:
+            parts.append(f"move left {fmt_dy} cm")
+        elif dy_m < 0:
+            parts.append(f"move right {fmt_dy} cm")
 
     # Final gripper value from last step
     g_last = float(arr[-1, 6])

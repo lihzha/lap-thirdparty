@@ -134,7 +134,7 @@ def convert_state_encoding(state: tf.Tensor, from_encoding: StateEncoding, to_en
 
 
 def convert_action_encoding(
-    action: tf.Tensor, from_encoding: ActionEncoding, to_encoding: ActionEncoding, to_delta_cartesian_pos: bool = False
+    action: tf.Tensor, from_encoding: ActionEncoding, to_encoding: ActionEncoding, to_delta_cartesian_pose: bool = False
 ) -> tf.Tensor:
     """
     Convert action representation between different encodings.
@@ -147,8 +147,8 @@ def convert_action_encoding(
     Returns:
         Converted action tensor
     """
-    if to_delta_cartesian_pos:
-        action = _convert_abs_eef_pos_to_delta_eef_pos(action)
+    if to_delta_cartesian_pose:
+        action = _convert_abs_eef_pose_to_delta_eef_pose(action)
     if from_encoding == to_encoding:
         return action
 
@@ -164,7 +164,7 @@ def convert_action_encoding(
     raise ValueError(f"Unsupported action encoding conversion: {from_encoding} -> {to_encoding}")
 
 
-def _convert_abs_eef_pos_to_delta_eef_pos(action: tf.Tensor) -> tf.Tensor:
+def _convert_abs_eef_pose_to_delta_eef_pose(action: tf.Tensor) -> tf.Tensor:
     """Convert absolute EEF pose [pos(3), euler(3)] to delta EEF pose.
     Assumes action shape [..., 6] = [x,y,z,roll,pitch,yaw].
     Pads last timestep with zeros so output has same shape as input.

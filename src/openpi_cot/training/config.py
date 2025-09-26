@@ -104,7 +104,7 @@ def build_droid_cfg(
             raise ValueError(f"Invalid TPU version: {tpu_version}")
 
     if language_action_dir is None:
-        language_action_dir = rlds_data_dir.replace("OXE", "droid-lang-actions")
+        language_action_dir = rlds_data_dir.replace("OXE", "droid-base-lang-actions")
     if ckpt_base_dir is None:
         ckpt_base_dir = rlds_data_dir.replace("OXE", "checkpoints")
 
