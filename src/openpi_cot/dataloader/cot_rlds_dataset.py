@@ -809,12 +809,13 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 )
                 traj["language_actions"] = tf.reshape(serialized_flat, [tf.shape(actions_window)[0], summation_steps])
 
-            grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)
-            traj["observation"]["exterior_image_1_left"] = grouped_images
+            if self.vis_dataset:
+                grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)
+                traj["observation"]["exterior_image_1_left"] = grouped_images
 
-            # if use_wrist_image:
-            grouped_wrist_images = tf.gather(traj["observation"]["wrist_image_left"], summation_indices)
-            traj["observation"]["wrist_image_left"] = grouped_wrist_images
+                if self.use_wrist_image:
+                    grouped_wrist_images = tf.gather(traj["observation"]["wrist_image_left"], summation_indices)
+                    traj["observation"]["wrist_image_left"] = grouped_wrist_images
 
             # Group cartesian positions for start/end projection when needed
             if self.need_calib:
@@ -962,6 +963,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         )
         self.action_dim = action_dim
         self.use_wrist_image = bool(config.use_wrist_image)
+        self.vis_dataset = bool(config.vis_dataset)
         self.use_idle_filter = bool(config.use_idle_filter)
         self.drop_gripper_oob = bool(config.drop_gripper_oob)
         self.need_calib = bool(config.vis_dataset or self.drop_gripper_oob)

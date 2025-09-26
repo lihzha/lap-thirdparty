@@ -443,39 +443,13 @@ def main(config: _config.TrainConfig):
         # Prepare start/end images for the first camera view
         first_cam_key = next(iter(obs.images))
         imgs = obs.images[first_cam_key]
-        # Also try to find a wrist camera to visualize next to the first image
-        wrist_cam_key = None
-        for k in obs.images:
-            if "left_wrist" in k:
-                wrist_cam_key = k
-                break
-        if wrist_cam_key is None:
-            for k in obs.images:
-                if "wrist" in k:
-                    wrist_cam_key = k
-                    break
-        wrist_imgs = obs.images[wrist_cam_key] if wrist_cam_key is not None else None
-        # imgs shape: [B, T, H, W, C] after grouping; pick t0 and t_end
         start_imgs = np.array(imgs[:, 0])
         end_imgs = np.array(imgs[:, -1])
-        wrist_start_imgs = np.array(wrist_imgs[:, 0]) if wrist_imgs is not None else None
-        wrist_end_imgs = np.array(wrist_imgs[:, -1]) if wrist_imgs is not None else None
         B = start_imgs.shape[0]
         vis_rows = []
-        breakpoint()
         for i in range(B):
             start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-            wrist_start_u8 = (
-                np.asarray(((wrist_start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-                if wrist_start_imgs is not None
-                else None
-            )
-            wrist_end_u8 = (
-                np.asarray(((wrist_end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-                if wrist_end_imgs is not None
-                else None
-            )
             # Project true start/end gripper points if cartesian window and calibs available
             start_xyz = None
             end_xyz = None
@@ -528,11 +502,7 @@ def main(config: _config.TrainConfig):
             if end_true_xy is not None:
                 col3 = _draw_dot(col3, end_true_xy, (0, 255, 0))  # GT end
             panels = [col1]
-            if wrist_start_u8 is not None:
-                panels.append(_ensure_color(wrist_start_u8))
             panels.append(col2)
-            if wrist_end_u8 is not None:
-                panels.append(_ensure_color(wrist_end_u8))
             panels.append(col3)
             panels = [p for p in panels if p is not None]
             if not panels:
