@@ -57,8 +57,10 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             return data.get(k, cot_src.get(k, None))
 
         # Construct subclass using base fields
+        base_dict = dataclasses.asdict(base)
+        base_dict["images"] = getk("images")
         return cls(
-            **dataclasses.asdict(base),
+            **base_dict,
             tokenized_reasoning_mask=getk("tokenized_reasoning_mask"),
             tokenized_numeric_mask=getk("tokenized_numeric_mask"),
             example_mask=getk("example_mask"),
