@@ -462,6 +462,7 @@ def main(config: _config.TrainConfig):
         wrist_end_imgs = np.array(wrist_imgs[:, -1]) if wrist_imgs is not None else None
         B = start_imgs.shape[0]
         vis_rows = []
+        breakpoint()
         for i in range(B):
             start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
@@ -541,7 +542,6 @@ def main(config: _config.TrainConfig):
             band_h_row = max(16, row.shape[0] // 14)
             row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
             vis_rows.append(row)
-            breakpoint()
         if vis_rows:
             pages = _compose_pages(vis_rows, target_max_height=1600)
             if wandb_enabled and wandb is not None:
