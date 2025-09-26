@@ -146,11 +146,16 @@ def make_decode_images_fn(
 
     def _decode_frame(traj: dict) -> dict:
         # traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
-        if use_wrist_image and wrist_key is not None:
-            traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
+        # if use_wrist_image and wrist_key is not None:
+        #     traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
         traj["observation"][primary_key] = tf.map_fn(
             _decode_single,
             traj["observation"][primary_key],
+            fn_output_signature=tf.uint8,
+        )
+        traj["observation"][wrist_key] = tf.map_fn(
+            _decode_single,
+            traj["observation"][wrist_key],
             fn_output_signature=tf.uint8,
         )
         return traj
@@ -808,8 +813,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             traj["observation"]["exterior_image_1_left"] = grouped_images
 
             # if use_wrist_image:
-            #     grouped_wrist_images = tf.gather(traj["observation"]["wrist_image"], summation_indices)
-            #     traj["observation"]["wrist_image"] = grouped_wrist_images
+            grouped_wrist_images = tf.gather(traj["observation"]["wrist_image_left"], summation_indices)
+            traj["observation"]["wrist_image_left"] = grouped_wrist_images
 
             # Group cartesian positions for start/end projection when needed
             if self.need_calib:
