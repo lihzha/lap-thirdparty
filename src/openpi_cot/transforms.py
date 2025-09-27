@@ -45,6 +45,10 @@ class TokenizePromptAndReasoning(DataTransformFn):
         if language_actions is not None and not isinstance(language_actions, str):
             language_actions = language_actions.item()
 
+        dataset_name = data.pop("dataset_name", None)
+        if dataset_name is not None and not isinstance(dataset_name, str):
+            dataset_name = dataset_name.item()
+
         # Idle check: mark examples whose summed language action is effectively zero on all axes
         def _is_idle_language_action(s: str | None) -> bool:
             if s is None:
@@ -71,6 +75,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
         example_mask = not is_idle
 
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
+        dataset_name = self.tokenizer.encode(dataset_name, add_bos=False, add_eos=False)
 
         return {
             **data,
@@ -80,6 +85,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_numeric_mask": numeric_mask,
             # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
             "example_mask": np.asarray(example_mask, dtype=bool),
+            "dataset_name": dataset_name,
         }
 
 
