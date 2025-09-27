@@ -410,8 +410,13 @@ _CONFIGS = [
         ),
         fsdp_devices=4,
         batch_size=256,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        save_interval=500,
+        keep_period=10000,
+        resume=True,
     ),
     TrainConfig(
         name="pi_combined_cot_local",

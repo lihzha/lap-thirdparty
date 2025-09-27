@@ -33,7 +33,7 @@ Since the DROID control laptop does not have a powerful GPU, we will start a rem
 2. Start the OpenPI server via the following command:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi_cot_droid_local --policy.dir=<YOUR_POLICY_DIR>
+uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi_droid_cot_local --policy.dir=<YOUR_POLICY_DIR>
 ```
 
 ### Step 2: Run the DROID robot
@@ -44,7 +44,7 @@ uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi_cot_droid_lo
 4. Install `tyro`, which we will use for command line parsing: `pip install tyro`.
 
 ```bash
-python3 scripts/real_robot/droid_main.py --remote_host=<server_ip> --remote_port=<server_port> --external_camera="right" --no-in-camera-frame --use-wrist-camera --run-upstream
+python3 scripts/real_robot/droid_main.py --external_camera="right" --no-in-camera-frame --use-wrist-camera --no-run-upstream
 ```
 
 
