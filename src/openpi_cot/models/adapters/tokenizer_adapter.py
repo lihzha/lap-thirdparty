@@ -144,3 +144,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         if not isinstance(tokens, list):
             tokens = tokens.tolist()
         return self._tokenizer.decode(tokens)
+
+    def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
+        """Encode a string to tokens."""
+        return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
