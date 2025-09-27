@@ -31,23 +31,27 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     if arr.shape[-1] < 7:
         return None
 
-    # Sum translations over the window
-    dx_m = float(arr[..., 0].sum())
-    dy_m = float(arr[..., 1].sum())
-    dz_m = float(arr[..., 2].sum())
-    if include_rotation:
-        breakpoint()
-        dx_m = float(arr[..., 3].sum())
-        dy_m = float(arr[..., 4].sum())
-        dz_m = float(arr[..., 5].sum())
     # Convert to centimeters
     if sum_decimal == "no_number":
         decimals = 0
     else:
         decimals = int(re.fullmatch(r"(\d+)f", sum_decimal).group(1))
+
+    # Sum translations over the window
+    dx_m = float(arr[..., 0].sum())
+    dy_m = float(arr[..., 1].sum())
+    dz_m = float(arr[..., 2].sum())
     dx = round(abs(dx_m * 100.0), decimals)
     dy = round(abs(dy_m * 100.0), decimals)
     dz = round(abs(dz_m * 100.0), decimals)
+
+    if include_rotation:
+        droll_rad = float(arr[..., 3].sum())
+        dpitch_rad = float(arr[..., 4].sum())
+        dyaw_rad = float(arr[..., 5].sum())
+        droll = round(abs(droll_rad * 180.0 / np.pi))
+        dpitch = round(abs(dpitch_rad * 180.0 / np.pi))
+        dyaw = round(abs(dyaw_rad * 180.0 / np.pi))
 
     parts: list[str] = []
 
@@ -64,6 +68,19 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
             parts.append("move up")
         elif dz_m < 0:
             parts.append("move down")
+        if include_rotation:
+            if droll_rad > 0:
+                parts.append("tilt left")
+            elif droll_rad < 0:
+                parts.append("tilt right")
+            if dpitch_rad > 0:
+                parts.append("tilt up")
+            elif dpitch_rad < 0:
+                parts.append("tilt down")
+            if dyaw_rad > 0:
+                parts.append("rotate counterclockwise")
+            elif dyaw_rad < 0:
+                parts.append("rotate clockwise")
     else:
         fmt_dx = _format_numeric(dx, sum_decimal)
         fmt_dy = _format_numeric(dy, sum_decimal)
@@ -80,6 +97,19 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
             parts.append(f"move left {fmt_dy} cm")
         elif dy_m < 0:
             parts.append(f"move right {fmt_dy} cm")
+        if include_rotation:
+            if droll_rad > 0:
+                parts.append(f"tilt left {droll} degrees")
+            elif droll_rad < 0:
+                parts.append(f"tilt right {droll} degrees")
+            if dpitch_rad > 0:
+                parts.append(f"tilt up {dpitch} degrees")
+            elif dpitch_rad < 0:
+                parts.append(f"tilt down {dpitch} degrees")
+            if dyaw_rad > 0:
+                parts.append(f"rotate counterclockwise {dyaw} degrees")
+            elif dyaw_rad < 0:
+                parts.append(f"rotate clockwise {dyaw} degrees")
 
     # Final gripper value from last step
     g_last = float(arr[-1, 6])
@@ -88,7 +118,8 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     return " and ".join(parts)
 
 
-def sum_language_actions(actions_list, sum_decimal):
+def sum_language_actions(actions_list, sum_decimal, include_rotation=False):
+    assert not include_rotation, "Rotation not supported yet"
     # Determine rounding/formatting behavior from sum_decimal
     decimals = 0
     no_number = False

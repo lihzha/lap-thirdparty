@@ -209,7 +209,7 @@ class DroidDatasetSpec:
         default_factory=lambda: tf.io.serialize_tensor(tf.reshape(tf.eye(4, dtype=tf.float32), [-1]))
     )
     default_state_encoding: StateEncoding = StateEncoding.POS_EULER
-    default_action_encoding: ActionEncoding = ActionEncoding.ABS_EEF_POS
+    default_action_encoding: ActionEncoding = ActionEncoding.EEF_POS
 
 
 class _SingleCoTRldsDatasetRaw:

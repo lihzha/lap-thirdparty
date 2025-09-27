@@ -148,7 +148,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
     dataset_type: Literal["droid", "oxe", "combined"] = "droid"
     state_encoding: StateEncoding = StateEncoding.POS_EULER
-    action_encoding: ActionEncoding = ActionEncoding.ABS_EEF_POS
+    action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     resize_resolution: tuple[int, int] = (224, 224)
     include_rotation: bool = False
 
@@ -270,6 +270,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     sum_decimal=base_cfg.sum_decimal,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     include_rotation=base_cfg.include_rotation,
+                    action_encoding=base_cfg.action_encoding,
                 )
             ],
             outputs=[cot_policy.CoTOutputs()],

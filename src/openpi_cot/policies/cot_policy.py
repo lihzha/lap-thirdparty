@@ -5,6 +5,7 @@ import numpy as np
 from openpi import transforms as upstream_transforms
 import wandb
 
+from openpi_cot.dataloader.helpers import ActionEncoding
 from openpi_cot.dataloader.lang_action_util import sum_language_actions
 from openpi_cot.dataloader.lang_action_util import summarize_numeric_actions
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
@@ -67,11 +68,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # Determines which model will be used.
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
     include_rotation: bool = False
+    action_encoding: ActionEncoding = ActionEncoding.EEF_POS
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
         # stores as float32 (C,H,W), gets skipped for policy inference
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
+        if self.include_rotation:
+            assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
         assert "observation" in data
         assert "exterior_image_1_left" in data["observation"]
         base_image = _parse_image(data["observation"]["exterior_image_1_left"])
