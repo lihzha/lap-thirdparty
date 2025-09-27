@@ -43,7 +43,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
-    dataset_name: str | None = None
+    dataset_name: str | None = struct.field(pytree_node=False, default=None)
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
