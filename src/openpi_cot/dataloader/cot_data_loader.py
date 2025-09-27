@@ -5,6 +5,7 @@ import os
 from typing import Literal
 
 import jax
+import numpy as np
 import openpi.models.model as _model
 import openpi.training.data_loader as up  # upstream module
 import openpi.transforms as up_tf
@@ -199,10 +200,11 @@ class CoTRLDSDataLoader:
         def put(x):
             if not (hasattr(x, "shape") and x.shape):
                 return x
+            # Skip strings/bytes/object arrays – JAX can't put them on device
+            if hasattr(x, "dtype") and (x.dtype == np.object_ or getattr(x.dtype, "kind", None) in ("U", "S")):
+                return x
             if isinstance(self._sharding, jax.sharding.NamedSharding):
-                # Assemble a global jax.Array across processes.
                 return jax.make_array_from_process_local_data(self._sharding, x)
-            # Per-host sharding (PositionalSharding etc.).
             return jax.device_put(x, self._sharding)
 
         return jax.tree_util.tree_map(put, batch)
