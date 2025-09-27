@@ -196,7 +196,7 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
         text = tokenizer.decode(sel.astype(np.int32))
-        sel2 = tokens[i][(1 - rmask[i]).astype(bool)]
+        sel2 = tokens[i][~rmask[i].astype(bool)]
         prompt = tokenizer.decode(sel2.astype(np.int32))
         reasonings.append(text)
         prompts.append(prompt)
