@@ -202,6 +202,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "cartesian_position_window" in data["observation"]:
             inputs["cartesian_position_window"] = np.asarray(data["observation"]["cartesian_position_window"])
 
+        if self.include_rotation:
+            breakpoint()
+
         return inputs
 
 
