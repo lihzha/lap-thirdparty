@@ -1133,9 +1133,6 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.apply_flatten()
         self.apply_frame_filters(**dataset_frame_transform_kwargs)
 
-        for example in self.dataset.take(100):
-            breakpoint()
-
     def apply_restructure(self, use_wrist_image: bool):
         def restructure(traj):
             # apply a standardization function, if provided
