@@ -576,8 +576,8 @@ class PiCoT(_pi0.Pi0):
         return output_tokens
 
     def sample_reasoning(self, observation: CoTObservation):
-        # _, _, _, logits, t, _, _ = self._sample_reasoning_tokens(observation)
-        # return logits, t
+        _, _, _, logits, t, _, _ = self._sample_reasoning_tokens(observation)
+        return logits, t
 
-        output_tokens = self._sample_reasoning_tokens(observation)
-        return output_tokens
+        # output_tokens = self._sample_reasoning_tokens(observation)
+        # return output_tokens

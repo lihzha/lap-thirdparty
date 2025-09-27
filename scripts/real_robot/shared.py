@@ -3,6 +3,8 @@ import datetime
 import re
 import signal
 import time
+import dataclasses
+from openpi_client import image_tools
 
 from moviepy.editor import ImageSequenceClip
 import numpy as np
@@ -14,6 +16,29 @@ AXIS_SIGN = np.array([1, 1, 1])
 # DROID data collection frequency -- we slow down execution to match this frequency
 DROID_CONTROL_FREQUENCY = 15
 
+@dataclasses.dataclass
+class Args:
+    # Hardware parameters
+    left_camera_id: str = "31177322"  # e.g., "24259877"
+    right_camera_id: str = "38872458"  # e.g., "24514023"
+    wrist_camera_id: str = "10501775"  # e.g., "13062452"
+    # Policy parameters
+    external_camera: str = None  # which external camera should be fed to the policy, choose from ["left", "right"]
+    # Rollout parameters
+    max_timesteps: int = 600
+    # How many actions to execute from a predicted action chunk before querying policy server again
+    # 8 is usually a good default (equals 0.5 seconds of action execution).
+    open_loop_horizon: int = 8
+    # Remote server parameters
+    remote_host: str = "0.0.0.0"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
+    remote_port: int = (
+        8000  # point this to the port of the policy server, default server port for openpi servers is 8000
+    )
+    in_camera_frame: bool = (
+        False  # whether the predicted actions are in camera frame (True) or robot/base frame (False)
+    )
+    use_wrist_camera: bool = False  # whether to use the wrist camera image as input to the policy
+    run_upstream: bool = False  # whether to run the upstream policy server
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
 # waiting for a new action chunk, it will raise an exception and the server connection dies.
@@ -88,6 +113,18 @@ def _reasoning_to_action(
                 dz_cm += value_cm
             elif direction == "up":
                 dz_cm -= value_cm
+            # if direction == "forward":
+            #     dx_cm += value_cm
+            # elif direction == "backward":
+            #     dx_cm -= value_cm
+            # elif direction == "left":
+            #     dy_cm += value_cm
+            # elif direction == "right":
+            #     dy_cm -= value_cm
+            # elif direction == "up":
+            #     dz_cm += value_cm
+            # elif direction == "down":
+            #     dz_cm -= value_cm
         # Parse gripper action (defaults to previous if missing, else 0.0 for first)
         grip_match = grip_pat.search(sentence)
         if grip_match:
@@ -130,13 +167,34 @@ class BaseEvalRunner:
         raise NotImplementedError()
 
     def binarize_gripper(self, action):
-        raise NotImplementedError()
+        # Binarize gripper action
+        if action[-1].item() > 0.5:
+            action = np.concatenate([action[:-1], np.ones((1,))])
+        else:
+            action = np.concatenate([action[:-1], np.zeros((1,))])
+        return action
 
     def _extract_observation(self, obs_dict, *, save_to_disk=False):
         raise NotImplementedError()
 
     def obs_to_request(self, curr_obs, instruction):
-        raise NotImplementedError()
+
+        request = {
+            "observation": {
+                "exterior_image_1_left": image_tools.resize_with_pad(
+                    curr_obs[self.side_image_name], 224, 224
+                ),
+                "cartesian_position": curr_obs["cartesian_position"],
+                "gripper_position": curr_obs["gripper_position"],
+                "joint_position": curr_obs["joint_position"],
+                "state": curr_obs["state"],
+            },
+            "prompt": instruction,
+            "batch_size": None,
+        }
+        if self.args.use_wrist_camera:
+            request["observation"]["wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
+        return request
 
     def set_extrinsics(self):
         return None
@@ -149,6 +207,7 @@ class BaseEvalRunner:
             # Map translation delta to robot/base frame using rotation only
             R_cb = self.cam_to_base_extrinsics_matrix[:3, :3]
             delta_base = R_cb @ t_cam
+            breakpoint()
         else:
             delta_base = poses_cam[1][:3, 3] - poses_cam[0][:3, 3]
         return delta_base, grip_actions
@@ -174,7 +233,10 @@ class BaseEvalRunner:
                         # Save the first observation to disk
                         save_to_disk=t_step == 0,
                     )
-                    video.append(curr_obs[f"{self.args.external_camera}_image"])
+                    if self.args.external_camera is not None:
+                        video.append(curr_obs[f"{self.args.external_camera}_image"])
+                    else:
+                        video.append(curr_obs["image"])
                     # Predict a new chunk if needed
                     if pred_action_chunk is None or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0
@@ -204,7 +266,6 @@ class BaseEvalRunner:
                             et = time.time()
                             print(f"Time taken for inference: {et - st}")
                     # Select current action to execute from chunk
-                    print(actions_from_chunk_completed)
                     action = pred_action_chunk[actions_from_chunk_completed]
                     action = self.binarize_gripper(action)
                     actions_from_chunk_completed += 1
@@ -250,7 +311,10 @@ class BaseEvalRunner:
                         # Save the first observation to disk
                         save_to_disk=t_step == 0,
                     )
-                    video.append(curr_obs[f"{self.args.external_camera}_image"])
+                    if self.args.external_camera is not None:
+                        video.append(curr_obs[f"{self.args.external_camera}_image"])
+                    else:
+                        video.append(curr_obs["image"])
                     # Predict a new chunk if needed
                     if actions_from_chunk_completed == 0  or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0

@@ -1,5 +1,4 @@
 # ruff: noqa
-import dataclasses
 import faulthandler
 import numpy as np
 from openpi_client import image_tools
@@ -10,7 +9,7 @@ import sys
 
 
 sys.path.append(".")
-from shared import BaseEvalRunner
+from shared import BaseEvalRunner, Args
 
 AXIS_PERM = np.array([0, 2, 1])
 AXIS_SIGN = np.array([1, 1, 1])
@@ -19,34 +18,10 @@ faulthandler.enable()
 DROID_CONTROL_FREQUENCY = 15
 
 
-@dataclasses.dataclass
-class Args:
-    # Hardware parameters
-    left_camera_id: str = "31177322"  # e.g., "24259877"
-    right_camera_id: str = "38872458"  # e.g., "24514023"
-    wrist_camera_id: str = "10501775"  # e.g., "13062452"
-    # Policy parameters
-    external_camera: str = None  # which external camera should be fed to the policy, choose from ["left", "right"]
-    # Rollout parameters
-    max_timesteps: int = 600
-    # How many actions to execute from a predicted action chunk before querying policy server again
-    # 8 is usually a good default (equals 0.5 seconds of action execution).
-    open_loop_horizon: int = 8
-    # Remote server parameters
-    remote_host: str = "0.0.0.0"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
-    remote_port: int = (
-        8000  # point this to the port of the policy server, default server port for openpi servers is 8000
-    )
-    in_camera_frame: bool = (
-        False  # whether the predicted actions are in camera frame (True) or robot/base frame (False)
-    )
-    use_wrist_camera: bool = False  # whether to use the wrist camera image as input to the policy
-    run_upstream: bool = False  # whether to run the upstream policy server
-
-
 class DroidEvalRunner(BaseEvalRunner):
     def __init__(self, args):
         super().__init__(args)
+        self.side_image_name = f"{self.args.external_camera}_image"
 
     def init_env(self):
         return RobotEnv(
@@ -54,37 +29,6 @@ class DroidEvalRunner(BaseEvalRunner):
             gripper_action_space="position",
         )
 
-    def obs_to_request(self, curr_obs, instruction):
-        state = np.concatenate(
-            [
-                curr_obs["cartesian_position"],
-                curr_obs["gripper_position"],
-            ]
-        )
-        request = {
-            "observation": {
-                "exterior_image_1_left": image_tools.resize_with_pad(
-                    curr_obs[f"{self.args.external_camera}_image"], 224, 224
-                ),
-                "cartesian_position": curr_obs["cartesian_position"],
-                "gripper_position": curr_obs["gripper_position"],
-                "joint_position": curr_obs["joint_position"],
-                "state": state,
-            },
-            "prompt": instruction,
-            "batch_size": None,
-        }
-        if self.args.use_wrist_camera:
-            request["observation"]["wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
-        return request
-
-    def binarize_gripper(self, action):
-        # Binarize gripper action
-        if action[-1].item() > 0.5:
-            action = np.concatenate([action[:-1], np.ones((1,))])
-        else:
-            action = np.concatenate([action[:-1], np.zeros((1,))])
-        return action
 
     def _extract_observation(self, obs_dict, save_to_disk=False):
         image_observations = obs_dict["image"]
@@ -158,20 +102,6 @@ class DroidUpstreamEvalRunner(DroidEvalRunner):
             gripper_action_space="position",
         )
     
-    def obs_to_request(self, curr_obs, instruction):
-        request = {
-            "observation/exterior_image_1_left": image_tools.resize_with_pad(
-                curr_obs[f"{self.args.external_camera}_image"], 224, 224
-            ),
-            "observation/cartesian_position": curr_obs["cartesian_position"],
-            "observation/gripper_position": curr_obs["gripper_position"],
-            "observation/joint_position": curr_obs["joint_position"],
-            "prompt": instruction,
-            "batch_size": None,
-        }
-        if self.args.use_wrist_camera:
-            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
-        return request
 
 
 if __name__ == "__main__":
