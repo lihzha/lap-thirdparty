@@ -170,7 +170,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             val = val.decode("utf-8") if isinstance(val, bytes) else str(val)
 
         inputs["dataset_name"] = val
-        # breakpoint()
+        breakpoint()
 
         def _is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
             if np.all(img == 0):
