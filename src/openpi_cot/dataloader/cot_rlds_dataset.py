@@ -1133,7 +1133,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.apply_flatten()
         self.apply_frame_filters(**dataset_frame_transform_kwargs)
 
-        for step in self.dataset.take(100):
+        for example in self.dataset.take(100):
             breakpoint()
 
     def apply_restructure(self, use_wrist_image: bool):
@@ -1253,7 +1253,13 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         def is_nonzero_length(traj):
             return tf.shape(traj["action"])[0] > 0
 
-        self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
+        def has_any_instruction(traj):
+            instr = traj["task"]["language_instruction"]
+            instr = tf.reshape(instr, [-1])
+            instr = tf.strings.strip(instr)
+            return tf.reduce_any(tf.strings.length(instr) > 0)
+
+        self.dataset = self.dataset.filter(has_any_instruction)
 
         self.dataset = self.dataset.filter(is_nonzero_length)
 
@@ -1371,6 +1377,14 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         Args:
             chunk_filter_fn (callable, optional): Filter function for chunks.
         """
+
+        # Always drop frames with empty/whitespace-only prompts
+        def _non_empty_prompt(frame: dict) -> tf.Tensor:
+            p = tf.strings.strip(frame["prompt"])  # scalar tf.string after flatten
+            return tf.strings.length(p) > 0
+
+        self.dataset = self.dataset.filter(_non_empty_prompt)
+
         if chunk_filter_fn:
             self.dataset = self.dataset.filter(chunk_filter_fn)
 
