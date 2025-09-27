@@ -19,7 +19,7 @@ def _format_numeric(val: float, sum_decimal: str) -> str:
     return f"{val:.{decimals}f}"
 
 
-def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
+def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:
     """Convert numeric delta EE actions ([..., 7]) into a language string.
 
     Expects translation in indices [0,1,2] (meters) and gripper at index 6.
@@ -35,6 +35,11 @@ def summarize_numeric_actions(arr_like, sum_decimal: str) -> str | None:
     dx_m = float(arr[..., 0].sum())
     dy_m = float(arr[..., 1].sum())
     dz_m = float(arr[..., 2].sum())
+    if include_rotation:
+        breakpoint()
+        dx_m = float(arr[..., 3].sum())
+        dy_m = float(arr[..., 4].sum())
+        dz_m = float(arr[..., 5].sum())
     # Convert to centimeters
     if sum_decimal == "no_number":
         decimals = 0

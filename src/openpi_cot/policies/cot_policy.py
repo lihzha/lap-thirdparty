@@ -66,6 +66,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     wrist_image_dropout_prob: float = 0.0
     # Determines which model will be used.
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
+    include_rotation: bool = False
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
@@ -143,12 +144,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 else:
                     la_used = la
                 raw_array = [_maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
-                summed = summarize_numeric_actions(raw_array, self.sum_decimal)
+                summed = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
                 inputs["language_actions"] = summed
             else:
                 seq = _to_str_list(la)
                 if seq is not None:
-                    summed = sum_language_actions(seq, self.sum_decimal)
+                    summed = sum_language_actions(seq, self.sum_decimal, self.include_rotation)
                     if summed is not None and len(summed) > 0:
                         inputs["language_actions"] = summed
                 else:

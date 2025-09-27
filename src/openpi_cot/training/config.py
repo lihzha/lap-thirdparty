@@ -150,6 +150,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     state_encoding: StateEncoding = StateEncoding.POS_EULER
     action_encoding: ActionEncoding = ActionEncoding.ABS_EEF_POS
     resize_resolution: tuple[int, int] = (224, 224)
+    include_rotation: bool = False
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
@@ -268,6 +269,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     model_type=model_config.model_type,
                     sum_decimal=base_cfg.sum_decimal,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
+                    include_rotation=base_cfg.include_rotation,
                 )
             ],
             outputs=[cot_policy.CoTOutputs()],
