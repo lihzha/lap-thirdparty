@@ -983,7 +983,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             # self.cam_table = train_dataset.cam_table
             # self.intr_table = train_dataset.intr_table
             # self.extr_table = train_dataset.extr_table
-            # self.instr_table = train_dataset.instr_table
+            self.instr_table = train_dataset.instr_table
             self.filter_table = train_dataset.filter_table
 
         else:
@@ -1003,7 +1003,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             # self.cam_table, self.intr_table, self.extr_table = self.build_cam_tables(
             #     metadata_path, need_calib=self.need_calib
             # )
-            # self.instr_table = self.build_instr_table(metadata_path)
+            self.instr_table = self.build_instr_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path, use_idle_filter=self.use_idle_filter)
 
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
