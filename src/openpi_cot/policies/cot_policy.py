@@ -159,7 +159,19 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                         raise ValueError(f"Language actions is not a bytes string: {la}")
                     inputs["language_actions"] = la
 
-        inputs["dataset_name"] = data["dataset_name"][0].decode("utf-8")
+        val = data["dataset_name"]
+
+        # If it's a NumPy array, grab the first element
+        if isinstance(val, np.ndarray):
+            val = val[0]
+
+        # Convert to string safely
+        if isinstance(val, bytes):
+            val = val.decode("utf-8")
+        else:
+            val = str(val)
+
+        inputs["dataset_name"] = val
         # breakpoint()
 
         def _is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
