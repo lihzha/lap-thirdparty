@@ -595,29 +595,36 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 lang_tensor = tf.fill([traj_len], tf.constant(""))
             # Sample instruction from merged table or fallback
             instr_bytes = self.instr_table.lookup(episode_id)
-            fallback_index = tf.random.uniform(
-                (),
-                minval=0,
-                maxval=tf.shape(self.fallback_instructions)[0],
-                dtype=tf.int32,
-                seed=self.seed,
-            )
-            fallback_instruction = self.fallback_instructions[fallback_index]
+            # fallback_index = tf.random.uniform(
+            #     (),
+            #     minval=0,
+            #     maxval=tf.shape(self.fallback_instructions)[0],
+            #     dtype=tf.int32,
+            #     seed=self.seed,
+            # )
+            # fallback_instruction = self.fallback_instructions[fallback_index]
+
+            # def _sample_from_table():
+            #     arr = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
+            #     # Guard against empty instruction arrays
+            #     return tf.cond(
+            #         tf.greater(tf.shape(arr)[0], 0),
+            #         lambda: tf.random.shuffle(arr, seed=self.seed)[0],
+            #         lambda: fallback_instruction,
+            #     )
+
+            # instruction = tf.cond(
+            #     tf.greater(tf.strings.length(instr_bytes), 0),
+            #     _sample_from_table,
+            #     lambda: fallback_instruction,
+            # )
 
             def _sample_from_table():
                 arr = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
                 # Guard against empty instruction arrays
-                return tf.cond(
-                    tf.greater(tf.shape(arr)[0], 0),
-                    lambda: tf.random.shuffle(arr, seed=self.seed)[0],
-                    lambda: fallback_instruction,
-                )
+                return tf.random.shuffle(arr, seed=self.seed)[0]
 
-            instruction = tf.cond(
-                tf.greater(tf.strings.length(instr_bytes), 0),
-                _sample_from_table,
-                lambda: fallback_instruction,
-            )
+            instruction = _sample_from_table()
 
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
 
@@ -1180,33 +1187,28 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                     )
                 raw_language_instruction = traj.pop(self.language_key)
 
-                # episode_id = self._episode_id_from_traj(traj, ep_table)
-                # lang_bytes = lang_table.lookup(episode_id)
-                # lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-                # # Language actions may include an extra terminal step; crop to match action length
-                # lang_tensor = lang_tensor[:traj_len]
-                # # Sample instruction from merged table or fallback
-                fallback_index = tf.random.uniform(
-                    (),
-                    minval=0,
-                    maxval=tf.shape(self.fallback_instructions)[0],
-                    dtype=tf.int32,
-                    seed=self.seed,
-                )
-                fallback_instruction = self.fallback_instructions[fallback_index]
+                # fallback_index = tf.random.uniform(
+                #     (),
+                #     minval=0,
+                #     maxval=tf.shape(self.fallback_instructions)[0],
+                #     dtype=tf.int32,
+                #     seed=self.seed,
+                # )
+                # fallback_instruction = self.fallback_instructions[fallback_index]
 
-                def _sample_from_table():
-                    arr = tf.reshape(raw_language_instruction, [-1])
-                    return tf.random.shuffle(arr, seed=self.seed)[0]
+                # def _sample_from_table():
+                #     arr = tf.reshape(raw_language_instruction, [-1])
+                #     return tf.random.shuffle(arr, seed=self.seed)[0]
 
-                has_any_instruction = tf.reduce_any(
-                    tf.greater(tf.strings.length(tf.reshape(raw_language_instruction, [-1])), 0)
-                )
+                # has_any_instruction = tf.reduce_any(
+                #     tf.greater(tf.strings.length(tf.reshape(raw_language_instruction, [-1])), 0)
+                # )
 
-                instruction = tf.cond(has_any_instruction, _sample_from_table, lambda: fallback_instruction)
+                # instruction = tf.cond(has_any_instruction, _sample_from_table, lambda: fallback_instruction)
 
-                instruction_vec = tf.fill([tf.shape(traj["action"])[0]], instruction)
-                task["language_instruction"] = instruction_vec
+                # instruction_vec = tf.fill([tf.shape(traj["action"])[0]], instruction)
+
+                task["language_instruction"] = raw_language_instruction
 
             # Build a deterministic per-trajectory identifier using a strong hash
             # of the dataset name and the serialized action tensor. This avoids
@@ -1246,7 +1248,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         def is_nonzero_length(traj):
             return tf.shape(traj["action"])[0] > 0
 
-        self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
+        self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x[self.language_key] != ""))
 
         self.dataset = self.dataset.filter(is_nonzero_length)
 
