@@ -978,12 +978,12 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.control_frequency: int = 15
 
         if train_dataset is not None:
-            self.lang_table = train_dataset.lang_table
+            # self.lang_table = train_dataset.lang_table
             self.ep_table = train_dataset.ep_table
-            self.cam_table = train_dataset.cam_table
-            self.intr_table = train_dataset.intr_table
-            self.extr_table = train_dataset.extr_table
-            self.instr_table = train_dataset.instr_table
+            # self.cam_table = train_dataset.cam_table
+            # self.intr_table = train_dataset.intr_table
+            # self.extr_table = train_dataset.extr_table
+            # self.instr_table = train_dataset.instr_table
             self.filter_table = train_dataset.filter_table
 
         else:
@@ -998,12 +998,12 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             else:
                 raise ValueError(f"Unknown language action directory: {language_action_dir}")
 
-            self.lang_table = self.build_lang_action_table(language_action_dir)
+            # self.lang_table = self.build_lang_action_table(language_action_dir)
             self.ep_table = self.build_lookup_table(metadata_path)
-            self.cam_table, self.intr_table, self.extr_table = self.build_cam_tables(
-                metadata_path, need_calib=self.need_calib
-            )
-            self.instr_table = self.build_instr_table(metadata_path)
+            # self.cam_table, self.intr_table, self.extr_table = self.build_cam_tables(
+            #     metadata_path, need_calib=self.need_calib
+            # )
+            # self.instr_table = self.build_instr_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path, use_idle_filter=self.use_idle_filter)
 
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
@@ -1101,8 +1101,8 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
         if cached_stats is not None:
             # Prefer early filtering when stats are already available to reduce downstream work.
-            self.apply_traj_filters()
             self.apply_restructure(use_wrist_image=config.use_wrist_image)
+            self.apply_traj_filters()
             self.split_val(split_seed=split_seed)
             self.dataset_statistics = cached_stats
         else:
@@ -1248,7 +1248,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         def is_nonzero_length(traj):
             return tf.shape(traj["action"])[0] > 0
 
-        self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x[self.language_key] != ""))
+        self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
 
         self.dataset = self.dataset.filter(is_nonzero_length)
 
