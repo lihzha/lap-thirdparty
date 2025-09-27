@@ -5,7 +5,6 @@ import numpy as np
 from openpi import transforms as upstream_transforms
 import wandb
 
-from openpi_cot.training import utils as _utils
 from openpi_cot.dataloader.lang_action_util import sum_language_actions
 from openpi_cot.dataloader.lang_action_util import summarize_numeric_actions
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
@@ -26,13 +25,9 @@ def _maybe_parse_serialized_tensor_to_ndarray(b) -> np.ndarray | None:
 def _parse_image(image) -> np.ndarray:
     if image is None:
         return None
-    # Bring possibly-device or sharded arrays to process-local NumPy first.
-    image = _utils.to_local_array(image)
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
-    else:
-        image = np.clip(image, 0, 255).astype(np.uint8)
     if image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
     return image
