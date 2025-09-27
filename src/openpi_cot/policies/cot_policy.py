@@ -88,7 +88,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             wrist_image_mask = np.False_
 
         def _is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
-            if img is None:
+            if np.all(img == 0):
                 if mask == np.False_:
                     return False
                 return True
