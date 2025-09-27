@@ -613,22 +613,8 @@ def main(config: _config.TrainConfig):
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
                 for val_step_idx in val_pbar:
-                    if step == 0:
-                        ram = get_mem()
-                        logging.info(f"Before first pval_step: RAM: {ram:.2f}GB")
-                        # wandb.log({
-                        #     "sys/ram_gb": ram,
-                        #     "sys/event": "val_before_next_iter",
-                        # }, step=step)
                     val_batch = next(val_iter)
                     val_info = pval_step(train_rng, train_state, val_batch)
-                    if step == 0:
-                        ram = get_mem()
-                        logging.info(f"After first pval_step: RAM: {ram:.2f}GB")
-                        # wandb.log({
-                        #     "sys/ram_gb": ram,
-                        #     "sys/event": "val_after_pval_step",
-                        # }, step=step)
                     val_infos.append(val_info)
 
                     if config.data.vis_dataset and val_step_idx == img_log_step_idx:
