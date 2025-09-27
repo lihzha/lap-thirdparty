@@ -159,8 +159,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                         raise ValueError(f"Language actions is not a bytes string: {la}")
                     inputs["language_actions"] = la
 
-        inputs["dataset_name"] = data["dataset_name"].decode("utf-8")
-
         def _is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
             if np.all(img == 0):
                 if mask == np.False_:
@@ -178,13 +176,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         ):
             log_payload = {
                 "policy/anomaly_base": wandb.Image(
-                    base_image, caption=f"Dataset: {data['dataset_name']}, prompt: {prompt_str}"
+                    base_image, caption=f"Dataset: {data['dataset_name'].decode('utf-8')}, prompt: {prompt_str}"
                 )
                 if base_image is not None
                 else None,
                 "policy/anomaly_wrist": wandb.Image(
                     wrist_image,
-                    caption=f"Dataset: {data['dataset_name']}, language actions: {inputs['language_actions']}",
+                    caption=f"Dataset: {data['dataset_name'].decode('utf-8')}, language actions: {inputs['language_actions']}",
                 )
                 if wrist_image is not None
                 else None,

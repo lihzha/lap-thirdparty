@@ -1085,6 +1085,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # self.action_normalization_mask = dataset_kwargs["action_normalization_mask"]
         self.state_encoding = dataset_kwargs["state_encoding"]
         self.action_encoding = dataset_kwargs["action_encoding"]
+        self.is_absolute_action = dataset_kwargs["is_absolute_action"]
         self.global_state_encoding = global_state_encoding
         self.global_action_encoding = global_action_encoding
         dataset_frame_transform_kwargs = dataset_kwargs.get("dataset_frame_transform_kwargs", {})
@@ -1152,6 +1153,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 action=traj["action"],
                 from_encoding=self.action_encoding,
                 to_encoding=self.global_action_encoding,
+                to_delta_cartesian_pose=self.is_absolute_action,
             )
 
             for new, old in self.image_obs_keys.items():

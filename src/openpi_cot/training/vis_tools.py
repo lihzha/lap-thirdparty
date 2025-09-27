@@ -111,7 +111,6 @@ class HardExampleTracker:
             if vis is None:
                 continue
             loss_val = float(losses[local_idx])
-            breakpoint()
             entry = {
                 "loss": loss_val,
                 "step": step_idx,
@@ -119,7 +118,7 @@ class HardExampleTracker:
                 "global_idx": int(local_idx + idx_offset),
                 "image": vis["image"],
                 "language_action": vis.get("language_action", "") or "",
-                "dataset_name": self.tokenizer.decode(vis.get("dataset_name"[0], "") or ""),
+                "dataset_name": vis.get("dataset_name", "") or "",
             }
             self._hard_example_buffer.append(entry)
             self._hard_example_keys.add((step_idx, entry["global_idx"]))
@@ -151,8 +150,7 @@ class HardExampleTracker:
             log_images = []
             for entry in hard_to_log:
                 caption_text = entry.get("language_action", "") or ""
-                breakpoint()
-                caption_text += self.tokenizer.decode(entry.get("dataset_name"[0], "") or "")
+                caption_text += entry.get("dataset_name", "") or ""
                 caption = f"loss={entry['loss']:.4f}"
                 panel_caption = caption
                 log_images.append(
