@@ -43,6 +43,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
+    dataset_name: str | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
@@ -66,6 +67,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             camera_intrinsics=getk("camera_intrinsics"),
             camera_extrinsics=getk("camera_extrinsics"),
             cartesian_position_window=getk("cartesian_position_window"),
+            dataset_name=getk("dataset_name"),
         )
 
 
@@ -142,4 +144,5 @@ def preprocess_observation(
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),
         cartesian_position_window=getattr(observation, "cartesian_position_window", None),
+        dataset_name=getattr(observation, "dataset_name", None),
     )

@@ -5,6 +5,7 @@ import numpy as np
 from openpi import transforms as upstream_transforms
 import wandb
 
+from openpi_cot.training import utils as _utils
 from openpi_cot.dataloader.lang_action_util import sum_language_actions
 from openpi_cot.dataloader.lang_action_util import summarize_numeric_actions
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
@@ -25,9 +26,13 @@ def _maybe_parse_serialized_tensor_to_ndarray(b) -> np.ndarray | None:
 def _parse_image(image) -> np.ndarray:
     if image is None:
         return None
+    # Bring possibly-device or sharded arrays to process-local NumPy first.
+    image = _utils.to_local_array(image)
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
+    else:
+        image = np.clip(image, 0, 255).astype(np.uint8)
     if image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
     return image
@@ -87,26 +92,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             wrist_image = np.zeros_like(base_image)
             wrist_image_mask = np.False_
 
-        def _is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
-            if np.all(img == 0):
-                if mask == np.False_:
-                    return False
-                return True
-            return np.all(img == 0) or np.all(img == 255)
-
-        prompt_val = data.get("prompt")
-        prompt_str = None
-        if prompt_val is not None:
-            if isinstance(prompt_val, bytes):
-                prompt_str = prompt_val.decode("utf-8")
-            elif isinstance(prompt_val, str):
-                prompt_str = prompt_val
-            else:
-                prompt_item = np.asarray(prompt_val).item()
-                prompt_str = (
-                    prompt_item.decode("utf-8") if isinstance(prompt_item, (bytes, np.bytes_)) else str(prompt_item)
-                )
-
         # Optional dropout: randomly mask out wrist image
         if self.wrist_image_dropout_prob > 0.0:
             if np.random.rand() < float(self.wrist_image_dropout_prob):
@@ -129,6 +114,18 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             "image_mask": dict(zip(names, image_masks, strict=True)),
         }
 
+        prompt_val = data.get("prompt")
+        prompt_str = None
+        if prompt_val is not None:
+            if isinstance(prompt_val, bytes):
+                prompt_str = prompt_val.decode("utf-8")
+            elif isinstance(prompt_val, str):
+                prompt_str = prompt_val
+            else:
+                prompt_item = np.asarray(prompt_val).item()
+                prompt_str = (
+                    prompt_item.decode("utf-8") if isinstance(prompt_item, (bytes, np.bytes_)) else str(prompt_item)
+                )
         if prompt_str is not None:
             inputs["prompt"] = prompt_str
 
@@ -167,6 +164,15 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                         raise ValueError(f"Language actions is not a bytes string: {la}")
                     inputs["language_actions"] = la
 
+        inputs["dataset_name"] = data["dataset_name"]
+
+        def _is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
+            if np.all(img == 0):
+                if mask == np.False_:
+                    return False
+                return True
+            return np.all(img == 0) or np.all(img == 255)
+
         images_for_check = {
             "base_0_rgb": [base_image, image_masks[0]],
             "left_wrist_0_rgb": [wrist_image, image_masks[1]],
@@ -175,7 +181,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if any(_is_trivial_image(img, mask) for img, mask in images_for_check.values()) or (
             prompt_str is None or prompt_str.strip() == ""
         ):
-            breakpoint()
             log_payload = {
                 "policy/anomaly_base": wandb.Image(
                     base_image, caption=f"Dataset: {data['dataset_name']}, prompt: {prompt_str}"
@@ -183,7 +188,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 if base_image is not None
                 else None,
                 "policy/anomaly_wrist": wandb.Image(
-                    wrist_image, caption=f"language actions: {inputs['language_actions']}"
+                    wrist_image,
+                    caption=f"Dataset: {data['dataset_name']}, language actions: {inputs['language_actions']}",
                 )
                 if wrist_image is not None
                 else None,

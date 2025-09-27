@@ -1243,13 +1243,12 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
 
     def apply_traj_filters(self):
-        # def is_nonzero_length(traj):
-        #     return tf.shape(traj["action"])[0] > 0
+        def is_nonzero_length(traj):
+            return tf.shape(traj["action"])[0] > 0
 
-        # # self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
+        self.dataset = self.dataset.filter(lambda x: tf.math.reduce_any(x["task"]["language_instruction"] != ""))
 
-        # self.dataset = self.dataset.filter(is_nonzero_length)
-        return
+        self.dataset = self.dataset.filter(is_nonzero_length)
 
     def get_split_anchor(self, traj):
         # Use the per-trajectory identifier (constant along time) to split deterministically
