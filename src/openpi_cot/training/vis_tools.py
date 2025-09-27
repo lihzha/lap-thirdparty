@@ -149,7 +149,8 @@ class HardExampleTracker:
         if hard_to_log:
             log_images = []
             for entry in hard_to_log:
-                caption_text = entry.get("language_action", "") or ""
+                caption_text = entry.get("prompt", "") or ""
+                caption_text += entry.get("language_action", "") or ""
                 caption_text += entry.get("dataset_name", "") or ""
                 caption = f"loss={entry['loss']:.4f}"
                 panel_caption = caption
@@ -323,7 +324,8 @@ def log_random_examples(
         return
     images_to_log = []
     for vis in random_visuals:
-        caption_text = vis.get("language_action", "") or ""
+        caption_text = vis.get("prompt", "") or ""
+        caption_text += vis.get("language_action", "") or ""
         caption_text += vis.get("dataset_name", "") or ""
         caption = f"{caption_text}"
         images_to_log.append(wandb.Image(vis["image"], caption=caption))
