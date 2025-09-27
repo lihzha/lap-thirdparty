@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 
 import einops
 import numpy as np
@@ -92,6 +93,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             wrist_image = np.zeros_like(base_image)
             wrist_image_mask = np.False_
 
+        if np.all(base_image == 0):
+            base_image_mask = np.False_
+        else:
+            base_image_mask = np.True_
+
         # Optional dropout: randomly mask out wrist image
         if self.wrist_image_dropout_prob > 0.0:
             if np.random.rand() < float(self.wrist_image_dropout_prob):
@@ -104,7 +110,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             wrist_image,
         )
         image_masks = (
-            np.True_,
+            base_image_mask,
             wrist_image_mask,
         )
 
@@ -193,7 +199,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 else None,
             }
             wandb.log({k: v for k, v in log_payload.items() if v is not None})
-            raise ValueError("Invalid policy inputs: trivial image or missing prompt")
+            logging.warning("Invalid policy inputs: trivial image or missing prompt")
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

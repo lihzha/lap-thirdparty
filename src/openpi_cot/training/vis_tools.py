@@ -74,8 +74,7 @@ class HardExampleTracker:
         if losses.size == 0:
             return
         capacity = self._compute_buffer_capacity()
-        if capacity <= 0:
-            return
+        assert capacity > 0
         buffer_len = len(self._hard_example_buffer)
         if buffer_len < capacity:
             # To guarantee global top-k correctness across the interval,
@@ -123,6 +122,7 @@ class HardExampleTracker:
                 "image": vis["image"],
                 "language_action": vis.get("language_action", "") or "",
                 "dataset_name": vis.get("dataset_name", "") or "",
+                "prompt": vis.get("prompt", "") or "",
             }
             self._hard_example_buffer.append(entry)
             self._hard_example_keys.add((step_idx, entry["global_idx"]))
@@ -191,17 +191,21 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
     """
     tokens = _utils.to_local_array(obs.tokenized_prompt)
     rmask = _utils.to_local_array(obs.tokenized_reasoning_mask)
-    out: list[str] = []
+    reasonings: list[str] = []
+    prompts: list[str] = []
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
         text = tokenizer.decode(sel.astype(np.int32))
-        out.append(text)
-    return out
+        sel2 = tokens[i][(1 - rmask[i]).astype(bool)]
+        prompt = tokenizer.decode(sel2.astype(np.int32))
+        reasonings.append(text)
+        prompts.append(prompt)
+    return reasonings, prompts
 
 
 def get_language_actions(batch, tok):
-    texts = _decode_reasoning_strings(batch[0], tok)
-    return texts
+    texts, prompts = _decode_reasoning_strings(batch[0], tok)
+    return texts, prompts
 
 
 def visualize_language_actions(
@@ -230,16 +234,16 @@ def visualize_language_actions(
     obs, _ = batch
     images = {key: _utils.to_local_array(value) for key, value in obs.images.items() if value is not None}
     if not images:
-        return []
+        raise ValueError("No images found")
 
     order = list(image_keys) if image_keys is not None else sorted(images.keys())
 
     batch_sizes = [arr.shape[0] for arr in images.values() if arr is not None and arr.ndim >= 1]
     if not batch_sizes:
-        return []
+        raise ValueError("No images found")
     batch_size = min(batch_sizes)
 
-    texts = get_language_actions(batch, tok)
+    texts, prompts = get_language_actions(batch, tok)
 
     if indices is None:
         indices_list = list(range(batch_size))
@@ -296,7 +300,8 @@ def visualize_language_actions(
                     combined = per_cam[0]
 
         text = texts[idx] if idx < len(texts) else ""
-        visuals.append({"image": combined, "language_action": text, "index": idx})
+        prompt = prompts[idx] if idx < len(prompts) else ""
+        visuals.append({"image": combined, "language_action": text, "index": idx, "prompt": prompt})
 
     return visuals
 
@@ -602,7 +607,7 @@ def eval_step(
     # Always run reasoning sampling across all processes; restrict decoding/logging to process 0.
     # Bound to local batch size to avoid indexing errors
     if jax.process_index() == 0:
-        gt_texts = _decode_reasoning_strings(gt_batch[0], tok)
+        gt_texts, _ = _decode_reasoning_strings(gt_batch[0], tok)
         # Decode sampled reasoning tokens
         ids = _utils.to_local_array(id_buf)
         # Be robust to bounds: clamp final index
