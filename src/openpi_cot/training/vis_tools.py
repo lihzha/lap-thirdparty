@@ -78,14 +78,18 @@ class HardExampleTracker:
             return
         buffer_len = len(self._hard_example_buffer)
         if buffer_len < capacity:
-            k_needed = min(losses.size, capacity - buffer_len)
-            if k_needed <= 0:
-                candidate_indices: list[int] = []
-            elif k_needed >= losses.size:
+            # To guarantee global top-k correctness across the interval,
+            # consider up to the top-`capacity` samples from this step, not just the remaining slots.
+            top_n = int(min(losses.size, capacity))
+            if top_n <= 0:
+                candidate_indices = []
+            elif top_n >= losses.size:
                 candidate_indices = list(range(losses.size))
             else:
-                candidate_indices = np.argpartition(losses, -k_needed)[-k_needed:].tolist()
+                candidate_indices = np.argpartition(losses, -top_n)[-top_n:].tolist()
         else:
+            # Buffer full: only candidates that can enter the global top-`capacity` are those
+            # with loss >= current minimum in the buffer.
             threshold_loss = self._hard_example_buffer[-1]["loss"]
             candidate_indices = np.flatnonzero(losses >= threshold_loss).tolist()
         if not candidate_indices:
@@ -175,9 +179,9 @@ class HardExampleTracker:
         self._hard_example_keys.clear()
 
     def _compute_buffer_capacity(self) -> int:
-        approx = int(np.ceil(self._interval_total_samples * self.buffer_ratio))
-        capacity = max(self.buffer_min, approx + self.buffer_slack)
-        return min(capacity, self.max_hard_examples)
+        # Always maintain capacity equal to the maximum number of hard examples to log.
+        # This ensures we can always retain the top-k (descending by loss) across the interval.
+        return int(self.max_hard_examples)
 
 
 def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
