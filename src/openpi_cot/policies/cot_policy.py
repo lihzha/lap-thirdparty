@@ -160,16 +160,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     inputs["language_actions"] = la
 
         val = data["dataset_name"]
-
-        # If it's a NumPy array, grab the first element
+        # Handle NumPy array vs single value
         if isinstance(val, np.ndarray):
-            val = val[0]
-
-        # Convert to string safely
-        if isinstance(val, bytes):
-            val = val.decode("utf-8")
+            val = val.tolist()  # convert to list of Python objects
+        # Convert each element to string
+        if isinstance(val, list):
+            val = [x.decode("utf-8") if isinstance(x, bytes) else str(x) for x in val]
         else:
-            val = str(val)
+            val = val.decode("utf-8") if isinstance(val, bytes) else str(val)
 
         inputs["dataset_name"] = val
         # breakpoint()
