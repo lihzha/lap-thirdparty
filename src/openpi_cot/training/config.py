@@ -345,6 +345,12 @@ class TrainConfig(upstream_config.TrainConfig):
     resume = True
     # New field
     do_val: bool = True
+    checkpoint_async_timeout_secs: int | None = 7200
+    checkpoint_async_enable: bool = True
+    checkpoint_max_retries: int = 1
+    checkpoint_retry_delay_secs: float = 30.0
+    checkpoint_retry_backoff: float = 2.0
+    checkpoint_fallback_to_sync: bool = True
 
     @property
     @override

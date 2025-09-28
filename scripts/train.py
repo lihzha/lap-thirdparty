@@ -406,6 +406,8 @@ def main(config: _config.TrainConfig):
         keep_period=config.keep_period,
         overwrite=config.overwrite,
         resume=config.resume,
+        async_timeout_secs=config.checkpoint_async_timeout_secs,
+        async_enable=config.checkpoint_async_enable,
     )
     init_wandb(
         config,
@@ -660,7 +662,18 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+            checkpoint_manager = _checkpoints.save_state(
+                checkpoint_manager,
+                train_state,
+                data_loader,
+                step,
+                max_retries=config.checkpoint_max_retries,
+                retry_delay_secs=config.checkpoint_retry_delay_secs,
+                retry_backoff=config.checkpoint_retry_backoff,
+                fallback_to_sync=config.checkpoint_fallback_to_sync,
+                async_timeout_secs=config.checkpoint_async_timeout_secs,
+                keep_period=config.keep_period,
+            )
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()
