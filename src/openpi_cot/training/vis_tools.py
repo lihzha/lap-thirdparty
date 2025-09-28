@@ -48,25 +48,29 @@ class HardExampleTracker:
     max_hard_examples: int = 5
     resize_hw: tuple[int, int] | None = (128, 128)
     _interval_losses: list[np.ndarray] = field(default_factory=list, init=False)
+    _per_host_loss_buffers: list[np.ndarray] = field(default_factory=list, init=False)
     _interval_total_samples: int = field(default=0, init=False)
     _hard_example_buffer: list[dict[str, Any]] = field(default_factory=list, init=False)
-    _hard_example_keys: set[tuple[int, int]] = field(default_factory=set, init=False)
+    _hard_example_keys: set[tuple[int, int, int]] = field(default_factory=set, init=False)
 
-    def update(self, per_sample_losses: np.ndarray | None) -> None:
+    def update_global_losses(self, per_sample_losses: np.ndarray | None) -> None:
         if per_sample_losses is None:
             return
         arr = np.asarray(per_sample_losses, dtype=np.float32).reshape(-1)
         if arr.size == 0:
             return
         self._interval_losses.append(arr)
+        self._per_host_loss_buffers.append(arr)
         self._interval_total_samples += int(arr.size)
 
-    def add_hard_examples(
+    def add_local_examples(
         self,
         step_idx: int,
         host_batch_local: tuple[CoTObservation, _model.Actions] | None,
         local_losses: np.ndarray | None,
-        idx_offset: int,
+        global_idx_base: int,
+        *,
+        process_idx: int,
     ) -> None:
         if host_batch_local is None or local_losses is None:
             return
@@ -95,7 +99,9 @@ class HardExampleTracker:
             return
         candidate_indices = sorted({int(idx) for idx in candidate_indices})
         new_indices = [
-            idx for idx in candidate_indices if (step_idx, int(idx_offset + idx)) not in self._hard_example_keys
+            idx
+            for idx in candidate_indices
+            if (process_idx, step_idx, int(global_idx_base + idx)) not in self._hard_example_keys
         ]
         if not new_indices:
             return
@@ -118,14 +124,15 @@ class HardExampleTracker:
                 "loss": loss_val,
                 "step": step_idx,
                 "local_idx": int(local_idx),
-                "global_idx": int(local_idx + idx_offset),
+                "global_idx": int(local_idx + global_idx_base),
+                "process_index": int(process_idx),
                 "image": vis["image"],
                 "language_action": vis.get("language_action", "") or "",
                 "dataset_name": vis.get("dataset_name", "") or "",
                 "prompt": vis.get("prompt", "") or "",
             }
             self._hard_example_buffer.append(entry)
-            self._hard_example_keys.add((step_idx, entry["global_idx"]))
+            self._hard_example_keys.add((process_idx, step_idx, entry["global_idx"]))
         self._hard_example_buffer.sort(key=lambda e: e["loss"], reverse=True)
         capacity = self._compute_buffer_capacity()
         if len(self._hard_example_buffer) > capacity:
@@ -133,16 +140,17 @@ class HardExampleTracker:
                 self._hard_example_keys.discard((removed["step"], removed["global_idx"]))
             del self._hard_example_buffer[capacity:]
 
-    def log_if_ready(self, step_idx: int) -> None:
+    def log_if_ready(self, step_idx: int) -> dict[str, Any] | None:
         if not self._interval_losses:
             self.reset()
-            return
+            return None
         interval_all = np.concatenate(self._interval_losses, axis=0)
         total_samples = int(interval_all.size)
-        hard_to_log = sorted(self._hard_example_buffer, key=lambda e: e["loss"], reverse=True)[: self.max_hard_examples]
-        if total_samples == 0 or not hard_to_log:
-            quantile_threshold = float("nan")
-        else:
+        hard_to_log = sorted(self._hard_example_buffer, key=lambda e: e["loss"], reverse=True)[
+            : self.max_hard_examples
+        ]
+        quantile_threshold = float("nan")
+        if total_samples > 0 and hard_to_log:
             target = min(self.max_hard_examples, total_samples)
             quantile_prob = 1.0 - target / total_samples
             quantile_prob = float(np.clip(quantile_prob, 0.0, 1.0))
@@ -150,30 +158,21 @@ class HardExampleTracker:
             min_logged_loss = float(hard_to_log[-1]["loss"])
             if not np.isfinite(quantile_threshold) or quantile_threshold < min_logged_loss:
                 quantile_threshold = min_logged_loss
-        if hard_to_log:
-            log_images = []
-            for entry in hard_to_log:
-                caption_text = entry.get("prompt", "") or ""
-                caption_text += entry.get("language_action", "") or ""
-                caption_text += entry.get("dataset_name", "") or ""
-                caption = f"loss={entry['loss']:.4f}"
-                panel_caption = caption
-                log_images.append(
-                    wandb.Image(
-                        entry["image"],
-                        caption=f"{panel_caption} | {caption_text}",
-                    )
-                )
-            wandb_payload = {
-                "train/hard_examples": log_images,
-                "train/hard_examples_loss_quantile": quantile_threshold,
-                "train/hard_examples_count": len(log_images),
-            }
-            wandb.log(wandb_payload, step=step_idx)
+        payload = {
+            "entries": hard_to_log,
+            "quantile_threshold": quantile_threshold,
+            "total_samples": total_samples,
+            "max_hard_examples": self.max_hard_examples,
+            "step": step_idx,
+        }
         self.reset()
+        if not hard_to_log and total_samples == 0:
+            return None
+        return payload
 
     def reset(self) -> None:
         self._interval_losses.clear()
+        self._per_host_loss_buffers.clear()
         self._interval_total_samples = 0
         self._hard_example_buffer.clear()
         self._hard_example_keys.clear()

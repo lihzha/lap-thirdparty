@@ -4,6 +4,7 @@ from typing import Any
 from flax import nnx
 from flax import struct
 import jax
+from jax.experimental import multihost_utils as mh
 import numpy as np
 from openpi.models import model as _model
 from openpi.shared import array_typing as at
@@ -87,3 +88,15 @@ def to_local_scalar(x) -> int:
     except Exception:
         pass
     return int(np.asarray(x).item())
+
+
+def global_concat(local_values: np.ndarray) -> np.ndarray:
+    """Gather and concatenate numpy arrays across all hosts, returning global view."""
+    if local_values is None:
+        return np.array([], dtype=np.float32)
+    local_values = np.asarray(local_values)
+    process_count = getattr(jax, "process_count", lambda: 1)()
+    if process_count == 1:
+        return local_values
+    gathered = mh.process_allgather(local_values, tiled=False)
+    return np.concatenate([np.asarray(x) for x in gathered], axis=0)
