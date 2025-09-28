@@ -45,7 +45,7 @@ class HardExampleTracker:
     buffer_ratio: float = 0.07
     buffer_min: int = 32
     buffer_slack: int = 32
-    max_hard_examples: int = 50
+    max_hard_examples: int = 5
     resize_hw: tuple[int, int] | None = (128, 128)
     _interval_losses: list[np.ndarray] = field(default_factory=list, init=False)
     _interval_total_samples: int = field(default=0, init=False)
