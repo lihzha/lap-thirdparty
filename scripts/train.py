@@ -12,7 +12,7 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
 import numpy as np
-import openpi.models.model as _model
+from openpi.models import model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.optimizer as _optimizer
@@ -551,7 +551,7 @@ def main(config: _config.TrainConfig):
         per_sample_np_local = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
         global_per_sample_np = training_utils.global_concat(per_sample_np_local)
         if global_per_sample_np.size > 0:
-            hard_example_tracker.update_global_losses(global_per_sample_np)
+            hard_example_tracker.update(global_per_sample_np)
         host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
         if local_size > 0 and per_sample_np_local.size >= local_size:
             process_idx = getattr(jax, "process_index", lambda: 0)()
