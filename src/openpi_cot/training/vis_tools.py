@@ -146,9 +146,7 @@ class HardExampleTracker:
             return None
         interval_all = np.concatenate(self._interval_losses, axis=0)
         total_samples = int(interval_all.size)
-        hard_to_log = sorted(self._hard_example_buffer, key=lambda e: e["loss"], reverse=True)[
-            : self.max_hard_examples
-        ]
+        hard_to_log = sorted(self._hard_example_buffer, key=lambda e: e["loss"], reverse=True)[: self.max_hard_examples]
         quantile_threshold = float("nan")
         if total_samples > 0 and hard_to_log:
             target = min(self.max_hard_examples, total_samples)
