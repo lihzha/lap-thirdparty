@@ -379,52 +379,34 @@ def log_hard_examples_payload(payload: dict[str, Any]) -> None:
     if num_slots <= 0:
         return
 
-    local_losses = np.full((num_slots,), -np.inf, dtype=np.float32)
-    local_lengths = np.zeros((num_slots,), dtype=np.int32)
-    serialized_data: list[bytes] = []
-    max_len_local = 0
-    for idx in range(num_slots):
-        if idx < len(entries):
-            entry = dict(entries[idx])
-            entry.setdefault("process_index", process_idx)
-            blob = pickle.dumps(entry)
-            serialized_data.append(blob)
-            local_lengths[idx] = len(blob)
-            local_losses[idx] = float(entry.get("loss", float("-inf")))
-            max_len_local = max(max_len_local, len(blob))
-        else:
-            serialized_data.append(b"")
+    local_payload = {
+        "process_index": process_idx,
+        "entries": entries,
+    }
+    try:
+        local_blob = pickle.dumps(local_payload)
+    except Exception as exc:
+        logging.warning("Failed to serialize hard example payload on host %d: %s", process_idx, exc)
+        return
 
-    max_len_arr = np.array([max_len_local], dtype=np.int32)
-    gathered_max_len = mh.process_allgather(max_len_arr, tiled=False)
-    global_max_len = int(np.max(np.asarray(gathered_max_len))) if gathered_max_len else max_len_local
-    if global_max_len <= 0:
-        global_max_len = 1
+    gathered_blobs = mh.process_allgather(local_blob, tiled=False)
 
-    local_bytes = np.zeros((num_slots, global_max_len), dtype=np.uint8)
-    for idx, blob in enumerate(serialized_data):
-        if not blob:
-            continue
-        byte_arr = np.frombuffer(blob, dtype=np.uint8)
-        local_bytes[idx, : byte_arr.size] = byte_arr
-
-    gathered_bytes = mh.process_allgather(local_bytes, tiled=False)
-    gathered_lengths = mh.process_allgather(local_lengths, tiled=False)
-    gathered_losses = mh.process_allgather(local_losses, tiled=False)
-
+    # Only process 0 performs the final aggregation and logging to avoid duplicate logs.
     if process_idx != 0:
         return
 
     all_entries: list[dict[str, Any]] = []
-    for proc_idx, (proc_bytes, proc_lengths, proc_losses) in enumerate(
-        zip(gathered_bytes, gathered_lengths, gathered_losses)
-    ):
-        for slot in range(num_slots):
-            length = int(proc_lengths[slot])
-            if length <= 0 or proc_losses[slot] == float("-inf"):
-                continue
-            data_slice = proc_bytes[slot, :length]
-            entry = pickle.loads(data_slice.tobytes())
+    for blob in gathered_blobs:
+        try:
+            host_payload = pickle.loads(blob)
+        except Exception as exc:
+            logging.warning("Failed to deserialize hard example payload on process 0: %s", exc)
+            continue
+        host_idx = host_payload.get("process_index", 0)
+        host_entries = host_payload.get("entries", [])
+        for entry in host_entries:
+            entry = dict(entry)
+            entry.setdefault("process_index", host_idx)
             all_entries.append(entry)
 
     if not all_entries:

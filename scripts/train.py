@@ -589,11 +589,11 @@ def main(config: _config.TrainConfig):
                     hard_example_tracker.update(global_per_sample_np)
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
+            hard_payload = hard_example_tracker.log_if_ready(step)
+            if hard_payload:
+                vis_tools.log_hard_examples_payload(hard_payload)
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
-                hard_payload = hard_example_tracker.log_if_ready(step)
-                if hard_payload:
-                    vis_tools.log_hard_examples_payload(hard_payload)
                 host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
                 vis_tools.log_random_examples(
                     step,
