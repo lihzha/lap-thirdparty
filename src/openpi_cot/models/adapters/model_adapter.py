@@ -76,7 +76,6 @@ def preprocess_observation(
     train: bool = False,
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = _model.IMAGE_RESOLUTION,
-    aug_wrist: bool = False,
 ) -> CoTObservation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
@@ -99,8 +98,13 @@ def preprocess_observation(
             image = image / 2.0 + 0.5
 
             transforms = []
-            if not aug_wrist and "wrist" in key:
-                pass
+            if "wrist" in key:
+                height, width = image.shape[1:3]
+                transforms += [
+                    augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
+                    augmax.Resize(width, height),
+                    augmax.Rotate((-5, 5)),
+                ]
             else:
                 height, width = image.shape[1:3]
                 transforms += [

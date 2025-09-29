@@ -50,7 +50,7 @@ def batch_prefetch(dataset: dl.DLataset, batch_size: int) -> dl.DLataset:
     return prefetched.with_ram_budget(1)
 
 
-def maybe_shuffle_and_take(
+def maybe_repeat_shuffle_and_take(
     dataset: dl.DLataset,
     *,
     want_val: bool,
@@ -1032,9 +1032,9 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         if align_oxe_fmt:
             self.apply_align_oxe_fmt()
 
-        self.apply_flatten()
+        # self.apply_flatten()
 
-        self.apply_frame_filters()
+        # self.apply_frame_filters()
 
 
 class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
@@ -1129,8 +1129,8 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # Use a fixed summation window across datasets to enable interleaving
         self.apply_traj_transforms(action_chunk_size=action_chunk_size, summation_steps=30)
         self.apply_repack_transforms(use_wrist_image=config.use_wrist_image)
-        self.apply_flatten()
-        self.apply_frame_filters(**dataset_frame_transform_kwargs)
+        # self.apply_flatten()
+        # self.apply_frame_filters(**dataset_frame_transform_kwargs)
 
     def apply_restructure(self, use_wrist_image: bool):
         def restructure(traj):
@@ -1566,7 +1566,7 @@ class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
         )
 
         # Apply common shuffling/take/cache behavior
-        self.dataset = maybe_shuffle_and_take(
+        self.dataset = maybe_repeat_shuffle_and_take(
             self.dataset,
             want_val=self.want_val,
             shuffle=shuffle,
@@ -1640,7 +1640,7 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
 
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(self.datasets, self.sample_weights)
 
-        self.dataset = maybe_shuffle_and_take(
+        self.dataset = maybe_repeat_shuffle_and_take(
             self.dataset,
             want_val=want_val,
             shuffle=shuffle,
@@ -1735,8 +1735,12 @@ class CombinedCoTRldsDataset:
         logging.info("Interleaving datasets...")
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(all_datasets, sample_weights)
 
+        self.dataset = self.dataset.shuffle(100_000_0, seed=seed)
+        self.dataset = self.dataset.flatten(num_parallel_calls=self.num_parallel_calls)
+        self.dataset = self.apply_frame_filters()
+
         # Apply common finalization
-        self.dataset = maybe_shuffle_and_take(
+        self.dataset = maybe_repeat_shuffle_and_take(
             self.dataset,
             want_val=want_val,
             shuffle=shuffle,
@@ -1775,3 +1779,46 @@ class CombinedCoTRldsDataset:
                 logging.info("StopIteration")
                 return
             yield batch
+
+    def apply_frame_filters(self):
+        def filter_from_dict(frame):
+            if "passes_filter" in frame:
+                return frame["passes_filter"]
+            return True
+
+        self.dataset = self.dataset.filter(filter_from_dict)
+
+        # Remove "passes_filter" key from output
+        def remove_passes_filter(frame):
+            if "passes_filter" in frame:
+                frame.pop("passes_filter")
+            return frame
+
+        self.dataset = self.dataset.map(remove_passes_filter)
+
+        def _filter_in_view(frame):
+            if "gripper_in_view" in frame:
+                return frame["gripper_in_view"]
+            return True
+
+        self.dataset = self.dataset.filter(_filter_in_view)
+
+        def _remove_in_view(frame):
+            if "gripper_in_view" in frame:
+                frame.pop("gripper_in_view")
+            return frame
+
+        self.dataset = self.dataset.map(_remove_in_view)
+
+        def _remove_raw_action(frame):
+            if "raw_action" in frame:
+                frame.pop("raw_action")
+            return frame
+
+        self.dataset = self.dataset.map(_remove_raw_action)
+
+        def _non_empty_prompt(frame: dict) -> tf.Tensor:
+            p = tf.strings.strip(frame["prompt"])  # scalar tf.string after flatten
+            return tf.strings.length(p) > 0
+
+        self.dataset = self.dataset.filter(_non_empty_prompt)

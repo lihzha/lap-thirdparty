@@ -126,7 +126,6 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
 
                 # Transform each sample
                 transformed = [self._transform(s) for s in individual_samples]
-                breakpoint()
 
                 # Recombine batch with tree_map
                 yield jax.tree.map(lambda *x: np.stack(x, axis=0), *transformed)
