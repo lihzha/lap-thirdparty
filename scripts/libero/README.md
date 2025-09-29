@@ -40,18 +40,18 @@ Terminal window 1:
 
 ```bash
 # Create virtual environment
-uv venv --python 3.8 examples/libero/.venv
-source examples/libero/.venv/bin/activate
-uv pip sync examples/libero/requirements.txt third_party/libero/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu113 --index-strategy=unsafe-best-match
-uv pip install -e packages/openpi-client
-uv pip install -e third_party/libero
-export PYTHONPATH=$PYTHONPATH:$PWD/third_party/libero
+uv venv --python 3.8 scripts/libero/.venv
+source scripts/libero/.venv/bin/activate
+uv pip sync scripts/libero/requirements.txt third_party/openpi/third_party/libero/requirements.txt --extra-index-url https://download.pytorch.org/whl/cu113 --index-strategy=unsafe-best-match
+uv pip install -e third_party/openpi/packages/openpi-client
+uv pip install -e third_party/openpi/third_party/libero
+export PYTHONPATH=$PYTHONPATH:$PWD/third_party/openpi/third_party/libero
 
 # Run the simulation
-python examples/libero/main.py
+python scripts/libero/main.py
 
 # To run with glx for Mujoco instead (use this if you have egl errors):
-MUJOCO_GL=glx python examples/libero/main.py
+MUJOCO_GL=glx python scripts/libero/main.py
 ```
 
 Terminal window 2:

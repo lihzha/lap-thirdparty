@@ -8,6 +8,7 @@ import imageio
 from libero.libero import benchmark
 from libero.libero import get_libero_path
 from libero.libero.envs import OffScreenRenderEnv
+import matplotlib.pyplot as plt
 import numpy as np
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
@@ -99,8 +100,9 @@ def eval_libero(args: Args) -> None:
             # Setup
             t = 0
             replay_images = []
+            actions_xyz = []  # Store first 3 action dimensions
 
-            logging.info(f"Starting episode {task_episodes+1}...")
+            logging.info(f"Starting episode {task_episodes + 1}...")
             while t < max_steps + args.num_steps_wait:
                 try:
                     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
@@ -112,8 +114,8 @@ def eval_libero(args: Args) -> None:
 
                     # Get preprocessed image
                     # IMPORTANT: rotate 180 degrees to match train preprocessing
-                    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-                    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+                    img = np.ascontiguousarray(obs["agentview_image"][:, :])
+                    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][:, :])
                     img = image_tools.convert_to_uint8(
                         image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
                     )
@@ -133,8 +135,9 @@ def eval_libero(args: Args) -> None:
                             "observation/state": np.concatenate(
                                 (
                                     obs["robot0_eef_pos"],
-                                    _quat2axisangle(obs["robot0_eef_quat"]),
-                                    obs["robot0_gripper_qpos"],
+                                    # _quat2axisangle(obs["robot0_eef_quat"]),
+                                    _quat2euler(obs["robot0_eef_quat"]),
+                                    # obs["robot0_gripper_qpos"],
                                 )
                             ),
                             "prompt": str(task_description),
@@ -142,12 +145,17 @@ def eval_libero(args: Args) -> None:
 
                         # Query model to get action
                         action_chunk = client.infer(element)["actions"]
-                        assert (
-                            len(action_chunk) >= args.replan_steps
-                        ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        assert len(action_chunk) >= args.replan_steps, (
+                            f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        )
                         action_plan.extend(action_chunk[: args.replan_steps])
 
                     action = action_plan.popleft()
+                    print(action)
+
+                    # Store first 3 action dimensions (XYZ position deltas)
+                    # actions_xyz.append(action[:3].copy())
+                    actions_xyz.append(obs["robot0_eef_pos"].copy())
 
                     # Execute action in environment
                     obs, reward, done, info = env.step(action.tolist())
@@ -167,6 +175,18 @@ def eval_libero(args: Args) -> None:
             # Save a replay video of the episode
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_")
+
+            # Create combined video with action visualization
+            if actions_xyz and replay_images:
+                combined_frames = _create_action_visualization(actions_xyz, replay_images, fps=10)
+                if combined_frames:
+                    imageio.mimwrite(
+                        pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}_with_actions.mp4",
+                        combined_frames,
+                        fps=10,
+                    )
+
+            # Also save the original replay video
             imageio.mimwrite(
                 pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
                 [np.asarray(x) for x in replay_images],
@@ -191,27 +211,150 @@ def _get_libero_env(task, resolution, seed):
     task_description = task.language
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
     env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution}
+
     env = OffScreenRenderEnv(**env_args)
     env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description
 
 
-def _quat2axisangle(quat):
+def _create_action_visualization(actions_xyz, replay_images, fps=10):
     """
-    Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
+    Create a visualization showing the first 3 action dimensions (XYZ) alongside the replay images.
+
+    Args:
+        actions_xyz: List of arrays containing the first 3 action dimensions for each timestep
+        replay_images: List of images from the replay
+        fps: Frames per second for the output video
+
+    Returns:
+        List of combined frames (image + action plot) for video creation
     """
-    # clip quaternion
-    if quat[3] > 1.0:
-        quat[3] = 1.0
-    elif quat[3] < -1.0:
-        quat[3] = -1.0
+    if not actions_xyz or not replay_images:
+        return []
 
-    den = np.sqrt(1.0 - quat[3] * quat[3])
-    if math.isclose(den, 0.0):
-        # This is (close to) a zero degree rotation, immediately return
-        return np.zeros(3)
+    # Convert actions to numpy array
+    actions_array = np.array(actions_xyz)
+    timesteps = len(actions_array)
 
-    return (quat[:3] * 2.0 * math.acos(quat[3])) / den
+    # Create figure with subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    fig.tight_layout(pad=2.0)
+
+    # Set up the action plot
+    ax2.set_xlabel("Timestep")
+    ax2.set_ylabel("Action Value")
+    ax2.set_title("First 3 Action Dimensions (XYZ)")
+    ax2.grid(alpha=0.3)
+
+    # Set consistent y-axis limits based on all data
+    all_actions = actions_array.flatten()
+    y_min, y_max = np.min(all_actions), np.max(all_actions)
+    y_range = y_max - y_min
+    y_margin = y_range * 0.1
+    ax2.set_ylim(y_min - y_margin, y_max + y_margin)
+    ax2.set_xlim(0, timesteps - 1)
+
+    # Create line objects for each dimension
+    (line_x,) = ax2.plot([], [], "r-", label="X", linewidth=2)
+    (line_y,) = ax2.plot([], [], "g-", label="Y", linewidth=2)
+    (line_z,) = ax2.plot([], [], "b-", label="Z", linewidth=2)
+    ax2.legend()
+
+    # Remove axis labels from image subplot
+    ax1.axis("off")
+    ax1.set_title("Robot View")
+
+    combined_frames = []
+
+    for t in range(timesteps):
+        # Update image
+        ax1.clear()
+        ax1.axis("off")
+        ax1.set_title("Robot View")
+        ax1.imshow(replay_images[t])
+
+        # Update action plot
+        ax2.clear()
+        ax2.set_xlabel("Timestep")
+        ax2.set_ylabel("Action Value")
+        ax2.set_title("First 3 Action Dimensions (XYZ)")
+        ax2.grid(alpha=0.3)
+        ax2.set_ylim(y_min - y_margin, y_max + y_margin)
+        ax2.set_xlim(0, timesteps - 1)
+
+        # Plot action history up to current timestep
+        if t > 0:
+            ax2.plot(range(t + 1), actions_array[: t + 1, 0], "r-", label="X", linewidth=2)
+            ax2.plot(range(t + 1), actions_array[: t + 1, 1], "g-", label="Y", linewidth=2)
+            ax2.plot(range(t + 1), actions_array[: t + 1, 2], "b-", label="Z", linewidth=2)
+        else:
+            ax2.plot([0], [actions_array[0, 0]], "ro", label="X", markersize=8)
+            ax2.plot([0], [actions_array[0, 1]], "go", label="Y", markersize=8)
+            ax2.plot([0], [actions_array[0, 2]], "bo", label="Z", markersize=8)
+
+        ax2.legend()
+
+        # Convert plot to image
+        fig.canvas.draw()
+        buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        buf = buf.reshape((*fig.canvas.get_width_height()[::-1], 3))
+
+        combined_frames.append(buf)
+
+    plt.close(fig)
+    return combined_frames
+
+
+def _quat2euler(quat):
+    q = np.asarray(quat, dtype=np.float64)
+    if q.shape != (4,):
+        raise ValueError("quat must be shape (4,), ordered as [x, y, z, w]")
+
+    # Normalize to guard against drift / scaling
+    norm = np.linalg.norm(q)
+    if norm == 0.0:
+        return np.zeros(3, dtype=np.float64)
+    x, y, z, w = q / norm
+
+    # Roll (x-axis rotation)
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    # Pitch (y-axis rotation)
+    sinp = 2.0 * (w * y - z * x)
+    # Clamp to handle numerical issues outside [-1, 1]
+    if sinp >= 1.0:
+        pitch = math.pi / 2.0
+    elif sinp <= -1.0:
+        pitch = -math.pi / 2.0
+    else:
+        pitch = math.asin(sinp)
+
+    # Yaw (z-axis rotation)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+
+    return np.array([roll, pitch, yaw], dtype=np.float64)
+
+
+# def _quat2axisangle(quat):
+#     """
+#     Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
+#     """
+#     # clip quaternion
+#     if quat[3] > 1.0:
+#         quat[3] = 1.0
+#     elif quat[3] < -1.0:
+#         quat[3] = -1.0
+
+#     den = np.sqrt(1.0 - quat[3] * quat[3])
+#     if math.isclose(den, 0.0):
+#         # This is (close to) a zero degree rotation, immediately return
+#         return np.zeros(3)
+
+#     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
 
 
 if __name__ == "__main__":
