@@ -346,7 +346,9 @@ def _log_entries(entries: list[dict[str, Any]], *, step: int, quantile_threshold
         caption_text = entry.get("prompt", "") or ""
         caption_text += entry.get("language_action", "") or ""
         caption_text += entry.get("dataset_name", "") or ""
-        caption = f"loss={entry['loss']:.4f}"
+        host_idx = entry.get("process_index")
+        host_tag = f"host={host_idx}" if host_idx is not None else "host=?"
+        caption = f"{host_tag} loss={entry['loss']:.4f}"
         log_images.append(wandb.Image(entry["image"], caption=f"{caption} | {caption_text}"))
     wandb_payload = {
         "train/hard_examples": log_images,
@@ -437,8 +439,45 @@ def log_hard_examples_payload(payload: dict[str, Any]) -> None:
     if not all_entries:
         return
 
-    all_entries.sort(key=lambda e: e.get("loss", float("-inf")), reverse=True)
-    selected = all_entries[:max_examples]
+    # Sort per host so that we can sample fairly across processes.
+    entries_by_host: dict[int, list[dict[str, Any]]] = {}
+    for entry in all_entries:
+        host_idx = int(entry.get("process_index", 0))
+        entries_by_host.setdefault(host_idx, []).append(entry)
+
+    for host_list in entries_by_host.values():
+        host_list.sort(key=lambda e: e.get("loss", float("-inf")), reverse=True)
+
+    selected: list[dict[str, Any]] = []
+    round_idx = 0
+    host_ids = sorted(entries_by_host.keys())
+    while len(selected) < max_examples:
+        added_any = False
+        for host_id in host_ids:
+            host_list = entries_by_host.get(host_id, [])
+            if round_idx < len(host_list):
+                selected.append(host_list[round_idx])
+                added_any = True
+                if len(selected) >= max_examples:
+                    break
+        if not added_any:
+            break
+        round_idx += 1
+
+    # If we still have room (e.g., fewer hosts than slots), fill with remaining highest-loss entries.
+    if len(selected) < max_examples:
+        remaining = []
+        for host_id in host_ids:
+            host_list = entries_by_host[host_id]
+            remaining.extend(host_list[round_idx:])
+        remaining.sort(key=lambda e: e.get("loss", float("-inf")), reverse=True)
+        for entry in remaining:
+            if len(selected) >= max_examples:
+                break
+            selected.append(entry)
+
+    # Keep overall ordering by loss for readability.
+    selected.sort(key=lambda e: e.get("loss", float("-inf")), reverse=True)
     _log_entries(selected, step=step, quantile_threshold=quantile_threshold, total_samples=total_samples)
 
 

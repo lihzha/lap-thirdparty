@@ -187,7 +187,7 @@ def dataset_size(ds: tf.data.Dataset) -> int:
 
 
 @dataclass(frozen=True)
-class DroidDatasetSpec:
+class CoTRldsDatasetSpec:
     lang_action_tfrecord_pattern: str = "tfds_language_actions-*.tfrecord.gz"
     lang_action_dir_name: str = "droid-lang-actions"
     lang_action_dir_name_base: str = "droid-base-lang-actions"
@@ -210,9 +210,6 @@ class DroidDatasetSpec:
     )
     default_state_encoding: StateEncoding = StateEncoding.POS_EULER
     default_action_encoding: ActionEncoding = ActionEncoding.EEF_POS
-
-
-class _SingleCoTRldsDatasetRaw:
     fallback_instructions = tf.constant(
         [
             "Do something useful.",
@@ -237,6 +234,8 @@ class _SingleCoTRldsDatasetRaw:
         dtype=tf.string,
     )
 
+
+class _SingleCoTRldsDatasetRaw:
     def __init__(
         self,
         dataset_name: str,
@@ -323,7 +322,7 @@ class _SingleCoTRldsDatasetRaw:
 
 
 class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
-    spec: ClassVar[DroidDatasetSpec] = DroidDatasetSpec()
+    spec: ClassVar[CoTRldsDatasetSpec] = CoTRldsDatasetSpec()
 
     def _episode_id_from_traj(self, traj, ep_table):
         """Lookup episode_id from trajectory metadata using regex extraction."""
