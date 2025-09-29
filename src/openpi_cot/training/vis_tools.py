@@ -389,22 +389,47 @@ def log_hard_examples_payload(payload: dict[str, Any]) -> None:
         logging.warning("Failed to serialize hard example payload on host %d: %s", process_idx, exc)
         return
 
-    gathered_blobs = mh.process_allgather(local_blob, tiled=False)
+    blob_arr = np.frombuffer(local_blob, dtype=np.uint8)
+    blob_len = np.array([blob_arr.size], dtype=np.int32)
 
-    # Only process 0 performs the final aggregation and logging to avoid duplicate logs.
+    gathered_lengths = mh.process_allgather(blob_len, tiled=False)
+    lengths_np = np.asarray(gathered_lengths, dtype=object)
+    max_len = 0
+    if lengths_np.size > 0:
+        max_len = int(max(int(np.asarray(x)[0]) for x in gathered_lengths))
+    if max_len <= 0:
+        max_len = int(blob_arr.size)
+
+    padded = np.zeros((max_len,), dtype=np.uint8)
+    if blob_arr.size > 0:
+        padded[: blob_arr.size] = blob_arr
+
+    gathered_blobs = mh.process_allgather(padded, tiled=False)
+
     if process_idx != 0:
         return
 
+    length_list = []
+    for x in gathered_lengths:
+        arr = np.asarray(x)
+        if arr.size == 0:
+            length_list.append(0)
+        elif arr.ndim == 0:
+            length_list.append(int(arr))
+        else:
+            length_list.append(int(arr.flat[0]))
+
     all_entries: list[dict[str, Any]] = []
-    for blob in gathered_blobs:
+    for arr, length in zip(gathered_blobs, length_list):
+        if length <= 0:
+            continue
         try:
-            host_payload = pickle.loads(blob)
+            host_payload = pickle.loads(arr[:length].tobytes())
         except Exception as exc:
             logging.warning("Failed to deserialize hard example payload on process 0: %s", exc)
             continue
         host_idx = host_payload.get("process_index", 0)
-        host_entries = host_payload.get("entries", [])
-        for entry in host_entries:
+        for entry in host_payload.get("entries", []):
             entry = dict(entry)
             entry.setdefault("process_index", host_idx)
             all_entries.append(entry)
