@@ -21,6 +21,7 @@ import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
+import openpi_cot.policies.libero_policy as libero_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
@@ -330,6 +331,74 @@ class VQADataConfig(RLDSCoTDataConfig):
 
 
 @dataclasses.dataclass(frozen=True)
+class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
+    """
+    Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
+    """
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        cot_fields = CoTDataConfig.__dataclass_fields__.keys()
+        data = {k: getattr(self, k) for k in cot_fields}
+        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
+        asset_id = self.assets.asset_id or repo_id
+        data.update(
+            repo_id=repo_id,
+            asset_id=asset_id,
+            # norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            norm_stats=None,  # Note: Normalization is handled on dataset level
+            use_quantile_norm=model_config.model_type != ModelType.PI0,
+        )
+        return CoTDataConfig(**data)
+
+    def _load_norm_stats(
+        self, assets_dir: epath.Path, asset_id: str | None
+    ) -> dict[str, upstream_transforms.NormStats] | None:
+        if asset_id is None:
+            return None
+        try:
+            data_assets_dir = str(assets_dir / asset_id)
+            norm_stats = _normalize_adapter.load(maybe_download(data_assets_dir))
+            logging.info(f"Loaded norm stats from {data_assets_dir}")
+            return norm_stats
+        except FileNotFoundError:
+            logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
+        return None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        base_cfg = self.create_base_config(assets_dirs, model_config)
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                libero_policy.LiberoInputs(
+                    model_type=model_config.model_type,
+                )
+            ],
+            outputs=[libero_policy.LiberoOutputs()],
+        )
+
+        # assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
+        # TODO: Data loader returns absolute joint position actions -- convert to delta actions for training. confirm with oxe
+        # delta_action_mask = upstream_transforms.make_bool_mask(6, -1)
+        # data_transforms = data_transforms.push(
+        #     inputs=[upstream_transforms.DeltaActions(delta_action_mask)],
+        #     # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
+        # )
+
+        model_transforms = ModelTransformFactory(
+            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
+        )(model_config)
+
+        return dataclasses.replace(
+            base_cfg,
+            # repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig(upstream_config.TrainConfig):
     # Overide
     project_name: str = "openpi-cot"
@@ -345,6 +414,12 @@ class TrainConfig(upstream_config.TrainConfig):
     resume = True
     # New field
     do_val: bool = True
+    checkpoint_async_timeout_secs: int | None = 7200
+    checkpoint_async_enable: bool = True
+    checkpoint_max_retries: int = 1
+    checkpoint_retry_delay_secs: float = 30.0
+    checkpoint_retry_backoff: float = 2.0
+    checkpoint_fallback_to_sync: bool = True
 
     @property
     @override
@@ -466,6 +541,21 @@ _CONFIGS = [
         batch_size=1,
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+    ),
+    TrainConfig(
+        name="pi05_libero_eval",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            number_token_weight=1.0,
+            pi05=True,
+            discrete_state_input=True,
+        ),
+        data=LiberoDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+        ),
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]

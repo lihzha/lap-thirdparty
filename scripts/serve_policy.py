@@ -88,7 +88,7 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
-            if "cot" in args.policy.config:
+            if "cot" in args.policy.config or "eval" in args.policy.config:
                 return _policy_config.create_trained_policy_cot(
                     _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
                 )

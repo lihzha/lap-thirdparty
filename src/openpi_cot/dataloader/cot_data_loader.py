@@ -110,6 +110,29 @@ def _make_iterable_transforms(
     return tx
 
 
+class IterableTransformedDataset(up.IterableTransformedDataset):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def __iter__(self):
+        for sample in self._dataset:
+            if self._is_batched:
+                # Transforms are designed to be applied to individual samples. So we need to split the batch into
+                # individual samples and apply the transform to each sample individually.
+                batch_size = next(v.shape[0] for v in sample.values())
+
+                # Split batch into individual samples using tree_map
+                individual_samples = [jax.tree.map(lambda x: x[i], sample) for i in range(batch_size)]  # noqa: B023
+
+                # Transform each sample
+                transformed = [self._transform(s) for s in individual_samples]
+
+                # Recombine batch with tree_map
+                yield jax.tree.map(lambda *x: np.stack(x, axis=0), *transformed)
+            else:
+                yield self._transform(sample)
+
+
 # ---------- Public entry: create_data_loader ----------
 def create_data_loader(
     config: _config.TrainConfig,
@@ -151,7 +174,7 @@ def create_data_loader(
 
         # 2) transforms (split-aware)
         tx = _make_iterable_transforms(data_cfg, skip_norm_stats=data_cfg.norm_stats is None, split=split)
-        iterable = up.IterableTransformedDataset(ds, tx, is_batched=True)
+        iterable = IterableTransformedDataset(ds, tx, is_batched=True)
 
         return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg)
 

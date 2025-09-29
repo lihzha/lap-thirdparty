@@ -85,30 +85,30 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
         fmt_dx = _format_numeric(dx, sum_decimal)
         fmt_dy = _format_numeric(dy, sum_decimal)
         fmt_dz = _format_numeric(dz, sum_decimal)
-        if dx_m > 0:
+        if dx_m > 0 and dx != 0:
             parts.append(f"move forward {fmt_dx} cm")
-        elif dx_m < 0:
+        elif dx_m < 0 and dx != 0:
             parts.append(f"move back {fmt_dx} cm")
-        if dz_m > 0:
+        if dz_m > 0 and dz != 0:
             parts.append(f"move up {fmt_dz} cm")
-        elif dz_m < 0:
+        elif dz_m < 0 and dz != 0:
             parts.append(f"move down {fmt_dz} cm")
-        if dy_m > 0:
+        if dy_m > 0 and dy != 0:
             parts.append(f"move left {fmt_dy} cm")
-        elif dy_m < 0:
+        elif dy_m < 0 and dy != 0:
             parts.append(f"move right {fmt_dy} cm")
         if include_rotation:
-            if droll_rad > 0:
+            if droll_rad > 0 and droll != 0:
                 parts.append(f"tilt left {droll} degrees")
-            elif droll_rad < 0:
+            elif droll_rad < 0 and droll != 0:
                 parts.append(f"tilt right {droll} degrees")
-            if dpitch_rad > 0:
+            if dpitch_rad > 0 and dpitch != 0:
                 parts.append(f"tilt up {dpitch} degrees")
-            elif dpitch_rad < 0:
+            elif dpitch_rad < 0 and dpitch != 0:
                 parts.append(f"tilt down {dpitch} degrees")
-            if dyaw_rad > 0:
+            if dyaw_rad > 0 and dyaw != 0:
                 parts.append(f"rotate counterclockwise {dyaw} degrees")
-            elif dyaw_rad < 0:
+            elif dyaw_rad < 0 and dyaw != 0:
                 parts.append(f"rotate clockwise {dyaw} degrees")
 
     # Final gripper value from last step

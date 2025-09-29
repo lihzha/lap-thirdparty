@@ -12,7 +12,7 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
 import numpy as np
-import openpi.models.model as _model
+from openpi.models import model as _model
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.optimizer as _optimizer
@@ -32,47 +32,16 @@ import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.weight_loaders as _weight_loaders
 
 
-def get_mem():
+def log_mem(msg: str):
     """
     Returns:
         ram (float): Host RAM usage in GB (RSS).
         tpu_mem (float): TPU HBM memory usage in GB (sum across devices).
     """
-
     # --- Host RAM (Resident Set Size) ---
     proc = psutil.Process(os.getpid())
     ram_gb = proc.memory_info().rss / (1024**3)  # RSS in GB
-
-    # # --- TPU HBM (High Bandwidth Memory) ---
-    # try:
-    #     # jax-smi CLI call (fast) - returns total HBM used across all TPU devices
-    #     out = subprocess.check_output(
-    #         ["jax-smi", "--bytes"], stderr=subprocess.DEVNULL
-    #     ).decode("utf-8")
-
-    #     # Parse lines like: "TPU:0 | MEM: 12.34 GB"
-    #     tpu_mem_gb = 0.0
-    #     for line in out.splitlines():
-    #         if "HBM" in line or "MEM" in line:
-    #             parts = line.split()
-    #             for i, p in enumerate(parts):
-    #                 if p.upper() in ["HBM:", "MEM:"] and i + 1 < len(parts):
-    #                     try:
-    #                         val = float(parts[i+1])
-    #                         if "GB" in parts[i+2]:
-    #                             tpu_mem_gb += val
-    #                         elif "MB" in parts[i+2]:
-    #                             tpu_mem_gb += val / 1024
-    #                     except:
-    #                         continue
-    #     if tpu_mem_gb == 0:
-    #         raise ValueError("No TPU memory parsed.")
-    # except Exception:
-    #     # Fallback: estimate using JAX runtime (less accurate but no external calls)
-    #     tpu_mem_gb = sum(d.memory_stats()['bytes_in_use'] for d in jax.devices()) / (1024 ** 3)
-
-    # return ram_gb, tpu_mem_gb
-    return ram_gb
+    logging.info(f"{msg}: RAM: {ram_gb:.2f}GB")
 
 
 def init_logging():
@@ -143,11 +112,56 @@ def init_wandb(
         wandb.run.log_code(epath.Path(__file__).parent.parent)
 
 
-def _is_tpu_runtime() -> bool:
-    try:
-        return any(d.platform == "tpu" for d in jax.devices())
-    except Exception:
-        return False
+def init_tpu(config: _config.TrainConfig):
+    def _is_tpu_runtime() -> bool:
+        try:
+            return any(d.platform == "tpu" for d in jax.devices())
+        except Exception:
+            return False
+
+    if (
+        ("v6" in config.name and config.fsdp_devices > 8)
+        or ("v4" in config.name and config.fsdp_devices > 4)
+        or ("v5" in config.name and config.fsdp_devices > 8)
+    ):
+        jax.distributed.initialize()
+    if "local" in config.name:
+        os.environ["CURL_CA_BUNDLE"] = (
+            "/etc/pki/tls/certs/ca-bundle.crt"  # Ensure the CA bundle is set for SSL verification
+        )
+
+    data_dir = save_dir = config.data.rlds_data_dir
+    cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
+    if _is_tpu_runtime() and (str(data_dir).startswith("gs://") or str(save_dir).startswith("gs://")):
+        prevent_cross_region(data_dir, save_dir)
+        if cache_dir is not None:
+            prevent_cross_region(cache_dir, save_dir)
+    # Determine effective FSDP devices for single-process GPU/CPU runs.
+    process_count = getattr(jax, "process_count", lambda: 1)()
+    local_devices = getattr(jax, "local_device_count", lambda: 1)()
+    global_devices = getattr(jax, "device_count", lambda: local_devices)()
+    logging.info(f"Local devices: {local_devices}, Global devices: {global_devices}, Process count: {process_count}")
+    if process_count == 1:
+        # Choose the largest divisor of available devices not exceeding configured fsdp_devices
+        target = min(config.fsdp_devices, local_devices)
+        effective_fsdp_devices = 1
+        for d in range(target, 0, -1):
+            if global_devices % d == 0:
+                effective_fsdp_devices = d
+                break
+        if effective_fsdp_devices != config.fsdp_devices:
+            logging.info(
+                "Using fsdp_devices=%d for single-process run (available devices=%d)",
+                effective_fsdp_devices,
+                global_devices,
+            )
+    else:
+        effective_fsdp_devices = config.fsdp_devices
+
+    logging.info(f"Running on: {platform.node()}")
+
+    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    return effective_fsdp_devices
 
 
 @dataclasses.dataclass
@@ -344,51 +358,8 @@ class ValidationStepRunner:
 
 
 def main(config: _config.TrainConfig):
-    if (
-        ("v6" in config.name and config.fsdp_devices > 8)
-        or ("v4" in config.name and config.fsdp_devices > 4)
-        or ("v5" in config.name and config.fsdp_devices > 8)
-    ):
-        jax.distributed.initialize()
-    if "local" in config.name:
-        os.environ["CURL_CA_BUNDLE"] = (
-            "/etc/pki/tls/certs/ca-bundle.crt"  # Ensure the CA bundle is set for SSL verification
-        )
-
-    data_dir = save_dir = config.data.rlds_data_dir
-    cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
-    if _is_tpu_runtime() and (str(data_dir).startswith("gs://") or str(save_dir).startswith("gs://")):
-        prevent_cross_region(data_dir, save_dir)
-        if cache_dir is not None:
-            prevent_cross_region(cache_dir, save_dir)
-    # Determine effective FSDP devices for single-process GPU/CPU runs.
-    process_count = getattr(jax, "process_count", lambda: 1)()
-    local_devices = getattr(jax, "local_device_count", lambda: 1)()
-    global_devices = getattr(jax, "device_count", lambda: local_devices)()
     init_logging()
-    logging.info(f"Local devices: {local_devices}, Global devices: {global_devices}, Process count: {process_count}")
-    if process_count == 1:
-        # Choose the largest divisor of available devices not exceeding configured fsdp_devices
-        target = min(config.fsdp_devices, local_devices)
-        effective_fsdp_devices = 1
-        for d in range(target, 0, -1):
-            if global_devices % d == 0:
-                effective_fsdp_devices = d
-                break
-        if effective_fsdp_devices != config.fsdp_devices:
-            logging.info(
-                "Using fsdp_devices=%d for single-process run (available devices=%d)",
-                effective_fsdp_devices,
-                global_devices,
-            )
-    else:
-        effective_fsdp_devices = config.fsdp_devices
-    #     assert global_devices % effective_fsdp_devices == 0
-    effective_fsdp_devices = config.fsdp_devices
-
-    logging.info(f"Running on: {platform.node()}")
-
-    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    effective_fsdp_devices = init_tpu(config)
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)
@@ -406,6 +377,8 @@ def main(config: _config.TrainConfig):
         keep_period=config.keep_period,
         overwrite=config.overwrite,
         resume=config.resume,
+        async_timeout_secs=config.checkpoint_async_timeout_secs,
+        async_enable=config.checkpoint_async_enable,
     )
     init_wandb(
         config,
@@ -413,64 +386,32 @@ def main(config: _config.TrainConfig):
         enabled=config.wandb_enabled,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
-    ram = get_mem()
-    logging.info(f"Before init: RAM: {ram:.2f}GB")
-    # wandb.log({
-    #     "sys/ram_gb": ram,
-    #     "sys/event": "start",
-    # }, step=0)
+    log_mem("Before init")
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
         shuffle=True,
         seed=config.seed,
     )
-
     data_iter = iter(data_loader)
 
-    ram = get_mem()
-    logging.info(f"Before getting batch: RAM: {ram:.2f}GB")
-    # wandb.log({
-    #     "sys/ram_gb": ram,
-    #     "sys/event": "before_get_batch",
-    # }, step=0)
+    log_mem("Before getting batch")
     # if resuming and start_step > 0:
     #     # Fast-forward the iterator so that step `start_step` uses batch index `start_step`.
     #     for _ in range(start_step):
     #         _ = next(data_iter)
     batch = next(data_iter)
-    # images_to_log = [
-    #     wandb.Image(
-    #         np.concatenate([np.array(_utils.to_local_array(img[i])) for img in batch[0].images.values()], axis=1)
-    #     )
-    #     for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    # ]
-    # wandb.log({"camera_views": images_to_log}, step=0)
 
-    ram = get_mem()
-    logging.info(f"After getting batch: RAM: {ram:.2f}GB")
-    # wandb.log({
-    #     "sys/ram_gb": ram,
-    #     "sys/event": "after_get_batch",
-    # }, step=0)
-
-    logging.info("After getting batch")
+    log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
-    # Sharding details for the first batch
     sharding.log_batch_sharding(batch)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
 
-    ram = get_mem()
-    logging.info(f"After init train state: RAM: {ram:.2f}GB")
-    # wandb.log({
-    #     "sys/ram_gb": ram,
-    #     "sys/event": "after_init_train_state",
-    # }, step=0)
+    log_mem("After init train state")
 
     logging.info(f"Initialized train state (param shapes):\n{training_utils.array_tree_to_info(train_state.params)}")
-    # Planned vs actual parameter sharding
     sharding.log_param_sharding_planned(train_state_sharding)
     sharding.log_param_sharding_actual(train_state.params)
 
@@ -538,33 +479,30 @@ def main(config: _config.TrainConfig):
         tokenizer=data_loader.tokenizer,
         hard_quantile=0.99,
     )
-    hard_logging_start_step = 0
     host_batch_cache = HostBatchCache()
 
     for step in pbar:
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
-        if jax.process_index() == 0 and step >= hard_logging_start_step:
-            per_sample_loss = info.get("per_sample_loss")  # global loss from all hosts
-            assert per_sample_loss is not None
-            per_sample_np = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
-            if per_sample_np.size > 0:
-                hard_example_tracker.update(per_sample_np)
-                host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-                if local_size > 0:
-                    total_examples = per_sample_np.shape[0]
-                    if process_count > 1 and total_examples == local_size * process_count:
-                        process_idx = getattr(jax, "process_index", lambda: 0)()
-                        start = process_idx * local_size
-                        end = start + local_size
-                        local_losses = per_sample_np[start:end]
-                        idx_offset = start
-                    else:
-                        local_losses = per_sample_np[:local_size]
-                        idx_offset = 0
-                    if local_losses.size > 0:
-                        hard_example_tracker.add_hard_examples(step, host_batch_local, local_losses, idx_offset)
+        per_sample_loss = info.get("per_sample_loss")
+        if per_sample_loss is None:
+            raise ValueError("Training step info missing per_sample_loss")
+        per_sample_np_local = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
+        global_per_sample_np = training_utils.global_concat(per_sample_np_local)
+        if global_per_sample_np.size > 0:
+            hard_example_tracker.update(global_per_sample_np)
+        host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+        if local_size > 0 and per_sample_np_local.size >= local_size:
+            process_idx = getattr(jax, "process_index", lambda: 0)()
+            start = process_idx * local_size
+            hard_example_tracker.add_local_examples(
+                step,
+                host_batch_local,
+                per_sample_np_local[:local_size],
+                global_idx_base=start,
+                process_idx=process_idx,
+            )
         if step % config.log_interval == 0:
             # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
@@ -574,17 +512,26 @@ def main(config: _config.TrainConfig):
                 "param_norm": jnp.mean,
             }
             reduced_info = {}
+            per_sample_losses_chunk: list[np.ndarray] = []
             for key, value in stacked_infos.items():
                 if key == "per_sample_loss":
+                    per_sample_losses_chunk.append(np.asarray(training_utils.to_local_array(value)).reshape(-1))
                     reduced_info["max_per_sample_loss"] = jnp.max(value)
                 else:
                     reduced_info[key] = reduce_overrides.get(key, jnp.mean)(value)
             reduced_info = jax.device_get(reduced_info)
+            if per_sample_losses_chunk:
+                concatenated = np.concatenate(per_sample_losses_chunk)
+                global_per_sample_np = training_utils.global_concat(concatenated)
+                if global_per_sample_np.size > 0:
+                    hard_example_tracker.update(global_per_sample_np)
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
+            hard_payload = hard_example_tracker.log_if_ready(step)
+            if hard_payload:
+                vis_tools.log_hard_examples_payload(hard_payload)
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
-                hard_example_tracker.log_if_ready(step)
                 host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
                 vis_tools.log_random_examples(
                     step,
@@ -653,7 +600,18 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+            checkpoint_manager = _checkpoints.save_state(
+                checkpoint_manager,
+                train_state,
+                data_loader,
+                step,
+                max_retries=config.checkpoint_max_retries,
+                retry_delay_secs=config.checkpoint_retry_delay_secs,
+                retry_backoff=config.checkpoint_retry_backoff,
+                fallback_to_sync=config.checkpoint_fallback_to_sync,
+                async_timeout_secs=config.checkpoint_async_timeout_secs,
+                keep_period=config.keep_period,
+            )
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

@@ -2,11 +2,13 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field
 import logging
+import pickle
 import re
 from typing import Any
 
 import cv2
 import jax
+from jax.experimental import multihost_utils as mh
 import jax.numpy as jnp
 import numpy as np
 from openpi.models import model as _model
@@ -50,7 +52,7 @@ class HardExampleTracker:
     _interval_losses: list[np.ndarray] = field(default_factory=list, init=False)
     _interval_total_samples: int = field(default=0, init=False)
     _hard_example_buffer: list[dict[str, Any]] = field(default_factory=list, init=False)
-    _hard_example_keys: set[tuple[int, int]] = field(default_factory=set, init=False)
+    _hard_example_keys: set[tuple[int, int, int]] = field(default_factory=set, init=False)
 
     def update(self, per_sample_losses: np.ndarray | None) -> None:
         if per_sample_losses is None:
@@ -61,12 +63,14 @@ class HardExampleTracker:
         self._interval_losses.append(arr)
         self._interval_total_samples += int(arr.size)
 
-    def add_hard_examples(
+    def add_local_examples(
         self,
         step_idx: int,
         host_batch_local: tuple[CoTObservation, _model.Actions] | None,
         local_losses: np.ndarray | None,
-        idx_offset: int,
+        global_idx_base: int,
+        *,
+        process_idx: int,
     ) -> None:
         if host_batch_local is None or local_losses is None:
             return
@@ -95,7 +99,9 @@ class HardExampleTracker:
             return
         candidate_indices = sorted({int(idx) for idx in candidate_indices})
         new_indices = [
-            idx for idx in candidate_indices if (step_idx, int(idx_offset + idx)) not in self._hard_example_keys
+            idx
+            for idx in candidate_indices
+            if (process_idx, step_idx, int(global_idx_base + idx)) not in self._hard_example_keys
         ]
         if not new_indices:
             return
@@ -118,14 +124,15 @@ class HardExampleTracker:
                 "loss": loss_val,
                 "step": step_idx,
                 "local_idx": int(local_idx),
-                "global_idx": int(local_idx + idx_offset),
+                "global_idx": int(local_idx + global_idx_base),
+                "process_index": int(process_idx),
                 "image": vis["image"],
                 "language_action": vis.get("language_action", "") or "",
                 "dataset_name": vis.get("dataset_name", "") or "",
                 "prompt": vis.get("prompt", "") or "",
             }
             self._hard_example_buffer.append(entry)
-            self._hard_example_keys.add((step_idx, entry["global_idx"]))
+            self._hard_example_keys.add((process_idx, step_idx, entry["global_idx"]))
         self._hard_example_buffer.sort(key=lambda e: e["loss"], reverse=True)
         capacity = self._compute_buffer_capacity()
         if len(self._hard_example_buffer) > capacity:
@@ -133,16 +140,15 @@ class HardExampleTracker:
                 self._hard_example_keys.discard((removed["step"], removed["global_idx"]))
             del self._hard_example_buffer[capacity:]
 
-    def log_if_ready(self, step_idx: int) -> None:
+    def log_if_ready(self, step_idx: int) -> dict[str, Any] | None:
         if not self._interval_losses:
             self.reset()
-            return
+            return None
         interval_all = np.concatenate(self._interval_losses, axis=0)
         total_samples = int(interval_all.size)
         hard_to_log = sorted(self._hard_example_buffer, key=lambda e: e["loss"], reverse=True)[: self.max_hard_examples]
-        if total_samples == 0 or not hard_to_log:
-            quantile_threshold = float("nan")
-        else:
+        quantile_threshold = float("nan")
+        if total_samples > 0 and hard_to_log:
             target = min(self.max_hard_examples, total_samples)
             quantile_prob = 1.0 - target / total_samples
             quantile_prob = float(np.clip(quantile_prob, 0.0, 1.0))
@@ -150,27 +156,17 @@ class HardExampleTracker:
             min_logged_loss = float(hard_to_log[-1]["loss"])
             if not np.isfinite(quantile_threshold) or quantile_threshold < min_logged_loss:
                 quantile_threshold = min_logged_loss
-        if hard_to_log:
-            log_images = []
-            for entry in hard_to_log:
-                caption_text = entry.get("prompt", "") or ""
-                caption_text += entry.get("language_action", "") or ""
-                caption_text += entry.get("dataset_name", "") or ""
-                caption = f"loss={entry['loss']:.4f}"
-                panel_caption = caption
-                log_images.append(
-                    wandb.Image(
-                        entry["image"],
-                        caption=f"{panel_caption} | {caption_text}",
-                    )
-                )
-            wandb_payload = {
-                "train/hard_examples": log_images,
-                "train/hard_examples_loss_quantile": quantile_threshold,
-                "train/hard_examples_count": len(log_images),
-            }
-            wandb.log(wandb_payload, step=step_idx)
+        payload = {
+            "entries": hard_to_log,
+            "quantile_threshold": quantile_threshold,
+            "total_samples": total_samples,
+            "max_hard_examples": self.max_hard_examples,
+            "step": step_idx,
+        }
         self.reset()
+        if not hard_to_log and total_samples == 0:
+            return None
+        return payload
 
     def reset(self) -> None:
         self._interval_losses.clear()
@@ -340,6 +336,149 @@ def log_random_examples(
         images_to_log.append(wandb.Image(vis["image"], caption=caption))
     if images_to_log:
         wandb.log({"train/random_examples": images_to_log}, step=step)
+
+
+def _log_entries(entries: list[dict[str, Any]], *, step: int, quantile_threshold: float, total_samples: int) -> None:
+    if not entries:
+        return
+    log_images = []
+    for entry in entries:
+        caption_text = entry.get("prompt", "") or ""
+        caption_text += entry.get("language_action", "") or ""
+        caption_text += entry.get("dataset_name", "") or ""
+        host_idx = entry.get("process_index")
+        host_tag = f"host={host_idx}" if host_idx is not None else "host=?"
+        caption = f"{host_tag} loss={entry['loss']:.4f}"
+        log_images.append(wandb.Image(entry["image"], caption=f"{caption} | {caption_text}"))
+    wandb_payload = {
+        "train/hard_examples": log_images,
+        "train/hard_examples_loss_quantile": quantile_threshold,
+        "train/hard_examples_count": len(log_images),
+        "train/hard_examples_interval_samples": total_samples,
+    }
+    wandb.log(wandb_payload, step=step)
+
+
+def log_hard_examples_payload(payload: dict[str, Any]) -> None:
+    if not payload:
+        return
+    entries: list[dict[str, Any]] = payload.get("entries", [])
+    max_examples = int(payload.get("max_hard_examples", len(entries) or 0))
+    quantile_threshold = float(payload.get("quantile_threshold", float("nan")))
+    total_samples = int(payload.get("total_samples", 0))
+    step = int(payload.get("step", 0))
+
+    process_count = getattr(jax, "process_count", lambda: 1)()
+    process_idx = getattr(jax, "process_index", lambda: 0)()
+
+    if process_count == 1:
+        _log_entries(
+            entries[:max_examples], step=step, quantile_threshold=quantile_threshold, total_samples=total_samples
+        )
+        return
+
+    num_slots = int(max_examples)
+    if num_slots <= 0:
+        return
+
+    local_payload = {
+        "process_index": process_idx,
+        "entries": entries,
+    }
+    try:
+        local_blob = pickle.dumps(local_payload)
+    except Exception as exc:
+        logging.warning("Failed to serialize hard example payload on host %d: %s", process_idx, exc)
+        return
+
+    blob_arr = np.frombuffer(local_blob, dtype=np.uint8)
+    blob_len = np.array([blob_arr.size], dtype=np.int32)
+
+    gathered_lengths = mh.process_allgather(blob_len, tiled=False)
+    lengths_np = np.asarray(gathered_lengths, dtype=object)
+    max_len = 0
+    if lengths_np.size > 0:
+        max_len = int(max(int(np.asarray(x)[0]) for x in gathered_lengths))
+    if max_len <= 0:
+        max_len = int(blob_arr.size)
+
+    padded = np.zeros((max_len,), dtype=np.uint8)
+    if blob_arr.size > 0:
+        padded[: blob_arr.size] = blob_arr
+
+    gathered_blobs = mh.process_allgather(padded, tiled=False)
+
+    if process_idx != 0:
+        return
+
+    length_list = []
+    for x in gathered_lengths:
+        arr = np.asarray(x)
+        if arr.size == 0:
+            length_list.append(0)
+        elif arr.ndim == 0:
+            length_list.append(int(arr))
+        else:
+            length_list.append(int(arr.flat[0]))
+
+    all_entries: list[dict[str, Any]] = []
+    for arr, length in zip(gathered_blobs, length_list):
+        if length <= 0:
+            continue
+        try:
+            host_payload = pickle.loads(arr[:length].tobytes())
+        except Exception as exc:
+            logging.warning("Failed to deserialize hard example payload on process 0: %s", exc)
+            continue
+        host_idx = host_payload.get("process_index", 0)
+        for entry in host_payload.get("entries", []):
+            entry = dict(entry)
+            entry.setdefault("process_index", host_idx)
+            all_entries.append(entry)
+
+    if not all_entries:
+        return
+
+    # Sort per host so that we can sample fairly across processes.
+    entries_by_host: dict[int, list[dict[str, Any]]] = {}
+    for entry in all_entries:
+        host_idx = int(entry.get("process_index", 0))
+        entries_by_host.setdefault(host_idx, []).append(entry)
+
+    for host_list in entries_by_host.values():
+        host_list.sort(key=lambda e: e.get("loss", float("-inf")), reverse=True)
+
+    selected: list[dict[str, Any]] = []
+    round_idx = 0
+    host_ids = sorted(entries_by_host.keys())
+    while len(selected) < max_examples:
+        added_any = False
+        for host_id in host_ids:
+            host_list = entries_by_host.get(host_id, [])
+            if round_idx < len(host_list):
+                selected.append(host_list[round_idx])
+                added_any = True
+                if len(selected) >= max_examples:
+                    break
+        if not added_any:
+            break
+        round_idx += 1
+
+    # If we still have room (e.g., fewer hosts than slots), fill with remaining highest-loss entries.
+    if len(selected) < max_examples:
+        remaining = []
+        for host_id in host_ids:
+            host_list = entries_by_host[host_id]
+            remaining.extend(host_list[round_idx:])
+        remaining.sort(key=lambda e: e.get("loss", float("-inf")), reverse=True)
+        for entry in remaining:
+            if len(selected) >= max_examples:
+                break
+            selected.append(entry)
+
+    # Keep overall ordering by loss for readability.
+    selected.sort(key=lambda e: e.get("loss", float("-inf")), reverse=True)
+    _log_entries(selected, step=step, quantile_threshold=quantile_threshold, total_samples=total_samples)
 
 
 def prepare_eval_batch(batch):

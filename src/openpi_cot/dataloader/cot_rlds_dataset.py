@@ -50,7 +50,7 @@ def batch_prefetch(dataset: dl.DLataset, batch_size: int) -> dl.DLataset:
     return prefetched.with_ram_budget(1)
 
 
-def maybe_shuffle_and_take(
+def maybe_repeat_shuffle_and_take(
     dataset: dl.DLataset,
     *,
     want_val: bool,
@@ -187,7 +187,7 @@ def dataset_size(ds: tf.data.Dataset) -> int:
 
 
 @dataclass(frozen=True)
-class DroidDatasetSpec:
+class CoTRldsDatasetSpec:
     lang_action_tfrecord_pattern: str = "tfds_language_actions-*.tfrecord.gz"
     lang_action_dir_name: str = "droid-lang-actions"
     lang_action_dir_name_base: str = "droid-base-lang-actions"
@@ -210,9 +210,6 @@ class DroidDatasetSpec:
     )
     default_state_encoding: StateEncoding = StateEncoding.POS_EULER
     default_action_encoding: ActionEncoding = ActionEncoding.EEF_POS
-
-
-class _SingleCoTRldsDatasetRaw:
     fallback_instructions = tf.constant(
         [
             "Do something useful.",
@@ -237,6 +234,8 @@ class _SingleCoTRldsDatasetRaw:
         dtype=tf.string,
     )
 
+
+class _SingleCoTRldsDatasetRaw:
     def __init__(
         self,
         dataset_name: str,
@@ -323,7 +322,7 @@ class _SingleCoTRldsDatasetRaw:
 
 
 class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
-    spec: ClassVar[DroidDatasetSpec] = DroidDatasetSpec()
+    spec: ClassVar[CoTRldsDatasetSpec] = CoTRldsDatasetSpec()
 
     def _episode_id_from_traj(self, traj, ep_table):
         """Lookup episode_id from trajectory metadata using regex extraction."""
@@ -1033,6 +1032,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         if align_oxe_fmt:
             self.apply_align_oxe_fmt()
 
+        self.dataset = self.dataset.shuffle(60_000, seed=self.seed)
+
         self.apply_flatten()
 
         self.apply_frame_filters()
@@ -1567,7 +1568,7 @@ class DroidCoTRldsDataset(_DroidCoTRldsDatasetRaw):
         )
 
         # Apply common shuffling/take/cache behavior
-        self.dataset = maybe_shuffle_and_take(
+        self.dataset = maybe_repeat_shuffle_and_take(
             self.dataset,
             want_val=self.want_val,
             shuffle=shuffle,
@@ -1641,7 +1642,7 @@ class OXECoTRldsDatasets(_OXECoTRldsDatasetsRaw):
 
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(self.datasets, self.sample_weights)
 
-        self.dataset = maybe_shuffle_and_take(
+        self.dataset = maybe_repeat_shuffle_and_take(
             self.dataset,
             want_val=want_val,
             shuffle=shuffle,
@@ -1737,7 +1738,7 @@ class CombinedCoTRldsDataset:
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(all_datasets, sample_weights)
 
         # Apply common finalization
-        self.dataset = maybe_shuffle_and_take(
+        self.dataset = maybe_repeat_shuffle_and_take(
             self.dataset,
             want_val=want_val,
             shuffle=shuffle,
