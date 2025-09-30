@@ -951,7 +951,6 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
         align_oxe_fmt: bool = False,
         train_dataset=None,
-        use_base_actions=True,
         **kwargs,
     ):
         super().__init__(
@@ -971,7 +970,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.need_calib = bool(config.vis_dataset or self.drop_gripper_oob)
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.use_per_traj_filter = bool(config.use_per_traj_filter)
-        self.use_base_actions = use_base_actions
+        self.use_base_actions = config.use_base_actions
         # Persist per-dataset control frequency for later padding and policy use
         # Default to 15 for DROID datasets
         self.control_frequency: int = 15

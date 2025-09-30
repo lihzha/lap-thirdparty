@@ -164,6 +164,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     droid_rlds_data_dir: str | None = None
     # support using droid_subset for debugging
     droid_dataset_name: Literal["droid", "droid_subset"] = "droid"
+    use_base_actions: bool = True
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_pi_magic_soup"
