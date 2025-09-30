@@ -1096,6 +1096,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         dataset_frame_transform_kwargs = dataset_kwargs.get("dataset_frame_transform_kwargs", {})
         assert "primary" in self.image_obs_keys, "primary image is required"
         assert "wrist" in self.image_obs_keys, "wrist image is required"
+        self.vis_dataset = bool(config.vis_dataset)
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
 
@@ -1364,6 +1365,13 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 serialized_flat,
                 [tf.shape(actions_window)[0], int(summation_steps)],
             )
+            if self.vis_dataset:
+                grouped_images = tf.gather(traj["observation"]["image_primary"], summation_indices)
+                traj["observation"]["image_primary"] = grouped_images
+
+                if self.use_wrist_image:
+                    grouped_wrist_images = tf.gather(traj["observation"]["image_wrist"], summation_indices)
+                    traj["observation"]["image_wrist"] = grouped_wrist_images
 
             return traj
 
