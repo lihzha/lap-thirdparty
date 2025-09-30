@@ -1369,9 +1369,8 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 grouped_images = tf.gather(traj["observation"]["image_primary"], summation_indices)
                 traj["observation"]["image_primary"] = grouped_images
 
-                if self.use_wrist_image:
-                    grouped_wrist_images = tf.gather(traj["observation"]["image_wrist"], summation_indices)
-                    traj["observation"]["image_wrist"] = grouped_wrist_images
+                grouped_wrist_images = tf.gather(traj["observation"]["image_wrist"], summation_indices)
+                traj["observation"]["image_wrist"] = grouped_wrist_images
 
             return traj
 
