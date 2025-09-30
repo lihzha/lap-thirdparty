@@ -145,19 +145,20 @@ def make_decode_images_fn(
         return img
 
     def _decode_frame(traj: dict) -> dict:
-        traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
+        # traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
+        # if use_wrist_image and wrist_key is not None:
+        #     traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
+        traj["observation"][primary_key] = tf.map_fn(
+            _decode_single,
+            traj["observation"][primary_key],
+            fn_output_signature=tf.uint8,
+        )
         if use_wrist_image and wrist_key is not None:
-            traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
-        # traj["observation"][primary_key] = tf.map_fn(
-        #     _decode_single,
-        #     traj["observation"][primary_key],
-        #     fn_output_signature=tf.uint8,
-        # )
-        # traj["observation"][wrist_key] = tf.map_fn(
-        #     _decode_single,
-        #     traj["observation"][wrist_key],
-        #     fn_output_signature=tf.uint8,
-        # )
+            traj["observation"][wrist_key] = tf.map_fn(
+                _decode_single,
+                traj["observation"][wrist_key],
+                fn_output_signature=tf.uint8,
+            )
         return traj
 
     return _decode_frame
