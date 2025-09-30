@@ -14,6 +14,7 @@ import psutil
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+from openpi_cot.dataloader.filters import IdleFilter
 from openpi_cot.dataloader.helpers import ActionEncoding
 from openpi_cot.dataloader.helpers import StateEncoding
 from openpi_cot.dataloader.helpers import convert_action_encoding
@@ -26,6 +27,10 @@ from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.materialize import get_oxe_dataset_kwargs_and_weights
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.dataloader.transforms import chunk_sequence
+from openpi_cot.dataloader.transforms import group_language_actions_numeric
+from openpi_cot.dataloader.transforms import group_language_actions_text
+from openpi_cot.dataloader.transforms import pad_action_and_state
 from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 from openpi_cot.transforms import NormalizeActionAndProprio
@@ -386,7 +391,6 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # ---------------------------------------------------------------------
         # 3. Camera-index table  (episode_id → ext-cam idx)
         # ---------------------------------------------------------------------
-        intrinsics_json = None
         with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.cam2base_extrinsics_file}", "r") as fp:
             cam2base_extrinsics = json.load(fp)
         with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.camera_serials_file}", "r") as fp:
@@ -405,9 +409,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             serial_to_name = {v: k for k, v in cams.items()}
             if camera_serial not in serial_to_name:
                 continue
-            if intrinsics_json is not None:
-                if eid not in intrinsics_json:
-                    continue
+            if eid not in intrinsics_json:
+                continue
 
             calib_camera_name = serial_to_name[camera_serial]
             if calib_camera_name == "ext1_cam_serial":
@@ -747,71 +750,40 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         )
 
         def pad_action_state(traj):
-            # pad actions to action_dim
-            traj["actions"] = tf.pad(traj["actions"], [[0, 0], [0, self.action_dim - tf.shape(traj["actions"])[-1]]])
-            # pad state to action_dim
-            traj["observation"]["state"] = tf.pad(
-                traj["observation"]["state"],
-                [[0, 0], [0, self.action_dim - tf.shape(traj["observation"]["state"])[-1]]],
+            return pad_action_and_state(
+                traj,
+                action_key="actions",
+                state_path=("observation", "state"),
+                action_dim=self.action_dim,
             )
-            return traj
 
         self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
 
         def chunk_actions(traj):
-            """Splits episode into action chunks using shared indexing utility."""
-            traj_len = tf.shape(traj["actions"])[0]
-            action_chunk_indices = compute_window_indices(traj_len, action_chunk_size)
-            traj["actions"] = tf.gather(traj["actions"], action_chunk_indices)
-            return traj
+            return chunk_sequence(traj, seq_key="actions", window_size=action_chunk_size)
 
         self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
         def group_language_actions(traj):
-            """Compute per-timestep summed language actions over future steps.
-
-            For each timestep t, we sum the language actions from t to
-            t + summation_steps - 1 (capped at trajectory end). We DO NOT
-            chunk the language actions; after flattening, each sample will
-            have a single language string aligned to its action chunk.
-            """
-            traj_len = tf.shape(traj["language_actions"])[0]
-            # First, create indices for summation (current + future steps)
+            # Always compute indices once for downstream grouping (images/calibration)
+            traj_len = tf.shape(traj["raw_action"])[0]
             summation_indices = compute_window_indices(traj_len, summation_steps)
 
-            # Trim window to control_frequency and pad to fixed length (summation_steps)
-            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
             if not self.use_base_actions:
-                la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
-                pad_len = summation_steps - trimmed_len
-
-                def _pad_text():
-                    pad = tf.fill([tf.shape(la_window)[0], pad_len], tf.constant("", dtype=tf.string))
-                    return tf.concat([la_window, pad], axis=1)
-
-                traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
-            else:
-                # Gather numeric actions for the future window: [T, trimmed_len, A]
-                actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
-                pad_len = summation_steps - trimmed_len
-
-                def _pad_numeric():
-                    zeros_pad = tf.zeros(
-                        [tf.shape(actions_window_trim)[0], pad_len, tf.shape(actions_window_trim)[-1]],
-                        dtype=actions_window_trim.dtype,
-                    )
-                    return tf.concat([actions_window_trim, zeros_pad], axis=1)
-
-                actions_window = tf.cond(pad_len > 0, _pad_numeric, lambda: actions_window_trim)
-
-                # Convert per-step numeric rows to tf.string via serialization -> [T, summation_steps]
-                flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
-                serialized_flat = tf.map_fn(
-                    lambda v: tf.io.serialize_tensor(v),
-                    flat_rows,
-                    fn_output_signature=tf.string,
+                traj = group_language_actions_text(
+                    traj,
+                    language_key="language_actions",
+                    summation_steps=summation_steps,
+                    control_frequency=self.control_frequency,
                 )
-                traj["language_actions"] = tf.reshape(serialized_flat, [tf.shape(actions_window)[0], summation_steps])
+            else:
+                traj = group_language_actions_numeric(
+                    traj,
+                    raw_action_key="raw_action",
+                    out_language_key="language_actions",
+                    summation_steps=summation_steps,
+                    control_frequency=self.control_frequency,
+                )
 
             if self.vis_dataset:
                 grouped_images = tf.gather(traj["observation"]["exterior_image_1_left"], summation_indices)
@@ -857,18 +829,16 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
 
     def apply_frame_filters(self):
         if self.use_idle_filter:
+            self.dataset = self.dataset.filter(IdleFilter())
 
-            def filter_from_dict(frame):
-                return frame["passes_filter"]
-
-            self.dataset = self.dataset.filter(filter_from_dict)
-
-            # Remove "passes_filter" key from output
-            def remove_passes_filter(frame):
-                frame.pop("passes_filter")
+            # Remove optional keys added during earlier filtering
+            def _remove_optional(frame):
+                for k in ("passes_filter",):
+                    if k in frame:
+                        frame.pop(k)
                 return frame
 
-            self.dataset = self.dataset.map(remove_passes_filter)
+            self.dataset = self.dataset.map(_remove_optional)
 
         # Optional filter: drop samples where gripper projects out of the view
         if self.drop_gripper_oob:
