@@ -976,7 +976,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.control_frequency: int = 15
 
         if train_dataset is not None:
-            if self.use_base_actions:
+            if not self.use_base_actions:
                 self.lang_table = train_dataset.lang_table
                 self.cam_table = train_dataset.cam_table
                 self.intr_table = train_dataset.intr_table
@@ -997,7 +997,7 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             else:
                 raise ValueError(f"Unknown language action directory: {language_action_dir}")
 
-            if self.use_base_actions:
+            if not self.use_base_actions:
                 self.lang_table = self.build_lang_action_table(language_action_dir)
                 self.cam_table, self.intr_table, self.extr_table = self.build_cam_tables(
                     metadata_path, need_calib=self.need_calib
