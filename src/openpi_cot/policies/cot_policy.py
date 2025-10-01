@@ -105,20 +105,20 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         assert self.model_type == ExtendedModelType.PI_COT
         names = ("base_0_rgb", "left_wrist_0_rgb")
+        cf = data.get("control_frequency")
+
         images = (
-            base_image,
-            wrist_image,
+            base_image[:cf],
+            wrist_image[:cf],
         )
         image_masks = (
             base_image_mask,
             wrist_image_mask,
         )
 
-        cf = data.get("control_frequency")
-
         inputs = {
             "state": data["observation"]["state"],
-            "image": dict(zip(names, images[:cf], strict=True)),
+            "image": dict(zip(names, images, strict=True)),
             "image_mask": dict(zip(names, image_masks, strict=True)),
         }
 
