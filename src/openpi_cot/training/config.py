@@ -401,6 +401,10 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 @dataclasses.dataclass(frozen=True)
 class TrainConfig:
+    # Name of the config. Must be unique. Will be used to reference this config.
+    name: tyro.conf.Suppress[str]
+    # Experiment name. Will be used to name the metadata and checkpoint directories.
+    exp_name: str = tyro.MISSING
     # Overide
     project_name: str = "openpi-cot"
     weight_loader: weight_loaders.WeightLoaderChoice = dataclasses.field(
@@ -421,11 +425,6 @@ class TrainConfig:
     checkpoint_retry_delay_secs: float = 30.0
     checkpoint_retry_backoff: float = 2.0
     checkpoint_fallback_to_sync: bool = True
-
-    # Name of the config. Must be unique. Will be used to reference this config.
-    name: tyro.conf.Suppress[str]
-    # Experiment name. Will be used to name the metadata and checkpoint directories.
-    exp_name: str = tyro.MISSING
 
     # Optional path to a PyTorch checkpoint to load weights from.
     pytorch_weight_path: str | None = None
