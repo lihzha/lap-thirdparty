@@ -641,7 +641,6 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
-    from openpi_cot.dataloader.oxe_utils.helpers import transform_actions_xyz
 
     trajectory["action"] = tf.concat(
         (
@@ -653,14 +652,12 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["eef_state"] = transform_actions_xyz(
-        tf.concat(
-            (
-                trajectory["observation"]["present/xyz"][:, :3],
-                trajectory["observation"]["present/axis_angle"][:, :3],
-            ),
-            axis=-1,
-        )
+    trajectory["observation"]["eef_state"] = tf.concat(
+        (
+            trajectory["observation"]["present/xyz"][:, :3],
+            trajectory["observation"]["present/axis_angle"][:, :3],
+        ),
+        axis=-1,
     )
 
     # movement_actions = tf.concat(
@@ -683,9 +680,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
-    raise ValueError("Not implemented")
-
-    movement_actions = transform_actions_xyz(movement_actions)
+    # movement_actions = transform_actions_xyz(movement_actions)
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
