@@ -114,9 +114,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             wrist_image_mask,
         )
 
+        cf = data.get("control_frequency")
+
         inputs = {
             "state": data["observation"]["state"],
-            "image": dict(zip(names, images, strict=True)),
+            "image": dict(zip(names, images[:cf], strict=True)),
             "image_mask": dict(zip(names, image_masks, strict=True)),
         }
 

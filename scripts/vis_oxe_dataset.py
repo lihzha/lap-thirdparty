@@ -371,6 +371,7 @@ def main(config: _config.TrainConfig):
         # Prepare start/end images for the first camera view
         first_cam_key = next(iter(obs.images))
         imgs = obs.images[first_cam_key]
+        logging.info(f"imgs: {imgs.shape}")
         start_imgs = np.array(imgs[:, 0])
         end_imgs = np.array(imgs[:, -1])
         B = start_imgs.shape[0]
