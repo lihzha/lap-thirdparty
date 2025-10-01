@@ -4,7 +4,7 @@ import dataclasses
 import difflib
 import logging
 import pathlib
-from typing import Any, Literal, TypeAlias
+from typing import Literal, TypeAlias
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -400,11 +400,7 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
-class TrainConfig:
-    # Name of the config. Must be unique. Will be used to reference this config.
-    name: tyro.conf.Suppress[str]
-    # Experiment name. Will be used to name the metadata and checkpoint directories.
-    exp_name: str = tyro.MISSING
+class TrainConfig(upstream_config.TrainConfig):
     # Overide
     project_name: str = "openpi-cot"
     weight_loader: weight_loaders.WeightLoaderChoice = dataclasses.field(
@@ -412,11 +408,11 @@ class TrainConfig:
     )
     model: _model.BaseModelConfig = dataclasses.field(default_factory=build_picot_model)
     lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=build_cosine_lr)
-    num_train_steps = 100_000
-    save_interval = 500
-    log_interval = 50
-    keep_period = 10000
-    resume = True
+    num_train_steps: int = 100_000
+    save_interval: int = 500
+    log_interval: int = 50
+    keep_period: int | None = 10000
+    resume: bool = True
     # New field
     do_val: bool = True
     checkpoint_async_timeout_secs: int | None = 7200
@@ -425,49 +421,6 @@ class TrainConfig:
     checkpoint_retry_delay_secs: float = 30.0
     checkpoint_retry_backoff: float = 2.0
     checkpoint_fallback_to_sync: bool = True
-
-    # Optional path to a PyTorch checkpoint to load weights from.
-    pytorch_weight_path: str | None = None
-
-    # Precision for PyTorch training.
-    pytorch_training_precision: Literal["bfloat16", "float32"] = "bfloat16"
-
-    optimizer: _optimizer.OptimizerConfig = dataclasses.field(default_factory=_optimizer.AdamW)
-    ema_decay: float | None = 0.99
-
-    # Specifies which weights should be frozen.
-    freeze_filter: tyro.conf.Suppress[Filter] = dataclasses.field(default_factory=nnx.Nothing)
-
-    # Determines the data to be trained on.
-    data: CoTDataConfig = dataclasses.field(default_factory=CoTDataConfig)
-
-    # Base directory for config assets (e.g., norm stats).
-    assets_base_dir: str = "./assets"
-    # Base directory for checkpoints.
-    checkpoint_base_dir: str = "./checkpoints"
-
-    # Random seed that will be used by random generators during training.
-    seed: int = 42
-    # Global batch size.
-    batch_size: int = 32
-    # Number of workers to use for the data loader. Increasing this number will speed up data loading but
-    # will increase memory and CPU usage.
-    num_workers: int = 2
-
-    # If true, will overwrite the checkpoint directory if it already exists.
-    overwrite: bool = False
-
-    # If true, will enable wandb logging.
-    wandb_enabled: bool = True
-
-    # Used to pass metadata to the policy server.
-    policy_metadata: dict[str, Any] | None = None
-
-    # If the value is greater than 1, FSDP will be enabled and shard across number of specified devices; overall
-    # device memory will be reduced but training could potentially be slower.
-    # eg. if total device is 4 and fsdp devices is 2; then the model will shard to 2 devices and run
-    # data parallel between 2 groups of devices.
-    fsdp_devices: int = 1
 
     @property
     @override
