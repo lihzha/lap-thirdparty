@@ -159,6 +159,7 @@ def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
     return out
 
 
+@tf.function
 def euler_diff(angles1, angles2, order="xyz", degrees=False):
     """
     Compute relative Euler angle difference: angles_rel such that
@@ -208,29 +209,29 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
     return out
 
 
-def axis_angle_to_euler(axis_angle):
-    """Convert axis-angle to euler angles."""
-    import tensorflow_graphics.geometry.transformation as tft
-
-    euler = tft.euler.from_axis_angle(axis_angle)
-    return euler
-
-
+@tf.function
 def transform_actions_xyz(movement_actions):
     """
     movement_actions: (..., 6) where [:3] = translation deltas (xyz),
                       [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
     Returns transformed actions under x'=-y, y'=-x, z'=-z.
     """
-    t = movement_actions[..., :3]
-    e = movement_actions[..., 3:6]
+    movement_actions = tf.convert_to_tensor(movement_actions)
+    dtype = movement_actions.dtype
+
+    # Ensure _C matches input dtype
+    C = tf.cast(_C, dtype)
 
     # translations: t' = C t
-    t_prime = tf.einsum("ij,...j->...i", _C, t)
+    t = movement_actions[..., :3]
+    t_prime = tf.linalg.matvec(C, t)
 
     # rotations: R' = C R C^T, then back to Euler XYZ
+    e = movement_actions[..., 3:6]
     R = _R_from_euler_xyz(e)
-    R_prime = tf.linalg.matmul(tf.linalg.matmul(_C, R), tf.transpose(_C))
+    # _C is symmetric here, but keep transpose for clarity / generality
+    CT = tf.linalg.matrix_transpose(C)
+    R_prime = tf.linalg.matmul(tf.linalg.matmul(C, R), CT)
     e_prime = _euler_xyz_from_R(R_prime)
 
     return tf.concat([t_prime, e_prime], axis=-1)
