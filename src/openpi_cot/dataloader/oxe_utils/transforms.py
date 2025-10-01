@@ -129,6 +129,10 @@ def ppgm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    import tensorflow_graphics.geometry.transformation as tft
+
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
     gripper_action = rel2abs_gripper_actions(gripper_action)
@@ -142,6 +146,21 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["base_pose_tool_reached"][1:, :3]
+            - trajectory["observation"]["base_pose_tool_reached"][:-1, :3],
+            euler_diff(
+                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][1:, 3:7]),
+                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][:-1, 3:7]),
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
     return trajectory
 
 
@@ -322,7 +341,6 @@ def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[s
         ),
         axis=-1,
     )
-
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
