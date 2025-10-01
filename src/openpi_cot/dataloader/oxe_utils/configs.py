@@ -32,8 +32,10 @@ OXE_DATASET_CONFIGS = {
     "fractal20220817_data": {
         "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": ["base_pose_tool_reached", "gripper_closed"],
-        "state_encoding": StateEncoding.POS_QUAT,
+        # "state_obs_keys": ["base_pose_tool_reached", "gripper_closed"],
+        "state_obs_keys": ["eef_state", "gripper_state"],
+        # "state_encoding": StateEncoding.POS_QUAT,
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "kuka": {
@@ -328,8 +330,9 @@ OXE_DATASET_CONFIGS = {
         "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": [
-            "present/xyz",
-            "present/axis_angle",
+            # "present/xyz",
+            # "present/axis_angle",
+            "eef_state",
             None,
             "present/sensed_close",
         ],

@@ -148,6 +148,7 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.helpers import transform_actions_xyz
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -163,6 +164,16 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
+    trajectory["observation"]["eef_state"] = transform_actions_xyz(
+        tf.concat(
+            (
+                trajectory["observation"]["base_pose_tool_reached"][:, :3],
+                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][:, 3:7]),
+            ),
+            axis=-1,
+        )
+    )
+
     movement_actions = tf.concat(
         (
             trajectory["observation"]["base_pose_tool_reached"][1:, :3]
@@ -174,6 +185,7 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
+    movement_actions = transform_actions_xyz(movement_actions)
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
@@ -633,6 +645,7 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.helpers import transform_actions_xyz
 
     trajectory["action"] = tf.concat(
         (
@@ -643,6 +656,16 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
+
+    trajectory["observation"]["eef_state"] = transform_actions_xyz(
+        tf.concat(
+            (
+                trajectory["observation"]["present/xyz"][:, :3],
+                trajectory["observation"]["present/axis_angle"][:, :3],
+            ),
+            axis=-1,
+        )
+    )
 
     # movement_actions = tf.concat(
     #     (
@@ -664,6 +687,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
+    movement_actions = transform_actions_xyz(movement_actions)
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 

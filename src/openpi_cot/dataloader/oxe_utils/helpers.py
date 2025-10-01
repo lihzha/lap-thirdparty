@@ -1,6 +1,9 @@
 import numpy as np
 import tensorflow as tf
 
+# Fixed frame transform: x'=-y, y'=-x, z'=-z
+_C = tf.constant([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=tf.float32)
+
 
 @tf.function
 def _rot_x(a):
@@ -45,6 +48,42 @@ def _rot_z(a):
         ],
         axis=-2,
     )
+
+
+def _R_from_euler_xyz(angles):
+    """Intrinsic XYZ: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)"""
+    roll, pitch, yaw = angles[..., 0], angles[..., 1], angles[..., 2]
+    return tf.linalg.matmul(tf.linalg.matmul(_rot_z(yaw), _rot_y(pitch)), _rot_x(roll))
+
+
+def _euler_xyz_from_R(R, eps=1e-6):
+    """
+    Extract intrinsic XYZ (roll, pitch, yaw) from rotation matrix R.
+    Handles gimbal lock with tf.where (graph-safe).
+    """
+    r20 = R[..., 2, 0]
+    r21 = R[..., 2, 1]
+    r22 = R[..., 2, 2]
+    r10 = R[..., 1, 0]
+    r00 = R[..., 0, 0]
+    r01 = R[..., 0, 1]
+    r11 = R[..., 1, 1]
+
+    cond = tf.less(tf.abs(r20), 1.0 - tf.convert_to_tensor(eps, R.dtype))
+
+    pitch_reg = tf.asin(tf.clip_by_value(-r20, -1.0, 1.0))
+    roll_reg = tf.atan2(r21, r22)
+    yaw_reg = tf.atan2(r10, r00)
+
+    # Gimbal lock: |cos(pitch)| ~ 0
+    pitch_gl = (np.pi / 2) * tf.sign(-r20)
+    roll_gl = tf.zeros_like(pitch_gl)
+    yaw_gl = tf.where(r20 < 0.0, tf.atan2(-r01, r11), tf.atan2(r01, r11))
+
+    roll = tf.where(cond, roll_reg, roll_gl)
+    pitch = tf.where(cond, pitch_reg, pitch_gl)
+    yaw = tf.where(cond, yaw_reg, yaw_gl)
+    return tf.stack([roll, pitch, yaw], axis=-1)
 
 
 @tf.function
@@ -156,3 +195,23 @@ def axis_angle_to_euler(axis_angle):
 
     euler = tft.euler.from_axis_angle(axis_angle)
     return euler
+
+
+def transform_actions_xyz(movement_actions):
+    """
+    movement_actions: (..., 6) where [:3] = translation deltas (xyz),
+                      [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
+    Returns transformed actions under x'=-y, y'=-x, z'=-z.
+    """
+    t = movement_actions[..., :3]
+    e = movement_actions[..., 3:6]
+
+    # translations: t' = C t
+    t_prime = tf.einsum("ij,...j->...i", _C, t)
+
+    # rotations: R' = C R C^T, then back to Euler XYZ
+    R = _R_from_euler_xyz(e)
+    R_prime = tf.linalg.matmul(tf.linalg.matmul(_C, R), tf.transpose(_C))
+    e_prime = _euler_xyz_from_R(R_prime)
+
+    return tf.concat([t_prime, e_prime], axis=-1)
