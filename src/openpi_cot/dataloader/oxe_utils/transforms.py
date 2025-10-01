@@ -662,6 +662,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
             axis=-1,
         )
     )
+    raise ValueError("Not implemented")
 
     # movement_actions = tf.concat(
     #     (
