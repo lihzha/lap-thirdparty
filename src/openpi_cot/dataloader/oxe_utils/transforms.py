@@ -290,6 +290,10 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    import tensorflow_graphics.geometry.transformation as tft
+
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     trajectory["observation"]["state"] = trajectory["observation"]["robot_state"][:, 6:14]
     trajectory["observation"]["depth"] = trajectory["observation"].pop("image_with_depth")
 
@@ -305,8 +309,24 @@ def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[s
         ),
         axis=-1,
     )
+
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
-    return trajectory
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                tft.euler.from_quaternion(trajectory["observation"]["state"][1:, 3:7]),
+                tft.euler.from_quaternion(trajectory["observation"]["state"][:-1, 3:7]),
+            ),
+        ),
+        axis=-1,
+    )
+
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def toto_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
