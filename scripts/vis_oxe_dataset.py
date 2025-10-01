@@ -213,7 +213,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     thickness = 2
     color = (255, 255, 255)
     outline = (0, 0, 0)
-    max_chars = 50
+    max_chars = 45
     lines = _wrap_text_to_lines(text, max_chars)
     line_h = max(10, int(10 * scale))
     y = y0 - 10
@@ -390,7 +390,7 @@ def main(config: _config.TrainConfig):
                 continue
             row = np.concatenate(panels, axis=1)
             # Single bottom overlay spanning the entire row
-            band_h_row = max(16, row.shape[0] // 14)
+            band_h_row = max(30, row.shape[0] // 14)
             row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
             vis_rows.append(row)
         if vis_rows:
