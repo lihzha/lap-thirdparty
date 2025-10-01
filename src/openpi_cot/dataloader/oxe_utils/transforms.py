@@ -63,6 +63,8 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     Note =>> In original Bridge V2 dataset, the first timestep has an all-zero action, so we remove it!
     """
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     for key in trajectory:
         if key == "traj_metadata":
             continue
@@ -83,7 +85,21 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     trajectory = relabel_bridge_actions(trajectory)
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
-    return trajectory
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["EEF_state"][1:, :3] - trajectory["observation"]["EEF_state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["EEF_state"][1:, 3:6],
+                trajectory["observation"]["EEF_state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def bridge_orig_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -161,7 +177,7 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
-    return trajectory
+    return traj_truncated
 
 
 def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
