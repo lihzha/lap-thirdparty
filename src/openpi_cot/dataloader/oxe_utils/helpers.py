@@ -1,8 +1,11 @@
-import numpy as np
 import tensorflow as tf
 
 # Fixed frame transform: x'=-y, y'=-x, z'=-z
 _C = tf.constant([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=tf.float32)
+
+
+def _tf_pi(dtype):
+    return tf.constant(3.141592653589793, dtype=dtype)
 
 
 @tf.function
@@ -50,36 +53,52 @@ def _rot_z(a):
     )
 
 
+@tf.function
 def _R_from_euler_xyz(angles):
-    """Intrinsic XYZ: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)"""
-    roll, pitch, yaw = angles[..., 0], angles[..., 1], angles[..., 2]
+    """Intrinsic XYZ: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)."""
+    angles = tf.convert_to_tensor(angles)
+    # Ensure last dim is 3
+    roll = angles[..., 0]
+    pitch = angles[..., 1]
+    yaw = angles[..., 2]
     return tf.linalg.matmul(tf.linalg.matmul(_rot_z(yaw), _rot_y(pitch)), _rot_x(roll))
 
 
+@tf.function
 def _euler_xyz_from_R(R, eps=1e-6):
     """
     Extract intrinsic XYZ (roll, pitch, yaw) from rotation matrix R.
-    Handles gimbal lock with tf.where (graph-safe).
+    Handles gimbal lock via elementwise tf.where (graph-safe).
     """
+    R = tf.convert_to_tensor(R)
+    dtype = R.dtype
+    eps_t = tf.cast(eps, dtype)
+    zero = tf.zeros([], dtype)
+    one = tf.ones([], dtype)
+
+    r00 = R[..., 0, 0]
+    r01 = R[..., 0, 1]
+    r10 = R[..., 1, 0]
+    r11 = R[..., 1, 1]
     r20 = R[..., 2, 0]
     r21 = R[..., 2, 1]
     r22 = R[..., 2, 2]
-    r10 = R[..., 1, 0]
-    r00 = R[..., 0, 0]
-    r01 = R[..., 0, 1]
-    r11 = R[..., 1, 1]
 
-    cond = tf.less(tf.abs(r20), 1.0 - tf.convert_to_tensor(eps, R.dtype))
+    # Regular case: |r20| < 1 - eps  (i.e., |cos(pitch)| != 0)
+    pitch_reg = tf.asin(tf.clip_by_value(-r20, -one, one))
+    roll_reg = tf.math.atan2(r21, r22)
+    yaw_reg = tf.math.atan2(r10, r00)
 
-    pitch_reg = tf.asin(tf.clip_by_value(-r20, -1.0, 1.0))
-    roll_reg = tf.atan2(r21, r22)
-    yaw_reg = tf.atan2(r10, r00)
+    # Gimbal lock: cos(pitch) ~ 0  -> pitch = ±pi/2
+    pitch_gl = (_tf_pi(dtype) / tf.cast(2.0, dtype)) * tf.sign(-r20)
+    roll_gl = tf.zeros_like(pitch_gl)  # set roll = 0
+    # Distinguish +pi/2 vs -pi/2 using sign of r20 (recall r20 = -sin(pitch))
+    yaw_pos = tf.math.atan2(-r01, r11)  # for +pi/2 (r20 < 0)
+    yaw_neg = tf.math.atan2(r01, r11)  # for -pi/2 (r20 > 0)
+    yaw_gl = tf.where(tf.less(r20, zero), yaw_pos, yaw_neg)
 
-    # Gimbal lock: |cos(pitch)| ~ 0
-    pitch_gl = (np.pi / 2) * tf.sign(-r20)
-    roll_gl = tf.zeros_like(pitch_gl)
-    yaw_gl = tf.where(r20 < 0.0, tf.atan2(-r01, r11), tf.atan2(r01, r11))
-
+    # Blend by condition
+    cond = tf.less(tf.abs(r20), (one - eps_t))
     roll = tf.where(cond, roll_reg, roll_gl)
     pitch = tf.where(cond, pitch_reg, pitch_gl)
     yaw = tf.where(cond, yaw_reg, yaw_gl)
@@ -95,7 +114,7 @@ def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
     """
     angles = tf.convert_to_tensor(angles, dtype=tf.float32)
     if degrees:
-        angles = tf.math.multiply(angles, np.pi / 180.0)
+        angles = tf.math.multiply(angles, _tf_pi(tf.float32) / 180.0)
 
     az = angles[..., 0]  # rotate about z
     ax = angles[..., 1]  # then about x
@@ -123,7 +142,7 @@ def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
     psi_reg = tf.atan2(r10, r00)  # yaw   (z)
 
     # Gimbal lock branch: |cos(theta)| ~ 0  -> theta = ±pi/2, set roll=0, solve yaw
-    theta_gl = (np.pi / 2) * tf.sign(-r20)
+    theta_gl = (_tf_pi(tf.float32) / 2) * tf.sign(-r20)
     phi_gl = tf.zeros_like(theta_gl)
     # If r20 < 0 (theta ≈ +pi/2):  psi = atan2(-r01, r11)
     # Else (theta ≈ -pi/2):       psi = atan2( r01, r11)
@@ -136,7 +155,7 @@ def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
 
     out = tf.stack([phi, theta, psi], axis=-1)
     if degrees:
-        out = tf.math.multiply(out, 180.0 / np.pi)
+        out = tf.math.multiply(out, 180.0 / _tf_pi(tf.float32))
     return out
 
 
@@ -154,8 +173,8 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
         (..., 3) tensor of relative Euler angles (same order)
     """
     if degrees:
-        angles1 = tf.math.multiply(angles1, np.pi / 180.0)
-        angles2 = tf.math.multiply(angles2, np.pi / 180.0)
+        angles1 = tf.math.multiply(angles1, _tf_pi(tf.float32) / 180.0)
+        angles2 = tf.math.multiply(angles2, _tf_pi(tf.float32) / 180.0)
 
     # map axis char -> rotation fn
     rot_map = {"x": _rot_x, "y": _rot_y, "z": _rot_z}
@@ -185,7 +204,7 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
 
     out = tf.stack([phi, theta, psi], axis=-1)
     if degrees:
-        out = tf.math.multiply(out, 180.0 / np.pi)
+        out = tf.math.multiply(out, 180.0 / _tf_pi(tf.float32))
     return out
 
 

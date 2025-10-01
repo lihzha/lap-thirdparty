@@ -1144,8 +1144,6 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             if self.standardize_fn is not None:
                 traj = self.standardize_fn(traj)
 
-            raise ValueError("Not implemented")
-
             if not all(k in traj for k in self.REQUIRED_KEYS):
                 raise ValueError(
                     f"Trajectory is missing keys: {self.REQUIRED_KEYS - set(traj.keys())}. Did you write a `standardize_fn`?"

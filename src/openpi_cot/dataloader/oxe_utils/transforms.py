@@ -802,10 +802,22 @@ def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dic
         axis=-1,
     )
 
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :3],
+            zxy_to_xyz_tf(trajectory["observation"]["state"][:, 3:6]),
+            trajectory["observation"]["state"][:, -1:],
+        ),
+        axis=-1,
+    )
+
     movement_actions = tf.concat(
         (
             trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(trajectory["observation"]["state"][1:, 3:6], trajectory["observation"]["state"][:-1, 3:6]),
+            euler_diff(
+                zxy_to_xyz_tf(trajectory["observation"]["state"][1:, 3:6]),
+                zxy_to_xyz_tf(trajectory["observation"]["state"][:-1, 3:6]),
+            ),
         ),
         axis=-1,
     )

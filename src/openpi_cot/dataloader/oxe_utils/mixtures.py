@@ -83,7 +83,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # joint state
         # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),
         # # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),
-        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         # # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),   # joint state
         # # ("utaustin_mutex", 1.0),  # joint state
         # ("berkeley_fanuc_manipulation", 2.0),   # join state
