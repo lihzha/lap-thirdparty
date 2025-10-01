@@ -452,6 +452,8 @@ def maniskill_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     trajectory["observation"]["state"] = tf.concat(
         (
             trajectory["observation"]["state"][:, :7],
@@ -470,11 +472,20 @@ def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, A
         axis=-1,
     )
 
-    # movement_actions = trajectory["observation"]["proprio"][1:, :6] - trajectory["observation"]["proprio"][:-1, :6]
-    # traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    # traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                tft.euler.from_quaternion(trajectory["observation"]["state"][1:, 3:7]),
+                tft.euler.from_quaternion(trajectory["observation"]["state"][:-1, 3:7]),
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
-    return trajectory
+    return traj_truncated
 
 
 def cmu_franka_exploration_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -646,16 +657,27 @@ def dlr_sara_grid_clamp_dataset_transform(trajectory: dict[str, Any]) -> dict[st
 
 
 def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.helpers import zxy_to_xyz_tf
+
     # invert gripper action, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
         (
-            trajectory["action"][:, :6],
+            trajectory["action"][:, :3],
+            zxy_to_xyz_tf(trajectory["action"][:, 3:6]),
             invert_gripper_actions(trajectory["action"][:, -1:]),
         ),
         axis=-1,
     )
 
-    movement_actions = trajectory["observation"]["state"][1:, :6] - trajectory["observation"]["state"][:-1, :6]
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(trajectory["observation"]["state"][1:, 3:6], trajectory["observation"]["state"][:-1, 3:6]),
+        ),
+        axis=-1,
+    )
+
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
@@ -766,6 +788,8 @@ def playfusion_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     trajectory["observation"]["eef_state"] = tf.concat(
         (
             trajectory["observation"]["state"][:, :3],
@@ -776,11 +800,20 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
     trajectory["action"] = trajectory["action"][..., :-1]
 
-    movement_actions = trajectory["observation"]["eef_state"][1:, :6] - trajectory["observation"]["eef_state"][:-1, :6]
-    trajectory_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    trajectory_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["eef_state"][1:, :3] - trajectory["observation"]["eef_state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["eef_state"][1:, 3:6], trajectory["observation"]["eef_state"][:-1, 3:6]
+            ),
+        ),
+        axis=-1,
+    )
 
-    return trajectory_truncated
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -805,6 +838,8 @@ def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     # every input feature is batched, ie has leading batch dimension
     trajectory["observation"]["proprio"] = tf.concat(
         (
@@ -813,7 +848,15 @@ def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
-    movement_actions = trajectory["observation"]["proprio"][1:, :6] - trajectory["observation"]["proprio"][:-1, :6]
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["proprio"][1:, :3] - trajectory["observation"]["proprio"][:-1, :3],
+            euler_diff(trajectory["observation"]["proprio"][1:, 3:6], trajectory["observation"]["proprio"][:-1, 3:6]),
+        ),
+        axis=-1,
+    )
+
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
