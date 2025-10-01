@@ -13,7 +13,7 @@ from typing import Any
 from openpi_cot.dataloader.oxe_utils.configs import OXE_DATASET_CONFIGS
 from openpi_cot.dataloader.oxe_utils.configs import ActionEncoding
 from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
-from openpi_cot.dataloader.transforms import UNIFIED_STANDARDIZATION_TRANSFORMS
+from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
 
 
 def make_oxe_dataset_kwargs(
@@ -91,7 +91,7 @@ def make_oxe_dataset_kwargs(
 
     # Specify Standardization Transform
     # Use unified registry (superset), still supports all OXE datasets
-    dataset_kwargs["standardize_fn"] = UNIFIED_STANDARDIZATION_TRANSFORMS[dataset_name]
+    dataset_kwargs["standardize_fn"] = OXE_STANDARDIZATION_TRANSFORMS[dataset_name]
 
     # Add any aux arguments
     if "aux_kwargs" in dataset_kwargs:
@@ -151,81 +151,81 @@ def get_oxe_dataset_kwargs_and_weights(
     return per_dataset_kwargs, sampling_weights
 
 
-def make_droid_dataset_kwargs(
-    rlds_data_dir: Path,
-    *,
-    load_camera_views: tuple[str] = ("primary", "wrist"),
-    action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
-) -> dict[str, Any]:
-    """Minimal DROID config to align with the unified pipeline.
+# def make_droid_dataset_kwargs(
+#     rlds_data_dir: Path,
+#     *,
+#     load_camera_views: tuple[str] = ("primary", "wrist"),
+#     action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
+# ) -> dict[str, Any]:
+#     """Minimal DROID config to align with the unified pipeline.
 
-    Note: DROID is not part of OXE_DATASET_CONFIGS. We construct the keys expected by
-    the unified SingleOXECoTRldsDatasetRaw pipeline.
-    """
-    dataset_name = "droid"
-    image_obs_keys = {"primary": "exterior_image_1_left", "wrist": "wrist_image_left"}
-    # unify contract: state_obs_keys present for proprio path
-    state_obs_keys = ["proprio"]
-    standardize_fn = UNIFIED_STANDARDIZATION_TRANSFORMS.get(dataset_name)
-    if standardize_fn is None:
-        # Defer to dataset-specific restructure; unified OXE loader won't use this path
-        standardize_fn = lambda x: x
-    return {
-        "name": dataset_name,
-        "data_dir": str(rlds_data_dir),
-        "image_obs_keys": image_obs_keys,
-        "state_obs_keys": state_obs_keys,
-        "language_key": "language_instruction",
-        "standardize_fn": standardize_fn,
-        "action_proprio_normalization_type": action_proprio_normalization_type,
-        "state_encoding": ActionEncoding.EEF_POS,  # placeholder; per-dataset restructure handles precise encodings
-        "action_encoding": ActionEncoding.EEF_POS,
-        "control_frequency": 15,
-        "is_absolute_action": True,
-    }
+#     Note: DROID is not part of OXE_DATASET_CONFIGS. We construct the keys expected by
+#     the unified SingleOXECoTRldsDatasetRaw pipeline.
+#     """
+#     dataset_name = "droid"
+#     image_obs_keys = {"primary": "exterior_image_1_left", "wrist": "wrist_image_left"}
+#     # unify contract: state_obs_keys present for proprio path
+#     state_obs_keys = ["proprio"]
+#     standardize_fn = OXE_STANDARDIZATION_TRANSFORMS.get(dataset_name)
+#     if standardize_fn is None:
+#         # Defer to dataset-specific restructure; unified OXE loader won't use this path
+#         standardize_fn = lambda x: x
+#     return {
+#         "name": dataset_name,
+#         "data_dir": str(rlds_data_dir),
+#         "image_obs_keys": image_obs_keys,
+#         "state_obs_keys": state_obs_keys,
+#         "language_key": "language_instruction",
+#         "standardize_fn": standardize_fn,
+#         "action_proprio_normalization_type": action_proprio_normalization_type,
+#         "state_encoding": ActionEncoding.EEF_POS,  # placeholder; per-dataset restructure handles precise encodings
+#         "action_encoding": ActionEncoding.EEF_POS,
+#         "control_frequency": 15,
+#         "is_absolute_action": True,
+#     }
 
 
-def get_unified_dataset_kwargs_and_weights(
-    rlds_data_dir: Path,
-    mixture_spec: list[tuple[str, float]],
-    *,
-    include_droid: bool,
-    load_camera_views: tuple[str] = ("primary", "wrist"),
-    load_depth: bool = False,
-    load_proprio: bool = True,
-    load_language: bool = True,
-    action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
-) -> tuple[list[dict[str, Any]], list[float]]:
-    """Unified factory that can include DROID alongside OXE datasets.
+# def get_unified_dataset_kwargs_and_weights(
+#     rlds_data_dir: Path,
+#     mixture_spec: list[tuple[str, float]],
+#     *,
+#     include_droid: bool,
+#     load_camera_views: tuple[str] = ("primary", "wrist"),
+#     load_depth: bool = False,
+#     load_proprio: bool = True,
+#     load_language: bool = True,
+#     action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
+# ) -> tuple[list[dict[str, Any]], list[float]]:
+#     """Unified factory that can include DROID alongside OXE datasets.
 
-    Returns kwargs compatible with the unified loader.
-    """
-    if include_droid:
-        # separate list to avoid name collisions and keep order
-        oxe_kwargs, oxe_weights = get_oxe_dataset_kwargs_and_weights(
-            rlds_data_dir,
-            mixture_spec,
-            load_camera_views,
-            load_depth,
-            load_proprio,
-            load_language,
-            action_proprio_normalization_type,
-        )
-        droid_kwargs = [
-            make_droid_dataset_kwargs(
-                rlds_data_dir,
-                load_camera_views=load_camera_views,
-                action_proprio_normalization_type=action_proprio_normalization_type,
-            )
-        ]
-        droid_weights = [1.0]
-        return [*oxe_kwargs, *droid_kwargs], [*oxe_weights, *droid_weights]
-    return get_oxe_dataset_kwargs_and_weights(
-        rlds_data_dir,
-        mixture_spec,
-        load_camera_views,
-        load_depth,
-        load_proprio,
-        load_language,
-        action_proprio_normalization_type,
-    )
+#     Returns kwargs compatible with the unified loader.
+#     """
+#     if include_droid:
+#         # separate list to avoid name collisions and keep order
+#         oxe_kwargs, oxe_weights = get_oxe_dataset_kwargs_and_weights(
+#             rlds_data_dir,
+#             mixture_spec,
+#             load_camera_views,
+#             load_depth,
+#             load_proprio,
+#             load_language,
+#             action_proprio_normalization_type,
+#         )
+#         droid_kwargs = [
+#             make_droid_dataset_kwargs(
+#                 rlds_data_dir,
+#                 load_camera_views=load_camera_views,
+#                 action_proprio_normalization_type=action_proprio_normalization_type,
+#             )
+#         ]
+#         droid_weights = [1.0]
+#         return [*oxe_kwargs, *droid_kwargs], [*oxe_weights, *droid_weights]
+#     return get_oxe_dataset_kwargs_and_weights(
+#         rlds_data_dir,
+#         mixture_spec,
+#         load_camera_views,
+#         load_depth,
+#         load_proprio,
+#         load_language,
+#         action_proprio_normalization_type,
+#     )
