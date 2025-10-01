@@ -5,6 +5,19 @@ _C = tf.constant([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=t
 
 
 def _tf_pi(dtype):
+    # Accept tf.DType, numpy dtype, or Tensor-like; default to tf.float32
+    try:
+        import tensorflow as tf
+    except Exception:
+        # Fallback, shouldn't happen in this codepath
+        return 3.141592653589793
+    if isinstance(dtype, tf.Tensor):
+        dtype = dtype.dtype
+    else:
+        try:
+            dtype = tf.dtypes.as_dtype(dtype)
+        except Exception:
+            dtype = tf.float32
     return tf.constant(3.141592653589793, dtype=dtype)
 
 
