@@ -771,11 +771,11 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
     trajectory["action"] = trajectory["action"][..., :-1]
 
-    movement_actions = trajectory["observation"]["eef_state"][1:, :6] - trajectory["observation"]["eef_state"][:-1, :6]
-    trajectory_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    trajectory_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # movement_actions = trajectory["observation"]["eef_state"][1:, :6] - trajectory["observation"]["eef_state"][:-1, :6]
+    # trajectory_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    # trajectory_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
-    return trajectory_truncated
+    return trajectory
 
 
 def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
