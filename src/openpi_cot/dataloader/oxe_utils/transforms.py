@@ -81,8 +81,7 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         ],
         axis=1,
     )
-    # print(trajectory.keys(), trajectory['observation'].keys())
-    trajectory = relabel_bridge_actions(trajectory)
+    # trajectory = relabel_bridge_actions(trajectory)
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
 
@@ -148,7 +147,6 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
-    from openpi_cot.dataloader.oxe_utils.helpers import transform_actions_xyz
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -164,14 +162,12 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["eef_state"] = transform_actions_xyz(
-        tf.concat(
-            (
-                trajectory["observation"]["base_pose_tool_reached"][:, :3],
-                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][:, 3:7]),
-            ),
-            axis=-1,
-        )
+    trajectory["observation"]["eef_state"] = tf.concat(
+        (
+            trajectory["observation"]["base_pose_tool_reached"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][:, 3:7]),
+        ),
+        axis=-1,
     )
 
     movement_actions = tf.concat(
