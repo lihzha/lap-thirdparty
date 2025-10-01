@@ -600,7 +600,6 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import axis_angle_to_euler
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
 
     trajectory["action"] = tf.concat(
@@ -613,12 +612,22 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
+    # movement_actions = tf.concat(
+    #     (
+    #         trajectory["observation"]["present/xyz"][1:, :3] - trajectory["observation"]["present/xyz"][:-1, :3],
+    #         euler_diff(
+    #             axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][1:, :3]),
+    #             axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][:-1, :3]),
+    #         ),
+    #     ),
+    #     axis=-1,
+    # )
     movement_actions = tf.concat(
         (
             trajectory["observation"]["present/xyz"][1:, :3] - trajectory["observation"]["present/xyz"][:-1, :3],
             euler_diff(
-                axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][1:, :3]),
-                axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][:-1, :3]),
+                trajectory["observation"]["present/axis_angle"][1:, :3],
+                trajectory["observation"]["present/axis_angle"][:-1, :3],
             ),
         ),
         axis=-1,
