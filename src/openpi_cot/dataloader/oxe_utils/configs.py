@@ -1160,7 +1160,7 @@ OXE_DATASET_METADATA = {
         "language_annotations": "Templated",
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
-        "is_absolute_action": True,
+        "is_absolute_action": False,
     },
     "io_ai_tech": {
         "control_frequency": 30,
