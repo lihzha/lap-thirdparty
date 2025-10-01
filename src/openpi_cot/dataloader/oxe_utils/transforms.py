@@ -211,6 +211,8 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     trajectory["observation"]["state_eef"] = trajectory["observation"]["robot_obs"][:, :6]
     trajectory["observation"]["state_gripper"] = trajectory["observation"]["robot_obs"][:, 7:8]
     trajectory["action"] = trajectory["action"]["rel_actions_world"]
@@ -225,10 +227,26 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
 
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
-    return trajectory
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state_eef"][1:, :3] - trajectory["observation"]["state_eef"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state_eef"][1:, 3:6],
+                trajectory["observation"]["state_eef"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
     trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
 
@@ -245,7 +263,21 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
-    return trajectory
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state_eef"][1:, :3] - trajectory["observation"]["state_eef"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state_eef"][1:, 3:6],
+                trajectory["observation"]["state_eef"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def berkeley_cable_routing_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
