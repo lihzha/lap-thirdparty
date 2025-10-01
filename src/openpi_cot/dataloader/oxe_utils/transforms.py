@@ -643,22 +643,11 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
     from openpi_cot.dataloader.oxe_utils.helpers import transform_actions_xyz
 
-    # Ensure expected numeric dtypes (graph-safe)
-    trajectory["observation"]["present/xyz"] = tf.cast(trajectory["observation"]["present/xyz"], tf.float32)
-    trajectory["observation"]["present/axis_angle"] = tf.cast(
-        trajectory["observation"]["present/axis_angle"], tf.float32
-    )
-    trajectory["action"]["future/xyz_residual"] = tf.cast(trajectory["action"]["future/xyz_residual"], tf.float32)
-    trajectory["action"]["future/axis_angle_residual"] = tf.cast(
-        trajectory["action"]["future/axis_angle_residual"], tf.float32
-    )
-    trajectory["action"]["future/target_close"] = tf.cast(trajectory["action"]["future/target_close"], tf.float32)
-
     trajectory["action"] = tf.concat(
         (
             trajectory["action"]["future/xyz_residual"][:, :3],
             trajectory["action"]["future/axis_angle_residual"][:, :3],
-            invert_gripper_actions(trajectory["action"]["future/target_close"][:, :1]),
+            invert_gripper_actions(tf.cast(trajectory["action"]["future/target_close"][:, :1], tf.float32)),
         ),
         axis=-1,
     )
@@ -684,7 +673,6 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     #     ),
     #     axis=-1,
     # )
-
     movement_actions = tf.concat(
         (
             trajectory["observation"]["present/xyz"][1:, :3] - trajectory["observation"]["present/xyz"][:-1, :3],

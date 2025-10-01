@@ -5,22 +5,10 @@ _C = tf.constant([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=t
 
 
 def _tf_pi(dtype):
-    # Accept tf.DType, numpy dtype, or Tensor-like; default to tf.float32
-    try:
-        import tensorflow as tf
-    except Exception:
-        # Fallback, shouldn't happen in this codepath
-        return 3.141592653589793
-    if isinstance(dtype, tf.Tensor):
-        dtype = dtype.dtype
-    else:
-        try:
-            dtype = tf.dtypes.as_dtype(dtype)
-        except Exception:
-            dtype = tf.float32
     return tf.constant(3.141592653589793, dtype=dtype)
 
 
+@tf.function
 def _rot_x(a):
     ca, sa = tf.cos(a), tf.sin(a)
     z = tf.zeros_like(a)
@@ -35,6 +23,7 @@ def _rot_x(a):
     )
 
 
+@tf.function
 def _rot_y(a):
     ca, sa = tf.cos(a), tf.sin(a)
     z = tf.zeros_like(a)
@@ -49,6 +38,7 @@ def _rot_y(a):
     )
 
 
+@tf.function
 def _rot_z(a):
     ca, sa = tf.cos(a), tf.sin(a)
     z = tf.zeros_like(a)
@@ -63,6 +53,7 @@ def _rot_z(a):
     )
 
 
+@tf.function
 def _R_from_euler_xyz(angles):
     """Intrinsic XYZ: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)."""
     angles = tf.convert_to_tensor(angles)
@@ -73,6 +64,7 @@ def _R_from_euler_xyz(angles):
     return tf.linalg.matmul(tf.linalg.matmul(_rot_z(yaw), _rot_y(pitch)), _rot_x(roll))
 
 
+@tf.function
 def _euler_xyz_from_R(R, eps=1e-6):
     """
     Extract intrinsic XYZ (roll, pitch, yaw) from rotation matrix R.
@@ -113,6 +105,7 @@ def _euler_xyz_from_R(R, eps=1e-6):
     return tf.stack([roll, pitch, yaw], axis=-1)
 
 
+@tf.function
 def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
     """
     Convert intrinsic Z-X-Y Euler angles to intrinsic X-Y-Z Euler angles.
@@ -166,6 +159,7 @@ def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
     return out
 
 
+@tf.function
 def euler_diff(angles1, angles2, order="xyz", degrees=False):
     """
     Compute relative Euler angle difference: angles_rel such that
@@ -215,6 +209,7 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
     return out
 
 
+@tf.function
 def transform_actions_xyz(movement_actions):
     """
     movement_actions: (..., 6) where [:3] = translation deltas (xyz),
