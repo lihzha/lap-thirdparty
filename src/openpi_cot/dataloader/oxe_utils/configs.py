@@ -886,7 +886,7 @@ OXE_DATASET_METADATA = {
         "has_suboptimal": "No",
     },
     "bc_z": {
-        "control_frequency": 10,
+        "control_frequency": 30,
         "language_annotations": "Templated",
         "robot_morphology": "Mobile Manipulator",
         "has_suboptimal": "Yes",
