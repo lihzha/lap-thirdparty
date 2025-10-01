@@ -65,7 +65,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     #     ("roboturk", 2.0),
     # ],
     "oxe_pi_magic_soup": [
-        ("fractal20220817_data", 0.5),
+        # ("fractal20220817_data", 0.5),
         # # ("kuka", 0.1),
         # ("bridge_v2_oxe", 1.0),
         # ("taco_play", 2.0),
@@ -88,7 +88,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # ("utaustin_mutex", 1.0),  # joint state
         # ("berkeley_fanuc_manipulation", 2.0),   # join state
         # ("cmu_stretch", 1.0),  # almost all movements are "move up"
-        # ("bc_z", 0.2),
+        ("bc_z", 0.2),
         # ("fmb", 1.0),
         # # ("dobbe", 0.2),  # question
     ],
