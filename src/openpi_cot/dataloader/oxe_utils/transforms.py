@@ -600,6 +600,9 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.helpers import axis_angle_to_euler
+    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+
     trajectory["action"] = tf.concat(
         (
             trajectory["action"]["future/xyz_residual"][:, :3],
@@ -609,7 +612,21 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
-    return trajectory
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["present/xyz"][1:, :3] - trajectory["observation"]["present/xyz"][:-1, :3],
+            euler_diff(
+                axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][1:, :3]),
+                axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][:-1, :3]),
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def tokyo_pr2_opening_fridge_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:

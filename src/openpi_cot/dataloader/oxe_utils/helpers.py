@@ -148,3 +148,11 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
     if degrees:
         out = tf.math.multiply(out, 180.0 / np.pi)
     return out
+
+
+def axis_angle_to_euler(axis_angle):
+    """Convert axis-angle to euler angles."""
+    import tensorflow_graphics.geometry.transformation as tft
+
+    euler = tft.euler.from_axis_angle(axis_angle)
+    return euler
