@@ -379,6 +379,7 @@ def main(config: _config.TrainConfig):
             start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             la_text = reasoning_texts[i] if i < len(reasoning_texts) else ""
+            logging.info(f"la_text: {la_text}")
             col1 = np.copy(_ensure_color(start_u8))
             col2 = np.copy(_ensure_color(end_u8))
             panels = [col1]

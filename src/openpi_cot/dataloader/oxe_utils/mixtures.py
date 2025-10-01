@@ -86,8 +86,8 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions
         # # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),
         # # ("utaustin_mutex", 1.0),
-        # ("berkeley_fanuc_manipulation", 2.0),
-        ("cmu_stretch", 1.0),
+        # ("berkeley_fanuc_manipulation", 2.0),   # join state
+        # ("cmu_stretch", 1.0),
         # ("bc_z", 0.2),
         # ("fmb", 1.0),
         # # ("dobbe", 0.2),  # question

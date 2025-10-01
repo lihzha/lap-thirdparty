@@ -649,7 +649,12 @@ def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dic
         ),
         axis=-1,
     )
-    return trajectory
+
+    movement_actions = trajectory["observation"]["state"][1:, :6] - trajectory["observation"]["state"][:-1, :6]
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def asu_table_top_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
