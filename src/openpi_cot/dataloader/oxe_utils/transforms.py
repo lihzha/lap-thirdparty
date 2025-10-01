@@ -185,7 +185,7 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
-    movement_actions = transform_actions_xyz(movement_actions)
+    # movement_actions = transform_actions_xyz(movement_actions)
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
