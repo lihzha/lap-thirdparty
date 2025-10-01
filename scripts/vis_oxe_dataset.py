@@ -363,7 +363,7 @@ def main(config: _config.TrainConfig):
     # Sharding details for the first batch
     log_batch_sharding(batch)
 
-    for j in range(10):
+    for j in range(100):
         # Visualize language-action projection per example
         obs = batch[0]
         # Decode reasoning strings
