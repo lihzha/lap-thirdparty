@@ -79,15 +79,15 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0),
         # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),
         # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),
-        # ("furniture_bench_dataset_converted_externally_to_rlds", 0.1),
-        # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.1),
+        # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # joint state
         # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),
         # # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),
         # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions
         # # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),   # joint state
         # # ("utaustin_mutex", 1.0),  # joint state
         # ("berkeley_fanuc_manipulation", 2.0),   # join state
-        ("cmu_stretch", 1.0),
+        # ("cmu_stretch", 1.0),  # almost all movements are "move up"
         # ("bc_z", 0.2),
         # ("fmb", 1.0),
         # # ("dobbe", 0.2),  # question
