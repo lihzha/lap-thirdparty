@@ -145,19 +145,20 @@ def make_decode_images_fn(
         return img
 
     def _decode_frame(traj: dict) -> dict:
-        traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
+        # traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
+        # if use_wrist_image and wrist_key is not None:
+        #     traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
+        traj["observation"][primary_key] = tf.map_fn(
+            _decode_single,
+            traj["observation"][primary_key],
+            fn_output_signature=tf.uint8,
+        )
         if use_wrist_image and wrist_key is not None:
-            traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
-        # traj["observation"][primary_key] = tf.map_fn(
-        #     _decode_single,
-        #     traj["observation"][primary_key],
-        #     fn_output_signature=tf.uint8,
-        # )
-        # traj["observation"][wrist_key] = tf.map_fn(
-        #     _decode_single,
-        #     traj["observation"][wrist_key],
-        #     fn_output_signature=tf.uint8,
-        # )
+            traj["observation"][wrist_key] = tf.map_fn(
+                _decode_single,
+                traj["observation"][wrist_key],
+                fn_output_signature=tf.uint8,
+            )
         return traj
 
     return _decode_frame
@@ -1089,12 +1090,12 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # self.action_normalization_mask = dataset_kwargs["action_normalization_mask"]
         self.state_encoding = dataset_kwargs["state_encoding"]
         self.action_encoding = dataset_kwargs["action_encoding"]
-        self.is_absolute_action = dataset_kwargs["is_absolute_action"]
         self.global_state_encoding = global_state_encoding
         self.global_action_encoding = global_action_encoding
         dataset_frame_transform_kwargs = dataset_kwargs.get("dataset_frame_transform_kwargs", {})
         assert "primary" in self.image_obs_keys, "primary image is required"
         assert "wrist" in self.image_obs_keys, "wrist image is required"
+        self.vis_dataset = bool(config.vis_dataset)
         if self.language_key is not None:
             self.REQUIRED_KEYS.add(self.language_key)
 
@@ -1157,7 +1158,7 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 action=traj["action"],
                 from_encoding=self.action_encoding,
                 to_encoding=self.global_action_encoding,
-                to_delta_cartesian_pose=self.is_absolute_action,
+                to_delta_cartesian_pose=False,
             )
 
             for new, old in self.image_obs_keys.items():
@@ -1363,6 +1364,12 @@ class _SingleOXECoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
                 serialized_flat,
                 [tf.shape(actions_window)[0], int(summation_steps)],
             )
+            if self.vis_dataset:
+                grouped_images = tf.gather(traj["observation"]["image_primary"], summation_indices)
+                traj["observation"]["image_primary"] = grouped_images
+
+                grouped_wrist_images = tf.gather(traj["observation"]["image_wrist"], summation_indices)
+                traj["observation"]["image_wrist"] = grouped_wrist_images
 
             return traj
 

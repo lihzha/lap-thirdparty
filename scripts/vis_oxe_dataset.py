@@ -213,7 +213,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     thickness = 2
     color = (255, 255, 255)
     outline = (0, 0, 0)
-    max_chars = 75
+    max_chars = 45
     lines = _wrap_text_to_lines(text, max_chars)
     line_h = max(10, int(10 * scale))
     y = y0 - 10
@@ -371,6 +371,7 @@ def main(config: _config.TrainConfig):
         # Prepare start/end images for the first camera view
         first_cam_key = next(iter(obs.images))
         imgs = obs.images[first_cam_key]
+        logging.info(f"imgs: {imgs.shape}")
         start_imgs = np.array(imgs[:, 0])
         end_imgs = np.array(imgs[:, -1])
         B = start_imgs.shape[0]
@@ -379,6 +380,7 @@ def main(config: _config.TrainConfig):
             start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             la_text = reasoning_texts[i] if i < len(reasoning_texts) else ""
+            logging.info(f"la_text: {la_text}")
             col1 = np.copy(_ensure_color(start_u8))
             col2 = np.copy(_ensure_color(end_u8))
             panels = [col1]
@@ -388,7 +390,7 @@ def main(config: _config.TrainConfig):
                 continue
             row = np.concatenate(panels, axis=1)
             # Single bottom overlay spanning the entire row
-            band_h_row = max(16, row.shape[0] // 14)
+            band_h_row = max(30, row.shape[0] // 14)
             row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
             vis_rows.append(row)
         if vis_rows:

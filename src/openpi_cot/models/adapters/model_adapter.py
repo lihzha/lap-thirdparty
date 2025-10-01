@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import copy
 import dataclasses
 from enum import Enum
 import logging
@@ -37,6 +38,7 @@ class ExtendedModelType(str, Enum):
 @struct.dataclass
 class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
+    images: dict[str, at.Float[ArrayT, "*b t h w c"]]
     tokenized_reasoning_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_numeric_mask: at.Bool[ArrayT, "*b l"] | None = None
     example_mask: at.Bool[ArrayT, "*b"] | None = None
@@ -48,7 +50,9 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
         # Build the base Observation first (handles images, masks, dtype fixes, etc.)
         data_dict = dict(data)
-        base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict)
+        data_dict_downsampled = copy.deepcopy(data_dict)
+        data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
+        base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict_downsampled)
         # Pull CoT extras from either flat keys or a namespaced location.
         cot_src = data.get("extras", {}).get("cot", {})
 
@@ -58,6 +62,9 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
 
         # Construct subclass using base fields
         base_dict = dataclasses.asdict(base)
+        base_dict["images"] = {
+            k: v.astype(np.float32) / 255.0 * 2.0 - 1.0 for k, v in data_dict["image"].items() if v is not None
+        }
         return cls(
             **base_dict,
             tokenized_reasoning_mask=getk("tokenized_reasoning_mask"),
@@ -76,6 +83,7 @@ def preprocess_observation(
     train: bool = False,
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = _model.IMAGE_RESOLUTION,
+    aug_wrist: bool = False,
 ) -> CoTObservation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
@@ -98,13 +106,8 @@ def preprocess_observation(
             image = image / 2.0 + 0.5
 
             transforms = []
-            if "wrist" in key:
-                height, width = image.shape[1:3]
-                transforms += [
-                    augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
-                    augmax.Resize(width, height),
-                    augmax.Rotate((-5, 5)),
-                ]
+            if not aug_wrist and "wrist" in key:
+                pass
             else:
                 height, width = image.shape[1:3]
                 transforms += [
