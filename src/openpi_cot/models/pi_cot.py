@@ -475,12 +475,10 @@ class PiCoT(_pi0.Pi0):
         temperature: float = 0.0,
     ) -> _model.Actions:
         # TODO: this is a hack to get the image keys.
-        observation = _model.preprocess_observation(
-            None, observation, train=False, image_keys=list(observation.images.keys())
-        )
+        observation = preprocess_observation(None, observation, train=False)
 
         # embed inputs
-        prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_inputs(observation)
+        prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
 
         prefill_size = prefix_token_embeddings.shape[1]
