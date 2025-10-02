@@ -37,6 +37,7 @@ class CoTPolicy:
             "reasoning_logits": logits,
             "final_length": logits.shape[1],
         }
+        breakpoint()
         # Unbatch and convert to np.ndarray.        # Unbatch and convert to np.ndarray.
         # outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
         model_time = time.monotonic() - start_time

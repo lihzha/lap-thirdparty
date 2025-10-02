@@ -549,4 +549,6 @@ class PiCoT(_pi0.Pi0):
         max_decoding_steps: int | at.Int[at.Array, ""] = 256,
         temperature: float = 0.0,
     ):
-        return self._sample_reasoning_tokens(rng, observation, max_decoding_steps, temperature)
+        return self._sample_reasoning_tokens(
+            rng, observation, max_decoding_steps=max_decoding_steps, temperature=temperature
+        )
