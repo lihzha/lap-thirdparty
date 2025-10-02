@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import jax.numpy as jnp
-import openpi.models.gemma_fast as _gemma
+import openpi.models.gemma as _gemma
 import openpi.shared.array_typing as at
 
 

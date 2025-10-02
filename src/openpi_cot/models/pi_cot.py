@@ -489,9 +489,15 @@ class PiCoT(_pi0.Pi0):
         # pad attention mask to set the size of the KV cache (prefill_size + max_decoding_steps)
         prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
         prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
-        prefix_logits, kv_cache, _ = self.PaliGemma.llm(
-            embedded_prefix=prefix_token_embeddings, mask=prefix_attn_mask, positions=prefix_positions, decode=True
+        (hs, _), kv_cache = self.PaliGemma.llm(
+            [prefix_token_embeddings, None], mask=prefix_attn_mask, positions=prefix_positions
         )
+        prefix_logits = jnp.argmax(self.PaliGemma.llm(hs, method="decode"), axis=-1)  # (B,1)
+        # curr_h = self.PaliGemma.llm(curr_id, method="embed")
+
+        # prefix_logits, kv_cache, _ = self.PaliGemma.llm(
+        #     embedded_prefix=prefix_token_embeddings, mask=prefix_attn_mask, positions=prefix_positions, decode=True
+        # )
 
         # prepare decoding -- final logit decodes the first token
         last_logit = prefix_logits[:, -1:]
@@ -516,16 +522,22 @@ class PiCoT(_pi0.Pi0):
             all_eos = jnp.all(has_eos)
 
             # Decode one step
-            token_embedding = self.PaliGemma.llm(token, embed_only=True)
+            # token_embedding = self.PaliGemma.llm(token, embed_only=True)
+            token_embedding = self.PaliGemma.llm(token, method="embed")
             positions = prefill_len[:, None] + step + 1
             mask = jnp.logical_and(
                 jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
                 jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
                 < (jnp.broadcast_to(prefill_size + step + 1, (prefix_start.shape[0], 1, 1))),
             )
-            last_logit, kv_cache, _ = self.PaliGemma.llm(
-                embedded_prefix=token_embedding, mask=mask, positions=positions, decode=True, kv_cache=cache
+            # last_logit, kv_cache, _ = self.PaliGemma.llm(
+            #     embedded_prefix=token_embedding, mask=mask, positions=positions, decode=True, kv_cache=cache
+            # )
+
+            (hs, _), kv_cache = self.PaliGemma.llm(
+                [token_embedding, None], mask=mask, positions=positions, kv_cache=cache
             )
+            last_logit = self.PaliGemma.llm(hs, method="decode")
 
             return rng, last_logit, output_tokens, kv_cache, all_eos, step + 1
 
