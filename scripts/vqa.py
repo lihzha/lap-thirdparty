@@ -141,6 +141,7 @@ def _iter_droid_request_data(
         wrist_img = to_np(wrist_img_t)
 
         # State
+        cartesian_pos = to_np(step["observation"]["cartesian_position"], to_uint8=False)
         joint_pos = to_np(step["observation"]["joint_position"], to_uint8=False)
         grip_obs = to_np(step["observation"]["gripper_position"], to_uint8=False)
 
@@ -148,7 +149,7 @@ def _iter_droid_request_data(
             "observation": {
                 "exterior_image_1_left": base_img,
                 "wrist_image_left": wrist_img,
-                "state": np.concatenate([joint_pos, grip_obs]),
+                "state": np.concatenate([cartesian_pos, grip_obs]),
             },
         }
         assert prompt is not None
