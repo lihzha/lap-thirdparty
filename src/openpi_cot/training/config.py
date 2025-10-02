@@ -52,7 +52,6 @@ def build_picot_model(
     *,
     action_horizon: int = 10,
     max_token_len: int = 110,
-    number_token_weight: float | None = 1.0,
     pi05: bool = True,
     discrete_state_input: bool = True,
 ) -> _model.BaseModelConfig:
@@ -60,7 +59,6 @@ def build_picot_model(
     return pi_cot_config.PiCoTConfig(
         action_horizon=action_horizon,
         max_token_len=max_token_len,
-        number_token_weight=number_token_weight,
         pi05=pi05,
         discrete_state_input=discrete_state_input,
     )
@@ -139,8 +137,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     max_samples: int | None = None
     # Tokenization / formatting controls for CoT numeric aggregation
     sum_decimal: str = "0f"
-    left_pad: bool = True
-    include_decimal_point: bool = True
     # Validation controls for RLDS-CoT dataset splitting/visualization
     val_max_samples: int | None = 60000
     val_fraction: float | None = 0.02
@@ -178,9 +174,6 @@ class CoTDataConfig(upstream_config.DataConfig):
 class ModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
 
-    left_pad: bool = True
-    include_decimal_point: bool = True
-
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
             assert isinstance(model_config, pi_cot_config.PiCoTConfig)
@@ -191,8 +184,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     TokenizePromptAndReasoning(
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
-                            left_pad=self.left_pad,
-                            include_decimal_point=self.include_decimal_point,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                     ),
@@ -202,8 +193,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     DetokenizeReasoning(
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
-                            left_pad=self.left_pad,
-                            include_decimal_point=self.include_decimal_point,
                         )
                     )
                 ],
@@ -287,9 +276,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         #     # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
         # )
 
-        model_transforms = ModelTransformFactory(
-            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
-        )(model_config)
+        model_transforms = ModelTransformFactory()(model_config)
 
         return dataclasses.replace(
             base_cfg,
@@ -317,9 +304,7 @@ class RLDSRawActionsDataConfig(CoTDataConfig, upstream_config.DataConfigFactory)
             outputs=[raw_actions_policy.RawActionsOutputs()],
         )
 
-        model_transforms = ModelTransformFactory(
-            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
-        )(model_config)
+        model_transforms = ModelTransformFactory()(model_config)
 
         return dataclasses.replace(
             base_cfg,
@@ -348,9 +333,7 @@ class VQADataConfig(RLDSCoTDataConfig):
             outputs=[vqa_policy.VQAOutputs()],
         )
 
-        model_transforms = ModelTransformFactory(
-            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
-        )(model_config)
+        model_transforms = ModelTransformFactory()(model_config)
 
         return dataclasses.replace(
             base_cfg,
@@ -416,9 +399,7 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         #     # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
         # )
 
-        model_transforms = ModelTransformFactory(
-            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
-        )(model_config)
+        model_transforms = ModelTransformFactory()(model_config)
 
         return dataclasses.replace(
             base_cfg,
@@ -478,7 +459,6 @@ _CONFIGS = [
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=110,
-            number_token_weight=1.0,
             pi05=True,
             discrete_state_input=True,
             enable_action_training=True,
@@ -503,7 +483,6 @@ _CONFIGS = [
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=110,
-            number_token_weight=1.0,
             pi05=True,
             discrete_state_input=True,
             enable_action_training=True,
@@ -597,7 +576,6 @@ _CONFIGS = [
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=110,
-            number_token_weight=1.0,
             pi05=False,
             discrete_state_input=False,
         ),
@@ -629,7 +607,6 @@ _CONFIGS = [
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=180,
-            number_token_weight=1.0,
             pi05=True,
             discrete_state_input=True,
         ),
