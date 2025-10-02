@@ -22,6 +22,7 @@ from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_policy as libero_policy
+import openpi_cot.policies.raw_actions_policy as raw_actions_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
@@ -300,6 +301,35 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class RLDSRawActionsDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
+    """Config for training on raw actions (no language actions required)."""
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        base_cfg = RLDSCoTDataConfig.create_base_config(self, assets_dirs, model_config)
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                raw_actions_policy.RawActionsInputs(
+                    model_type=model_config.model_type,
+                )
+            ],
+            outputs=[raw_actions_policy.RawActionsOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory(
+            left_pad=base_cfg.left_pad, include_decimal_point=base_cfg.include_decimal_point
+        )(model_config)
+
+        return dataclasses.replace(
+            base_cfg,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class VQADataConfig(RLDSCoTDataConfig):
     """
     Config for VQA evaluation.
@@ -443,6 +473,57 @@ _CONFIGS = [
     build_droid_cfg("v5", fsdp_devices=8, batch_size=256),
     build_droid_cfg("v6", fsdp_devices=8, batch_size=256),
     build_droid_cfg("local", fsdp_devices=1, batch_size=4),
+    TrainConfig(
+        name="pi_raw_actions_joint_local",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=110,
+            number_token_weight=1.0,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+        ),
+        data=RLDSRawActionsDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="/n/fs/robot-data/data/",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="/n/fs/robot-data/data/",
+            # We won't use language actions in training, but dataset requires a directory
+            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
+        ),
+        fsdp_devices=1,
+        batch_size=4,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+    ),
+    TrainConfig(
+        name="pi_raw_actions_action_expert_finetune_local",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=110,
+            number_token_weight=1.0,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+        ),
+        data=RLDSRawActionsDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="/n/fs/robot-data/data/",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="/n/fs/robot-data/data/",
+            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
+        ),
+        fsdp_devices=1,
+        batch_size=4,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        # Freeze VLM, only train action expert branch
+        freeze_filter=pi_cot_config.PiCoTConfig(pi05=True).get_vlm_freeze_filter(),
+    ),
     TrainConfig(
         name="pi_oxe_cot_v4",
         data=RLDSCoTDataConfig(

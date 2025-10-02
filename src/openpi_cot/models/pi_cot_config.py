@@ -33,6 +33,9 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     # Weight multiplier for numeric tokens in reasoning loss (>=1.0). 1.0 disables weighting.
     number_token_weight: float = 1.0
+    # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
+    # When False, trains on language tokens only (language-actions-only mode).
+    enable_action_training: bool = False
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -116,3 +119,23 @@ class PiCoTConfig(_model.BaseModelConfig):
         combined = nnx.All(*filters)
         # return nnx.Any(combined, input_embedding_filter)
         return combined
+
+    def get_vlm_freeze_filter(self) -> nnx.filterlib.Filter:
+        """Freeze the VLM (language model + image encoder), keep action expert trainable.
+
+        This returns a filter that matches:
+          - All params under `llm` EXCEPT the action-expert branch (identified by suffix `_1`)
+          - All params under the image encoder `img`
+        """
+        # Match any parameter path containing "llm"
+        llm_filter = nnx_utils.PathRegex(".*llm.*")
+        # The action expert branch is identified with a trailing "_1" in its path per ModuleWithDecode
+        action_expert_filter = nnx_utils.PathRegex(".*llm.*_1.*")
+        # Image encoder lives under `img`
+        img_filter = nnx_utils.PathRegex(".*img.*")
+
+        # Freeze (llm minus action expert) OR (img)
+        return nnx.Any(
+            nnx.All(llm_filter, nnx.Not(action_expert_filter)),
+            img_filter,
+        )

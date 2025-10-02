@@ -5,7 +5,6 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
-import openpi.models.gemma as _gemma
 import openpi.models.model as _model
 import openpi.models.pi0 as _pi0
 import openpi.models.siglip as _siglip
@@ -13,6 +12,7 @@ from openpi.shared import array_typing as at
 from typing_extensions import override
 
 from openpi_cot.models.adapters.gemma_adapter import ModuleWithDecode
+from openpi_cot.models.adapters.gemma_adapter import get_extended_config
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import preprocess_observation
 import openpi_cot.models.pi_cot_config as _pi_cot_config
@@ -83,12 +83,13 @@ def cross_entropy_loss(
 
 class PiCoT(_pi0.Pi0):
     EOS_ID = 1  # TODO: hard-coded for PaliGemma
-    lang_action_only: bool = True
 
     def __init__(self, config: _pi_cot_config.PiCoTConfig, rngs: nnx.Rngs):
         self.pi05 = config.pi05
-        paligemma_config = _gemma.get_config(config.paligemma_variant)
-        action_expert_config = _gemma.get_config(config.action_expert_variant)
+        # When action training is enabled, enable diffusion suffix and joint loss
+        self.lang_action_only = not bool(getattr(config, "enable_action_training", False))
+        paligemma_config = get_extended_config(config.paligemma_variant)
+        action_expert_config = get_extended_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
         llm = nnx_bridge.ToNNX(
             ModuleWithDecode(

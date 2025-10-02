@@ -979,11 +979,10 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         self.control_frequency: int = 15
 
         if train_dataset is not None:
-            if not self.use_base_actions:
-                self.lang_table = train_dataset.lang_table
-                self.cam_table = train_dataset.cam_table
-                self.intr_table = train_dataset.intr_table
-                self.extr_table = train_dataset.extr_table
+            self.cam_table = train_dataset.cam_table
+            self.intr_table = train_dataset.intr_table
+            self.extr_table = train_dataset.extr_table
+            self.lang_table = train_dataset.lang_table
             self.ep_table = train_dataset.ep_table
             self.instr_table = train_dataset.instr_table
             self.filter_table = train_dataset.filter_table
@@ -1000,11 +999,10 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             else:
                 raise ValueError(f"Unknown language action directory: {language_action_dir}")
 
-            if not self.use_base_actions:
-                self.lang_table = self.build_lang_action_table(language_action_dir)
-                self.cam_table, self.intr_table, self.extr_table = self.build_cam_tables(
-                    metadata_path, need_calib=self.need_calib
-                )
+            self.cam_table, self.intr_table, self.extr_table = self.build_cam_tables(
+                metadata_path, need_calib=self.need_calib
+            )
+            self.lang_table = self.build_lang_action_table(language_action_dir)
             self.ep_table = self.build_lookup_table(metadata_path)
             self.instr_table = self.build_instr_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path, use_idle_filter=self.use_idle_filter)
