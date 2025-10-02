@@ -153,7 +153,8 @@ def _iter_droid_request_data(
             },
         }
         assert prompt is not None
-        req["prompt"] = prompt
+        # req["prompt"] = prompt
+        req["prompt"] = step["language_instruction"]
         print(prompt)
         yield req
 
