@@ -30,7 +30,7 @@ class CoTPolicy:
 
         start_time = time.monotonic()
         self._rng, _ = jax.random.split(self._base._rng)  # noqa: SLF001
-        logits = self._sample_reasoning(CoTObservation.from_dict(inputs))
+        logits = self._sample_reasoning(self._rng, CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],
             "actions": jnp.zeros((1, 1, 32)),  # TODO
