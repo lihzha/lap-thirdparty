@@ -31,11 +31,14 @@ class PiCoTConfig(_model.BaseModelConfig):
     pi05: bool = False
     discrete_state_input: bool = None
 
-    # Weight multiplier for numeric tokens in reasoning loss (>=1.0). 1.0 disables weighting.
-    number_token_weight: float = 1.0
+    # Enable/disable individual loss components
     # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
-    # When False, trains on language tokens only (language-actions-only mode).
     enable_action_training: bool = False
+    # When True, enables training on language (reasoning) tokens with cross-entropy.
+    enable_reasoning_training: bool = True
+    # Scalar weights to combine losses when multiple are enabled
+    language_loss_weight: float = 1.0
+    action_loss_weight: float = 1.0
 
     def __post_init__(self):
         if self.max_token_len is None:

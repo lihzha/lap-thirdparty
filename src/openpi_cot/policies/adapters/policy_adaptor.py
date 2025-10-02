@@ -30,12 +30,12 @@ class CoTPolicy:
 
         start_time = time.monotonic()
         self._rng, _ = jax.random.split(self._base._rng)  # noqa: SLF001
-        logits, t = self._sample_reasoning(CoTObservation.from_dict(inputs))
+        logits = self._sample_reasoning(CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],
             "actions": jnp.zeros((1, 1, 32)),  # TODO
             "reasoning_logits": logits,
-            "final_length": t,
+            "final_length": logits.shape[1],
         }
         # Unbatch and convert to np.ndarray.        # Unbatch and convert to np.ndarray.
         # outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)

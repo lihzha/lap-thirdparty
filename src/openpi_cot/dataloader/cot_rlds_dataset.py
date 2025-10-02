@@ -197,7 +197,6 @@ class CoTRldsDatasetSpec:
     cam2base_extrinsics_file: str = "cam2base_extrinsics.json"
     camera_serials_file: str = "camera_serials.json"
     intrinsics_file: str = "intrinsics.json"
-    droid_instructions_file: str = "droid_instructions.json"
     droid_language_annotations_file: str = "droid_language_annotations.json"
     keep_ranges_file: str = "keep_ranges_1_0_1.json"
     images_list: tuple[str, str] = ("exterior_image_1_left", "exterior_image_2_left")
@@ -387,17 +386,14 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # ---------------------------------------------------------------------
         # 3. Camera-index table  (episode_id → ext-cam idx)
         # ---------------------------------------------------------------------
-        intrinsics_json = None
         with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.cam2base_extrinsics_file}", "r") as fp:
             cam2base_extrinsics = json.load(fp)
         with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.camera_serials_file}", "r") as fp:
             camera_serials = json.load(fp)
-        if need_calib:
-            with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.intrinsics_file}", "r") as fp:
-                intrinsics_json = json.load(fp)
-            eid_to_intr_vec = {}
-            eid_to_extr_mat = {}
-
+        with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.intrinsics_file}", "r") as fp:
+            intrinsics_json = json.load(fp)
+        eid_to_intr_vec = {}
+        eid_to_extr_mat = {}
         eid_to_cam_dict = {}
 
         for eid, extr in cam2base_extrinsics.items():
@@ -406,9 +402,8 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             serial_to_name = {v: k for k, v in cams.items()}
             if camera_serial not in serial_to_name:
                 continue
-            if intrinsics_json is not None:
-                if eid not in intrinsics_json:
-                    continue
+            if eid not in intrinsics_json:
+                continue
 
             calib_camera_name = serial_to_name[camera_serial]
             if calib_camera_name == "ext1_cam_serial":
@@ -472,39 +467,23 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
         # ---------------------------------------------------------------------
         # 6. Language-instruction table (merged; episode_id → serialized [K])
         # ---------------------------------------------------------------------
-        instr_cache_path = f"{metadata_path}/{self.spec.droid_instructions_file}"
         _instr_keys_py = []
         _instr_vals_ser = []
-        if tf.io.gfile.exists(instr_cache_path):
-            with tf.io.gfile.GFile(instr_cache_path, "r") as fp:
-                instr_index = json.load(fp)
-            _instr_keys_py = list(instr_index.keys())
-            for _eid in _instr_keys_py:
-                _arr = instr_index[_eid]
-                if not isinstance(_arr, list):
-                    _arr = []
-                _arr = [s for s in _arr if isinstance(s, str) and len(s) > 0]
-                if len(_arr) == 0:
-                    # Use truly empty bytes for missing-instruction episodes so we can detect and fallback later
-                    _instr_vals_ser.append(b"")
-                else:
-                    _instr_vals_ser.append(tf.io.serialize_tensor(tf.constant(_arr, dtype=tf.string)).numpy())
-        else:
-            with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.droid_language_annotations_file}", "r") as fp:
-                language_annotations = json.load(fp)
-            _instr_keys_py = list(language_annotations.keys())
-            for _eid in _instr_keys_py:
-                _v = language_annotations[_eid]
-                _arr = [
-                    _v.get("language_instruction1", ""),
-                    _v.get("language_instruction2", ""),
-                    _v.get("language_instruction3", ""),
-                ]
-                _arr = [s for s in _arr if len(s) > 0]
-                if len(_arr) == 0:
-                    _instr_vals_ser.append(b"")
-                else:
-                    _instr_vals_ser.append(tf.io.serialize_tensor(tf.constant(_arr, dtype=tf.string)).numpy())
+        with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.droid_language_annotations_file}", "r") as fp:
+            language_annotations = json.load(fp)
+        _instr_keys_py = list(language_annotations.keys())
+        for _eid in _instr_keys_py:
+            _v = language_annotations[_eid]
+            _arr = [
+                _v.get("language_instruction1", ""),
+                _v.get("language_instruction2", ""),
+                _v.get("language_instruction3", ""),
+            ]
+            _arr = [s for s in _arr if len(s) > 0]
+            if len(_arr) == 0:
+                _instr_vals_ser.append(b"")
+            else:
+                _instr_vals_ser.append(tf.io.serialize_tensor(tf.constant(_arr, dtype=tf.string)).numpy())
         _instr_keys = tf.constant(_instr_keys_py, dtype=tf.string)
         _instr_vals = tf.constant(_instr_vals_ser, dtype=tf.string)
         _instr_default = tf.constant(b"", dtype=tf.string)
@@ -522,40 +501,20 @@ class _DroidCoTRldsDatasetRaw(_SingleCoTRldsDatasetRaw):
             with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.keep_ranges_file}", "r") as f:
                 filter_dict = json.load(f)
             logging.info(f"Using filter dictionary with {len(filter_dict)} episodes")
+            keys_tensor = []
+            values_tensor = []
 
-            if self.use_per_traj_filter:
-                ep_keys = []
-                ranges_ser = []
-                for episode_key, ranges in filter_dict.items():
-                    # Ensure serialized ranges are always 2D [M, 2]
-                    # Some entries may be a single [start, end] list → shape (2,)
-                    arr = np.array(ranges, dtype=np.int32).reshape(-1, 2)
-                    ep_keys.append(episode_key)
-                    ranges_ser.append(tf.io.serialize_tensor(tf.constant(arr)).numpy())
-
-                keys = tf.constant(ep_keys, dtype=tf.string)
-                vals = tf.constant(ranges_ser, dtype=tf.string)
-                filter_table = tf.lookup.StaticHashTable(
-                    tf.lookup.KeyValueTensorInitializer(keys, vals),
-                    default_value=tf.constant(b"", dtype=tf.string),
-                )
-                print_memory_usage("After building filter_table (per-trajectory)")
-
-            else:
-                keys_tensor = []
-                values_tensor = []
-
-                for episode_key, ranges in filter_dict.items():
-                    for start, end in ranges:
-                        for t in range(start, end):
-                            frame_key = f"{episode_key}--{t}"
-                            keys_tensor.append(frame_key)
-                            values_tensor.append(True)
-                filter_table = tf.lookup.StaticHashTable(
-                    tf.lookup.KeyValueTensorInitializer(keys_tensor, values_tensor),
-                    default_value=False,
-                )
-                print_memory_usage("After building filter_table (per-step)")
+            for episode_key, ranges in filter_dict.items():
+                for start, end in ranges:
+                    for t in range(start, end):
+                        frame_key = f"{episode_key}--{t}"
+                        keys_tensor.append(frame_key)
+                        values_tensor.append(True)
+            filter_table = tf.lookup.StaticHashTable(
+                tf.lookup.KeyValueTensorInitializer(keys_tensor, values_tensor),
+                default_value=False,
+            )
+            print_memory_usage("After building filter_table (per-step)")
         logging.info("Filter hash table initialized")
 
         return filter_table

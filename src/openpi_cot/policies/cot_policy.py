@@ -1,61 +1,17 @@
 import dataclasses
 import logging
 
-import einops
 import numpy as np
 from openpi import transforms as upstream_transforms
 import wandb
 
 from openpi_cot.dataloader.helpers import ActionEncoding
-from openpi_cot.dataloader.lang_action_util import sum_language_actions
-from openpi_cot.dataloader.lang_action_util import summarize_numeric_actions
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
-
-
-def _maybe_parse_serialized_tensor_to_ndarray(b) -> np.ndarray | None:
-    try:
-        if not isinstance(b, (bytes, np.bytes_)):
-            return None
-        import tensorflow as tf  # Lazy import to avoid TF dependency at module import time
-
-        t = tf.io.parse_tensor(b, out_type=tf.float32)
-        return t.numpy()
-    except Exception:
-        return None
-
-
-def _parse_image(image) -> np.ndarray:
-    if image is None:
-        return None
-    image = np.asarray(image)
-    if np.issubdtype(image.dtype, np.floating):
-        image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
-        image = einops.rearrange(image, "c h w -> h w c")
-    return image
-
-
-def _safe_decode_bytes(value: bytes | np.bytes_) -> str:
-    try:
-        return value.decode("utf-8")
-    except UnicodeDecodeError:
-        return value.decode("utf-8", errors="replace")
-
-
-def _to_str_list(x):
-    if isinstance(x, (list, tuple)):
-        seq = x
-    elif isinstance(x, np.ndarray):
-        seq = x.tolist()
-    else:
-        return None
-    out = []
-    for item in seq:
-        if isinstance(item, (bytes, np.bytes_)):
-            out.append(_safe_decode_bytes(item))
-        else:
-            out.append(str(item))
-    return out
+from openpi_cot.policies.utils import maybe_parse_serialized_tensor_to_ndarray
+from openpi_cot.policies.utils import parse_image
+from openpi_cot.policies.utils import sum_language_actions
+from openpi_cot.policies.utils import summarize_numeric_actions
+from openpi_cot.policies.utils import to_str_list
 
 
 # TODO: during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
@@ -79,11 +35,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
         assert "observation" in data
         assert "exterior_image_1_left" in data["observation"]
-        base_image = _parse_image(data["observation"]["exterior_image_1_left"])
+        base_image = parse_image(data["observation"]["exterior_image_1_left"])
         if base_image is None:
             raise ValueError("Base image missing from observation")
         if "wrist_image_left" in data["observation"]:
-            wrist_image = _parse_image(data["observation"]["wrist_image_left"])
+            wrist_image = parse_image(data["observation"]["wrist_image_left"])
             if np.all(wrist_image == 0.0):
                 wrist_image = np.zeros_like(base_image)
                 wrist_image_mask = np.False_
@@ -143,7 +99,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "language_actions" in data:
             la = data["language_actions"]
             assert isinstance(la[0], bytes)
-            if _maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
+            if maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
                 # Only use the non-padded portion according to control_frequency, if present
                 cf_val = data.get("control_frequency")
                 try:
@@ -154,11 +110,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     la_used = la[: int(cf)]
                 else:
                     la_used = la
-                raw_array = [_maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
+                raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
                 summed = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
                 inputs["language_actions"] = summed
             else:
-                seq = _to_str_list(la)
+                seq = to_str_list(la)
                 if seq is not None:
                     summed = sum_language_actions(seq, self.sum_decimal, self.include_rotation)
                     if summed is not None and len(summed) > 0:

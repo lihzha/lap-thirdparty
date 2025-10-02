@@ -4,18 +4,7 @@ import numpy as np
 from openpi import transforms as upstream_transforms
 
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
-
-
-def _parse_image(image):
-    if image is None:
-        return None
-    image = np.asarray(image)
-    if np.issubdtype(image.dtype, np.floating):
-        image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
-        # (C,H,W) -> (H,W,C)
-        image = np.transpose(image, (1, 2, 0))
-    return image
+from openpi_cot.policies.utils import parse_image
 
 
 @dataclasses.dataclass(frozen=True)
@@ -27,10 +16,10 @@ class RawActionsInputs(upstream_transforms.DataTransformFn):
         # Expect images and continuous actions; no language actions required.
         assert "observation" in data
         assert "exterior_image_1_left" in data["observation"]
-        base_image = _parse_image(data["observation"]["exterior_image_1_left"])
+        base_image = parse_image(data["observation"]["exterior_image_1_left"])
 
         wrist_image = data["observation"].get("wrist_image_left", None)
-        wrist_image = _parse_image(wrist_image) if wrist_image is not None else np.zeros_like(base_image)
+        wrist_image = parse_image(wrist_image) if wrist_image is not None else np.zeros_like(base_image)
         wrist_image_mask = np.True_ if wrist_image is not None else np.False_
 
         assert self.model_type == ExtendedModelType.PI_COT

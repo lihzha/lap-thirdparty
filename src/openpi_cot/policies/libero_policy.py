@@ -1,11 +1,11 @@
 import dataclasses
 import re
 
-import einops
 import numpy as np
 from openpi import transforms
 
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
+from openpi_cot.policies.utils import parse_image
 
 
 def make_libero_example() -> dict:
@@ -16,15 +16,6 @@ def make_libero_example() -> dict:
         "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "prompt": "do something",
     }
-
-
-def _parse_image(image) -> np.ndarray:
-    image = np.asarray(image)
-    if np.issubdtype(image.dtype, np.floating):
-        image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
-        image = einops.rearrange(image, "c h w -> h w c")
-    return image
 
 
 def reasoning_to_action(
@@ -310,8 +301,8 @@ class LiberoInputs(transforms.DataTransformFn):
         # and two wrist views (left and right). If your dataset does not have a particular type
         # of image, e.g. wrist images, you can comment it out here and replace it with zeros like we do for the
         # right wrist image below.
-        base_image = _parse_image(data["observation/image"])
-        wrist_image = _parse_image(data["observation/wrist_image"])
+        base_image = parse_image(data["observation/image"])
+        wrist_image = parse_image(data["observation/wrist_image"])
 
         # Create inputs dict. Do not change the keys in the dict below.
         inputs = {
