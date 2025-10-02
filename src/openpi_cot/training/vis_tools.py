@@ -6,7 +6,7 @@ import pickle
 import re
 from typing import Any
 
-import cv2
+# import cv2
 import jax
 from jax.experimental import multihost_utils as mh
 import jax.numpy as jnp
