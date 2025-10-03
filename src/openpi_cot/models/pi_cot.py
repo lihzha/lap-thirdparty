@@ -77,6 +77,7 @@ class PiCoT(_pi0.Pi0):
 
     def __init__(self, config: _pi_cot_config.PiCoTConfig, rngs: nnx.Rngs):
         self.pi05 = config.pi05
+        self.aug_wrist_image = config.aug_wrist_image
         # Loss/control knobs
         self.enable_action_training = bool(getattr(config, "enable_action_training", False))
         self.enable_reasoning_training = bool(getattr(config, "enable_reasoning_training", True))
@@ -171,7 +172,9 @@ class PiCoT(_pi0.Pi0):
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
-        observation = preprocess_observation(preprocess_rng, observation, train=train)
+        observation = preprocess_observation(
+            preprocess_rng, observation, train=train, aug_wrist_image=self.aug_wrist_image
+        )
 
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
 
@@ -295,7 +298,7 @@ class PiCoT(_pi0.Pi0):
     ### left padding
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
-        observation = preprocess_observation(None, observation, train=False)
+        observation = preprocess_observation(None, observation, train=False, aug_wrist_image=self.aug_wrist_image)
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation)  # (B,Tp,D) + (B,Tp)
         b, tp, d = *p_tokens.shape[:2], p_tokens.shape[-1]
         gen_len = observation.tokenized_prompt.shape[1]

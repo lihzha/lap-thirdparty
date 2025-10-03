@@ -21,10 +21,10 @@ from typing import Any
 # from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_finetuning_transform
 import tensorflow as tf
 
-from openpi_cot.dataloader.oxe_utils.data_utils import binarize_gripper_actions
-from openpi_cot.dataloader.oxe_utils.data_utils import invert_gripper_actions
-from openpi_cot.dataloader.oxe_utils.data_utils import rel2abs_gripper_actions
-from openpi_cot.dataloader.oxe_utils.data_utils import relabel_bridge_actions
+from openpi_cot.dataloader.oxe_utils.transform_utils import binarize_gripper_actions
+from openpi_cot.dataloader.oxe_utils.transform_utils import invert_gripper_actions
+from openpi_cot.dataloader.oxe_utils.transform_utils import rel2abs_gripper_actions
+from openpi_cot.dataloader.oxe_utils.transform_utils import relabel_bridge_actions
 
 
 def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -144,9 +144,8 @@ def ppgm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    import tensorflow_graphics.geometry.transformation as tft
-
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    import tensorflow_graphics.geometry.transformation as tft
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -365,9 +364,8 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    import tensorflow_graphics.geometry.transformation as tft
-
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    import tensorflow_graphics.geometry.transformation as tft
 
     trajectory["observation"]["state"] = trajectory["observation"]["robot_state"][:, 6:14]
     trajectory["observation"]["depth"] = trajectory["observation"].pop("image_with_depth")
@@ -544,9 +542,8 @@ def maniskill_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    import tensorflow_graphics.geometry.transformation as tft
-
     from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    import tensorflow_graphics.geometry.transformation as tft
 
     trajectory["observation"]["state"] = tf.concat(
         (

@@ -10,9 +10,9 @@ import openpi.models.model as _model
 import openpi.training.data_loader as up  # upstream module
 import openpi.transforms as up_tf
 
-from openpi_cot.dataloader.cot_rlds_dataset import CombinedCoTRldsDataset
-from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTRldsDataset
-from openpi_cot.dataloader.cot_rlds_dataset import OXECoTRldsDatasets
+from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTDataset
+from openpi_cot.dataloader.cot_rlds_dataset import OXECoTDatasets
+from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
@@ -43,14 +43,10 @@ def _create_rlds_dataset(
 
     if dataset_type == "droid":
         assert droid_required, "language_action_dir is required"
-        dataset_cls = DroidCoTRldsDataset
-    if dataset_type == "oxe":
+        dataset_cls = DroidCoTDataset
+    if dataset_type == "oxe" or dataset_type == "combined":
         assert oxe_required, "data_mix is required"
-        dataset_cls = OXECoTRldsDatasets
-    if dataset_type == "combined":
-        assert oxe_required, "data_mix is required"
-        assert droid_required, "language_action_dir is required"
-        dataset_cls = CombinedCoTRldsDataset
+        dataset_cls = OXECoTDatasets
 
     if dataset_cls is None:
         return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)
@@ -66,10 +62,10 @@ def _create_rlds_dataset(
         split=split,
         action_horizon=action_horizon,
         action_dim=action_dim,
+        train_dataset=train_dataset,
+        standalone=True,
+        action_proprio_normalization_type=NormalizationType.NORMAL,
     )
-
-    if dataset_type == "droid":
-        kwargs["train_dataset"] = train_dataset
 
     return dataset_cls(**kwargs)
 

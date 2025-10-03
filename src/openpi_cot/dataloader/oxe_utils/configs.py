@@ -545,22 +545,20 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
-    # "droid": {
-    #     "image_obs_keys": {
-    #         "primary": "exterior_image_1_left",
-    #         "secondary": "exterior_image_2_left",
-    #         "wrist": "wrist_image_left",
-    #     },
-    #     "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-    #     "state_obs_keys": ["proprio"],
-    #     "state_encoding": StateEncoding.POS_QUAT,
-    #     "action_encoding": ActionEncoding.EEF_POS,
-    #     "aux_kwargs": {
-    #         "dataset_frame_transform_kwargs": {
-    #             "chunk_filter_fn": zero_action_filter,
-    #         },
-    #     },
-    # },
+    "droid": {
+        "image_obs_keys": {
+            "primary": "exterior_image_1_left",
+            "secondary": "exterior_image_2_left",
+            "wrist": "wrist_image_left",
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            "cartesian_position",
+            "gripper_position",
+        ],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
     "fmb": {
         "image_obs_keys": {
             "primary": "image_side_1",
@@ -1085,7 +1083,6 @@ OXE_DATASET_METADATA = {
         "language_annotations": "Natural",
         "robot_morphology": "Single Arm",
         "has_suboptimal": "Yes",
-        "is_absolute_action": True,
     },
     "conq_hose_manipulation": {
         "control_frequency": 30,

@@ -5,12 +5,19 @@ Additional RLDS-specific data utilities.
 """
 
 from collections.abc import Callable
+from copy import deepcopy
 from enum import Enum
+import logging
+from pathlib import Path
 from typing import Any
 
 import dlimp as dl
 import numpy as np
 import tensorflow as tf
+
+from openpi_cot.dataloader.oxe_utils.configs import OXE_DATASET_CONFIGS
+from openpi_cot.dataloader.oxe_utils.configs import ActionEncoding
+from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
 
 
 def tree_map(fn: Callable, tree: dict) -> dict:
@@ -301,3 +308,58 @@ def allocate_threads(n: int | None, weights: np.ndarray):
         allocation[i] += 1
 
     return allocation
+
+
+def load_dataset_kwargs(
+    dataset_name: str,
+    rlds_data_dir: Path,
+    load_camera_views: tuple[str] = ("primary", "wrist"),
+) -> dict[str, Any]:
+    """Generates config (kwargs) for given dataset from Open-X Embodiment."""
+    dataset_kwargs = deepcopy(OXE_DATASET_CONFIGS[dataset_name])
+    if dataset_kwargs["action_encoding"] not in [ActionEncoding.EEF_POS, ActionEncoding.EEF_R6]:
+        raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
+
+    language_annotations = dataset_kwargs.get("language_annotations")
+    if not language_annotations or language_annotations.lower() == "none":
+        raise ValueError(f"Cannot load `{dataset_name}`; language annotations required!")
+
+    robot_morphology = dataset_kwargs.get("robot_morphology", "")
+    if robot_morphology.lower() == "bi-manual":
+        raise ValueError(f"Cannot load `{dataset_name}`; bi-manual datasets are not supported!")
+
+    has_suboptimal = dataset_kwargs.get("has_suboptimal")
+    if isinstance(has_suboptimal, str):
+        has_suboptimal = has_suboptimal.lower() == "yes"
+    if has_suboptimal:
+        logging.warning(f"Cannot load `{dataset_name}`; suboptimal datasets are not supported!")
+
+    if (
+        dataset_kwargs["action_encoding"] is ActionEncoding.EEF_POS
+        or dataset_kwargs["action_encoding"] is ActionEncoding.EEF_R6
+    ):
+        pass
+    else:
+        raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
+
+    # Adjust Loaded Camera Views
+    if len(missing_keys := (set(load_camera_views) - set(dataset_kwargs["image_obs_keys"]))) > 0:
+        raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
+
+    # Filter
+    dataset_kwargs["image_obs_keys"] = {
+        k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in load_camera_views
+    }
+    for k, v in dataset_kwargs["image_obs_keys"].items():
+        if k == "primary":
+            assert v is not None, f"primary image is required for {dataset_name}"
+
+    # Specify Standardization Transform
+    # Use unified registry (superset), still supports all OXE datasets
+    dataset_kwargs["standardize_fn"] = OXE_STANDARDIZATION_TRANSFORMS[dataset_name]
+
+    # Add any aux arguments
+    if "aux_kwargs" in dataset_kwargs:
+        dataset_kwargs.update(dataset_kwargs.pop("aux_kwargs"))
+
+    return {"name": dataset_name, "data_dir": str(rlds_data_dir), **dataset_kwargs}

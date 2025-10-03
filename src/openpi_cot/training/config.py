@@ -22,7 +22,6 @@ from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_policy as libero_policy
-import openpi_cot.policies.raw_actions_policy as raw_actions_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
@@ -140,7 +139,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     # Validation controls for RLDS-CoT dataset splitting/visualization
     val_max_samples: int | None = 60000
     val_fraction: float | None = 0.02
-    validation_mode: str = "easy"
     use_wrist_image: bool = True
     wrist_image_dropout_prob: float = 0.0
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
@@ -152,16 +150,13 @@ class CoTDataConfig(upstream_config.DataConfig):
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
-    use_idle_filter: bool = True
     use_per_traj_filter: bool = False
-    # If true, will drop samples where projected gripper is outside the resized image bounds.
-    drop_gripper_oob: bool = False
     language_action_dir: str | None = None
     # Optional path when DROID path is different from OXE path
     droid_rlds_data_dir: str | None = None
     # support using droid_subset for debugging
     droid_dataset_name: Literal["droid", "droid_subset"] = "droid"
-    use_base_actions: bool = True
+    use_json_actions: bool = True
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_pi_magic_soup"
@@ -281,33 +276,6 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         return dataclasses.replace(
             base_cfg,
             # repack_transforms=repack_transform,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
-        )
-
-
-@dataclasses.dataclass(frozen=True)
-class RLDSRawActionsDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
-    """Config for training on raw actions (no language actions required)."""
-
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        base_cfg = RLDSCoTDataConfig.create_base_config(self, assets_dirs, model_config)
-
-        data_transforms = upstream_transforms.Group(
-            inputs=[
-                raw_actions_policy.RawActionsInputs(
-                    model_type=model_config.model_type,
-                )
-            ],
-            outputs=[raw_actions_policy.RawActionsOutputs()],
-        )
-
-        model_transforms = ModelTransformFactory()(model_config)
-
-        return dataclasses.replace(
-            base_cfg,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
             use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
@@ -454,55 +422,6 @@ _CONFIGS = [
     build_droid_cfg("v5", fsdp_devices=8, batch_size=256),
     build_droid_cfg("v6", fsdp_devices=8, batch_size=256),
     build_droid_cfg("local", fsdp_devices=1, batch_size=4),
-    TrainConfig(
-        name="pi_raw_actions_joint_local",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=110,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-        ),
-        data=RLDSRawActionsDataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            rlds_data_dir="/n/fs/robot-data/data/",
-            droid_dataset_name="droid",
-            droid_rlds_data_dir="/n/fs/robot-data/data/",
-            # We won't use language actions in training, but dataset requires a directory
-            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
-        ),
-        fsdp_devices=1,
-        batch_size=4,
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-    ),
-    TrainConfig(
-        name="pi_raw_actions_action_expert_finetune_local",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=110,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-        ),
-        data=RLDSRawActionsDataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            rlds_data_dir="/n/fs/robot-data/data/",
-            droid_dataset_name="droid",
-            droid_rlds_data_dir="/n/fs/robot-data/data/",
-            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
-        ),
-        fsdp_devices=1,
-        batch_size=4,
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        # Freeze VLM, only train action expert branch
-        freeze_filter=pi_cot_config.PiCoTConfig(pi05=True).get_vlm_freeze_filter(),
-    ),
     TrainConfig(
         name="pi_oxe_cot_v4",
         data=RLDSCoTDataConfig(

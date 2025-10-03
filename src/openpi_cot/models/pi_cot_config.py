@@ -31,6 +31,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     pi05: bool = False
     discrete_state_input: bool = None
 
+    aug_wrist_image: bool = True
+
     # Enable/disable individual loss components
     # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
     enable_action_training: bool = False
@@ -67,12 +69,12 @@ class PiCoTConfig(_model.BaseModelConfig):
                 images={
                     "base_0_rgb": image_spec,
                     "left_wrist_0_rgb": image_spec,
-                    "right_wrist_0_rgb": image_spec,
+                    # "right_wrist_0_rgb": image_spec,
                 },
                 image_masks={
                     "base_0_rgb": image_mask_spec,
                     "left_wrist_0_rgb": image_mask_spec,
-                    "right_wrist_0_rgb": image_mask_spec,
+                    # "right_wrist_0_rgb": image_mask_spec,
                 },
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),

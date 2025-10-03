@@ -6,7 +6,9 @@ from openpi import transforms as upstream_transforms
 import wandb
 
 from openpi_cot.dataloader.helpers import ActionEncoding
+from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
+from openpi_cot.policies.utils import is_trivial_image
 from openpi_cot.policies.utils import maybe_parse_serialized_tensor_to_ndarray
 from openpi_cot.policies.utils import parse_image
 from openpi_cot.policies.utils import sum_language_actions
@@ -27,12 +29,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     include_rotation: bool = False
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
 
-    def __call__(self, data: dict) -> dict:
-        # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
-        # stores as float32 (C,H,W), gets skipped for policy inference
-        # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
-        if self.include_rotation:
-            assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
+    def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert "observation" in data
         assert "exterior_image_1_left" in data["observation"]
         base_image = parse_image(data["observation"]["exterior_image_1_left"])
@@ -60,7 +57,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 wrist_image_mask = np.False_
 
         assert self.model_type == ExtendedModelType.PI_COT
-        names = ("base_0_rgb", "left_wrist_0_rgb")
+        names = IMAGE_KEYS
 
         images = (
             base_image,
@@ -70,7 +67,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             base_image_mask,
             wrist_image_mask,
         )
-
         inputs = {
             "state": data["observation"]["state"],
             "image": dict(zip(names, images, strict=True)),
@@ -96,50 +92,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
 
-        if "language_actions" in data:
-            la = data["language_actions"]
-            assert isinstance(la[0], bytes)
-            if maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
-                # Only use the non-padded portion according to control_frequency, if present
-                cf_val = data.get("control_frequency")
-                try:
-                    cf = int(np.asarray(cf_val).item()) if cf_val is not None else None
-                except Exception:
-                    cf = None
-                if cf is not None:
-                    la_used = la[: int(cf)]
-                else:
-                    la_used = la
-                raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
-                summed = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
-                inputs["language_actions"] = summed
-            else:
-                seq = to_str_list(la)
-                if seq is not None:
-                    summed = sum_language_actions(seq, self.sum_decimal, self.include_rotation)
-                    if summed is not None and len(summed) > 0:
-                        inputs["language_actions"] = summed
-                else:
-                    # Scalar/bytes case
-                    if isinstance(la, bytes):
-                        la = la.decode("utf-8")
-                    else:
-                        raise ValueError(f"Language actions is not a bytes string: {la}")
-                    inputs["language_actions"] = la
-
-        def _is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
-            if np.all(img == 0):
-                if mask == np.False_:
-                    return False
-                return True
-            return np.all(img == 0) or np.all(img == 255)
-
         images_for_check = {
             "base_0_rgb": [base_image, image_masks[0]],
             "left_wrist_0_rgb": [wrist_image, image_masks[1]],
         }
 
-        if any(_is_trivial_image(img, mask) for img, mask in images_for_check.values()) or (
+        if any(is_trivial_image(img, mask) for img, mask in images_for_check.values()) or (
             prompt_str is None or prompt_str.strip() == ""
         ):
             log_payload = {
@@ -157,6 +115,51 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             }
             wandb.log({k: v for k, v in log_payload.items() if v is not None})
             logging.warning("Invalid policy inputs: trivial image or missing prompt")
+
+        return inputs
+
+    def _prepare_language_actions(self, data: dict) -> dict:
+        if "language_actions" in data:
+            la = data["language_actions"]
+            assert isinstance(la[0], bytes)
+            if maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
+                # Only use the non-padded portion according to control_frequency, if present
+                cf_val = data.get("control_frequency")
+                try:
+                    cf = int(np.asarray(cf_val).item()) if cf_val is not None else None
+                except Exception:
+                    cf = None
+                if cf is not None:
+                    la_used = la[: int(cf)]
+                else:
+                    la_used = la
+                raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
+                summed = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                return summed
+            seq = to_str_list(la)
+            if seq is not None:
+                summed = sum_language_actions(seq, self.sum_decimal, self.include_rotation)
+                if summed is not None and len(summed) > 0:
+                    return summed
+            else:
+                # Scalar/bytes case
+                if isinstance(la, bytes):
+                    la = la.decode("utf-8")
+                else:
+                    raise ValueError(f"Language actions is not a bytes string: {la}")
+                return la
+        return None
+
+    def __call__(self, data: dict) -> dict:
+        # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
+        # stores as float32 (C,H,W), gets skipped for policy inference
+        # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
+        inputs = self._prepare_inputs(data)
+        if self.include_rotation:
+            assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
+        language_actions = self._prepare_language_actions(data)
+        if language_actions is not None:
+            inputs["language_actions"] = language_actions
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):
