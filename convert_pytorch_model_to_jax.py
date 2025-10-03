@@ -432,8 +432,16 @@ def convert_pytorch_to_jax(pytorch_model_path: str, output_path: str):
     for key, value in jax_params.items():
         np_params[key] = np.array(value)
 
-    # Save parameters
-    np.savez(os.path.join(params_path, "params.npz"), **np_params)
+    # Structure parameters so that when unflattened, they create the expected nested structure
+    # The training code expects: {"PaliGemma": {"params": {...}}}
+    # So we need to prefix all keys with "params/" so that unflattening creates the right structure
+    structured_flat_params = {}
+    for key, value in np_params.items():
+        structured_flat_params[f"params/{key}"] = value
+
+    # Save parameters as flat dictionary with "/" separators
+    # The training code will unflatten this and access the "params" key
+    np.savez(os.path.join(params_path, "params.npz"), **structured_flat_params)
 
     # Copy config files
     for config_file in [
