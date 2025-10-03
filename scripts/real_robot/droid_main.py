@@ -64,6 +64,7 @@ class DroidEvalRunner(BaseEvalRunner):
             "cartesian_position": cartesian_position,
             "joint_position": joint_position,
             "gripper_position": gripper_position,
+            "state": np.concatenate([cartesian_position, gripper_position]),
         }
 
 
