@@ -21,10 +21,10 @@ from typing import Any
 # from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_finetuning_transform
 import tensorflow as tf
 
-from openpi_cot.dataloader.oxe_utils.transform_utils import binarize_gripper_actions
-from openpi_cot.dataloader.oxe_utils.transform_utils import invert_gripper_actions
-from openpi_cot.dataloader.oxe_utils.transform_utils import rel2abs_gripper_actions
-from openpi_cot.dataloader.oxe_utils.transform_utils import relabel_bridge_actions
+from openpi_cot.dataloader.oxe_utils.data_utils import binarize_gripper_actions
+from openpi_cot.dataloader.oxe_utils.data_utils import invert_gripper_actions
+from openpi_cot.dataloader.oxe_utils.data_utils import rel2abs_gripper_actions
+from openpi_cot.dataloader.oxe_utils.data_utils import relabel_bridge_actions
 
 
 def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:

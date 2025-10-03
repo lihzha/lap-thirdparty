@@ -13,10 +13,10 @@ import psutil
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.dataloader.helpers import convert_action_encoding
 from openpi_cot.dataloader.helpers import convert_state_encoding
 from openpi_cot.dataloader.helpers import extract_episode_path_from_file_path
-from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
