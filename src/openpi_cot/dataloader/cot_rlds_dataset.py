@@ -309,7 +309,6 @@ class SingleCoTDataset:
 
         self.apply_traj_transforms(
             action_horizon=action_horizon,
-            use_json_actions=self.use_json_actions,
         )
 
         self.apply_repack_transforms()
@@ -376,7 +375,6 @@ class SingleCoTDataset:
         summation_steps: int = 30,
         action_key: str = "actions",
         state_key: str = "state",
-        use_json_actions: bool = False,
     ):
         """
         Compare to original transforms, we omit the following:
@@ -434,7 +432,7 @@ class SingleCoTDataset:
             # Trim to dataset control frequency and pad to fixed window length (summation_steps)
             # Note: self.control_frequency is a Python int constant per dataset instance
             trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
-            if not use_json_actions:
+            if self.use_json_actions:
                 la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
                 pad_len = summation_steps - trimmed_len
 
@@ -696,7 +694,7 @@ class DroidCoTDataset(SingleCoTDataset):
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
             episode_id = traj["trajectory_id"][0]
-            if not self.use_json_actions:
+            if self.use_json_actions:
                 lang_bytes = self.lang_table.lookup(episode_id)
                 lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
                 # Language actions may include an extra terminal step; crop to match action length
@@ -713,7 +711,7 @@ class DroidCoTDataset(SingleCoTDataset):
             instruction = _sample_from_table()
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
 
-            if not self.use_json_actions:
+            if self.use_json_actions:
                 cam_idx = self.cam_table.lookup(episode_id)
                 cam_images = [
                     traj["observation"][self.spec.images_list[0]],
