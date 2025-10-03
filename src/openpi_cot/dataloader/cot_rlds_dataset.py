@@ -1076,6 +1076,7 @@ class OXECoTDatasets:
         action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
         balance_weights: bool = True,  # noqa: FBT001, FBT002
         train_dataset=None,
+        standalone=True,
     ):
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
