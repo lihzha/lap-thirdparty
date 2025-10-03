@@ -130,8 +130,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     # TODO: remove the cot argument
     cot: bool = False
     shuffle_buffer_size: int = 250_000
-    # For CoT-style datasets (e.g., DROID-CoT): number of future steps to sum over for language actions
-    summation_steps: int = 15
     # Optional cap on number of unique flattened samples for overfitting tests
     max_samples: int | None = None
     # Tokenization / formatting controls for CoT numeric aggregation
@@ -150,7 +148,6 @@ class CoTDataConfig(upstream_config.DataConfig):
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
-    use_per_traj_filter: bool = False
     language_action_dir: str | None = None
     # Optional path when DROID path is different from OXE path
     droid_rlds_data_dir: str | None = None
@@ -160,9 +157,6 @@ class CoTDataConfig(upstream_config.DataConfig):
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_pi_magic_soup"
-
-    #### Combined-only: weight for DROID when interleaving with OXE
-    droid_weight: float = 2.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -460,7 +454,6 @@ _CONFIGS = [
             rlds_data_dir="gs://pi0-cot/OXE",
             language_action_dir="gs://pi0-cot/droid-base-lang-actions",
             data_mix="oxe_pi_magic_soup",
-            droid_weight=10.0,
             shuffle_buffer_size=300_000,
         ),
         fsdp_devices=4,
@@ -482,7 +475,6 @@ _CONFIGS = [
             rlds_data_dir="/n/fs/vla-mi/datasets/OXE",
             language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
             data_mix="oxe_pi_magic_soup",
-            droid_weight=2.0,
             shuffle_buffer_size=400_000,
         ),
         fsdp_devices=4,
