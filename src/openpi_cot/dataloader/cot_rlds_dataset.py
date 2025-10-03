@@ -539,7 +539,7 @@ class DroidCoTDataset(SingleCoTDataset):
         files = tf.io.gfile.glob(f"{language_action_dir}/{self.spec.lang_action_tfrecord_pattern}")
         ds = (
             tf.data.TFRecordDataset(files, compression_type="GZIP", num_parallel_reads=tf.data.AUTOTUNE)
-            .map(_parse, num_parallel_calls=self.num_parallel_calls)
+            .map(_parse, num_parallel_calls=tf.data.AUTOTUNE)
             .prefetch(tf.data.AUTOTUNE)
         )
         episodes, lang_serialized = [], []
