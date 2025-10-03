@@ -93,7 +93,7 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
     mlp_dense1_kernels = []
     mlp_dense1_biases = []
 
-    # Collect attention parameters
+    # Collect attention parameters - these will be stored as single arrays per attention type
     attn_key_kernels = []
     attn_key_biases = []
     attn_value_kernels = []
@@ -138,14 +138,14 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
         if pytorch_key in state_dict:
             mlp_dense1_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
 
-        # Attention layers
+        # Attention layers - collect per layer, will reshape later
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.weight"
         if pytorch_key in state_dict:
-            # Reshape from (hidden_size, num_heads * head_dim) to (num_heads, head_dim, hidden_size)
             weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
-            attn_key_kernels.append(weight.reshape(num_heads, head_dim, -1))
+            # Store as (hidden_size, num_heads, head_dim) for later reshaping
+            attn_key_kernels.append(weight.reshape(-1, num_heads, head_dim))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.bias"
         if pytorch_key in state_dict:
@@ -159,7 +159,7 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
             weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
-            attn_value_kernels.append(weight.reshape(num_heads, head_dim, -1))
+            attn_value_kernels.append(weight.reshape(-1, num_heads, head_dim))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.bias"
         if pytorch_key in state_dict:
@@ -173,7 +173,7 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
             weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
-            attn_query_kernels.append(weight.reshape(num_heads, head_dim, -1))
+            attn_query_kernels.append(weight.reshape(-1, num_heads, head_dim))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.bias"
         if pytorch_key in state_dict:
@@ -187,7 +187,7 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
             weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
-            attn_out_kernels.append(weight.reshape(num_heads, head_dim, -1))
+            attn_out_kernels.append(weight.reshape(-1, num_heads, head_dim))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.bias"
         if pytorch_key in state_dict:
@@ -216,10 +216,12 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
         jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_1/bias"] = jnp.array(mlp_dense1_biases)
 
     if attn_key_kernels:
+        # Convert from list of (hidden_size, num_heads, head_dim) to (num_layers, hidden_size, num_heads, head_dim)
         jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/key/kernel"] = jnp.array(
             attn_key_kernels
         )
     if attn_key_biases:
+        # Convert from list of (num_heads, head_dim) to (num_layers, num_heads, head_dim)
         jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/key/bias"] = jnp.array(attn_key_biases)
     if attn_value_kernels:
         jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/value/kernel"] = jnp.array(
