@@ -1007,7 +1007,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
     def get_traj_identifier(self):
         def _get_traj_identifier(traj):
             traj_len = tf.shape(traj["action"])[0]
-            max_steps = 128
+            max_steps = tf.constant(128, dtype=tf.int32)
             action_for_hash = tf.cond(
                 max_steps >= traj_len,
                 lambda: traj["action"],
