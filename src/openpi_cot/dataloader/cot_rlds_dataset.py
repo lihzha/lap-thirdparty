@@ -944,10 +944,6 @@ class SingleOXECoTDataset(SingleCoTDataset):
 
     def apply_restructure(self):
         def restructure(traj):
-            # apply a standardization function, if provided
-            if self.standardize_fn is not None:
-                traj = self.standardize_fn(traj)
-
             # extracts images, depth images and proprio from the "observation" dict
             traj_len = tf.shape(traj["action"])[0]
             old_obs = traj["observation"]
@@ -1006,8 +1002,11 @@ class SingleOXECoTDataset(SingleCoTDataset):
 
     def get_traj_identifier(self):
         def _get_traj_identifier(traj):
+            # apply a standardization function, if provided
+            if self.standardize_fn is not None:
+                traj = self.standardize_fn(traj)
             traj_len = tf.shape(traj["action"])[0]
-            max_steps = tf.constant(128, dtype=tf.int32)
+            max_steps = 128
             action_for_hash = tf.cond(
                 max_steps >= traj_len,
                 lambda: traj["action"],
