@@ -7,3 +7,4 @@ most_similar_out/
 .vscode/
 uv.lock
 checkpoints/
+paligemma2-3b-pt-224/
