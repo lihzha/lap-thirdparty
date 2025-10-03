@@ -25,6 +25,13 @@ import safetensors
 import torch
 
 
+def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
+    """Convert PyTorch tensor to numpy array, handling BFloat16 conversion."""
+    if tensor.dtype == torch.bfloat16:
+        return tensor.float().numpy()
+    return tensor.numpy()
+
+
 def load_pytorch_model(pytorch_model_path: str) -> dict[str, torch.Tensor]:
     """Load PyTorch model from safetensors files."""
     model_files = []
@@ -52,19 +59,21 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
     if pytorch_key in state_dict:
         jax_key = "img/embedding/kernel"
         # Convert from (out_channels, in_channels, kernel_height, kernel_width) to (kernel_height, kernel_width, in_channels, out_channels)
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy().transpose(2, 3, 1, 0))
+        # Convert to float32 first to handle BFloat16
+        weight = tensor_to_numpy(state_dict[pytorch_key]).transpose(2, 3, 1, 0)
+        jax_params[jax_key] = jnp.array(weight)
 
     pytorch_key = "vision_tower.vision_model.embeddings.patch_embedding.bias"
     if pytorch_key in state_dict:
         jax_key = "img/embedding/bias"
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy())
+        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
 
     # Positional embeddings
     pytorch_key = "vision_tower.vision_model.embeddings.position_embedding.weight"
     if pytorch_key in state_dict:
         jax_key = "img/pos_embedding"
         # Reshape from (num_positions, hidden_size) to (height, width, hidden_size)
-        pos_emb = state_dict[pytorch_key].numpy()
+        pos_emb = tensor_to_numpy(state_dict[pytorch_key])
         height = int(np.sqrt(pos_emb.shape[0]))
         width = height
         jax_params[jax_key] = jnp.array(pos_emb.reshape(height, width, -1))
@@ -98,91 +107,91 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
         # Layer norms
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm1.weight"
         if pytorch_key in state_dict:
-            layernorm0_scales.append(state_dict[pytorch_key].numpy().T)
+            layernorm0_scales.append(tensor_to_numpy(state_dict[pytorch_key]).T)
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm1.bias"
         if pytorch_key in state_dict:
-            layernorm0_biases.append(state_dict[pytorch_key].numpy())
+            layernorm0_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm2.weight"
         if pytorch_key in state_dict:
-            layernorm1_scales.append(state_dict[pytorch_key].numpy().T)
+            layernorm1_scales.append(tensor_to_numpy(state_dict[pytorch_key]).T)
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm2.bias"
         if pytorch_key in state_dict:
-            layernorm1_biases.append(state_dict[pytorch_key].numpy())
+            layernorm1_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
 
         # MLP layers
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.weight"
         if pytorch_key in state_dict:
-            mlp_dense0_kernels.append(state_dict[pytorch_key].numpy().T)
+            mlp_dense0_kernels.append(tensor_to_numpy(state_dict[pytorch_key]).T)
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.bias"
         if pytorch_key in state_dict:
-            mlp_dense0_biases.append(state_dict[pytorch_key].numpy())
+            mlp_dense0_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.weight"
         if pytorch_key in state_dict:
-            mlp_dense1_kernels.append(state_dict[pytorch_key].numpy().T)
+            mlp_dense1_kernels.append(tensor_to_numpy(state_dict[pytorch_key]).T)
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.bias"
         if pytorch_key in state_dict:
-            mlp_dense1_biases.append(state_dict[pytorch_key].numpy())
+            mlp_dense1_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
 
         # Attention layers
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.weight"
         if pytorch_key in state_dict:
             # Reshape from (hidden_size, num_heads * head_dim) to (num_heads, head_dim, hidden_size)
-            weight = state_dict[pytorch_key].numpy().T
+            weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
             attn_key_kernels.append(weight.reshape(num_heads, head_dim, -1))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.bias"
         if pytorch_key in state_dict:
-            bias = state_dict[pytorch_key].numpy()
+            bias = tensor_to_numpy(state_dict[pytorch_key])
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = bias.shape[0] // num_heads
             attn_key_biases.append(bias.reshape(num_heads, head_dim))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.weight"
         if pytorch_key in state_dict:
-            weight = state_dict[pytorch_key].numpy().T
+            weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
             attn_value_kernels.append(weight.reshape(num_heads, head_dim, -1))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.bias"
         if pytorch_key in state_dict:
-            bias = state_dict[pytorch_key].numpy()
+            bias = tensor_to_numpy(state_dict[pytorch_key])
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = bias.shape[0] // num_heads
             attn_value_biases.append(bias.reshape(num_heads, head_dim))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.weight"
         if pytorch_key in state_dict:
-            weight = state_dict[pytorch_key].numpy().T
+            weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
             attn_query_kernels.append(weight.reshape(num_heads, head_dim, -1))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.bias"
         if pytorch_key in state_dict:
-            bias = state_dict[pytorch_key].numpy()
+            bias = tensor_to_numpy(state_dict[pytorch_key])
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = bias.shape[0] // num_heads
             attn_query_biases.append(bias.reshape(num_heads, head_dim))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.weight"
         if pytorch_key in state_dict:
-            weight = state_dict[pytorch_key].numpy().T
+            weight = tensor_to_numpy(state_dict[pytorch_key]).T
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = weight.shape[0] // num_heads
             attn_out_kernels.append(weight.reshape(num_heads, head_dim, -1))
 
         pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.bias"
         if pytorch_key in state_dict:
-            bias = state_dict[pytorch_key].numpy()
+            bias = tensor_to_numpy(state_dict[pytorch_key])
             num_heads = config["vision_config"]["num_attention_heads"]
             head_dim = bias.shape[0] // num_heads
             attn_out_biases.append(bias.reshape(num_heads, head_dim))
@@ -239,12 +248,12 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
     pytorch_key = "vision_tower.vision_model.post_layernorm.weight"
     if pytorch_key in state_dict:
         jax_key = "img/Transformer/encoder_norm/scale"
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy().T)
+        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]).T)
 
     pytorch_key = "vision_tower.vision_model.post_layernorm.bias"
     if pytorch_key in state_dict:
         jax_key = "img/Transformer/encoder_norm/bias"
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy())
+        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
 
     return jax_params
 
@@ -256,12 +265,12 @@ def convert_multimodal_projector_to_jax(state_dict: dict[str, torch.Tensor]) -> 
     pytorch_key = "multi_modal_projector.linear.weight"
     if pytorch_key in state_dict:
         jax_key = "img/head/kernel"
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy().T)
+        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]).T)
 
     pytorch_key = "multi_modal_projector.linear.bias"
     if pytorch_key in state_dict:
         jax_key = "img/head/bias"
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy())
+        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
 
     return jax_params
 
@@ -276,7 +285,7 @@ def convert_language_model_to_jax(
     pytorch_key = "language_model.model.embed_tokens.weight"
     if pytorch_key in state_dict:
         jax_key = "llm/embedder/input_embedding"
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy())
+        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
 
     num_layers = config["text_config"]["num_hidden_layers"]
     num_heads = config["text_config"]["num_attention_heads"]
@@ -299,27 +308,27 @@ def convert_language_model_to_jax(
         # Attention weights
         pytorch_key = f"language_model.model.layers.{i}.self_attn.q_proj.weight"
         if pytorch_key in state_dict:
-            weight = state_dict[pytorch_key].numpy()
+            weight = tensor_to_numpy(state_dict[pytorch_key])
             # Reshape from (hidden_size, num_heads * head_dim) to (num_heads, head_dim, hidden_size)
             q_weight = weight.T.reshape(num_heads, head_dim, -1)
             q_einsum.append(q_weight)
 
         pytorch_key = f"language_model.model.layers.{i}.self_attn.k_proj.weight"
         if pytorch_key in state_dict:
-            weight = state_dict[pytorch_key].numpy()
+            weight = tensor_to_numpy(state_dict[pytorch_key])
             k_weight = weight.T.reshape(num_heads, head_dim, -1)
             kv_einsum.append([k_weight, np.zeros_like(k_weight)])  # Placeholder for v
 
         pytorch_key = f"language_model.model.layers.{i}.self_attn.v_proj.weight"
         if pytorch_key in state_dict:
-            weight = state_dict[pytorch_key].numpy()
+            weight = tensor_to_numpy(state_dict[pytorch_key])
             v_weight = weight.T.reshape(num_heads, head_dim, -1)
             if i < len(kv_einsum):
                 kv_einsum[i][1] = v_weight
 
         pytorch_key = f"language_model.model.layers.{i}.self_attn.o_proj.weight"
         if pytorch_key in state_dict:
-            weight = state_dict[pytorch_key].numpy()
+            weight = tensor_to_numpy(state_dict[pytorch_key])
             # Reshape from (num_heads * head_dim, hidden_size) to (num_heads, head_dim, hidden_size)
             o_weight = weight.T.reshape(num_heads, head_dim, -1)
             attn_vec_einsum.append(o_weight)
@@ -327,28 +336,28 @@ def convert_language_model_to_jax(
         # MLP weights
         pytorch_key = f"language_model.model.layers.{i}.mlp.gate_proj.weight"
         if pytorch_key in state_dict:
-            gate_weight = state_dict[pytorch_key].numpy().T
+            gate_weight = tensor_to_numpy(state_dict[pytorch_key]).T
             gating_einsum.append([gate_weight, np.zeros_like(gate_weight)])  # Placeholder for up
 
         pytorch_key = f"language_model.model.layers.{i}.mlp.up_proj.weight"
         if pytorch_key in state_dict:
-            up_weight = state_dict[pytorch_key].numpy().T
+            up_weight = tensor_to_numpy(state_dict[pytorch_key]).T
             if i < len(gating_einsum):
                 gating_einsum[i][1] = up_weight
 
         pytorch_key = f"language_model.model.layers.{i}.mlp.down_proj.weight"
         if pytorch_key in state_dict:
-            down_weight = state_dict[pytorch_key].numpy().T
+            down_weight = tensor_to_numpy(state_dict[pytorch_key]).T
             linear_mlp.append(down_weight)
 
         # Layer norms
         pytorch_key = f"language_model.model.layers.{i}.input_layernorm.weight"
         if pytorch_key in state_dict:
-            input_layernorm.append(state_dict[pytorch_key].numpy())
+            input_layernorm.append(tensor_to_numpy(state_dict[pytorch_key]))
 
         pytorch_key = f"language_model.model.layers.{i}.post_attention_layernorm.weight"
         if pytorch_key in state_dict:
-            post_attention_layernorm.append(state_dict[pytorch_key].numpy())
+            post_attention_layernorm.append(tensor_to_numpy(state_dict[pytorch_key]))
 
     # Store parameters in JAX format
     if attn_vec_einsum:
@@ -372,7 +381,7 @@ def convert_language_model_to_jax(
     pytorch_key = "language_model.model.norm.weight"
     if pytorch_key in state_dict:
         jax_key = "llm/final_norm/scale"
-        jax_params[jax_key] = jnp.array(state_dict[pytorch_key].numpy())
+        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
 
     return jax_params
 
