@@ -1231,6 +1231,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "berkeley_gnm_cory_hall": gnm_dataset_transform,
     "berkeley_gnm_sac_son": gnm_dataset_transform,
     # "droid": droid_baseact_transform,
+    "droid": lambda x: x,
     "fmb": fmb_dataset_transform,
     "dobbe": dobbe_dataset_transform,
     "roboset": roboset_dataset_transform,
