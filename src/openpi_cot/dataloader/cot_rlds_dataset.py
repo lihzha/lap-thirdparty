@@ -988,7 +988,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
 
             traj = {
                 "observation": new_obs,
-                "prompt": traj["language_instruction"],
+                "language_instruction": traj["language_instruction"],
                 "actions": tf.cast(traj["action"], tf.float32),
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": traj["trajectory_id"],
@@ -1029,7 +1029,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
             return tf.shape(traj["action"])[0] > 0
 
         def has_any_instruction(traj):
-            instr = traj["prompt"]
+            instr = traj["language_instruction"]
             instr = tf.reshape(instr, [-1])
             instr = tf.strings.strip(instr)
             return tf.reduce_any(tf.strings.length(instr) > 0)
@@ -1051,11 +1051,13 @@ class SingleOXECoTDataset(SingleCoTDataset):
         self.dataset = self.dataset.filter(_non_empty_prompt)
 
     def apply_repack_transforms(self):
-        def _pop_keys(traj):
+        def _pop_and_rename_keys(traj):
             traj.pop("trajectory_id")
+            traj["prompt"] = traj["language_instruction"]
+            traj.pop("language_instruction")
             return traj
 
-        self.dataset = self.dataset.traj_map(_pop_keys, self.num_parallel_calls)
+        self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
 
 
 class OXECoTDatasets:
