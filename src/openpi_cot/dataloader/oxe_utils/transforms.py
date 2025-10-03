@@ -127,7 +127,7 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     Note =>> In original Bridge V2 dataset, the first timestep has an all-zero action, so we remove it!
     """
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     for key in trajectory:
         if key == "traj_metadata":
@@ -208,8 +208,9 @@ def ppgm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
     import tensorflow_graphics.geometry.transformation as tft
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -282,7 +283,7 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["state_eef"] = trajectory["observation"]["robot_obs"][:, :6]
     trajectory["observation"]["state_gripper"] = trajectory["observation"]["robot_obs"][:, 7:8]
@@ -316,7 +317,7 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
     trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
@@ -428,8 +429,9 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
     import tensorflow_graphics.geometry.transformation as tft
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["state"] = trajectory["observation"]["robot_state"][:, 6:14]
     trajectory["observation"]["depth"] = trajectory["observation"].pop("image_with_depth")
@@ -606,8 +608,9 @@ def maniskill_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
     import tensorflow_graphics.geometry.transformation as tft
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["state"] = tf.concat(
         (
@@ -701,8 +704,8 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
-    from openpi_cot.dataloader.oxe_utils.helpers import transform_actions_xyz
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import transform_actions_xyz
 
     trajectory["action"] = tf.concat(
         (
@@ -850,8 +853,8 @@ def dlr_sara_grid_clamp_dataset_transform(trajectory: dict[str, Any]) -> dict[st
 
 
 def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
-    from openpi_cot.dataloader.oxe_utils.helpers import zxy_to_xyz_tf
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import zxy_to_xyz_tf
 
     # invert gripper action, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
@@ -993,7 +996,7 @@ def playfusion_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["eef_state"] = tf.concat(
         (
@@ -1043,7 +1046,7 @@ def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.helpers import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     # every input feature is batched, ie has leading batch dimension
     trajectory["observation"]["proprio"] = tf.concat(
