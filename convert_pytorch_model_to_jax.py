@@ -18,7 +18,6 @@ import pathlib
 from typing import Any
 
 import numpy as np
-import orbax.checkpoint as ocp
 import safetensors.torch
 import torch
 import tyro
@@ -311,32 +310,27 @@ def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: d
 
 
 def save_jax_checkpoint(params: dict[str, np.ndarray], output_path: str):
-    """Save parameters in JAX/Orbax checkpoint format."""
+    """Save parameters as .npz file."""
     os.makedirs(output_path, exist_ok=True)
 
-    # Create nested parameter structure
-    # The structure should match what the JAX model expects
-    nested_params = {}
-
-    # Group parameters by prefix
-    for key, value in params.items():
-        parts = key.split("/")
-        current = nested_params
-        for part in parts[:-1]:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-        current[parts[-1]] = value
-
-    # Wrap in PaliGemma structure as expected by the model
-    checkpoint_params = {"PaliGemma": nested_params}
-
-    # Save using orbax
-    checkpointer = ocp.PyTreeCheckpointer()
-    save_path = os.path.join(output_path, "params")
-    checkpointer.save(save_path, checkpoint_params, force=True)
+    # Save as compressed npz file with all parameters
+    save_path = os.path.join(output_path, "model.npz")
+    np.savez_compressed(save_path, **params)
 
     print(f"Checkpoint saved to {save_path}")
+
+    # Also save parameter metadata as JSON for reference
+    metadata = {
+        "parameter_keys": list(params.keys()),
+        "parameter_shapes": {k: v.shape for k, v in params.items()},
+        "parameter_dtypes": {k: str(v.dtype) for k, v in params.items()},
+    }
+
+    metadata_path = os.path.join(output_path, "metadata.json")
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=2, default=str)
+
+    print(f"Metadata saved to {metadata_path}")
 
 
 def main(
