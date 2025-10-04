@@ -77,8 +77,14 @@ class PiCoT(_pi0.Pi0):
 
     def __init__(self, config: _pi_cot_config.PiCoTConfig, rngs: nnx.Rngs):
         self.pi05 = config.pi05
-        # When action training is enabled, enable diffusion suffix and joint loss
-        self.lang_action_only = not bool(getattr(config, "enable_action_training", False))
+        self.aug_wrist_image = config.aug_wrist_image
+        # Loss/control knobs
+        self.enable_action_training = bool(getattr(config, "enable_action_training", False))
+        self.enable_reasoning_training = bool(getattr(config, "enable_reasoning_training", True))
+        self.language_loss_weight = float(getattr(config, "language_loss_weight", 1.0))
+        self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
+        # Backward compatibility flag used in a few places
+        self.lang_action_only = not self.enable_action_training
         paligemma_config = get_extended_config(config.paligemma_variant)
         action_expert_config = get_extended_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -113,7 +119,6 @@ class PiCoT(_pi0.Pi0):
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
-        self.number_token_weight = float(config.number_token_weight)
 
     @at.typecheck
     def embed_prefix(
@@ -166,12 +171,49 @@ class PiCoT(_pi0.Pi0):
         train: bool = False,
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
-        # TODO: assume reasoning is already tokenized for compute_loss. Need to tokenize reasoning on-the-fly for inference.
-        observation = preprocess_observation(preprocess_rng, observation, train=train)
+        # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
+        observation = preprocess_observation(
+            preprocess_rng, observation, train=train, aug_wrist_image=self.aug_wrist_image
+        )
 
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
 
-        if not self.lang_action_only:
+        total_loss = 0.0
+
+        # Cross-entropy (language/reasoning) loss
+        if self.enable_reasoning_training:
+            attn_mask_lang = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
+            positions_lang = jnp.cumsum(prefix_mask, axis=1) - 1
+            (prefix_out, _), _ = self.PaliGemma.llm(
+                [prefix_tokens, None], mask=attn_mask_lang, positions=positions_lang
+            )
+
+            # Predict next tokens over the reasoning span
+            shift_labels = observation.tokenized_prompt[:, 1:]
+            max_len = observation.tokenized_reasoning_mask.shape[1]
+            shift_tokens = prefix_out[:, -max_len:-1, :]
+            shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
+
+            reasoning_and_pad_mask = jnp.logical_and(
+                observation.tokenized_reasoning_mask[:, 1:],
+                observation.tokenized_prompt_mask[:, 1:],
+            )
+
+            ex_mask = jnp.asarray(observation.example_mask)[..., None]
+            token_mask = reasoning_and_pad_mask * ex_mask
+
+            lang_loss = cross_entropy_loss(
+                shift_logits,
+                shift_labels,
+                mask=token_mask,
+                axis=-1,
+                train=True,
+                per_example=True,
+            )
+            total_loss = total_loss + self.language_loss_weight * lang_loss
+
+        # Diffusion (actions) loss
+        if self.enable_action_training:
             batch_shape = actions.shape[:-2]
             noise = jax.random.normal(noise_rng, actions.shape)
             time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
@@ -180,93 +222,17 @@ class PiCoT(_pi0.Pi0):
             u_t = noise - actions
             suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(observation, x_t, time)
             suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
-            # one big forward pass of prefix + suffix at once. Reasoning is identical to prompt except for ar_mask.
+
             input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
             ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=1)
-        else:
-            suffix_tokens = None
-            input_mask = prefix_mask
-            ar_mask = prefix_ar_mask
-
-        attn_mask = _pi0.make_attn_mask(input_mask, ar_mask)
-        positions = jnp.cumsum(input_mask, axis=1) - 1
-        (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions
-        )
-
-        # TODO: should we jointly compute loss on the prompt?
-        shift_labels = observation.tokenized_prompt[:, 1:]  # shape (B, max_len-1). TODO: contiguous?
-        max_len = observation.tokenized_reasoning_mask.shape[1]
-        shift_tokens = prefix_out[:, -max_len:-1, :]  # shape (B, max_len-1, D)
-        shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")  # shape (B, max_len-1, V)
-        # compute cross-entropy loss on the reasoning tokens
-        reasoning_and_pad_mask = jnp.logical_and(
-            observation.tokenized_reasoning_mask[:, 1:],
-            observation.tokenized_prompt_mask[:, 1:],
-        )
-        # If present, fold example_mask (B,) into the token mask (B, L-1)
-        if getattr(observation, "example_mask", None) is not None:
-            # Broadcast example_mask over the sequence length
-            ex_mask = jnp.asarray(observation.example_mask)[..., None]
-            token_mask = reasoning_and_pad_mask * ex_mask
-        else:
-            token_mask = reasoning_and_pad_mask
-
-        # Optionally apply higher weights to numeric tokens within reasoning
-        if getattr(observation, "tokenized_numeric_mask", None) is not None and self.number_token_weight != 1.0:
-            numeric_shift = observation.tokenized_numeric_mask[:, 1:]
-            weights = token_mask.astype(jnp.float32) * (
-                1.0 + (self.number_token_weight - 1.0) * numeric_shift.astype(jnp.float32)
-            )
-            loss = cross_entropy_loss(
-                shift_logits,
-                shift_labels,
-                mask=weights,
-                axis=-1,
-                train=True,
-                per_example=True,
-            )
-        else:
-            loss = cross_entropy_loss(
-                shift_logits,
-                shift_labels,
-                mask=token_mask,
-                axis=-1,
-                train=True,
-                per_example=True,
-            )
-
-        if not self.lang_action_only:
+            attn_mask = _pi0.make_attn_mask(input_mask, ar_mask)
+            positions = jnp.cumsum(input_mask, axis=1) - 1
+            (_, suffix_out), _ = self.PaliGemma.llm([prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions)
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
-            # Per-example action MSE reduced over (horizon, action_dim)
-            loss = loss + jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
+            action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
+            total_loss = total_loss + self.action_loss_weight * action_loss
 
-        return loss
-
-    # # Optional eval metrics for validation
-    # def compute_eval_metrics(
-    #     self, rng: at.KeyArrayLike, observation: Observation, actions: _model.Actions
-    # ) -> dict[str, at.Array]:
-    #     loss = self.compute_loss(rng, observation, actions, train=False)
-    #     out = {"val_loss": jnp.mean(loss)}
-    #     # Add a simple language perplexity estimate when reasoning tokens present
-    #     if observation.tokenized_reasoning_mask is not None:
-    #         try:
-    #             prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
-    #             max_len = observation.tokenized_reasoning_mask.shape[1]
-    #             positions = jnp.cumsum(prefix_mask, axis=1) - 1
-    #             (prefix_out, _), _ = self.PaliGemma.llm([prefix_tokens, None], mask=make_attn_mask(prefix_mask, prefix_ar_mask), positions=positions)
-    #             shift_tokens = prefix_out[:, -max_len:-1, :]
-    #             logits = self.PaliGemma.llm(shift_tokens, method="decode")
-    #             shift_labels = observation.tokenized_prompt[:, 1:]
-    #             reasoning_and_pad_mask = jnp.logical_and(
-    #                 observation.tokenized_reasoning_mask[:, 1:], observation.tokenized_prompt_mask[:, 1:]
-    #             )
-    #             nll = cross_entropy_loss(logits, shift_labels, mask=reasoning_and_pad_mask, axis=-1, train=False)
-    #             out["val_lang_nll"] = nll
-    #         except Exception:
-    #             pass
-    #     return out
+        return total_loss
 
     @override
     def sample_actions(
@@ -275,19 +241,21 @@ class PiCoT(_pi0.Pi0):
         observation: CoTObservation,
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
+        noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
-        # first fill KV cache with a forward pass of the prefix
-        prefix_tokens, prefix_mask, kv_cache = self._sample_reasoning_tokens(observation)
+        # 1) Sample reasoning tokens (left-padded already) and build KV cache
+        prefix_mask, _, prefix_tokens, _, t, k_cache, v_cache = self._sample_reasoning_tokens(observation)
 
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
-        noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+        if noise is None:
+            noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
         def step(carry):
             x_t, time = carry
-            suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
                 observation, x_t, jnp.broadcast_to(time, batch_size)
             )
             # `suffix_attn_mask` is shape (b, suffix_len, suffix_len) indicating how the suffix tokens can attend to each
@@ -311,7 +279,8 @@ class PiCoT(_pi0.Pi0):
                 [None, suffix_tokens],
                 mask=full_attn_mask,
                 positions=positions,
-                kv_cache=kv_cache,
+                kv_cache=(k_cache, v_cache),
+                adarms_cond=[None, adarms_cond],
             )
             assert prefix_out is None
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
@@ -329,7 +298,7 @@ class PiCoT(_pi0.Pi0):
     ### left padding
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
-        observation = preprocess_observation(None, observation, train=False)
+        observation = preprocess_observation(None, observation, train=False, aug_wrist_image=self.aug_wrist_image)
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation)  # (B,Tp,D) + (B,Tp)
         b, tp, d = *p_tokens.shape[:2], p_tokens.shape[-1]
         gen_len = observation.tokenized_prompt.shape[1]

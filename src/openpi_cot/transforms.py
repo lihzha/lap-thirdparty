@@ -11,7 +11,7 @@ from openpi.transforms import apply_tree
 from openpi.transforms import flatten_dict
 from openpi.transforms import unflatten_dict
 
-from openpi_cot.dataloader.oxe_utils.data_utils import NormalizationType
+from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 
 # Optional TF import: used to ensure ops run inside tf.data pipelines
@@ -70,14 +70,13 @@ class TokenizePromptAndReasoning(DataTransformFn):
         is_idle = _is_idle_language_action(language_actions)
         example_mask = not is_idle
 
-        tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
+        tokens, pad_mask, reasoning_mask, _ = self.tokenizer.tokenize_cot(prompt, language_actions, state)
 
         return {
             **data,
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_reasoning_mask": reasoning_mask,
-            "tokenized_numeric_mask": numeric_mask,
             # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
             "example_mask": np.asarray(example_mask, dtype=bool),
         }

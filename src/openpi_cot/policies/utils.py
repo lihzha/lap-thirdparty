@@ -1,9 +1,64 @@
 import re
 
+import einops
 import numpy as np
 
 AXIS_PERM = np.array([0, 2, 1])  # X -> dx (right/left), Z -> dy (forward/backward), Y -> dz (down/up)
 AXIS_SIGN = np.array([1, 1, 1])  # start with no flips
+
+
+def maybe_parse_serialized_tensor_to_ndarray(b) -> np.ndarray | None:
+    try:
+        if not isinstance(b, (bytes, np.bytes_)):
+            return None
+        import tensorflow as tf  # Lazy import to avoid TF dependency at module import time
+
+        t = tf.io.parse_tensor(b, out_type=tf.float32)
+        return t.numpy()
+    except Exception:
+        return None
+
+
+def parse_image(image) -> np.ndarray:
+    if image is None:
+        return None
+    image = np.asarray(image)
+    if np.issubdtype(image.dtype, np.floating):
+        image = (255 * image).astype(np.uint8)
+    if image.shape[0] == 3:
+        image = einops.rearrange(image, "c h w -> h w c")
+    return image
+
+
+def _safe_decode_bytes(value: bytes | np.bytes_) -> str:
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("utf-8", errors="replace")
+
+
+def to_str_list(x):
+    if isinstance(x, (list, tuple)):
+        seq = x
+    elif isinstance(x, np.ndarray):
+        seq = x.tolist()
+    else:
+        return None
+    out = []
+    for item in seq:
+        if isinstance(item, (bytes, np.bytes_)):
+            out.append(_safe_decode_bytes(item))
+        else:
+            out.append(str(item))
+    return out
+
+
+def is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
+    if np.all(img == 0):
+        if mask == np.False_:
+            return False
+        return True
+    return np.all(img == 0) or np.all(img == 255)
 
 
 def _format_numeric(val: float, sum_decimal: str) -> str:

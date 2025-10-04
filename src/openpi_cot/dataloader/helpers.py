@@ -1,3 +1,4 @@
+from enum import Enum
 from enum import IntEnum
 
 import numpy as np
@@ -23,6 +24,15 @@ class ActionEncoding(IntEnum):
     JOINT_POS_BIMANUAL = 3  # Joint Delta Position (2 x [ Joint Delta Position (6) + Gripper Open/Close (1) ])
     EEF_R6 = 4  # EEF Delta XYZ (3) + R6 (6) + Gripper Open/Close (1)
     ABS_EEF_POS = 5  # EEF Absolute XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1)
+
+
+# Defines supported normalization schemes for action and proprioceptive state.
+class NormalizationType(str, Enum):
+    # fmt: off
+    NORMAL = "normal"               # Normalize to Mean = 0, Stdev = 1
+    BOUNDS = "bounds"               # Normalize to Interval = [-1, 1]
+    BOUNDS_Q99 = "bounds_q99"       # Normalize [quantile_01, ..., quantile_99] --> [-1, ..., 1]
+    # fmt: on
 
 
 def euler_xyz_to_rot(rx, ry, rz):

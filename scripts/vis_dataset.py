@@ -406,9 +406,7 @@ def main(config: _config.TrainConfig):
         effective_fsdp_devices = config.fsdp_devices
         assert global_devices % effective_fsdp_devices == 0
 
-    logging.info(
-        f"Summation steps: {config.data.summation_steps}, left_pad: {config.data.left_pad}, sum_decimal: {config.data.sum_decimal}, ema_decay: {config.ema_decay}"
-    )
+    logging.info(f"sum_decimal: {config.data.sum_decimal}, ema_decay: {config.ema_decay}")
     logging.info(f"Running on: {platform.node()}")
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))

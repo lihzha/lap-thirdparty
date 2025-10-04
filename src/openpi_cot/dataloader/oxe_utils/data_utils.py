@@ -5,12 +5,26 @@ Additional RLDS-specific data utilities.
 """
 
 from collections.abc import Callable
-from enum import Enum
+from copy import deepcopy
+import logging
+from pathlib import Path
 from typing import Any
 
 import dlimp as dl
 import numpy as np
 import tensorflow as tf
+
+from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.oxe_utils.configs import OXE_DATASET_CONFIGS
+from openpi_cot.dataloader.oxe_utils.configs import ActionEncoding
+from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
+
+# Fixed frame transform: x'=-y, y'=-x, z'=-z
+_C = tf.constant([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=tf.float32)
+
+
+def _tf_pi(dtype):
+    return tf.constant(3.141592653589793, dtype=dtype)
 
 
 def tree_map(fn: Callable, tree: dict) -> dict:
@@ -34,15 +48,6 @@ def to_padding(tensor: tf.Tensor) -> tf.Tensor:
     if tensor.dtype == tf.string:
         return tf.fill(tf.shape(tensor), "")
     raise ValueError(f"Cannot generate padding for tensor of type {tensor.dtype}.")
-
-
-# Defines supported normalization schemes for action and proprioceptive state.
-class NormalizationType(str, Enum):
-    # fmt: off
-    NORMAL = "normal"               # Normalize to Mean = 0, Stdev = 1
-    BOUNDS = "bounds"               # Normalize to Interval = [-1, 1]
-    BOUNDS_Q99 = "bounds_q99"       # Normalize [quantile_01, ..., quantile_99] --> [-1, ..., 1]
-    # fmt: on
 
 
 # === State / Action Processing Primitives ===
@@ -187,75 +192,6 @@ def normalize_action_and_proprio(
     # raise ValueError(f"Unknown Normalization Type {normalization_type}")
 
 
-def binarize_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
-    """
-    Converts gripper actions from continuous to binary values (0 and 1).
-
-    We exploit that fact that most of the time, the gripper is fully open (near 1.0) or fully closed (near 0.0). As it
-    transitions between the two, it sometimes passes through a few intermediate values. We relabel those intermediate
-    values based on the state that is reached _after_ those intermediate values.
-
-    In the edge case that the trajectory ends with an intermediate value, we give up on binarizing and relabel that
-    chunk of intermediate values as the last action in the trajectory.
-
-    The `scan_fn` implements the following logic:
-        new_actions = np.empty_like(actions)
-        carry = actions[-1]
-        for i in reversed(range(actions.shape[0])):
-            if in_between_mask[i]:
-                carry = carry
-            else:
-                carry = float(open_mask[i])
-            new_actions[i] = carry
-    """
-    open_mask, closed_mask = actions > 0.95, actions < 0.05
-    in_between_mask = tf.logical_not(tf.logical_or(open_mask, closed_mask))
-    is_open_float = tf.cast(open_mask, tf.float32)
-
-    def scan_fn(carry, i):
-        return tf.cond(in_between_mask[i], lambda: tf.cast(carry, tf.float32), lambda: is_open_float[i])
-
-    return tf.scan(scan_fn, tf.range(tf.shape(actions)[0]), actions[-1], reverse=True)
-
-
-def invert_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
-    return 1 - actions
-
-
-def rel2abs_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
-    """
-    Converts relative gripper actions (+1 for closing, -1 for opening) to absolute actions (0 = closed; 1 = open).
-
-    Assumes that the first relative gripper is not redundant (i.e. close when already closed)!
-    """
-    # Note =>> -1 for closing, 1 for opening, 0 for no change
-    opening_mask, closing_mask = actions < -0.1, actions > 0.1
-    thresholded_actions = tf.where(opening_mask, 1, tf.where(closing_mask, -1, 0))
-
-    def scan_fn(carry, i):
-        return tf.cond(thresholded_actions[i] == 0, lambda: carry, lambda: thresholded_actions[i])
-
-    # If no relative grasp, assumes open for whole trajectory
-    start = -1 * thresholded_actions[tf.argmax(thresholded_actions != 0, axis=0)]
-    start = tf.cond(start == 0, lambda: 1, lambda: start)
-
-    # Note =>> -1 for closed, 1 for open
-    new_actions = tf.scan(scan_fn, tf.range(tf.shape(actions)[0]), start)
-    new_actions = tf.cast(new_actions, tf.float32) / 2 + 0.5
-
-    return new_actions
-
-
-# === Bridge-V2 =>> Dataset-Specific Transform ===
-def relabel_bridge_actions(traj: dict[str, Any]) -> dict[str, Any]:
-    """Relabels actions to use reached proprioceptive state; discards last timestep (no-action)."""
-    movement_actions = traj["observation"]["state"][1:, :6] - traj["observation"]["state"][:-1, :6]
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], traj)
-    traj_truncated["action"] = tf.concat([movement_actions, traj["action"][:-1, -1:]], axis=1)
-
-    return traj_truncated
-
-
 # === RLDS Dataset Initialization Utilities ===
 def pprint_data_mixture(dataset_names: list[str], dataset_weights: list[int]) -> None:
     print("\n######################################################################################")
@@ -301,3 +237,287 @@ def allocate_threads(n: int | None, weights: np.ndarray):
         allocation[i] += 1
 
     return allocation
+
+
+def load_dataset_kwargs(
+    dataset_name: str,
+    rlds_data_dir: Path,
+    load_camera_views: tuple[str] = ("primary", "wrist"),
+) -> dict[str, Any]:
+    """Generates config (kwargs) for given dataset from Open-X Embodiment."""
+    dataset_kwargs = deepcopy(OXE_DATASET_CONFIGS[dataset_name])
+    if dataset_kwargs["action_encoding"] not in [ActionEncoding.EEF_POS, ActionEncoding.EEF_R6]:
+        raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
+
+    language_annotations = dataset_kwargs.get("language_annotations")
+    if not language_annotations or language_annotations.lower() == "none":
+        raise ValueError(f"Cannot load `{dataset_name}`; language annotations required!")
+
+    robot_morphology = dataset_kwargs.get("robot_morphology", "")
+    if robot_morphology.lower() == "bi-manual":
+        raise ValueError(f"Cannot load `{dataset_name}`; bi-manual datasets are not supported!")
+
+    has_suboptimal = dataset_kwargs.get("has_suboptimal")
+    if isinstance(has_suboptimal, str):
+        has_suboptimal = has_suboptimal.lower() == "yes"
+    if has_suboptimal:
+        logging.warning(f"Cannot load `{dataset_name}`; suboptimal datasets are not supported!")
+
+    if (
+        dataset_kwargs["action_encoding"] is ActionEncoding.EEF_POS
+        or dataset_kwargs["action_encoding"] is ActionEncoding.EEF_R6
+    ):
+        pass
+    else:
+        raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
+
+    # Adjust Loaded Camera Views
+    if len(missing_keys := (set(load_camera_views) - set(dataset_kwargs["image_obs_keys"]))) > 0:
+        raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
+
+    # Filter
+    dataset_kwargs["image_obs_keys"] = {
+        k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in load_camera_views
+    }
+    for k, v in dataset_kwargs["image_obs_keys"].items():
+        if k == "primary":
+            assert v is not None, f"primary image is required for {dataset_name}"
+
+    # Specify Standardization Transform
+    # Use unified registry (superset), still supports all OXE datasets
+    dataset_kwargs["standardize_fn"] = OXE_STANDARDIZATION_TRANSFORMS[dataset_name]
+
+    # Add any aux arguments
+    if "aux_kwargs" in dataset_kwargs:
+        dataset_kwargs.update(dataset_kwargs.pop("aux_kwargs"))
+
+    return {"name": dataset_name, "data_dir": str(rlds_data_dir), **dataset_kwargs}
+
+
+@tf.function
+def _rot_x(a):
+    ca, sa = tf.cos(a), tf.sin(a)
+    z = tf.zeros_like(a)
+    o = tf.ones_like(a)
+    return tf.stack(
+        [
+            tf.stack([o, z, z], axis=-1),
+            tf.stack([z, ca, -sa], axis=-1),
+            tf.stack([z, sa, ca], axis=-1),
+        ],
+        axis=-2,
+    )
+
+
+@tf.function
+def _rot_y(a):
+    ca, sa = tf.cos(a), tf.sin(a)
+    z = tf.zeros_like(a)
+    o = tf.ones_like(a)
+    return tf.stack(
+        [
+            tf.stack([ca, z, sa], axis=-1),
+            tf.stack([z, o, z], axis=-1),
+            tf.stack([-sa, z, ca], axis=-1),
+        ],
+        axis=-2,
+    )
+
+
+@tf.function
+def _rot_z(a):
+    ca, sa = tf.cos(a), tf.sin(a)
+    z = tf.zeros_like(a)
+    o = tf.ones_like(a)
+    return tf.stack(
+        [
+            tf.stack([ca, -sa, z], axis=-1),
+            tf.stack([sa, ca, z], axis=-1),
+            tf.stack([z, z, o], axis=-1),
+        ],
+        axis=-2,
+    )
+
+
+@tf.function
+def _R_from_euler_xyz(angles):
+    """Intrinsic XYZ: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)."""
+    angles = tf.convert_to_tensor(angles)
+    # Ensure last dim is 3
+    roll = angles[..., 0]
+    pitch = angles[..., 1]
+    yaw = angles[..., 2]
+    return tf.linalg.matmul(tf.linalg.matmul(_rot_z(yaw), _rot_y(pitch)), _rot_x(roll))
+
+
+@tf.function
+def _euler_xyz_from_R(R, eps=1e-6):
+    """
+    Extract intrinsic XYZ (roll, pitch, yaw) from rotation matrix R.
+    Handles gimbal lock via elementwise tf.where (graph-safe).
+    """
+    R = tf.convert_to_tensor(R)
+    dtype = R.dtype
+    eps_t = tf.cast(eps, dtype)
+    zero = tf.zeros([], dtype)
+    one = tf.ones([], dtype)
+
+    r00 = R[..., 0, 0]
+    r01 = R[..., 0, 1]
+    r10 = R[..., 1, 0]
+    r11 = R[..., 1, 1]
+    r20 = R[..., 2, 0]
+    r21 = R[..., 2, 1]
+    r22 = R[..., 2, 2]
+
+    # Regular case: |r20| < 1 - eps  (i.e., |cos(pitch)| != 0)
+    pitch_reg = tf.asin(tf.clip_by_value(-r20, -one, one))
+    roll_reg = tf.math.atan2(r21, r22)
+    yaw_reg = tf.math.atan2(r10, r00)
+
+    # Gimbal lock: cos(pitch) ~ 0  -> pitch = ±pi/2
+    pitch_gl = (_tf_pi(dtype) / tf.cast(2.0, dtype)) * tf.sign(-r20)
+    roll_gl = tf.zeros_like(pitch_gl)  # set roll = 0
+    # Distinguish +pi/2 vs -pi/2 using sign of r20 (recall r20 = -sin(pitch))
+    yaw_pos = tf.math.atan2(-r01, r11)  # for +pi/2 (r20 < 0)
+    yaw_neg = tf.math.atan2(r01, r11)  # for -pi/2 (r20 > 0)
+    yaw_gl = tf.where(tf.less(r20, zero), yaw_pos, yaw_neg)
+
+    # Blend by condition
+    cond = tf.less(tf.abs(r20), (one - eps_t))
+    roll = tf.where(cond, roll_reg, roll_gl)
+    pitch = tf.where(cond, pitch_reg, pitch_gl)
+    yaw = tf.where(cond, yaw_reg, yaw_gl)
+    return tf.stack([roll, pitch, yaw], axis=-1)
+
+
+@tf.function
+def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
+    """
+    Convert intrinsic Z-X-Y Euler angles to intrinsic X-Y-Z Euler angles.
+    angles: tensor of shape (..., 3) -> (az, ax, ay) in radians by default.
+    returns: tensor of shape (..., 3) -> (roll[x], pitch[y], yaw[z]) in same unit.
+    """
+    angles = tf.convert_to_tensor(angles, dtype=tf.float32)
+    if degrees:
+        angles = tf.math.multiply(angles, _tf_pi(tf.float32) / 180.0)
+
+    az = angles[..., 0]  # rotate about z
+    ax = angles[..., 1]  # then about x
+    ay = angles[..., 2]  # then about y
+
+    # Build rotation for intrinsic "zxy": R = Rz(az) @ Rx(ax) @ Ry(ay)
+    Rz = _rot_z(az)
+    Rx = _rot_x(ax)
+    Ry = _rot_y(ay)
+    R = tf.linalg.matmul(tf.linalg.matmul(Rz, Rx), Ry)
+
+    # Elements we need
+    r20 = R[..., 2, 0]
+    r21 = R[..., 2, 1]
+    r22 = R[..., 2, 2]
+    r10 = R[..., 1, 0]
+    r00 = R[..., 0, 0]
+    r01 = R[..., 0, 1]
+    r11 = R[..., 1, 1]
+
+    # Regular branch (no gimbal lock): |r20| < 1 - eps
+    cond = tf.less(tf.abs(r20), 1.0 - tf.convert_to_tensor(eps, R.dtype))
+    theta_reg = tf.asin(tf.clip_by_value(-r20, -1.0, 1.0))  # pitch (y)
+    phi_reg = tf.atan2(r21, r22)  # roll  (x)
+    psi_reg = tf.atan2(r10, r00)  # yaw   (z)
+
+    # Gimbal lock branch: |cos(theta)| ~ 0  -> theta = ±pi/2, set roll=0, solve yaw
+    theta_gl = (_tf_pi(tf.float32) / 2) * tf.sign(-r20)
+    phi_gl = tf.zeros_like(theta_gl)
+    # If r20 < 0 (theta ≈ +pi/2):  psi = atan2(-r01, r11)
+    # Else (theta ≈ -pi/2):       psi = atan2( r01, r11)
+    psi_gl = tf.where(r20 < 0.0, tf.atan2(-r01, r11), tf.atan2(r01, r11))
+
+    # Select per element
+    phi = tf.where(cond, phi_reg, phi_gl)
+    theta = tf.where(cond, theta_reg, theta_gl)
+    psi = tf.where(cond, psi_reg, psi_gl)
+
+    out = tf.stack([phi, theta, psi], axis=-1)
+    if degrees:
+        out = tf.math.multiply(out, 180.0 / _tf_pi(tf.float32))
+    return out
+
+
+@tf.function
+def euler_diff(angles1, angles2, order="xyz", degrees=False):
+    """
+    Compute relative Euler angle difference: angles_rel such that
+        R(angles2) * R(angles_rel) = R(angles1)
+
+    Args:
+        angles1: (..., 3) tensor of Euler angles [a1, a2, a3]
+        angles2: (..., 3) tensor of Euler angles [a1, a2, a3]
+        order:   rotation order string, e.g. "xyz" (intrinsic)
+        degrees: whether input/output are in degrees
+    Returns:
+        (..., 3) tensor of relative Euler angles (same order)
+    """
+    if degrees:
+        angles1 = tf.math.multiply(angles1, _tf_pi(tf.float32) / 180.0)
+        angles2 = tf.math.multiply(angles2, _tf_pi(tf.float32) / 180.0)
+
+    # map axis char -> rotation fn
+    rot_map = {"x": _rot_x, "y": _rot_y, "z": _rot_z}
+
+    def build_R(angles):
+        R = None
+        for i, ax in enumerate(order):
+            Ri = rot_map[ax](angles[..., i])
+            R = Ri if R is None else tf.linalg.matmul(R, Ri)
+        return R
+
+    R1 = build_R(angles1)
+    R2 = build_R(angles2)
+
+    Rrel = tf.linalg.matmul(R2, R1, transpose_a=True)  # Rrel = R2^T * R1
+
+    # Extract back Euler from Rrel, here only for "xyz" (extendable)
+    r20 = Rrel[..., 2, 0]
+    r21 = Rrel[..., 2, 1]
+    r22 = Rrel[..., 2, 2]
+    r10 = Rrel[..., 1, 0]
+    r00 = Rrel[..., 0, 0]
+
+    theta = tf.asin(-r20)
+    phi = tf.atan2(r21, r22)
+    psi = tf.atan2(r10, r00)
+
+    out = tf.stack([phi, theta, psi], axis=-1)
+    if degrees:
+        out = tf.math.multiply(out, 180.0 / _tf_pi(tf.float32))
+    return out
+
+
+@tf.function
+def transform_actions_xyz(movement_actions):
+    """
+    movement_actions: (..., 6) where [:3] = translation deltas (xyz),
+                      [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
+    Returns transformed actions under x'=-y, y'=-x, z'=-z.
+    """
+    movement_actions = tf.convert_to_tensor(movement_actions)
+    dtype = movement_actions.dtype
+
+    # Ensure _C matches input dtype
+    C = tf.cast(_C, dtype)
+
+    # translations: t' = C t
+    t = movement_actions[..., :3]
+    t_prime = tf.linalg.matvec(C, t)
+
+    # rotations: R' = C R C^T, then back to Euler XYZ
+    e = movement_actions[..., 3:6]
+    R = _R_from_euler_xyz(e)
+    # _C is symmetric here, but keep transpose for clarity / generality
+    CT = tf.linalg.matrix_transpose(C)
+    R_prime = tf.linalg.matmul(tf.linalg.matmul(C, R), CT)
+    e_prime = _euler_xyz_from_R(R_prime)
+
+    return tf.concat([t_prime, e_prime], axis=-1)

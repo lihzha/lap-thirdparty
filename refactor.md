@@ -1,0 +1,13 @@
+## pi_cot.py
+1. Learn from third_party/openpi/src/openpi/models/pi0_fast.py: rewrite our sample_reasoning_tokens to be same as pi0_fast's sample_actions, but should work effectively the same. Note that tokens for our model are already left padded. Optimize our sample_actions so that it can first sample tokens, then generate actions with diffusion, so it's a combination of pi0_fast's sample_actions and pi0's sample actions.
+
+2. Clean up compute_loss function to make it modular and consist of two types of loss: cross entropy loss and diffusion loss on actions. Users should be able to easily only use one loss for training, or use both losses, through config.
+
+
+## cot_rlds_dataset.py
+The goal is to combine Droid and OXE dataset classes. Finally, there should only be three classes: (1) SingleCoTRldsDataset, where you can specify "DROID" or any name of the OXE dataset (e.g., "fmb") and only loading that Dataset. This dataset class should also provide an option "raw" or "not raw". If "raw", then it will skip the batching, shuffling, frame map etc. operations. (2) CombinedCoTRldsDataset, which loads the data mixture of OXE specified in mixtures.py and also DROID. This class will behave similarly as it is now. (3) DroidCoTRldsDataset, this one only serves as an interface for back-compatibility, and it can simply be calling SingleCoTRldsDataset while passing "DROID" as the dataset name argument.
+
+To achieve this, you need to do these things step by step: (1) Write a readme.md to clarify what is the final dataset class structure looks like, and how you are going to do the refactoring. (2) Create a droid_utils.py to put all droid-specific functions to it. Note you should keep things modular you may need to rewrite several functions to optimize for clarity and structure. (3) Modify the existing OXE dataset loading process. To do this, you should first eliminate materialize.py, and make data kwargs loading process happening in SingleCoTRldsDataset. You should also make the data kwargs loading interface between DROID and other OXE datasets similar, e.g. from config users can pass in a dataset's name, and if it belongs to OXE then it calls a single function to get the config. Rename the configs and eliminate unused configs for OXE. (5) Unify DROID's filter/map functions with OXE's, but not changing the functionalities. To achive this, you can either define these functions as standarization and get them through configs
+
+
+TODO: example mask usage. make drop_gripper_oob a separate filter

@@ -65,6 +65,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     #     ("roboturk", 2.0),
     # ],
     "oxe_pi_magic_soup": [
+        ("droid", 0.5),
         # ("bc_z", 0.5),
         ("fractal20220817_data", 1.0),
         # # ("kuka", 0.1),
