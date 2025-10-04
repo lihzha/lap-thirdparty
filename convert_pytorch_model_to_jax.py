@@ -242,29 +242,38 @@ def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: d
     for i in range(num_layers):
         prefix = f"language_model.model.layers.{i}"
 
-        # Attention Q projection: [num_heads * head_dim, hidden_size] -> [num_heads, hidden_size, head_dim]
+        # Attention Q projection
+        # PyTorch shape: [num_heads * head_dim, hidden_size]
+        # We need to find the actual output dimension from the weight
         q_weight = to_numpy(state_dict[f"{prefix}.self_attn.q_proj.weight"])
-        q_reshaped = q_weight.reshape(num_heads, head_dim, hidden_size).transpose(1, 0, 2)
+        q_out_dim, q_in_dim = q_weight.shape
+        actual_head_dim = q_out_dim // num_heads
+
+        # Reshape: [num_heads * head_dim, hidden_size] -> [num_heads, head_dim, hidden_size] -> [hidden_size, num_heads, head_dim]
+        q_reshaped = q_weight.reshape(num_heads, actual_head_dim, hidden_size).transpose(2, 0, 1)
         q_einsum_list.append(q_reshaped)
 
         # K and V projections for multi-query/grouped-query attention
-        k_weight = to_numpy(state_dict[f"{prefix}.self_attn.k_proj.weight"].T)
-        v_weight = to_numpy(state_dict[f"{prefix}.self_attn.v_proj.weight"].T)
+        k_weight = to_numpy(state_dict[f"{prefix}.self_attn.k_proj.weight"])
+        v_weight = to_numpy(state_dict[f"{prefix}.self_attn.v_proj.weight"])
 
-        # Stack K and V: shape should be [2, num_kv_heads, head_dim, hidden_size]
-        kv_stacked = np.stack(
-            [
-                k_weight.reshape(hidden_size, num_kv_heads, head_dim).transpose(1, 2, 0),
-                v_weight.reshape(hidden_size, num_kv_heads, head_dim).transpose(1, 2, 0),
-            ],
-            axis=0,
-        )
+        # Get actual dimensions from K/V weights
+        kv_out_dim = k_weight.shape[0]
+        kv_head_dim = kv_out_dim // num_kv_heads
+
+        # Transpose and reshape K and V
+        # PyTorch: [num_kv_heads * head_dim, hidden_size] -> [hidden_size, num_kv_heads, head_dim]
+        k_reshaped = k_weight.T.reshape(hidden_size, num_kv_heads, kv_head_dim).transpose(1, 2, 0)
+        v_reshaped = v_weight.T.reshape(hidden_size, num_kv_heads, kv_head_dim).transpose(1, 2, 0)
+
+        # Stack K and V: [2, num_kv_heads, head_dim, hidden_size]
+        kv_stacked = np.stack([k_reshaped, v_reshaped], axis=0)
         # Add extra dimension to match expected format
         kv_einsum_list.append(kv_stacked[:, :, None, :, :])
 
         # O projection: [hidden_size, num_heads * head_dim] -> [num_heads, head_dim, hidden_size]
         o_weight = to_numpy(state_dict[f"{prefix}.self_attn.o_proj.weight"])
-        o_reshaped = o_weight.T.reshape(num_heads, head_dim, hidden_size)
+        o_reshaped = o_weight.T.reshape(num_heads, actual_head_dim, hidden_size)
         attn_vec_einsum_list.append(o_reshaped)
 
         # MLP gate and up projections
