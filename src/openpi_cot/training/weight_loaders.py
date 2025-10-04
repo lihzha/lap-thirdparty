@@ -132,7 +132,7 @@ class WeightLoaderChoice(WeightLoader):
     """
 
     # Which loader to use.
-    kind: Literal["none", "checkpoint", "paligemma", "paligemma2_3b"] = "paligemma"
+    kind: Literal["none", "checkpoint", "paligemma", "paligemma2"] = "paligemma"
     # Only used when kind == "checkpoint".
     params_path: str | None = None
 
