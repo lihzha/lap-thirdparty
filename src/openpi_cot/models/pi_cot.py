@@ -12,7 +12,9 @@ from openpi.shared import array_typing as at
 from typing_extensions import override
 
 from openpi_cot.models.adapters.gemma_adapter import ModuleWithDecode
-from openpi_cot.models.adapters.gemma_adapter import get_extended_config
+from openpi_cot.models.adapters.gemma_adapter import Gemma2ModuleWithDecode
+from openpi_cot.models.gemma2 import get_config as get_gemma2_config
+from openpi.models.gemma import get_config as get_gemma_config
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import preprocess_observation
 import openpi_cot.models.pi_cot_config as _pi_cot_config
@@ -85,11 +87,19 @@ class PiCoT(_pi0.Pi0):
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
         # Backward compatibility flag used in a few places
         self.lang_action_only = not self.enable_action_training
-        paligemma_config = get_extended_config(config.paligemma_variant)
-        action_expert_config = get_extended_config(config.action_expert_variant)
+        if "gemma2" in config.paligemma_variant:
+            assert "gemma2" in config.action_expert_variant, "gemma2 must be used for both LLM and action expert"
+            paligemma_config = get_gemma2_config(config.paligemma_variant)
+            action_expert_config = get_gemma2_config(config.action_expert_variant)
+            module = Gemma2ModuleWithDecode
+        else:
+            paligemma_config = get_gemma_config(config.paligemma_variant)
+            action_expert_config = get_gemma_config(config.action_expert_variant)
+            module = ModuleWithDecode
+        
         # TODO: rewrite gemma in NNX. For now, use bridge.
         llm = nnx_bridge.ToNNX(
-            ModuleWithDecode(
+            module(
                 configs=[paligemma_config, action_expert_config],
                 embed_dtype=config.dtype,
                 adarms=config.pi05,

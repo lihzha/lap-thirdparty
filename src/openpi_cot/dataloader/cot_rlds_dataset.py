@@ -250,6 +250,7 @@ class SingleCoTDataset:
         shuffle: bool = False,
         batch_size: int = 1,
         max_samples: int | None = None,
+        skip_normalization: bool = False,
     ):
         self.config = config
         self.seed = seed
@@ -260,6 +261,7 @@ class SingleCoTDataset:
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.use_wrist_image = bool(config.use_wrist_image)
         self.standalone = standalone
+        self.skip_normalization = skip_normalization
         dataset_kwargs = load_dataset_kwargs(dataset_name, data_dir, load_camera_views=("primary", "wrist"))
 
         logging.info(f"Dataset kwargs: {dataset_kwargs}")
@@ -336,6 +338,8 @@ class SingleCoTDataset:
             )
 
     def build_dataset_builder(self, ds_name, data_dir):
+        if ds_name == "fmb":
+            ds_name = "fmb:0.0.1"
         return tfds.builder(ds_name, data_dir=data_dir)
 
     def build_dataset(self, builder):
@@ -385,15 +389,16 @@ class SingleCoTDataset:
         - drop_goal_or_instruction
         - subsample_length
         """
-        self.dataset = self.dataset.traj_map(
-            NormalizeActionAndProprio(
-                norm_stats=self.dataset_statistics,
-                normalization_type=self.action_proprio_normalization_type,
-                action_key=action_key,
-                state_key=state_key,
-            ),
-            self.num_parallel_calls,
-        )
+        if not self.skip_normalization:
+            self.dataset = self.dataset.traj_map(
+                NormalizeActionAndProprio(
+                    norm_stats=self.dataset_statistics,
+                    normalization_type=self.action_proprio_normalization_type,
+                    action_key=action_key,
+                    state_key=state_key,
+                ),
+                self.num_parallel_calls,
+            )
 
         def pad_action_state(traj):
             # pad actions to action_dim
@@ -856,6 +861,7 @@ class DroidCoTDataset(SingleCoTDataset):
         batch_size: int = 1,
         max_samples: int | None = None,
         train_dataset=None,
+        skip_normalization: bool = False,
     ):
         self.use_json_actions = config.use_json_actions
 
@@ -899,6 +905,7 @@ class DroidCoTDataset(SingleCoTDataset):
             shuffle=shuffle,
             batch_size=batch_size,
             max_samples=max_samples,
+            skip_normalization=skip_normalization,
         )
 
 
@@ -920,6 +927,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
         shuffle: bool = False,
         batch_size: int = 1,
         max_samples: int | None = None,
+        skip_normalization: bool = False,
     ):
         self.use_json_actions = False
 
@@ -938,6 +946,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
             shuffle=shuffle,
             batch_size=batch_size,
             max_samples=max_samples,
+            skip_normalization=skip_normalization,
         )
 
     def apply_restructure(self):
@@ -1076,6 +1085,7 @@ class OXECoTDatasets:
         balance_weights: bool = True,  # noqa: FBT001, FBT002
         train_dataset=None,
         standalone=True,
+        use_global_normalization: bool = False,
     ):
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
@@ -1085,6 +1095,12 @@ class OXECoTDatasets:
         sample_weights = [l[1] for l in mixture_spec]
 
         want_val = split == "val"
+
+        # When using global normalization, assert normalization type is NORMAL
+        if use_global_normalization:
+            assert action_proprio_normalization_type == NormalizationType.NORMAL, (
+                "Global normalization only supports NORMAL normalization type"
+            )
 
         total_threads = len(os.sched_getaffinity(0))
         total_read_threads = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
@@ -1117,6 +1133,7 @@ class OXECoTDatasets:
                 num_parallel_reads=threads,
                 num_parallel_calls=threads,
                 standalone=False,
+                skip_normalization=use_global_normalization,
             )
             if dataset_name == "droid":
                 ds = DroidCoTDataset(
@@ -1155,6 +1172,129 @@ class OXECoTDatasets:
         pprint_data_mixture(dataset_names, sample_weights)
 
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
+
+        # Apply global normalization if requested
+        if use_global_normalization:
+            global_stats_dir = os.path.join(data_dir, "global_normalization")
+            global_stats = self._compute_or_load_global_stats(
+                datasets=datasets,
+                dataset_names=dataset_names,
+                all_dataset_statistics=all_dataset_statistics,
+                save_dir=global_stats_dir,
+            )
+            logging.info("Applying global normalization with stats: %s", global_stats)
+
+            # Apply normalization at the frame level (after interleaving)
+            def apply_global_norm(frame):
+                return NormalizeActionAndProprio(
+                    norm_stats=global_stats,
+                    normalization_type=action_proprio_normalization_type,
+                    action_key="actions",
+                    state_key="state",
+                )(frame)
+
+            self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
+            self.global_statistics = global_stats
+        else:
+            self.global_statistics = None
+
+    def _compute_or_load_global_stats(
+        self,
+        datasets: list[dl.DLataset],
+        dataset_names: list[str],
+        all_dataset_statistics: dict,
+        save_dir: str,
+    ) -> dict:
+        """Compute or load global normalization statistics across all datasets.
+
+        When using global normalization, we compute mean/std across all datasets
+        weighted by their sample counts. This provides consistent normalization
+        across the entire data mixture.
+        """
+        from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+        from openpi_cot.shared.adapters.normalize_adapter import load
+        from openpi_cot.shared.adapters.normalize_adapter import save
+
+        # Try to load cached global stats
+        try:
+            global_stats = load(save_dir)
+            logging.info(f"Loaded cached global normalization stats from {save_dir}")
+            return global_stats
+        except FileNotFoundError:
+            logging.info("Computing global normalization statistics from scratch...")
+
+        # Compute weighted global statistics
+        total_action_n = sum(stats["actions"].num_transitions for stats in all_dataset_statistics.values())
+        total_state_n = sum(stats["state"].num_transitions for stats in all_dataset_statistics.values())
+
+        # Compute weighted mean
+        action_weighted_sum = np.zeros_like(list(all_dataset_statistics.values())[0]["actions"].mean)
+        state_weighted_sum = np.zeros_like(list(all_dataset_statistics.values())[0]["state"].mean)
+
+        for dataset_name, stats in all_dataset_statistics.items():
+            action_n = stats["actions"].num_transitions
+            state_n = stats["state"].num_transitions
+            action_weighted_sum += stats["actions"].mean * action_n
+            state_weighted_sum += stats["state"].mean * state_n
+
+        action_global_mean = action_weighted_sum / total_action_n
+        state_global_mean = state_weighted_sum / total_state_n
+
+        # Compute weighted variance using parallel axis theorem:
+        # Var(combined) = sum_i [n_i * (var_i + (mean_i - global_mean)^2)] / sum_i n_i
+        action_var_sum = np.zeros_like(action_global_mean)
+        state_var_sum = np.zeros_like(state_global_mean)
+
+        for dataset_name, stats in all_dataset_statistics.items():
+            action_n = stats["actions"].num_transitions
+            state_n = stats["state"].num_transitions
+
+            # var_i + (mean_i - global_mean)^2
+            action_local_var = np.square(stats["actions"].std)
+            action_mean_diff_sq = np.square(stats["actions"].mean - action_global_mean)
+            action_var_sum += action_n * (action_local_var + action_mean_diff_sq)
+
+            state_local_var = np.square(stats["state"].std)
+            state_mean_diff_sq = np.square(stats["state"].mean - state_global_mean)
+            state_var_sum += state_n * (state_local_var + state_mean_diff_sq)
+
+        action_global_var = action_var_sum / total_action_n
+        state_global_var = state_var_sum / total_state_n
+
+        action_global_std = np.sqrt(action_global_var)
+        state_global_std = np.sqrt(state_global_var)
+
+        # For quantiles, use conservative bounds (global min/max across all datasets)
+        action_q01 = np.min([stats["actions"].q01 for stats in all_dataset_statistics.values()], axis=0)
+        action_q99 = np.max([stats["actions"].q99 for stats in all_dataset_statistics.values()], axis=0)
+        state_q01 = np.min([stats["state"].q01 for stats in all_dataset_statistics.values()], axis=0)
+        state_q99 = np.max([stats["state"].q99 for stats in all_dataset_statistics.values()], axis=0)
+
+        global_stats = {
+            "actions": ExtendedNormStats(
+                mean=action_global_mean,
+                std=action_global_std,
+                q01=action_q01,
+                q99=action_q99,
+                num_transitions=total_action_n,
+                num_trajectories=sum(stats["actions"].num_trajectories for stats in all_dataset_statistics.values()),
+            ),
+            "state": ExtendedNormStats(
+                mean=state_global_mean,
+                std=state_global_std,
+                q01=state_q01,
+                q99=state_q99,
+                num_transitions=total_state_n,
+                num_trajectories=sum(stats["state"].num_trajectories for stats in all_dataset_statistics.values()),
+            ),
+        }
+
+        # Save global stats
+        if jax.process_index() == 0:
+            save(save_dir, global_stats)
+            logging.info(f"Saved global normalization stats to {save_dir}")
+
+        return global_stats
 
     def __iter__(self):
         it = self.dataset.as_numpy_iterator()
