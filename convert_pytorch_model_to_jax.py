@@ -1,411 +1,337 @@
 #!/usr/bin/env python3
 """
-Convert PyTorch PaliGemma model to JAX format.
+Convert a PyTorch PaliGemma model to JAX format.
 
-This script loads a PyTorch PaliGemma model and converts it to JAX format
-using the same structure as the original JAX models.
+This script loads a PyTorch PaliGemma checkpoint (from HuggingFace format) and converts
+it to the JAX/Flax format used by the OpenPI codebase.
 
 Usage:
-    # Convert PyTorch model to JAX:
-    python convert_pytorch_model_to_jax.py --pytorch_model_path /path/to/pytorch/model --output_path /path/to/output
+    python convert_pytorch_model_to_jax.py --checkpoint_dir /path/to/pytorch/model --output_path /path/to/jax/checkpoint
 
 Example:
-    python convert_pytorch_model_to_jax.py --pytorch_model_path paligemma2-3b-pt-224 --output_path paligemma2-3b-jax
+    python convert_pytorch_model_to_jax.py --checkpoint_dir ./paligemma2-3b-pt-224 --output_path ./paligemma2-3b-jax
 """
 
-import argparse
 import json
 import os
-import shutil
-from typing import Any
+import pathlib
+from typing import Dict, Any
 
 import jax.numpy as jnp
 import numpy as np
-import safetensors
+import orbax.checkpoint as ocp
+import safetensors.torch
 import torch
+import tyro
 
 
-def tensor_to_numpy(tensor: torch.Tensor) -> np.ndarray:
-    """Convert PyTorch tensor to numpy array, handling BFloat16 conversion."""
-    if tensor.dtype == torch.bfloat16:
-        return tensor.float().numpy()
-    return tensor.numpy()
-
-
-def load_pytorch_model(pytorch_model_path: str) -> dict[str, torch.Tensor]:
+def load_pytorch_model(checkpoint_dir: str) -> Dict[str, torch.Tensor]:
     """Load PyTorch model from safetensors files."""
-    model_files = []
-    for file in os.listdir(pytorch_model_path):
-        if file.endswith(".safetensors") and file.startswith("model-"):
-            model_files.append(os.path.join(pytorch_model_path, file))
+    checkpoint_path = pathlib.Path(checkpoint_dir)
 
-    model_files.sort()  # Ensure correct order
+    # Load the index file to find all weight files
+    index_file = checkpoint_path / "model.safetensors.index.json"
+    if index_file.exists():
+        with open(index_file) as f:
+            index_data = json.load(f)
 
-    state_dict = {}
-    for model_file in model_files:
-        with safetensors.safe_open(model_file, framework="pt", device="cpu") as f:
-            for key in f.keys():
-                state_dict[key] = f.get_tensor(key)
+        # Load all safetensors files
+        state_dict = {}
+        weight_files = set(index_data["weight_map"].values())
+        for weight_file in weight_files:
+            file_path = checkpoint_path / weight_file
+            with safetensors.torch.safe_open(file_path, framework="pt") as f:
+                for key in f.keys():
+                    state_dict[key] = f.get_tensor(key)
+    else:
+        # Single file model
+        model_file = checkpoint_path / "model.safetensors"
+        with safetensors.torch.safe_open(model_file, framework="pt") as f:
+            state_dict = {key: f.get_tensor(key) for key in f.keys()}
 
     return state_dict
 
 
-def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dict[str, Any]) -> dict[str, jnp.ndarray]:
-    """Convert vision tower from PyTorch to JAX format."""
+def convert_vision_tower_to_jax(state_dict: Dict[str, torch.Tensor], config: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """Convert vision tower weights from PyTorch to JAX format."""
     jax_params = {}
-
-    # Patch embeddings
-    pytorch_key = "vision_tower.vision_model.embeddings.patch_embedding.weight"
-    if pytorch_key in state_dict:
-        jax_key = "img/embedding/kernel"
-        # Convert from (out_channels, in_channels, kernel_height, kernel_width) to (kernel_height, kernel_width, in_channels, out_channels)
-        # Convert to float32 first to handle BFloat16
-        weight = tensor_to_numpy(state_dict[pytorch_key]).transpose(2, 3, 1, 0)
-        jax_params[jax_key] = jnp.array(weight)
-
-    pytorch_key = "vision_tower.vision_model.embeddings.patch_embedding.bias"
-    if pytorch_key in state_dict:
-        jax_key = "img/embedding/bias"
-        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
-
-    # Positional embeddings
-    pytorch_key = "vision_tower.vision_model.embeddings.position_embedding.weight"
-    if pytorch_key in state_dict:
-        jax_key = "img/pos_embedding"
-        # Reshape from (num_positions, hidden_size) to (height, width, hidden_size)
-        pos_emb = tensor_to_numpy(state_dict[pytorch_key])
-        height = int(np.sqrt(pos_emb.shape[0]))
-        width = height
-        jax_params[jax_key] = jnp.array(pos_emb.reshape(height, width, -1))
-
-    # Vision encoder layers
     num_layers = config["vision_config"]["num_hidden_layers"]
+    hidden_size = config["vision_config"]["hidden_size"]
+    num_heads = config["vision_config"]["num_attention_heads"]
 
-    # Collect layer norm parameters
-    layernorm0_scales = []
-    layernorm0_biases = []
-    layernorm1_scales = []
-    layernorm1_biases = []
+    # Patch embedding: Conv2d weight needs OIHW -> HWIO transpose
+    patch_weight = state_dict["vision_tower.vision_model.embeddings.patch_embedding.weight"]
+    jax_params["img/embedding/kernel"] = patch_weight.permute(2, 3, 1, 0).cpu().numpy()
 
-    # Collect MLP parameters
-    mlp_dense0_kernels = []
-    mlp_dense0_biases = []
-    mlp_dense1_kernels = []
-    mlp_dense1_biases = []
+    # Patch embedding bias
+    patch_bias = state_dict["vision_tower.vision_model.embeddings.patch_embedding.bias"]
+    jax_params["img/embedding/bias"] = patch_bias.cpu().numpy()
 
-    # Collect attention parameters - these will be stored as single arrays per attention type
-    attn_key_kernels = []
-    attn_key_biases = []
-    attn_value_kernels = []
-    attn_value_biases = []
-    attn_query_kernels = []
-    attn_query_biases = []
-    attn_out_kernels = []
-    attn_out_biases = []
+    # Position embedding: reshape to original format
+    pos_emb = state_dict["vision_tower.vision_model.embeddings.position_embedding.weight"]
+    # PyTorch shape: [num_patches, hidden_size], JAX expects specific reshape
+    jax_params["img/pos_embedding"] = pos_emb.cpu().numpy()
 
-    for i in range(num_layers):
-        # Layer norms
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm1.weight"
-        if pytorch_key in state_dict:
-            layernorm0_scales.append(tensor_to_numpy(state_dict[pytorch_key]).T)
+    # Stack encoder layer parameters across all layers
+    # Collect parameters for all layers
+    layernorm0_scale = []
+    layernorm0_bias = []
+    layernorm1_scale = []
+    layernorm1_bias = []
 
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm1.bias"
-        if pytorch_key in state_dict:
-            layernorm0_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
+    mlp_dense0_kernel = []
+    mlp_dense0_bias = []
+    mlp_dense1_kernel = []
+    mlp_dense1_bias = []
 
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm2.weight"
-        if pytorch_key in state_dict:
-            layernorm1_scales.append(tensor_to_numpy(state_dict[pytorch_key]).T)
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.layer_norm2.bias"
-        if pytorch_key in state_dict:
-            layernorm1_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
-
-        # MLP layers
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.weight"
-        if pytorch_key in state_dict:
-            mlp_dense0_kernels.append(tensor_to_numpy(state_dict[pytorch_key]).T)
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc1.bias"
-        if pytorch_key in state_dict:
-            mlp_dense0_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.weight"
-        if pytorch_key in state_dict:
-            mlp_dense1_kernels.append(tensor_to_numpy(state_dict[pytorch_key]).T)
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.mlp.fc2.bias"
-        if pytorch_key in state_dict:
-            mlp_dense1_biases.append(tensor_to_numpy(state_dict[pytorch_key]))
-
-        # Attention layers - collect per layer, will reshape later
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key]).T
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = weight.shape[0] // num_heads
-            # Store as (hidden_size, num_heads, head_dim) for later reshaping
-            attn_key_kernels.append(weight.reshape(-1, num_heads, head_dim))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.k_proj.bias"
-        if pytorch_key in state_dict:
-            bias = tensor_to_numpy(state_dict[pytorch_key])
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = bias.shape[0] // num_heads
-            attn_key_biases.append(bias.reshape(num_heads, head_dim))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key]).T
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = weight.shape[0] // num_heads
-            attn_value_kernels.append(weight.reshape(-1, num_heads, head_dim))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.v_proj.bias"
-        if pytorch_key in state_dict:
-            bias = tensor_to_numpy(state_dict[pytorch_key])
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = bias.shape[0] // num_heads
-            attn_value_biases.append(bias.reshape(num_heads, head_dim))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key]).T
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = weight.shape[0] // num_heads
-            attn_query_kernels.append(weight.reshape(-1, num_heads, head_dim))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.q_proj.bias"
-        if pytorch_key in state_dict:
-            bias = tensor_to_numpy(state_dict[pytorch_key])
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = bias.shape[0] // num_heads
-            attn_query_biases.append(bias.reshape(num_heads, head_dim))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key]).T
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = weight.shape[0] // num_heads
-            attn_out_kernels.append(weight.reshape(-1, num_heads, head_dim))
-
-        pytorch_key = f"vision_tower.vision_model.encoder.layers.{i}.self_attn.out_proj.bias"
-        if pytorch_key in state_dict:
-            bias = tensor_to_numpy(state_dict[pytorch_key])
-            num_heads = config["vision_config"]["num_attention_heads"]
-            head_dim = bias.shape[0] // num_heads
-            attn_out_biases.append(bias.reshape(num_heads, head_dim))
-
-    # Store collected parameters in JAX format
-    if layernorm0_scales:
-        jax_params["img/Transformer/encoderblock/LayerNorm_0/scale"] = jnp.array(layernorm0_scales)
-    if layernorm0_biases:
-        jax_params["img/Transformer/encoderblock/LayerNorm_0/bias"] = jnp.array(layernorm0_biases)
-    if layernorm1_scales:
-        jax_params["img/Transformer/encoderblock/LayerNorm_1/scale"] = jnp.array(layernorm1_scales)
-    if layernorm1_biases:
-        jax_params["img/Transformer/encoderblock/LayerNorm_1/bias"] = jnp.array(layernorm1_biases)
-
-    if mlp_dense0_kernels:
-        jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_0/kernel"] = jnp.array(mlp_dense0_kernels)
-    if mlp_dense0_biases:
-        jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_0/bias"] = jnp.array(mlp_dense0_biases)
-    if mlp_dense1_kernels:
-        jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_1/kernel"] = jnp.array(mlp_dense1_kernels)
-    if mlp_dense1_biases:
-        jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_1/bias"] = jnp.array(mlp_dense1_biases)
-
-    if attn_key_kernels:
-        # Convert from list of (hidden_size, num_heads, head_dim) to (num_layers, hidden_size, num_heads, head_dim)
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/key/kernel"] = jnp.array(
-            attn_key_kernels
-        )
-    if attn_key_biases:
-        # Convert from list of (num_heads, head_dim) to (num_layers, num_heads, head_dim)
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/key/bias"] = jnp.array(attn_key_biases)
-    if attn_value_kernels:
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/value/kernel"] = jnp.array(
-            attn_value_kernels
-        )
-    if attn_value_biases:
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/value/bias"] = jnp.array(
-            attn_value_biases
-        )
-    if attn_query_kernels:
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/query/kernel"] = jnp.array(
-            attn_query_kernels
-        )
-    if attn_query_biases:
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/query/bias"] = jnp.array(
-            attn_query_biases
-        )
-    if attn_out_kernels:
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/out/kernel"] = jnp.array(
-            attn_out_kernels
-        )
-    if attn_out_biases:
-        jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/out/bias"] = jnp.array(attn_out_biases)
-
-    # Final layer norm
-    pytorch_key = "vision_tower.vision_model.post_layernorm.weight"
-    if pytorch_key in state_dict:
-        jax_key = "img/Transformer/encoder_norm/scale"
-        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]).T)
-
-    pytorch_key = "vision_tower.vision_model.post_layernorm.bias"
-    if pytorch_key in state_dict:
-        jax_key = "img/Transformer/encoder_norm/bias"
-        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
-
-    return jax_params
-
-
-def convert_multimodal_projector_to_jax(state_dict: dict[str, torch.Tensor]) -> dict[str, jnp.ndarray]:
-    """Convert multimodal projector from PyTorch to JAX format."""
-    jax_params = {}
-
-    pytorch_key = "multi_modal_projector.linear.weight"
-    if pytorch_key in state_dict:
-        jax_key = "img/head/kernel"
-        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]).T)
-
-    pytorch_key = "multi_modal_projector.linear.bias"
-    if pytorch_key in state_dict:
-        jax_key = "img/head/bias"
-        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
-
-    return jax_params
-
-
-def convert_language_model_to_jax(
-    state_dict: dict[str, torch.Tensor], config: dict[str, Any]
-) -> dict[str, jnp.ndarray]:
-    """Convert language model from PyTorch to JAX format."""
-    jax_params = {}
-
-    # Embedding layer
-    pytorch_key = "language_model.model.embed_tokens.weight"
-    if pytorch_key in state_dict:
-        jax_key = "llm/embedder/input_embedding"
-        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
-
-    num_layers = config["text_config"]["num_hidden_layers"]
-    num_heads = config["text_config"]["num_attention_heads"]
-    head_dim = config["text_config"]["hidden_size"] // num_heads
-
-    # Collect attention parameters
-    attn_vec_einsum = []
-    kv_einsum = []
-    q_einsum = []
-
-    # Collect MLP parameters
-    gating_einsum = []
-    linear_mlp = []
-
-    # Collect layer norm parameters
-    input_layernorm = []
-    post_attention_layernorm = []
+    attn_q_kernel = []
+    attn_q_bias = []
+    attn_k_kernel = []
+    attn_k_bias = []
+    attn_v_kernel = []
+    attn_v_bias = []
+    attn_out_kernel = []
+    attn_out_bias = []
 
     for i in range(num_layers):
-        # Attention weights
-        pytorch_key = f"language_model.model.layers.{i}.self_attn.q_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key])
-            # Reshape from (hidden_size, num_heads * head_dim) to (num_heads, head_dim, hidden_size)
-            q_weight = weight.T.reshape(num_heads, head_dim, -1)
-            q_einsum.append(q_weight)
-
-        pytorch_key = f"language_model.model.layers.{i}.self_attn.k_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key])
-            k_weight = weight.T.reshape(num_heads, head_dim, -1)
-            kv_einsum.append([k_weight, np.zeros_like(k_weight)])  # Placeholder for v
-
-        pytorch_key = f"language_model.model.layers.{i}.self_attn.v_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key])
-            v_weight = weight.T.reshape(num_heads, head_dim, -1)
-            if i < len(kv_einsum):
-                kv_einsum[i][1] = v_weight
-
-        pytorch_key = f"language_model.model.layers.{i}.self_attn.o_proj.weight"
-        if pytorch_key in state_dict:
-            weight = tensor_to_numpy(state_dict[pytorch_key])
-            # Reshape from (num_heads * head_dim, hidden_size) to (num_heads, head_dim, hidden_size)
-            o_weight = weight.T.reshape(num_heads, head_dim, -1)
-            attn_vec_einsum.append(o_weight)
-
-        # MLP weights
-        pytorch_key = f"language_model.model.layers.{i}.mlp.gate_proj.weight"
-        if pytorch_key in state_dict:
-            gate_weight = tensor_to_numpy(state_dict[pytorch_key]).T
-            gating_einsum.append([gate_weight, np.zeros_like(gate_weight)])  # Placeholder for up
-
-        pytorch_key = f"language_model.model.layers.{i}.mlp.up_proj.weight"
-        if pytorch_key in state_dict:
-            up_weight = tensor_to_numpy(state_dict[pytorch_key]).T
-            if i < len(gating_einsum):
-                gating_einsum[i][1] = up_weight
-
-        pytorch_key = f"language_model.model.layers.{i}.mlp.down_proj.weight"
-        if pytorch_key in state_dict:
-            down_weight = tensor_to_numpy(state_dict[pytorch_key]).T
-            linear_mlp.append(down_weight)
+        prefix = f"vision_tower.vision_model.encoder.layers.{i}"
 
         # Layer norms
-        pytorch_key = f"language_model.model.layers.{i}.input_layernorm.weight"
-        if pytorch_key in state_dict:
-            input_layernorm.append(tensor_to_numpy(state_dict[pytorch_key]))
+        layernorm0_scale.append(state_dict[f"{prefix}.layer_norm1.weight"].cpu().numpy())
+        layernorm0_bias.append(state_dict[f"{prefix}.layer_norm1.bias"].cpu().numpy())
+        layernorm1_scale.append(state_dict[f"{prefix}.layer_norm2.weight"].cpu().numpy())
+        layernorm1_bias.append(state_dict[f"{prefix}.layer_norm2.bias"].cpu().numpy())
 
-        pytorch_key = f"language_model.model.layers.{i}.post_attention_layernorm.weight"
-        if pytorch_key in state_dict:
-            post_attention_layernorm.append(tensor_to_numpy(state_dict[pytorch_key]))
+        # MLP - transpose weights from [out, in] to [in, out]
+        mlp_dense0_kernel.append(state_dict[f"{prefix}.mlp.fc1.weight"].T.cpu().numpy())
+        mlp_dense0_bias.append(state_dict[f"{prefix}.mlp.fc1.bias"].cpu().numpy())
+        mlp_dense1_kernel.append(state_dict[f"{prefix}.mlp.fc2.weight"].T.cpu().numpy())
+        mlp_dense1_bias.append(state_dict[f"{prefix}.mlp.fc2.bias"].cpu().numpy())
 
-    # Store parameters in JAX format
-    if attn_vec_einsum:
-        jax_params["llm/layers/attn/attn_vec_einsum/w"] = jnp.array(attn_vec_einsum)
-    if kv_einsum:
-        jax_params["llm/layers/attn/kv_einsum/w"] = jnp.array(kv_einsum)
-    if q_einsum:
-        jax_params["llm/layers/attn/q_einsum/w"] = jnp.array(q_einsum)
+        # Attention - transpose and reshape
+        # PyTorch stores as [out_features, in_features], JAX needs [in, num_heads, head_dim]
+        q_weight = state_dict[f"{prefix}.self_attn.q_proj.weight"].T.cpu().numpy()
+        q_weight_reshaped = q_weight.reshape(hidden_size, num_heads, hidden_size // num_heads)
+        attn_q_kernel.append(q_weight_reshaped)
 
-    if gating_einsum:
-        jax_params["llm/layers/mlp/gating_einsum"] = jnp.array(gating_einsum)
-    if linear_mlp:
-        jax_params["llm/layers/mlp/linear"] = jnp.array(linear_mlp)
+        q_bias = state_dict[f"{prefix}.self_attn.q_proj.bias"].cpu().numpy()
+        q_bias_reshaped = q_bias.reshape(num_heads, hidden_size // num_heads)
+        attn_q_bias.append(q_bias_reshaped)
 
-    if input_layernorm:
-        jax_params["llm/layers/pre_attention_norm/scale"] = jnp.array(input_layernorm)
-    if post_attention_layernorm:
-        jax_params["llm/layers/pre_ffw_norm/scale"] = jnp.array(post_attention_layernorm)
+        k_weight = state_dict[f"{prefix}.self_attn.k_proj.weight"].T.cpu().numpy()
+        k_weight_reshaped = k_weight.reshape(hidden_size, num_heads, hidden_size // num_heads)
+        attn_k_kernel.append(k_weight_reshaped)
 
-    # Final layer norm
-    pytorch_key = "language_model.model.norm.weight"
-    if pytorch_key in state_dict:
-        jax_key = "llm/final_norm/scale"
-        jax_params[jax_key] = jnp.array(tensor_to_numpy(state_dict[pytorch_key]))
+        k_bias = state_dict[f"{prefix}.self_attn.k_proj.bias"].cpu().numpy()
+        k_bias_reshaped = k_bias.reshape(num_heads, hidden_size // num_heads)
+        attn_k_bias.append(k_bias_reshaped)
+
+        v_weight = state_dict[f"{prefix}.self_attn.v_proj.weight"].T.cpu().numpy()
+        v_weight_reshaped = v_weight.reshape(hidden_size, num_heads, hidden_size // num_heads)
+        attn_v_kernel.append(v_weight_reshaped)
+
+        v_bias = state_dict[f"{prefix}.self_attn.v_proj.bias"].cpu().numpy()
+        v_bias_reshaped = v_bias.reshape(num_heads, hidden_size // num_heads)
+        attn_v_bias.append(v_bias_reshaped)
+
+        out_weight = state_dict[f"{prefix}.self_attn.out_proj.weight"].T.cpu().numpy()
+        out_weight_reshaped = out_weight.reshape(num_heads, hidden_size // num_heads, hidden_size)
+        attn_out_kernel.append(out_weight_reshaped)
+
+        out_bias = state_dict[f"{prefix}.self_attn.out_proj.bias"].cpu().numpy()
+        out_bias_reshaped = out_bias.reshape(num_heads, hidden_size // num_heads)
+        attn_out_bias.append(out_bias_reshaped)
+
+    # Stack all layers (layer dimension first)
+    jax_params["img/Transformer/encoderblock/LayerNorm_0/scale"] = np.stack(layernorm0_scale, axis=0)
+    jax_params["img/Transformer/encoderblock/LayerNorm_0/bias"] = np.stack(layernorm0_bias, axis=0)
+    jax_params["img/Transformer/encoderblock/LayerNorm_1/scale"] = np.stack(layernorm1_scale, axis=0)
+    jax_params["img/Transformer/encoderblock/LayerNorm_1/bias"] = np.stack(layernorm1_bias, axis=0)
+
+    jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_0/kernel"] = np.stack(mlp_dense0_kernel, axis=0)
+    jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_0/bias"] = np.stack(mlp_dense0_bias, axis=0)
+    jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_1/kernel"] = np.stack(mlp_dense1_kernel, axis=0)
+    jax_params["img/Transformer/encoderblock/MlpBlock_0/Dense_1/bias"] = np.stack(mlp_dense1_bias, axis=0)
+
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/query/kernel"] = np.stack(attn_q_kernel, axis=0)
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/query/bias"] = np.stack(attn_q_bias, axis=0)
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/key/kernel"] = np.stack(attn_k_kernel, axis=0)
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/key/bias"] = np.stack(attn_k_bias, axis=0)
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/value/kernel"] = np.stack(attn_v_kernel, axis=0)
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/value/bias"] = np.stack(attn_v_bias, axis=0)
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/out/kernel"] = np.stack(attn_out_kernel, axis=0)
+    jax_params["img/Transformer/encoderblock/MultiHeadDotProductAttention_0/out/bias"] = np.stack(attn_out_bias, axis=0)
+
+    # Post layer norm
+    post_ln_weight = state_dict["vision_tower.vision_model.post_layernorm.weight"]
+    jax_params["img/Transformer/encoder_norm/scale"] = post_ln_weight.cpu().numpy()
+
+    post_ln_bias = state_dict["vision_tower.vision_model.post_layernorm.bias"]
+    jax_params["img/Transformer/encoder_norm/bias"] = post_ln_bias.cpu().numpy()
 
     return jax_params
 
 
-def convert_pytorch_to_jax(pytorch_model_path: str, output_path: str):
-    """Convert PyTorch PaliGemma model to JAX format."""
-    print(f"Converting PyTorch model from {pytorch_model_path} to {output_path}")
+def convert_multimodal_projector_to_jax(state_dict: Dict[str, torch.Tensor]) -> Dict[str, np.ndarray]:
+    """Convert multi-modal projector weights from PyTorch to JAX format."""
+    jax_params = {}
 
-    # Load PyTorch model
-    state_dict = load_pytorch_model(pytorch_model_path)
-    print(f"Loaded {len(state_dict)} parameters from PyTorch model")
+    # Linear projection - transpose weight
+    weight = state_dict["multi_modal_projector.linear.weight"]
+    jax_params["img/head/kernel"] = weight.T.cpu().numpy()
+
+    bias = state_dict["multi_modal_projector.linear.bias"]
+    jax_params["img/head/bias"] = bias.cpu().numpy()
+
+    return jax_params
+
+
+def convert_language_model_to_jax(state_dict: Dict[str, torch.Tensor], config: Dict[str, Any]) -> Dict[str, np.ndarray]:
+    """Convert language model (Gemma2) weights from PyTorch to JAX format."""
+    jax_params = {}
+    text_config = config["text_config"]
+    num_layers = text_config["num_hidden_layers"]
+    hidden_size = text_config["hidden_size"]
+    num_heads = text_config["num_attention_heads"]
+    head_dim = hidden_size // num_heads
+    num_kv_heads = text_config.get("num_key_value_heads", num_heads)
+
+    print(f"  Language model: {num_layers} layers, hidden_size={hidden_size}, "
+          f"num_heads={num_heads}, head_dim={head_dim}, num_kv_heads={num_kv_heads}")
+
+    # Embedding table
+    emb_weight = state_dict["language_model.model.embed_tokens.weight"]
+    jax_params["llm/embedder/input_embedding"] = emb_weight.cpu().numpy()
+
+    # Collect layer parameters for stacking
+    q_einsum_list = []
+    kv_einsum_list = []
+    attn_vec_einsum_list = []
+    gating_einsum_list = []
+    linear_list = []
+    input_layernorm_list = []
+    post_attention_layernorm_list = []
+
+    for i in range(num_layers):
+        prefix = f"language_model.model.layers.{i}"
+
+        # Attention Q projection: [num_heads * head_dim, hidden_size] -> [num_heads, hidden_size, head_dim]
+        q_weight = state_dict[f"{prefix}.self_attn.q_proj.weight"].cpu().numpy()
+        q_reshaped = q_weight.reshape(num_heads, head_dim, hidden_size).transpose(1, 0, 2)
+        q_einsum_list.append(q_reshaped)
+
+        # K and V projections for multi-query/grouped-query attention
+        k_weight = state_dict[f"{prefix}.self_attn.k_proj.weight"].T.cpu().numpy()
+        v_weight = state_dict[f"{prefix}.self_attn.v_proj.weight"].T.cpu().numpy()
+
+        # Stack K and V: shape should be [2, num_kv_heads, head_dim, hidden_size]
+        kv_stacked = np.stack([
+            k_weight.reshape(hidden_size, num_kv_heads, head_dim).transpose(1, 2, 0),
+            v_weight.reshape(hidden_size, num_kv_heads, head_dim).transpose(1, 2, 0)
+        ], axis=0)
+        # Add extra dimension to match expected format
+        kv_einsum_list.append(kv_stacked[:, :, None, :, :])
+
+        # O projection: [hidden_size, num_heads * head_dim] -> [num_heads, head_dim, hidden_size]
+        o_weight = state_dict[f"{prefix}.self_attn.o_proj.weight"].cpu().numpy()
+        o_reshaped = o_weight.T.reshape(num_heads, head_dim, hidden_size)
+        attn_vec_einsum_list.append(o_reshaped)
+
+        # MLP gate and up projections
+        gate_weight = state_dict[f"{prefix}.mlp.gate_proj.weight"].T.cpu().numpy()
+        up_weight = state_dict[f"{prefix}.mlp.up_proj.weight"].T.cpu().numpy()
+        # Stack gate and up: [2, hidden_size, intermediate_size]
+        gating_stacked = np.stack([gate_weight, up_weight], axis=0)
+        gating_einsum_list.append(gating_stacked)
+
+        # MLP down projection
+        down_weight = state_dict[f"{prefix}.mlp.down_proj.weight"].T.cpu().numpy()
+        linear_list.append(down_weight)
+
+        # Layer norms
+        input_ln = state_dict[f"{prefix}.input_layernorm.weight"].cpu().numpy()
+        input_layernorm_list.append(input_ln)
+
+        post_attn_ln = state_dict[f"{prefix}.post_attention_layernorm.weight"].cpu().numpy()
+        post_attention_layernorm_list.append(post_attn_ln)
+
+    # Stack all layer parameters
+    jax_params["llm/layers/attn/q_einsum/w"] = np.stack(q_einsum_list, axis=0)
+    jax_params["llm/layers/attn/kv_einsum/w"] = np.stack(kv_einsum_list, axis=0)
+    jax_params["llm/layers/attn/attn_vec_einsum/w"] = np.stack(attn_vec_einsum_list, axis=0)
+    jax_params["llm/layers/mlp/gating_einsum"] = np.stack(gating_einsum_list, axis=0)
+    jax_params["llm/layers/mlp/linear"] = np.stack(linear_list, axis=0)
+    jax_params["llm/layers/pre_attention_norm/scale"] = np.stack(input_layernorm_list, axis=0)
+    jax_params["llm/layers/pre_ffw_norm/scale"] = np.stack(post_attention_layernorm_list, axis=0)
+
+    # Final layer norm
+    final_ln = state_dict["language_model.model.norm.weight"]
+    jax_params["llm/final_norm/scale"] = final_ln.cpu().numpy()
+
+    return jax_params
+
+
+def save_jax_checkpoint(params: Dict[str, np.ndarray], output_path: str):
+    """Save parameters in JAX/Orbax checkpoint format."""
+    os.makedirs(output_path, exist_ok=True)
+
+    # Create nested parameter structure
+    # The structure should match what the JAX model expects
+    nested_params = {}
+
+    # Group parameters by prefix
+    for key, value in params.items():
+        parts = key.split("/")
+        current = nested_params
+        for part in parts[:-1]:
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+        current[parts[-1]] = value
+
+    # Wrap in PaliGemma structure as expected by the model
+    checkpoint_params = {
+        "PaliGemma": nested_params
+    }
+
+    # Save using orbax
+    checkpointer = ocp.PyTreeCheckpointer()
+    save_path = os.path.join(output_path, "params")
+    checkpointer.save(save_path, checkpoint_params, force=True)
+
+    print(f"Checkpoint saved to {save_path}")
+
+
+def main(
+    checkpoint_dir: str,
+    output_path: str,
+):
+    """Convert PyTorch PaliGemma model to JAX format.
+
+    Args:
+        checkpoint_dir: Path to the PyTorch checkpoint directory
+        output_path: Path to save the JAX checkpoint
+    """
+    print(f"Loading PyTorch model from {checkpoint_dir}")
 
     # Load config
-    config_path = os.path.join(pytorch_model_path, "config.json")
+    config_path = os.path.join(checkpoint_dir, "config.json")
     with open(config_path) as f:
         config = json.load(f)
 
-    # Convert components
+    print(f"Model config: {config['model_type']}")
+    print(f"  Vision layers: {config['vision_config']['num_hidden_layers']}")
+    print(f"  Text layers: {config['text_config']['num_hidden_layers']}")
+
+    # Load PyTorch model
+    state_dict = load_pytorch_model(checkpoint_dir)
+    print(f"Loaded {len(state_dict)} parameters from PyTorch model")
+
+    # Convert each component
     print("Converting vision tower...")
     vision_params = convert_vision_tower_to_jax(state_dict, config)
 
-    print("Converting multimodal projector...")
+    print("Converting multi-modal projector...")
     projector_params = convert_multimodal_projector_to_jax(state_dict)
 
     print("Converting language model...")
@@ -414,68 +340,24 @@ def convert_pytorch_to_jax(pytorch_model_path: str, output_path: str):
     # Combine all parameters
     all_params = {**vision_params, **projector_params, **language_params}
 
-    # Create output directory
-    os.makedirs(output_path, exist_ok=True)
+    print(f"Total JAX parameters: {len(all_params)}")
 
-    # Save parameters in JAX format
-    params_path = os.path.join(output_path, "params")
-    os.makedirs(params_path, exist_ok=True)
+    # Print shape verification
+    print("\nParameter shapes verification:")
+    print("Vision Tower:")
+    for key in sorted([k for k in all_params.keys() if k.startswith("img/")]):
+        print(f"  {key}: {all_params[key].shape}")
+    print("\nLanguage Model (sample):")
+    for key in sorted([k for k in all_params.keys() if k.startswith("llm/")])[:5]:
+        print(f"  {key}: {all_params[key].shape}")
 
-    # Convert to JAX format and save
-    jax_params = {}
-    for key, value in all_params.items():
-        if isinstance(value, jnp.ndarray):
-            jax_params[key] = value
-        else:
-            jax_params[key] = jnp.array(value)
+    # Save checkpoint
+    print(f"\nSaving JAX checkpoint to {output_path}")
+    save_jax_checkpoint(all_params, output_path)
 
-    # Save as numpy arrays (simplified approach)
-    np_params = {}
-    for key, value in jax_params.items():
-        np_params[key] = np.array(value)
-
-    # Structure parameters so that when unflattened, they create the expected nested structure
-    # The training code expects: {"PaliGemma": {"params": {...}}}
-    # So we need to prefix all keys with "params/" so that unflattening creates the right structure
-    structured_flat_params = {}
-    for key, value in np_params.items():
-        structured_flat_params[f"params/{key}"] = value
-
-    # Save parameters as flat dictionary with "/" separators
-    # The training code will unflatten this and access the "params" key
-    np.savez(os.path.join(params_path, "params.npz"), **structured_flat_params)
-
-    # Copy config files
-    for config_file in [
-        "config.json",
-        "generation_config.json",
-        "tokenizer_config.json",
-        "tokenizer.json",
-        "special_tokens_map.json",
-        "preprocessor_config.json",
-    ]:
-        src_path = os.path.join(pytorch_model_path, config_file)
-        if os.path.exists(src_path):
-            shutil.copy2(src_path, os.path.join(output_path, config_file))
-
-    print("Conversion completed successfully!")
-    print(f"JAX model saved to {output_path}")
-    print(f"Total parameters converted: {len(all_params)}")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Convert PyTorch PaliGemma model to JAX format")
-    parser.add_argument("--pytorch_model_path", required=True, help="Path to PyTorch model directory")
-    parser.add_argument("--output_path", required=True, help="Path to save JAX model")
-
-    args = parser.parse_args()
-
-    if not os.path.exists(args.pytorch_model_path):
-        print(f"Error: PyTorch model path {args.pytorch_model_path} does not exist")
-        return
-
-    convert_pytorch_to_jax(args.pytorch_model_path, args.output_path)
+    print("\nConversion completed successfully!")
+    print(f"Output saved to: {output_path}")
 
 
 if __name__ == "__main__":
-    main()
+    tyro.cli(main)
