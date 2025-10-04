@@ -73,8 +73,8 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
 
     # Position embedding: reshape to original format
     pos_emb = state_dict["vision_tower.vision_model.embeddings.position_embedding.weight"]
-    # PyTorch shape: [num_patches, hidden_size], JAX expects specific reshape
-    jax_params["img/pos_embedding"] = to_numpy(pos_emb)
+    # PyTorch shape: [num_patches, hidden_size], JAX expects [1, num_patches, hidden_size]
+    jax_params["img/pos_embedding"] = to_numpy(pos_emb)[None, :, :]
 
     # Stack encoder layer parameters across all layers
     # Collect parameters for all layers
