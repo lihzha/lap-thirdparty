@@ -86,7 +86,7 @@ class PaliGemmaWeightLoader(WeightLoader):
 
     def load(self, params: at.Params) -> at.Params:
         path = download.maybe_download(
-            "gs://vertex-model-garden-paligemma-us/paligemma/pt_224.npz", gs={"token": "anon"}
+            "/n/fs/robot-data/openpi-cot/paligemma2-3b-jax/params/params.npz", gs={"token": "anon"}
         )
         with path.open("rb") as f:
             flat_params = dict(np.load(f, allow_pickle=False))
