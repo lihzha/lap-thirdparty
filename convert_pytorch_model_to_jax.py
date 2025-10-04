@@ -313,11 +313,16 @@ def save_jax_checkpoint(params: dict[str, np.ndarray], output_path: str):
     """Save parameters as .npz file (uncompressed for speed)."""
     os.makedirs(output_path, exist_ok=True)
 
+    # The loader expects parameters with a "params/" prefix after unflattening
+    # So we need to add "params/" to all keys
+    params_with_prefix = {f"params/{k}": v for k, v in params.items()}
+
     # Save as uncompressed npz file for much faster saving
     # File size will be larger but saving is 10-100x faster
-    save_path = os.path.join(output_path, "model.npz")
-    print(f"Saving {len(params)} parameters to {save_path}...")
-    np.savez(save_path, **params)  # Use np.savez instead of np.savez_compressed
+    save_path = os.path.join(output_path, "params", "params.npz")
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    print(f"Saving {len(params_with_prefix)} parameters to {save_path}...")
+    np.savez(save_path, **params_with_prefix)  # Use np.savez instead of np.savez_compressed
 
     print(f"Checkpoint saved to {save_path}")
 
