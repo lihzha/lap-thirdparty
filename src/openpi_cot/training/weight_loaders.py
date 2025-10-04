@@ -4,22 +4,23 @@ import re
 from typing import Literal, Protocol, runtime_checkable
 
 import flax.traverse_util
+import jax
 import numpy as np
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
-import jax
 
 import openpi_cot.shared.download as download
 
 logger = logging.getLogger(__name__)
+
 
 def recover_dtype(a: np.ndarray) -> np.ndarray:
     """Numpy's `save` stores bfloat16 type as "void" type, so we recover it."""
     if hasattr(a, "dtype") and a.dtype.type is np.void:
         assert a.itemsize == 2, "Unknown dtype!"
         return a.view(jax.numpy.bfloat16)
-    else:
-        return a
+    return a
+
 
 @runtime_checkable
 class WeightLoader(Protocol):
@@ -102,11 +103,13 @@ class PaliGemmaWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
-class PaliGemma2_3BWeightLoader(WeightLoader):
-    """Loads weights from the official PaliGemma2_3B checkpoint."""
+class PaliGemma2WeightLoader(WeightLoader):
+    """Loads weights from the official PaliGemma2 checkpoint."""
+
+    params_path: str
 
     def load(self, params: at.Params) -> at.Params:
-        path = download.maybe_download("/n/fs/robot-data/openpi-cot/paligemma2-3b-pt-224.b16.npz", gs={"token": "anon"})
+        path = download.maybe_download(self.params_path, gs={"token": "anon"})
         with path.open("rb") as f:
             flat_params = dict(np.load(f, allow_pickle=False))
         loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
@@ -141,8 +144,10 @@ class WeightLoaderChoice(WeightLoader):
                 return CheckpointWeightLoader(self.params_path)
             case "paligemma":
                 return PaliGemmaWeightLoader()
-            case "paligemma2_3b":
-                return PaliGemma2_3BWeightLoader()
+            case "paligemma2":
+                if not self.params_path:
+                    raise ValueError("--weight-loader.params-path must be set when kind=paligemma2")
+                return PaliGemma2WeightLoader(self.params_path)
             case "none":
                 return NoOpWeightLoader()
             case _:

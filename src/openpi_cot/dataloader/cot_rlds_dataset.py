@@ -1085,7 +1085,7 @@ class OXECoTDatasets:
         balance_weights: bool = True,  # noqa: FBT001, FBT002
         train_dataset=None,
         standalone=True,
-        use_global_normalization: bool = False,
+        use_global_normalization: bool = True,
     ):
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
