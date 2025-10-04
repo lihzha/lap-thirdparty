@@ -204,8 +204,14 @@ def convert_multimodal_projector_to_jax(state_dict: dict[str, torch.Tensor]) -> 
     return jax_params
 
 
-def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: dict[str, Any]) -> dict[str, np.ndarray]:
-    """Convert language model (Gemma2) weights from PyTorch to JAX format."""
+def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: dict[str, Any], vocab_size: int | None = None) -> dict[str, np.ndarray]:
+    """Convert language model (Gemma2) weights from PyTorch to JAX format.
+
+    Args:
+        state_dict: PyTorch state dict
+        config: Model config
+        vocab_size: Target vocabulary size (truncates if provided and smaller than model vocab size)
+    """
     jax_params = {}
     text_config = config["text_config"]
     num_layers = text_config["num_hidden_layers"]
@@ -216,7 +222,7 @@ def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: d
 
     print(
         f"  Language model: {num_layers} layers, hidden_size={hidden_size}, "
-        f"num_heads={num_heads}, head_dim={head_dim}, num_kv_heads={num_kv_heads}"
+        f"num_heads={num_heads}, num_kv_heads={num_kv_heads}"
     )
 
     # Helper function to convert tensor to numpy (handles bfloat16)
@@ -227,7 +233,14 @@ def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: d
 
     # Embedding table
     emb_weight = state_dict["language_model.model.embed_tokens.weight"]
-    jax_params["llm/embedder/input_embedding"] = to_numpy(emb_weight)
+    emb_weight_np = to_numpy(emb_weight)
+
+    # Truncate vocabulary if needed
+    if vocab_size is not None and vocab_size < emb_weight_np.shape[0]:
+        print(f"  Truncating vocabulary from {emb_weight_np.shape[0]} to {vocab_size}")
+        emb_weight_np = emb_weight_np[:vocab_size, :]
+
+    jax_params["llm/embedder/input_embedding"] = emb_weight_np
 
     # Collect layer parameters for stacking
     q_einsum_list = []
@@ -344,12 +357,14 @@ def save_jax_checkpoint(params: dict[str, np.ndarray], output_path: str):
 def main(
     checkpoint_dir: str,
     output_path: str,
+    vocab_size: int | None = None,
 ):
     """Convert PyTorch PaliGemma model to JAX format.
 
     Args:
         checkpoint_dir: Path to the PyTorch checkpoint directory
         output_path: Path to save the JAX checkpoint
+        vocab_size: Target vocabulary size (truncates embedding table if provided)
     """
     print(f"Loading PyTorch model from {checkpoint_dir}")
 
@@ -374,7 +389,7 @@ def main(
     projector_params = convert_multimodal_projector_to_jax(state_dict)
 
     print("Converting language model...")
-    language_params = convert_language_model_to_jax(state_dict, config)
+    language_params = convert_language_model_to_jax(state_dict, config, vocab_size=vocab_size)
 
     # Combine all parameters
     all_params = {**vision_params, **projector_params, **language_params}

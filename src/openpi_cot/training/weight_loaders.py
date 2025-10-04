@@ -7,11 +7,19 @@ import flax.traverse_util
 import numpy as np
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
+import jax
 
 import openpi_cot.shared.download as download
 
 logger = logging.getLogger(__name__)
 
+def recover_dtype(a: np.ndarray) -> np.ndarray:
+    """Numpy's `save` stores bfloat16 type as "void" type, so we recover it."""
+    if hasattr(a, "dtype") and a.dtype.type is np.void:
+        assert a.itemsize == 2, "Unknown dtype!"
+        return a.view(jax.numpy.bfloat16)
+    else:
+        return a
 
 @runtime_checkable
 class WeightLoader(Protocol):
@@ -102,6 +110,7 @@ class PaliGemma2_3BWeightLoader(WeightLoader):
         with path.open("rb") as f:
             flat_params = dict(np.load(f, allow_pickle=False))
         loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
+        loaded_params = jax.tree.map(recover_dtype, loaded_params)
         # Add all missing weights.
         return _merge_params(loaded_params, params, missing_regex=".*")
 
