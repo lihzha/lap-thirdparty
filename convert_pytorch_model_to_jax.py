@@ -143,8 +143,8 @@ def convert_vision_tower_to_jax(state_dict: dict[str, torch.Tensor], config: dic
         attn_out_kernel.append(out_weight_reshaped)
 
         out_bias = to_numpy(state_dict[f"{prefix}.self_attn.out_proj.bias"])
-        out_bias_reshaped = out_bias.reshape(num_heads, hidden_size // num_heads)
-        attn_out_bias.append(out_bias_reshaped)
+        # out_bias should NOT be reshaped - keep as [hidden_size]
+        attn_out_bias.append(out_bias)
 
     # Stack all layers (layer dimension first)
     jax_params["img/Transformer/encoderblock/LayerNorm_0/scale"] = np.stack(layernorm0_scale, axis=0)
@@ -243,16 +243,18 @@ def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: d
 
         # Attention Q projection
         # PyTorch shape: [num_heads * head_dim, hidden_size]
-        # We need to find the actual output dimension from the weight
+        # JAX expects: [num_heads, hidden_size, head_dim]
         q_weight = to_numpy(state_dict[f"{prefix}.self_attn.q_proj.weight"])
         q_out_dim, q_in_dim = q_weight.shape
         actual_head_dim = q_out_dim // num_heads
 
-        # Reshape: [num_heads * head_dim, hidden_size] -> [num_heads, head_dim, hidden_size] -> [hidden_size, num_heads, head_dim]
-        q_reshaped = q_weight.reshape(num_heads, actual_head_dim, hidden_size).transpose(2, 0, 1)
+        # Reshape: [num_heads * head_dim, hidden_size] -> [num_heads, head_dim, hidden_size] -> [num_heads, hidden_size, head_dim]
+        q_reshaped = q_weight.reshape(num_heads, actual_head_dim, hidden_size).transpose(0, 2, 1)
         q_einsum_list.append(q_reshaped)
 
         # K and V projections for multi-query/grouped-query attention
+        # PyTorch shape: [num_kv_heads * head_dim, hidden_size]
+        # JAX expects: [2, num_kv_heads, hidden_size, head_dim] for the stacked K/V
         k_weight = to_numpy(state_dict[f"{prefix}.self_attn.k_proj.weight"])
         v_weight = to_numpy(state_dict[f"{prefix}.self_attn.v_proj.weight"])
 
@@ -260,15 +262,14 @@ def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: d
         kv_out_dim = k_weight.shape[0]
         kv_head_dim = kv_out_dim // num_kv_heads
 
-        # Transpose and reshape K and V
-        # PyTorch: [num_kv_heads * head_dim, hidden_size] -> [hidden_size, num_kv_heads, head_dim]
-        k_reshaped = k_weight.T.reshape(hidden_size, num_kv_heads, kv_head_dim).transpose(1, 2, 0)
-        v_reshaped = v_weight.T.reshape(hidden_size, num_kv_heads, kv_head_dim).transpose(1, 2, 0)
+        # Transpose and reshape K: [num_kv_heads * head_dim, hidden_size] -> [num_kv_heads, hidden_size, head_dim]
+        k_reshaped = k_weight.T.reshape(hidden_size, num_kv_heads, kv_head_dim).transpose(1, 0, 2)
+        # Transpose and reshape V: [num_kv_heads * head_dim, hidden_size] -> [num_kv_heads, hidden_size, head_dim]
+        v_reshaped = v_weight.T.reshape(hidden_size, num_kv_heads, kv_head_dim).transpose(1, 0, 2)
 
-        # Stack K and V: [2, num_kv_heads, head_dim, hidden_size]
+        # Stack K and V: [2, num_kv_heads, hidden_size, head_dim]
         kv_stacked = np.stack([k_reshaped, v_reshaped], axis=0)
-        # Add extra dimension to match expected format
-        kv_einsum_list.append(kv_stacked[:, :, None, :, :])
+        kv_einsum_list.append(kv_stacked)
 
         # O projection: [hidden_size, num_heads * head_dim] -> [num_heads, head_dim, hidden_size]
         o_weight = to_numpy(state_dict[f"{prefix}.self_attn.o_proj.weight"])

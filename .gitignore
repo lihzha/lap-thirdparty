@@ -9,3 +9,4 @@ uv.lock
 checkpoints/
 paligemma2-3b-pt-224/
 pt_224.npz_.gstmp
+pt_224.npz
