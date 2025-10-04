@@ -85,9 +85,20 @@ class PaliGemmaWeightLoader(WeightLoader):
     """
 
     def load(self, params: at.Params) -> at.Params:
-        path = download.maybe_download(
-            "/n/fs/robot-data/openpi-cot/paligemma2-3b-jax/params/params.npz", gs={"token": "anon"}
-        )
+        path = download.maybe_download("/n/fs/robot-data/openpi-cot/params/params.npz", gs={"token": "anon"})
+        with path.open("rb") as f:
+            flat_params = dict(np.load(f, allow_pickle=False))
+        loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
+        # Add all missing weights.
+        return _merge_params(loaded_params, params, missing_regex=".*")
+
+
+@dataclasses.dataclass(frozen=True)
+class PaliGemma2_3BWeightLoader(WeightLoader):
+    """Loads weights from the official PaliGemma2_3B checkpoint."""
+
+    def load(self, params: at.Params) -> at.Params:
+        path = download.maybe_download("/n/fs/robot-data/openpi-cot/paligemma2-3b-pt-224.b16.npz", gs={"token": "anon"})
         with path.open("rb") as f:
             flat_params = dict(np.load(f, allow_pickle=False))
         loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
@@ -109,7 +120,7 @@ class WeightLoaderChoice(WeightLoader):
     """
 
     # Which loader to use.
-    kind: Literal["none", "checkpoint", "paligemma"] = "paligemma"
+    kind: Literal["none", "checkpoint", "paligemma", "paligemma2_3b"] = "paligemma"
     # Only used when kind == "checkpoint".
     params_path: str | None = None
 
@@ -121,6 +132,8 @@ class WeightLoaderChoice(WeightLoader):
                 return CheckpointWeightLoader(self.params_path)
             case "paligemma":
                 return PaliGemmaWeightLoader()
+            case "paligemma2_3b":
+                return PaliGemma2_3BWeightLoader()
             case "none":
                 return NoOpWeightLoader()
             case _:

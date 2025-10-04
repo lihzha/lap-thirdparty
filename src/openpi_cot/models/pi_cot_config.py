@@ -5,11 +5,11 @@ import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 from openpi.models import model as _model
-import openpi.models.gemma as _gemma
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
+import openpi_cot.models.adapters.gemma_adapter as _gemma
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 

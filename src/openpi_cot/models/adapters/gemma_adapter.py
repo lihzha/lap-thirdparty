@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Literal
 
 import jax.numpy as jnp
 import openpi.models.gemma as _gemma
 import openpi.shared.array_typing as at
+
+Variant = Literal[
+    "dummy", "gemma_300m", "gemma_300m_lora", "gemma_2b", "gemma_2b_lora", "paligemma2_3b", "paligemma2_300m"
+]
 
 
 class ModuleWithDecode(_gemma.Module):
@@ -54,14 +59,23 @@ def get_extended_config(variant: _gemma.Variant | str) -> _gemma.Config:
         pass
 
     v = str(variant)
-    if v == "paligemma2_10b":
+    if v == "paligemma2_3b":
         return _gemma.Config(
-            width=3072,
-            depth=42,
-            mlp_dim=8192,
-            num_heads=24,
-            num_kv_heads=8,
-            head_dim=128,
+            width=2304,
+            depth=26,
+            mlp_dim=9216,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
+        )
+    if v == "paligemma2_300m":
+        return _gemma.Config(
+            width=1024,
+            depth=26,
+            mlp_dim=4096,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
         )
 
     raise ValueError(f"Unknown variant: {variant}")
