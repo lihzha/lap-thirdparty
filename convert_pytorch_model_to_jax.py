@@ -310,12 +310,14 @@ def convert_language_model_to_jax(state_dict: dict[str, torch.Tensor], config: d
 
 
 def save_jax_checkpoint(params: dict[str, np.ndarray], output_path: str):
-    """Save parameters as .npz file."""
+    """Save parameters as .npz file (uncompressed for speed)."""
     os.makedirs(output_path, exist_ok=True)
 
-    # Save as compressed npz file with all parameters
+    # Save as uncompressed npz file for much faster saving
+    # File size will be larger but saving is 10-100x faster
     save_path = os.path.join(output_path, "model.npz")
-    np.savez_compressed(save_path, **params)
+    print(f"Saving {len(params)} parameters to {save_path}...")
+    np.savez(save_path, **params)  # Use np.savez instead of np.savez_compressed
 
     print(f"Checkpoint saved to {save_path}")
 
