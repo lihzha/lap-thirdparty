@@ -1209,7 +1209,7 @@ class OXECoTDatasets:
 
         # Apply global normalization if requested
         if use_global_normalization:
-            global_stats_dir = os.path.join(data_dir, "global_normalization")
+            global_stats_dir = data_dir
             global_stats = self._compute_or_load_global_stats(
                 datasets=datasets,
                 dataset_names=dataset_names,
@@ -1279,8 +1279,8 @@ class OXECoTDatasets:
         state_global_mean = state_weighted_sum / total_state_n
 
         # Pad global mean to action_dim (padding with zeros)
-        action_global_mean = np.pad(action_global_mean, (0, action_dim - len(action_global_mean)), mode='constant')
-        state_global_mean = np.pad(state_global_mean, (0, action_dim - len(state_global_mean)), mode='constant')
+        action_global_mean = np.pad(action_global_mean, (0, action_dim - len(action_global_mean)), mode="constant")
+        state_global_mean = np.pad(state_global_mean, (0, action_dim - len(state_global_mean)), mode="constant")
 
         # Compute weighted variance using parallel axis theorem:
         # Var(combined) = sum_i [n_i * (var_i + (mean_i - global_mean)^2)] / sum_i n_i
@@ -1292,10 +1292,14 @@ class OXECoTDatasets:
             state_n = stats["state"].num_transitions
 
             # Pad local stats to action_dim for comparison with global stats
-            action_local_mean = np.pad(stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode='constant')
-            action_local_std = np.pad(stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode='constant')
-            state_local_mean = np.pad(stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode='constant')
-            state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode='constant')
+            action_local_mean = np.pad(
+                stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode="constant"
+            )
+            action_local_std = np.pad(
+                stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode="constant"
+            )
+            state_local_mean = np.pad(stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant")
+            state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant")
 
             # var_i + (mean_i - global_mean)^2
             action_local_var = np.square(action_local_std)
@@ -1319,10 +1323,10 @@ class OXECoTDatasets:
         state_q99 = np.max([stats["state"].q99 for stats in all_dataset_statistics.values()], axis=0)
 
         # Pad quantiles to action_dim
-        action_q01 = np.pad(action_q01, (0, action_dim - len(action_q01)), mode='constant', constant_values=0)
-        action_q99 = np.pad(action_q99, (0, action_dim - len(action_q99)), mode='constant', constant_values=0)
-        state_q01 = np.pad(state_q01, (0, action_dim - len(state_q01)), mode='constant', constant_values=0)
-        state_q99 = np.pad(state_q99, (0, action_dim - len(state_q99)), mode='constant', constant_values=0)
+        action_q01 = np.pad(action_q01, (0, action_dim - len(action_q01)), mode="constant", constant_values=0)
+        action_q99 = np.pad(action_q99, (0, action_dim - len(action_q99)), mode="constant", constant_values=0)
+        state_q01 = np.pad(state_q01, (0, action_dim - len(state_q01)), mode="constant", constant_values=0)
+        state_q99 = np.pad(state_q99, (0, action_dim - len(state_q99)), mode="constant", constant_values=0)
 
         global_stats = {
             "actions": ExtendedNormStats(
