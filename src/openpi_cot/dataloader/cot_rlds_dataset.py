@@ -1219,16 +1219,16 @@ class OXECoTDatasets:
             )
             logging.info("Applying global normalization with stats: %s", global_stats)
 
-            # Apply normalization at the frame level (after interleaving)
-            def apply_global_norm(frame):
-                return NormalizeActionAndProprio(
-                    norm_stats=global_stats,
-                    normalization_type=action_proprio_normalization_type,
-                    action_key="actions",
-                    state_key="state",
-                )(frame)
+            # # Apply normalization at the frame level (after interleaving)
+            # def apply_global_norm(frame):
+            #     return NormalizeActionAndProprio(
+            #         norm_stats=global_stats,
+            #         normalization_type=action_proprio_normalization_type,
+            #         action_key="actions",
+            #         state_key="state",
+            #     )(frame)
 
-            self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
+            # self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
             self.global_statistics = global_stats
         else:
             self.global_statistics = None
