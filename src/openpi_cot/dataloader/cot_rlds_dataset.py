@@ -293,7 +293,7 @@ class SingleCoTDataset:
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
         if cached_stats is not None:
             # Prefer early filtering when stats are already available to reduce downstream work.
-            self.apply_traj_filters()
+            self.apply_traj_filters(action_key="action")
             self.split_val(split_seed=seed)
             self.apply_restructure()
             self.dataset_statistics = cached_stats
@@ -306,7 +306,7 @@ class SingleCoTDataset:
                 action_key="actions",
                 state_key="state",
             )
-            self.apply_traj_filters()
+            self.apply_traj_filters(action_key="actions")
             self.split_val(split_seed=seed)
 
         self.apply_traj_transforms(
@@ -832,7 +832,7 @@ class DroidCoTDataset(SingleCoTDataset):
 
         self.dataset = self.dataset.map(_remove_raw_action)
 
-    def apply_traj_filters(self):
+    def apply_traj_filters(self, action_key):
         # ------------------------------------------------------------------
         # Regex helpers for robust path/id extraction
         # ------------------------------------------------------------------
@@ -1064,9 +1064,9 @@ class SingleOXECoTDataset(SingleCoTDataset):
 
         self.dataset = self.dataset.traj_map(_get_traj_identifier, self.num_parallel_calls)
 
-    def apply_traj_filters(self):
+    def apply_traj_filters(self, action_key):
         def is_nonzero_length(traj):
-            return tf.shape(traj["action"])[0] > 0
+            return tf.shape(traj[action_key])[0] > 0
 
         def has_any_instruction(traj):
             instr = traj["language_instruction"]

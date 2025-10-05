@@ -204,7 +204,7 @@ def _convert_abs_eef_pose_to_delta_eef_pose(action: tf.Tensor) -> tf.Tensor:
 def _convert_pos_euler_quat(state: tf.Tensor, from_encoding: StateEncoding, to_encoding: StateEncoding) -> tf.Tensor:
     """Convert between POS_EULER and POS_QUAT encodings."""
     if from_encoding == StateEncoding.POS_EULER and to_encoding == StateEncoding.POS_QUAT:
-        # POS_EULER: [x, y, z, rx, ry, rz, pad, gripper] -> POS_QUAT: [x, y, z, qx, qy, qz, qw, gripper]
+        # POS_EULER: [x, y, z, rx, ry, rz, gripper] -> POS_QUAT: [x, y, z, qx, qy, qz, qw, gripper]
         xyz = state[..., :3]  # [..., 3]
         euler = state[..., 3:6]  # [..., 3] - rx, ry, rz
         gripper = state[..., -1:]  # [..., 1]
@@ -215,16 +215,15 @@ def _convert_pos_euler_quat(state: tf.Tensor, from_encoding: StateEncoding, to_e
         return tf.concat([xyz, quat, gripper], axis=-1)
 
     if from_encoding == StateEncoding.POS_QUAT and to_encoding == StateEncoding.POS_EULER:
-        # POS_QUAT: [x, y, z, qx, qy, qz, qw, gripper] -> POS_EULER: [x, y, z, rx, ry, rz, pad, gripper]
+        # POS_QUAT: [x, y, z, qx, qy, qz, qw, gripper] -> POS_EULER: [x, y, z, rx, ry, rz, gripper]
         xyz = state[..., :3]  # [..., 3]
         quat = state[..., 3:7]  # [..., 4] - qx, qy, qz, qw
         gripper = state[..., -1:]  # [..., 1]
 
         # Convert quaternion to euler angles
         euler = _quaternion_to_euler(quat)
-        pad = tf.zeros_like(gripper)  # [..., 1] - padding
 
-        return tf.concat([xyz, euler, pad, gripper], axis=-1)
+        return tf.concat([xyz, euler, gripper], axis=-1)
 
     raise ValueError(f"Unsupported conversion: {from_encoding} -> {to_encoding}")
 
@@ -233,7 +232,7 @@ def _convert_pos_to_eef_r6(state: tf.Tensor, from_encoding: StateEncoding) -> tf
     """Convert POS_EULER or POS_QUAT to EEF_R6 encoding."""
     dtype = state.dtype
     if from_encoding == StateEncoding.POS_EULER:
-        # POS_EULER: [x, y, z, rx, ry, rz, pad, gripper] -> EEF_R6: [x, y, z, r11, r12, r13, r21, r22, r23, gripper]
+        # POS_EULER: [x, y, z, rx, ry, rz, gripper] -> EEF_R6: [x, y, z, r11, r12, r13, r21, r22, r23, gripper]
         xyz = state[..., :3]  # [..., 3]
         euler = state[..., 3:6]  # [..., 3] - rx, ry, rz
         gripper = state[..., -1:]  # [..., 1]
@@ -285,8 +284,7 @@ def _convert_eef_r6_to_pos(state: tf.Tensor, to_encoding: StateEncoding) -> tf.T
     if to_encoding == StateEncoding.POS_EULER:
         # Convert rotation matrix to euler angles
         euler = _rotation_matrix_to_euler(rot_matrix)
-        pad = tf.zeros_like(gripper)  # [..., 1] - padding
-        return tf.concat([xyz, euler, pad, gripper], axis=-1)
+        return tf.concat([xyz, euler, gripper], axis=-1)
 
     if to_encoding == StateEncoding.POS_QUAT:
         # Convert rotation matrix to quaternion
