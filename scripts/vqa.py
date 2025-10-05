@@ -17,6 +17,32 @@ import tyro
 import openpi_cot.policies.adapters.policy_config_adapter as _policy_config
 from openpi_cot.training import config as _config
 
+try:
+    import tensorflow_datasets as tfds  # type: ignore
+except Exception:  # pragma: no cover - optional at runtime
+    tfds = None  # type: ignore
+from typing import Any
+
+import flax.nnx as nnx
+import flax.traverse_util as traverse_util
+import jax
+import jax.numpy as jnp
+import openpi.shared.array_typing as at
+import openpi.shared.nnx_utils as nnx_utils
+
+import openpi_cot.training.weight_loaders as _weight_loaders
+
+
+def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
+    """Loads and validates the weights. Returns a loaded subset of the weights."""
+    loaded_params = loader.load(params_shape)
+    at.check_pytree_equality(expected=params_shape, got=loaded_params, check_shapes=True, check_dtypes=True)
+
+    # Remove jax.ShapeDtypeStruct from the loaded params. This makes sure that only the loaded params are returned.
+    return traverse_util.unflatten_dict(
+        {k: v for k, v in traverse_util.flatten_dict(loaded_params).items() if not isinstance(v, jax.ShapeDtypeStruct)}
+    )
+
 
 class EnvMode(enum.Enum):
     """Supported environments."""
@@ -87,6 +113,45 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
         dir="gs://openpi-assets/checkpoints/pi05_libero",
     ),
 }
+
+
+def init_model(
+    config: _config.TrainConfig,
+    init_rng: at.KeyArrayLike,
+) -> Any:
+    rng, model_rng = jax.random.split(init_rng)
+    # initialize the model (and its parameters).
+    model = config.model.create(model_rng)
+
+    # Get the state and load partial params
+    graphdef, state = nnx.split(model)
+    partial_params = _load_weights_and_validate(config.weight_loader, state.to_pure_dict())
+
+    # Replace the state with partial params (this modifies state in place)
+    state.replace_by_pure_dict(partial_params)
+
+    # Merge the updated state back into the model
+    model = nnx.merge(graphdef, state)
+
+    # Apply frozen param conversion to bfloat16 (replicating train.py behavior)
+    params = nnx.state(model)
+    params = nnx_utils.state_map(
+        params,
+        config.freeze_filter,
+        lambda p: p.replace(p.value.astype(jnp.bfloat16)),
+    )
+
+    # Update the model with the converted params
+    nnx.update(model, params)
+
+    return model
+
+
+def create_model(config):
+    rng = jax.random.key(config.seed)
+    _, init_rng = jax.random.split(rng)
+    model = init_model(config, init_rng)
+    return model
 
 
 def create_default_policy(env: EnvMode, *, default_prompt: str | None = None) -> _policy.Policy:
@@ -160,7 +225,8 @@ def _iter_droid_request_data(
 
 
 def main(args: Args) -> None:
-    policy = create_policy(args, model=None)
+    model = create_model(_config.get_config(args.policy.config))
+    policy = create_policy(args, model=model)
 
     if tfds is None:
         raise ImportError("Please install tensorflow_datasets to use the DROID dataloader.")

@@ -1046,12 +1046,15 @@ def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    import tensorflow_graphics.geometry.transformation as tft
+
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     # every input feature is batched, ie has leading batch dimension
     trajectory["observation"]["proprio"] = tf.concat(
         (
-            trajectory["observation"]["eef_pose"],
+            trajectory["observation"]["eef_pose"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["eef_pose"][:, 3:7]),
             trajectory["observation"]["state_gripper_pose"][..., None],
         ),
         axis=-1,

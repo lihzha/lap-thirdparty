@@ -338,8 +338,6 @@ class SingleCoTDataset:
             )
 
     def build_dataset_builder(self, ds_name, data_dir):
-        if ds_name == "fmb":
-            ds_name = "fmb:0.0.1"
         return tfds.builder(ds_name, data_dir=data_dir)
 
     def build_dataset(self, builder):

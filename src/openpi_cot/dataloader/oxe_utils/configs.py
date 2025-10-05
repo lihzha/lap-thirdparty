@@ -571,7 +571,7 @@ OXE_DATASET_CONFIGS = {
             "wrist": "image_wrist_1_depth",
         },
         "state_obs_keys": ["proprio"],
-        "state_encoding": StateEncoding.POS_EULER,
+        "state_encoding": StateEncoding.POS_QUAT,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "dobbe": {
