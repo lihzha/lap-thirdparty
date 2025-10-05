@@ -401,13 +401,22 @@ class SingleCoTDataset:
             )
 
         def pad_action_state(traj):
-            # pad actions to action_dim
-            traj[action_key] = tf.pad(traj[action_key], [[0, 0], [0, self.action_dim - tf.shape(traj[action_key])[-1]]])
-            # pad state to action_dim
+            # Pad actions to action_dim (only if not already padded)
+            action_last_dim = tf.shape(traj[action_key])[-1]
+            pad_amount_action = tf.maximum(0, self.action_dim - action_last_dim)
+            traj[action_key] = tf.pad(traj[action_key], [[0, 0], [0, pad_amount_action]])
+            # Ensure static shape is preserved
+            traj[action_key].set_shape([None, self.action_dim])
+
+            # Pad state to action_dim (only if not already padded)
+            state_last_dim = tf.shape(traj["observation"][state_key])[-1]
+            pad_amount_state = tf.maximum(0, self.action_dim - state_last_dim)
             traj["observation"][state_key] = tf.pad(
                 traj["observation"][state_key],
-                [[0, 0], [0, self.action_dim - tf.shape(traj["observation"][state_key])[-1]]],
+                [[0, 0], [0, pad_amount_state]],
             )
+            # Ensure static shape is preserved
+            traj["observation"][state_key].set_shape([None, self.action_dim])
             return traj
 
         self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
@@ -418,6 +427,8 @@ class SingleCoTDataset:
 
             action_chunk_indices = compute_window_indices(traj_len, action_horizon)
             traj[action_key] = tf.gather(traj[action_key], action_chunk_indices)
+            # Ensure static shape is preserved: [T, action_horizon, action_dim]
+            traj[action_key].set_shape([None, action_horizon, self.action_dim])
             return traj
 
         self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
@@ -446,6 +457,8 @@ class SingleCoTDataset:
                     return tf.concat([la_window, pad], axis=1)
 
                 traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
+                # Set static shape for TensorFlow's shape inference
+                traj["language_actions"].set_shape([None, summation_steps])
             else:
                 # Gather numeric actions for the future window up to control frequency: [T, trimmed_len, A]
                 actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
@@ -472,6 +485,8 @@ class SingleCoTDataset:
                     serialized_flat,
                     [tf.shape(actions_window)[0], int(summation_steps)],
                 )
+                # Set static shape for TensorFlow's shape inference
+                traj["language_actions"].set_shape([None, summation_steps])
             if self.vis_dataset:
                 grouped_images = tf.gather(traj["observation"][self.spec.primary_image_key], summation_indices)
                 traj["observation"][self.spec.primary_image_key] = grouped_images
@@ -696,6 +711,15 @@ class DroidCoTDataset(SingleCoTDataset):
                 to_encoding=self.config.action_encoding,
                 to_delta_cartesian_pose=True,
             )
+            # Pad actions to action_dim to ensure fixed shape for dataset interleaving
+            action_pad_amount = self.action_dim - tf.shape(actions)[-1]
+            actions = tf.pad(
+                actions,
+                [[0, 0], [0, action_pad_amount]],
+            )
+            # Set static shape for TensorFlow's shape inference
+            actions.set_shape([None, self.action_dim])
+
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
             episode_id = traj["trajectory_id"][0]
@@ -747,6 +771,15 @@ class DroidCoTDataset(SingleCoTDataset):
             state = convert_state_encoding(
                 state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
             )
+
+            # Pad state to action_dim to ensure fixed shape for dataset interleaving
+            state_pad_amount = self.action_dim - tf.shape(state)[-1]
+            state = tf.pad(
+                state,
+                [[0, 0], [0, state_pad_amount]],
+            )
+            # Set static shape for TensorFlow's shape inference
+            state.set_shape([None, self.action_dim])
 
             _return_dict = {
                 "actions": tf.cast(actions, tf.float32),
