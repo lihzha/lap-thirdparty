@@ -286,8 +286,8 @@ def main(config: _config.TrainConfig):
         train_state_sharding_without_params, params_sharding = _split_params(train_state_sharding)
 
         # Create restore args with explicit shardings to handle device mismatch
-        restore_args = {
-            "train_state": ocp.args.PyTreeRestore(
+        restore_args = ocp.args.Composite(
+            train_state=ocp.args.PyTreeRestore(
                 item=train_state_without_params,
                 transforms={},
                 restore_args=ocp.checkpoint_utils.construct_restore_args(
@@ -295,7 +295,7 @@ def main(config: _config.TrainConfig):
                     sharding_tree=train_state_sharding_without_params,
                 ),
             ),
-            "params": ocp.args.PyTreeRestore(
+            params=ocp.args.PyTreeRestore(
                 item={"params": params},
                 transforms={},
                 restore_args=ocp.checkpoint_utils.construct_restore_args(
@@ -303,7 +303,7 @@ def main(config: _config.TrainConfig):
                     sharding_tree={"params": params_sharding},
                 ),
             ),
-        }
+        )
 
         restored = checkpoint_manager.restore(
             config.eval_checkpoint_step,
