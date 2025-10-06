@@ -1241,13 +1241,13 @@ class OXECoTDatasets:
 
         self.dataset = prepare_batched_dataset(
             dataset=self.dataset,
-            want_val=self.want_val,
+            want_val=want_val,
             shuffle=shuffle,
             shuffle_buffer_size=config.shuffle_buffer_size,
             seed=seed,
             max_samples=max_samples,
             batch_size=batch_size,
-            use_wrist_image=self.use_wrist_image,
+            use_wrist_image=config.use_wrist_image,
             resize_resolution=config.resize_resolution,
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
