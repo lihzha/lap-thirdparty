@@ -214,10 +214,8 @@ def _iter_droid_request_data(
                 "state": np.concatenate([cartesian_pos, grip_obs]),
             },
         }
-        assert prompt is not None
         # req["prompt"] = prompt
         req["prompt"] = step["language_instruction"]
-        print(prompt)
         yield req
 
 
@@ -238,7 +236,7 @@ def main(args: Args) -> None:
         )
     ):
         outputs = policy.vqa_infer(req)
-        print({"request_keys": list(req.keys()), "text": outputs.get("reasoning")})
+        print({"request_keys": list(req.keys()), "prompt": req["prompt"], "text": outputs.get("reasoning")})
         if idx + 1 >= args.droid_max_examples:
             break
 
