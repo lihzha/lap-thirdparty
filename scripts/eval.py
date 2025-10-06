@@ -468,9 +468,10 @@ def evaluate_rollout(
 ) -> dict[str, float]:
     """Evaluate rollout performance (language action prediction accuracy)."""
     evaluator = RolloutEvaluator(config)
+    # Note: batch input uses replicated sharding because prepare_eval_batch is called outside JIT
     peval_step = jax.jit(
         evaluator,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
         out_shardings=(replicated_sharding, replicated_sharding),
     )
 
@@ -499,8 +500,13 @@ def evaluate_rollout(
                 logging.info(f"Reached end of dataset at batch {batch_idx}")
                 break
 
+            # Prepare eval batch (remove reasoning) and replicate for JIT
+            eval_batch = vis_tools.prepare_eval_batch(batch)
+            # Replicate the batch to match expected sharding
+            eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
+
             # Run rollout evaluation
-            id_buf, t_final = peval_step(eval_rng, train_state, vis_tools.prepare_eval_batch(batch))
+            id_buf, t_final = peval_step(eval_rng, train_state, eval_batch_replicated)
 
             # Process results on host
             if jax.process_index() == 0:
