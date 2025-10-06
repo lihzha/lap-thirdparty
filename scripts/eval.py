@@ -311,12 +311,12 @@ def main(config: _config.TrainConfig):
 
         train_state = _merge_params(restored["train_state"], restored["params"])
 
-        # Use EMA params for evaluation if available (they typically perform better)
-        if train_state.ema_params is not None:
-            logging.info("Using EMA params for evaluation")
-            train_state = dataclasses.replace(train_state, params=train_state.ema_params)
-        else:
-            logging.info("EMA params not available, using regular params for evaluation")
+        # # Use EMA params for evaluation if available (they typically perform better)
+        # if train_state.ema_params is not None:
+        #     logging.info("Using EMA params for evaluation")
+        #     train_state = dataclasses.replace(train_state, params=train_state.ema_params)
+        # else:
+        #     logging.info("EMA params not available, using regular params for evaluation")
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
