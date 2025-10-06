@@ -536,7 +536,6 @@ _CONFIGS = [
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=140,
-            number_token_weight=1.0,
             pi05=True,
             discrete_state_input=True,
         ),

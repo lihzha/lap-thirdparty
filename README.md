@@ -58,6 +58,17 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi_droid_cot_v6 --exp
 
 The command will log training progress to the console and save checkpoints to the `gs://<BUCKET_NAME>/checkpoints` directory. You can also monitor training progress on the Weights & Biases dashboard. For maximally using the TPU memory, set `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` before running training -- this enables JAX to use up to 90% of the TPU memory (vs. the default of 75%).
 
+## Running eval
+
+uv run scripts/eval.py \
+      pi_droid_cot_v4 \
+      --exp-name=test \
+      --eval-checkpoint-step=26500 \
+      --num-eval-batches=1000 \
+      --eval-mode=token_accuracy
+
+## Running VQA
+uv run scripts/train.py policy:checkpoint --policy.config=paligemma2_vqa_v4 --policy.dir=None
 
 ## New Features Summary
 
