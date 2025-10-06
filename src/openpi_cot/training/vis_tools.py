@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Mapping, Sequence
+import dataclasses
 from dataclasses import dataclass
 from dataclasses import field
 import logging
@@ -484,86 +485,91 @@ def log_hard_examples_payload(payload: dict[str, Any]) -> None:
 def prepare_eval_batch(batch):
     # Process the batch to remove reasoning and update masks
     obs, actions = batch
+    new_tokenized_prompt = obs.tokenized_prompt * (~obs.tokenized_reasoning_mask)
+    new_obs = dataclasses.asdict(obs)
+    new_obs["tokenized_prompt"] = new_tokenized_prompt
+    new_obs = CoTObservation(**new_obs)
+    return (new_obs, actions)
 
-    # Find position 108 (start of reasoning) in each batch item
-    batch_size = obs.tokenized_prompt.shape[0]
-    new_tokenized_prompts = []
-    new_tokenized_prompt_masks = []
-    new_tokenized_reasoning_masks = []
+    # # Find position 108 (start of reasoning) in each batch item
+    # batch_size = obs.tokenized_prompt.shape[0]
+    # new_tokenized_prompts = []
+    # new_tokenized_prompt_masks = []
+    # new_tokenized_reasoning_masks = []
 
-    for i in range(batch_size):
-        prompt_tokens = obs.tokenized_prompt[i]
+    # for i in range(batch_size):
+    #     prompt_tokens = obs.tokenized_prompt[i]
 
-        # Find position of token 108 (start of reasoning) - get the LAST occurrence
-        # Ensure prompt_tokens is int32 for the comparison
-        prompt_tokens_int32 = prompt_tokens.astype(jnp.int32)
-        # Find all positions where token is 108, and take the maximum (last occurrence)
-        matches = jnp.where(prompt_tokens_int32 == 108, jnp.arange(len(prompt_tokens_int32)), -1)
-        pos_108 = jnp.max(matches)
+    #     # Find position of token 108 (start of reasoning) - get the LAST occurrence
+    #     # Ensure prompt_tokens is int32 for the comparison
+    #     prompt_tokens_int32 = prompt_tokens.astype(jnp.int32)
+    #     # Find all positions where token is 108, and take the maximum (last occurrence)
+    #     matches = jnp.where(prompt_tokens_int32 == 108, jnp.arange(len(prompt_tokens_int32)), -1)
+    #     pos_108 = jnp.max(matches)
 
-        if pos_108 >= 0:
-            # Remove everything after token 108 (inclusive)
-            prompt_without_reasoning = prompt_tokens[: pos_108 + 1]
-            original_length = prompt_tokens.shape[0]
+    #     if pos_108 >= 0:
+    #         # Remove everything after token 108 (inclusive)
+    #         prompt_without_reasoning = prompt_tokens[: pos_108 + 1]
+    #         original_length = prompt_tokens.shape[0]
 
-            # Left pad to maintain the same length
-            padding_length = original_length - prompt_without_reasoning.shape[0]
-            # Ensure consistent dtype for concatenation
-            padding_zeros = jnp.zeros(padding_length, dtype=prompt_tokens.dtype)
-            prompt_without_reasoning = prompt_without_reasoning.astype(prompt_tokens.dtype)
-            padded_prompt = jnp.concatenate([padding_zeros, prompt_without_reasoning])
+    #         # Left pad to maintain the same length
+    #         padding_length = original_length - prompt_without_reasoning.shape[0]
+    #         # Ensure consistent dtype for concatenation
+    #         padding_zeros = jnp.zeros(padding_length, dtype=prompt_tokens.dtype)
+    #         prompt_without_reasoning = prompt_without_reasoning.astype(prompt_tokens.dtype)
+    #         padded_prompt = jnp.concatenate([padding_zeros, prompt_without_reasoning])
 
-            # Create new mask: True for non-zero tokens, False for padding
-            new_mask = (padded_prompt != 0).astype(jnp.bool_)
+    #         # Create new mask: True for non-zero tokens, False for padding
+    #         new_mask = (padded_prompt != 0).astype(jnp.bool_)
 
-            # Create reasoning mask: all False - ensure consistent dtype
-            reasoning_mask = jnp.zeros(original_length, dtype=jnp.bool_)
+    #         # Create reasoning mask: all False - ensure consistent dtype
+    #         reasoning_mask = jnp.zeros(original_length, dtype=jnp.bool_)
 
-        else:
-            # No token 108 found, keep original
-            padded_prompt = prompt_tokens
-            # Ensure consistent dtype for the mask
-            if obs.tokenized_prompt_mask is not None:
-                new_mask = obs.tokenized_prompt_mask[i].astype(jnp.bool_)
-            else:
-                # Create a boolean mask of the same length as prompt_tokens
-                new_mask = jnp.ones(prompt_tokens.shape[0], dtype=jnp.bool_)
-            # Create reasoning mask with consistent dtype - use original length instead of zeros_like
-            reasoning_mask = jnp.zeros(prompt_tokens.shape[0], dtype=jnp.bool_)
+    #     else:
+    #         # No token 108 found, keep original
+    #         padded_prompt = prompt_tokens
+    #         # Ensure consistent dtype for the mask
+    #         if obs.tokenized_prompt_mask is not None:
+    #             new_mask = obs.tokenized_prompt_mask[i].astype(jnp.bool_)
+    #         else:
+    #             # Create a boolean mask of the same length as prompt_tokens
+    #             new_mask = jnp.ones(prompt_tokens.shape[0], dtype=jnp.bool_)
+    #         # Create reasoning mask with consistent dtype - use original length instead of zeros_like
+    #         reasoning_mask = jnp.zeros(prompt_tokens.shape[0], dtype=jnp.bool_)
 
-            logging.info(f"Batch {i}: No token 108 found, keeping original prompt")
+    #         logging.info(f"Batch {i}: No token 108 found, keeping original prompt")
 
-        new_tokenized_prompts.append(padded_prompt)
-        new_tokenized_prompt_masks.append(new_mask)
-        new_tokenized_reasoning_masks.append(reasoning_mask)
+    #     new_tokenized_prompts.append(padded_prompt)
+    #     new_tokenized_prompt_masks.append(new_mask)
+    #     new_tokenized_reasoning_masks.append(reasoning_mask)
 
-    # Ensure all tensors have consistent types before stacking
-    # All masks should be boolean, all prompts should be int32
-    new_tokenized_prompts = [p.astype(jnp.int32) for p in new_tokenized_prompts]
-    new_tokenized_prompt_masks = [m.astype(jnp.bool_) for m in new_tokenized_prompt_masks]
-    new_tokenized_reasoning_masks = [r.astype(jnp.bool_) for r in new_tokenized_reasoning_masks]
+    # # Ensure all tensors have consistent types before stacking
+    # # All masks should be boolean, all prompts should be int32
+    # new_tokenized_prompts = [p.astype(jnp.int32) for p in new_tokenized_prompts]
+    # new_tokenized_prompt_masks = [m.astype(jnp.bool_) for m in new_tokenized_prompt_masks]
+    # new_tokenized_reasoning_masks = [r.astype(jnp.bool_) for r in new_tokenized_reasoning_masks]
 
-    # Stack the processed tensors
-    new_tokenized_prompt = jnp.stack(new_tokenized_prompts)
-    new_tokenized_prompt_mask = jnp.stack(new_tokenized_prompt_masks)
-    new_tokenized_reasoning_mask = jnp.stack(new_tokenized_reasoning_masks)
+    # # Stack the processed tensors
+    # new_tokenized_prompt = jnp.stack(new_tokenized_prompts)
+    # new_tokenized_prompt_mask = jnp.stack(new_tokenized_prompt_masks)
+    # new_tokenized_reasoning_mask = jnp.stack(new_tokenized_reasoning_masks)
 
-    # Create new observation with modified prompts and masks
-    new_obs = CoTObservation(
-        images=obs.images,
-        image_masks=obs.image_masks,
-        state=obs.state,
-        tokenized_prompt=new_tokenized_prompt,
-        tokenized_prompt_mask=new_tokenized_prompt_mask,
-        tokenized_reasoning_mask=new_tokenized_reasoning_mask,
-        token_ar_mask=obs.token_ar_mask,
-        token_loss_mask=obs.token_loss_mask,
-        example_mask=obs.example_mask,
-    )
+    # # Create new observation with modified prompts and masks
+    # new_obs = CoTObservation(
+    #     images=obs.images,
+    #     image_masks=obs.image_masks,
+    #     state=obs.state,
+    #     tokenized_prompt=new_tokenized_prompt,
+    #     tokenized_prompt_mask=new_tokenized_prompt_mask,
+    #     tokenized_reasoning_mask=new_tokenized_reasoning_mask,
+    #     token_ar_mask=obs.token_ar_mask,
+    #     token_loss_mask=obs.token_loss_mask,
+    #     example_mask=obs.example_mask,
+    # )
 
-    # Create new batch with modified observation
-    new_batch = (new_obs, actions)
-    return new_batch
+    # # Create new batch with modified observation
+    # new_batch = (new_obs, actions)
+    # return new_batch
 
 
 def subsample_batch(
