@@ -187,8 +187,7 @@ class RolloutEvaluator:
         model.eval()
 
         # Prepare eval batch (remove reasoning from ground truth)
-        eval_batch = vis_tools.prepare_eval_batch(batch)
-        observation, _ = eval_batch
+        observation, _ = batch
 
         # Sample reasoning tokens
         id_buf, t_final = model.sample_reasoning(observation)
@@ -311,6 +310,13 @@ def main(config: _config.TrainConfig):
         )
 
         train_state = _merge_params(restored["train_state"], restored["params"])
+
+        # Use EMA params for evaluation if available (they typically perform better)
+        if train_state.ema_params is not None:
+            logging.info("Using EMA params for evaluation")
+            train_state = dataclasses.replace(train_state, params=train_state.ema_params)
+        else:
+            logging.info("EMA params not available, using regular params for evaluation")
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
@@ -494,7 +500,7 @@ def evaluate_rollout(
                 break
 
             # Run rollout evaluation
-            id_buf, t_final = peval_step(eval_rng, train_state, batch)
+            id_buf, t_final = peval_step(eval_rng, train_state, vis_tools.prepare_eval_batch(batch))
 
             # Process results on host
             if jax.process_index() == 0:
