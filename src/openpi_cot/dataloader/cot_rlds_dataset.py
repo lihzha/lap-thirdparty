@@ -315,7 +315,7 @@ class SingleCoTDataset:
 
         self.apply_repack_transforms()
 
-        self.dataset = self.dataset.shuffle(60_000, seed=self.seed)
+        # self.dataset = self.dataset.shuffle(60_000, seed=self.seed)
 
         self.apply_flatten()
 
