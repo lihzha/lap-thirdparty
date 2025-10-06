@@ -264,13 +264,53 @@ def main(config: _config.TrainConfig):
         out_shardings=train_state_sharding,
     )(init_rng)
 
-    # Restore checkpoint
-    train_state = _checkpoints.restore_state(
-        checkpoint_manager,
-        train_state,
-        data_loader,
-        step=config.eval_checkpoint_step,
-    )
+    # Restore checkpoint with explicit sharding for device mismatch handling
+    import orbax.checkpoint as ocp
+
+    with at.disable_typechecking():
+        # Split params for restoration
+        def _split_params(state):
+            """Split params from train state for separate checkpointing."""
+            params = state.params
+            state_without_params = dataclasses.replace(state, params=None)
+            return state_without_params, params
+
+        def _merge_params(state, params_dict):
+            """Merge params back into train state after restoration."""
+            params = params_dict.get("params")
+            return dataclasses.replace(state, params=params)
+
+        train_state_without_params, params = _split_params(train_state)
+
+        # Get sharding for restoration
+        train_state_sharding_without_params, params_sharding = _split_params(train_state_sharding)
+
+        # Create restore args with explicit shardings to handle device mismatch
+        restore_args = {
+            "train_state": ocp.args.PyTreeRestore(
+                item=train_state_without_params,
+                transforms={},
+                restore_args=ocp.checkpoint_utils.construct_restore_args(
+                    train_state_without_params,
+                    sharding_tree=train_state_sharding_without_params,
+                ),
+            ),
+            "params": ocp.args.PyTreeRestore(
+                item={"params": params},
+                transforms={},
+                restore_args=ocp.checkpoint_utils.construct_restore_args(
+                    {"params": params},
+                    sharding_tree={"params": params_sharding},
+                ),
+            ),
+        }
+
+        restored = checkpoint_manager.restore(
+            config.eval_checkpoint_step,
+            args=restore_args,
+        )
+
+        train_state = _merge_params(restored["train_state"], restored["params"])
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
