@@ -898,6 +898,12 @@ class DroidCoTDataset(SingleCoTDataset):
     ):
         self.use_json_actions = config.use_json_actions
 
+        if num_parallel_calls == -1 or num_parallel_reads == -1:
+            want_val = split == "val"
+            total_threads = len(os.sched_getaffinity(0))
+            num_parallel_reads = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
+            num_parallel_calls = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
+
         if train_dataset is not None:
             self.cam_table = train_dataset.cam_table
             self.lang_table = train_dataset.lang_table
