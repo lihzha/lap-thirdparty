@@ -1,4 +1,4 @@
-"""Evaluate token accuracy on a checkpoint using validation data."""
+"""Evaluate token accuracy and/or rollout performance on a checkpoint using validation data."""
 
 import dataclasses
 import logging
@@ -11,6 +11,7 @@ import flax.nnx as nnx
 from flax.training import common_utils
 import jax
 import jax.numpy as jnp
+import numpy as np
 from openpi.models import model as _model
 import openpi.shared.array_typing as at
 from rail_tpu_utils import prevent_cross_region
@@ -23,6 +24,7 @@ import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
+import openpi_cot.training.vis_tools as vis_tools
 
 
 def init_logging():
@@ -65,11 +67,12 @@ def init_wandb(
         wandb.init(mode="disabled")
         return
 
+    eval_tag = f"eval_{config.eval_mode}"
     wandb.init(
-        name=f"{config.exp_name}_token_accuracy_eval",
+        name=f"{config.exp_name}_{eval_tag}",
         config=dataclasses.asdict(config),
         project=config.project_name,
-        tags=["evaluation", "token_accuracy"],
+        tags=["evaluation", config.eval_mode],
     )
 
 
@@ -147,7 +150,7 @@ class TokenAccuracyEvaluator:
             actions: _model.Actions,
         ):
             per_sample_loss = model.compute_loss(rng, observation, actions, train=False)
-            token_accuracy = getattr(model, 'token_accuracy', None)
+            token_accuracy = getattr(model, "token_accuracy", None)
             token_acc_value = token_accuracy.value if token_accuracy is not None else jnp.array(0.0)
             return jnp.mean(per_sample_loss), (per_sample_loss, token_acc_value)
 
@@ -161,6 +164,36 @@ class TokenAccuracyEvaluator:
             "token_accuracy": token_accuracy,
         }
         return info
+
+
+class RolloutEvaluator:
+    def __init__(self, config: _config.TrainConfig):
+        self.config = config
+
+    @at.typecheck
+    def __call__(
+        self,
+        rng: at.KeyArrayLike,
+        state: training_utils.TrainState,
+        batch: tuple[CoTObservation, _model.Actions],
+    ) -> tuple[jax.Array, jax.Array]:
+        """Sample reasoning tokens for rollout evaluation.
+
+        Returns:
+            id_buf: Sampled token IDs [batch, seq_len, 1]
+            t_final: Final sequence length
+        """
+        model = nnx.merge(state.model_def, state.params)
+        model.eval()
+
+        # Prepare eval batch (remove reasoning from ground truth)
+        eval_batch = vis_tools.prepare_eval_batch(batch)
+        observation, _ = eval_batch
+
+        # Sample reasoning tokens
+        id_buf, t_final = model.sample_reasoning(observation)
+
+        return id_buf, t_final
 
 
 def main(config: _config.TrainConfig):
@@ -191,7 +224,6 @@ def main(config: _config.TrainConfig):
         async_enable=False,  # No async for evaluation
     )
 
-    # Create validation data loader
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
@@ -200,8 +232,6 @@ def main(config: _config.TrainConfig):
         seed=config.seed,
         max_samples=getattr(config.data, "val_max_samples", None),
     )
-
-    logging.info("Initialized validation data loader")
 
     # Initialize train state shape and sharding
     from openpi.training import optimizer as _optimizer
@@ -226,23 +256,24 @@ def main(config: _config.TrainConfig):
     train_state_shape = jax.eval_shape(init, init_rng)
     train_state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
+    # Initialize concrete train state with proper sharding for checkpoint restoration
+    logging.info("Initializing train state for checkpoint restoration...")
+    train_state = jax.jit(
+        init,
+        in_shardings=replicated_sharding,
+        out_shardings=train_state_sharding,
+    )(init_rng)
+
     # Restore checkpoint
     train_state = _checkpoints.restore_state(
         checkpoint_manager,
-        train_state_shape,
+        train_state,
         data_loader,
         step=config.eval_checkpoint_step,
     )
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
-
-    # Create evaluator
-    evaluator = TokenAccuracyEvaluator(config)
-    peval_step = jax.jit(
-        evaluator,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-    )
 
     # Determine number of evaluation batches
     num_eval_batches = config.num_eval_batches
@@ -255,9 +286,76 @@ def main(config: _config.TrainConfig):
             # Default to 1000 batches if not specified
             num_eval_batches = 1000
 
-    logging.info(f"Evaluating over {num_eval_batches} batches")
+    logging.info(f"Evaluating over {num_eval_batches} batches with mode: {config.eval_mode}")
 
-    # Run evaluation
+    results = {}
+
+    # Token accuracy evaluation
+    if config.eval_mode in ["token_accuracy", "both"]:
+        logging.info("Running token accuracy evaluation...")
+        token_results = evaluate_token_accuracy(
+            config,
+            eval_rng,
+            train_state,
+            train_state_sharding,
+            data_loader,
+            mesh,
+            data_sharding,
+            replicated_sharding,
+            num_eval_batches,
+        )
+        results.update(token_results)
+
+    # Rollout evaluation
+    if config.eval_mode in ["rollout", "both"]:
+        logging.info("Running rollout evaluation...")
+        rollout_results = evaluate_rollout(
+            config,
+            eval_rng,
+            train_state,
+            train_state_sharding,
+            data_loader,
+            mesh,
+            data_sharding,
+            replicated_sharding,
+            num_eval_batches,
+        )
+        results.update(rollout_results)
+
+    # Log final results
+    logging.info("=" * 80)
+    logging.info("EVALUATION RESULTS")
+    logging.info("=" * 80)
+    for key, value in results.items():
+        logging.info(f"{key:40s}: {value}")
+    logging.info("=" * 80)
+
+    # Log to wandb
+    if jax.process_index() == 0 and config.wandb_enabled:
+        wandb.log(results, step=int(train_state.step))
+        wandb.summary.update(results)
+
+    return results
+
+
+def evaluate_token_accuracy(
+    config: _config.TrainConfig,
+    eval_rng: at.KeyArrayLike,
+    train_state: training_utils.TrainState,
+    train_state_sharding,
+    data_loader,
+    mesh,
+    data_sharding,
+    replicated_sharding,
+    num_eval_batches: int,
+) -> dict[str, float]:
+    """Evaluate token accuracy."""
+    evaluator = TokenAccuracyEvaluator(config)
+    peval_step = jax.jit(
+        evaluator,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    )
+
     data_iter = iter(data_loader)
     eval_infos = []
 
@@ -265,7 +363,7 @@ def main(config: _config.TrainConfig):
         range(num_eval_batches),
         total=num_eval_batches,
         dynamic_ncols=True,
-        desc="Evaluating token accuracy",
+        desc="Token accuracy evaluation",
         disable=(jax.process_index() != 0),
     )
 
@@ -284,10 +382,12 @@ def main(config: _config.TrainConfig):
             if (batch_idx + 1) % 10 == 0:
                 stacked_infos = common_utils.stack_forest(eval_infos[-10:])
                 reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-                pbar.set_postfix({
-                    "loss": f"{reduced_info['loss']:.4f}",
-                    "token_acc": f"{reduced_info['token_accuracy']:.4f}",
-                })
+                pbar.set_postfix(
+                    {
+                        "loss": f"{reduced_info['loss']:.4f}",
+                        "token_acc": f"{reduced_info['token_accuracy']:.4f}",
+                    }
+                )
 
     # Compute final statistics
     stacked_infos = common_utils.stack_forest(eval_infos)
@@ -297,29 +397,115 @@ def main(config: _config.TrainConfig):
     token_accuracies = jax.device_get(stacked_infos["token_accuracy"])
     losses = jax.device_get(stacked_infos["loss"])
 
-    results = {
-        "eval/mean_token_accuracy": float(final_results["token_accuracy"]),
-        "eval/mean_loss": float(final_results["loss"]),
-        "eval/std_token_accuracy": float(jnp.std(token_accuracies)),
-        "eval/std_loss": float(jnp.std(losses)),
-        "eval/min_token_accuracy": float(jnp.min(token_accuracies)),
-        "eval/max_token_accuracy": float(jnp.max(token_accuracies)),
+    return {
+        "eval/token_accuracy/mean": float(final_results["token_accuracy"]),
+        "eval/token_accuracy/loss": float(final_results["loss"]),
+        "eval/token_accuracy/std": float(jnp.std(token_accuracies)),
+        "eval/token_accuracy/loss_std": float(jnp.std(losses)),
+        "eval/token_accuracy/min": float(jnp.min(token_accuracies)),
+        "eval/token_accuracy/max": float(jnp.max(token_accuracies)),
         "eval/num_batches_evaluated": len(eval_infos),
         "eval/checkpoint_step": int(train_state.step),
     }
 
-    # Log results
-    logging.info("=" * 80)
-    logging.info("EVALUATION RESULTS")
-    logging.info("=" * 80)
-    for key, value in results.items():
-        logging.info(f"{key:40s}: {value}")
-    logging.info("=" * 80)
 
-    # Log to wandb
-    if jax.process_index() == 0 and config.wandb_enabled:
-        wandb.log(results, step=int(train_state.step))
-        wandb.summary.update(results)
+def evaluate_rollout(
+    config: _config.TrainConfig,
+    eval_rng: at.KeyArrayLike,
+    train_state: training_utils.TrainState,
+    train_state_sharding,
+    data_loader,
+    mesh,
+    data_sharding,
+    replicated_sharding,
+    num_eval_batches: int,
+) -> dict[str, float]:
+    """Evaluate rollout performance (language action prediction accuracy)."""
+    evaluator = RolloutEvaluator(config)
+    peval_step = jax.jit(
+        evaluator,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(replicated_sharding, replicated_sharding),
+    )
+
+    # Get tokenizer for decoding
+    tokenizer = data_loader.tokenizer
+
+    data_iter = iter(data_loader)
+    l2_cm_values_all = []
+    images_to_log = []
+    num_images_logged = 0
+    max_images_to_log = 64
+
+    pbar = tqdm.tqdm(
+        range(num_eval_batches),
+        total=num_eval_batches,
+        dynamic_ncols=True,
+        desc="Rollout evaluation",
+        disable=(jax.process_index() != 0),
+    )
+
+    with sharding.set_mesh(mesh):
+        for batch_idx in pbar:
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                logging.info(f"Reached end of dataset at batch {batch_idx}")
+                break
+
+            # Run rollout evaluation
+            id_buf, t_final = peval_step(eval_rng, train_state, batch)
+
+            # Process results on host
+            if jax.process_index() == 0:
+                k_local = min(config.batch_size, batch[0].state.shape[0])
+                l2_cm_values, to_log = vis_tools.eval_step(
+                    batch, id_buf, t_final, tokenizer, k_local, vis_dataset=getattr(config.data, "vis_dataset", False)
+                )
+
+                if l2_cm_values:
+                    l2_cm_values_all.extend(l2_cm_values)
+
+                # Collect images for logging
+                if to_log and num_images_logged < max_images_to_log:
+                    for img in to_log:
+                        if num_images_logged >= max_images_to_log:
+                            break
+                        images_to_log.append(wandb.Image(img))
+                        num_images_logged += 1
+
+            # Update progress bar
+            if l2_cm_values_all and (batch_idx + 1) % 10 == 0:
+                recent_l2 = l2_cm_values_all[-min(100, len(l2_cm_values_all)) :]
+                pbar.set_postfix(
+                    {
+                        "mean_l2_cm": f"{np.mean(recent_l2):.2f}",
+                        "n_samples": len(l2_cm_values_all),
+                    }
+                )
+
+    # Compute final statistics
+    if not l2_cm_values_all:
+        logging.warning("No valid rollout samples were evaluated!")
+        return {
+            "eval/rollout/mean_l2_cm": float("nan"),
+            "eval/rollout/std_l2_cm": float("nan"),
+            "eval/rollout/num_samples": 0,
+        }
+
+    l2_array = np.array(l2_cm_values_all)
+    results = {
+        "eval/rollout/mean_l2_cm": float(np.mean(l2_array)),
+        "eval/rollout/std_l2_cm": float(np.std(l2_array)),
+        "eval/rollout/median_l2_cm": float(np.median(l2_array)),
+        "eval/rollout/min_l2_cm": float(np.min(l2_array)),
+        "eval/rollout/max_l2_cm": float(np.max(l2_array)),
+        "eval/rollout/num_samples": len(l2_cm_values_all),
+    }
+
+    # Log images to wandb
+    if images_to_log and jax.process_index() == 0 and config.wandb_enabled:
+        wandb.log({"eval/rollout/predictions": images_to_log}, step=int(train_state.step))
 
     return results
 

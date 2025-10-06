@@ -397,6 +397,7 @@ class TrainConfig(upstream_config.TrainConfig):
     # Evaluation fields
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = None
+    eval_mode: Literal["token_accuracy", "rollout", "both"] = "token_accuracy"
 
     @property
     @override
@@ -531,6 +532,21 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
+        name="pi05_droid_cot_eval",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=140,
+            number_token_weight=1.0,
+            pi05=True,
+            discrete_state_input=True,
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+        ),
+    ),
+    TrainConfig(
         name="paligemma_vqa_v4",
         model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
         data=VQADataConfig(
@@ -546,6 +562,31 @@ _CONFIGS = [
         batch_size=16,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+    ),
+    TrainConfig(
+        name="paligemma2_vqa_v4",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=600,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ),
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="gs://pi0-cot/OXE",
+        ),
+        fsdp_devices=4,
+        batch_size=16,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="paligemma2", params_path="gs://pi0-cot/cache/paligemma2-3b-pt-224.b16.npz"
+        ),
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]
