@@ -10,6 +10,7 @@ from openpi_cot.policies.cot_policy import CoTInputs
 @dataclasses.dataclass(frozen=True)
 class VQAInputs(CoTInputs):
     # Determines which model will be used.
+    action_dim: int = 32
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
 
     def __call__(self, data: dict) -> dict:
