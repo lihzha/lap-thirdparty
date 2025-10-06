@@ -88,9 +88,6 @@ class Args:
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
     # DROID dataloader options (used when env == EnvMode.DROID)
-    droid_data_dir: str = "/n/fs/robot-data/data"
-    droid_dataset_name: str = "droid_subset"
-    droid_split: str = "all"
     droid_max_examples: int = 100
 
 
@@ -225,7 +222,8 @@ def _iter_droid_request_data(
 
 
 def main(args: Args) -> None:
-    model = create_model(_config.get_config(args.policy.config))
+    config: _config.TrainConfig = _config.get_config(args.policy.config)
+    model = create_model(config)
     policy = create_policy(args, model=model)
 
     if tfds is None:
@@ -234,7 +232,7 @@ def main(args: Args) -> None:
     prompt = args.default_prompt or "what is in the image?"
     for idx, req in enumerate(
         tqdm(
-            _iter_droid_request_data(args.droid_data_dir, args.droid_split, args.droid_dataset_name, prompt=prompt),
+            _iter_droid_request_data(config.data.rlds_data_dir, "all", config.data.droid_dataset_name, prompt=prompt),
             total=args.droid_max_examples,
             desc="DROID samples",
         )
