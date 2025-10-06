@@ -92,7 +92,17 @@ def get_config(variant: Variant) -> Config:
             post_norms=False,
         )
     if variant == "gemma2_2b":
-        return Config(width=2304, depth=26, mlp_dim=9216, num_heads=8, num_kv_heads=4, head_dim=256, post_norms=True)
+        return Config(
+            width=2304,
+            depth=26,
+            mlp_dim=9216,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
+            final_logits_softcap=30.0,
+            attn_logits_softcap=50.0,
+            post_norms=True,
+        )
 
     if variant == "gemma2_9b":
         return Config(
@@ -232,6 +242,7 @@ class Attention(nn.Module):
 class Block(_Block):
     """Transformer block."""
 
+    configs: tuple[Config, ...]  # Override parent class annotation with gemma2.Config
     post_norms: bool = True  # new in gemma2
 
     @nn.compact
