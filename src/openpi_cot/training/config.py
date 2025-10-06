@@ -394,6 +394,9 @@ class TrainConfig(upstream_config.TrainConfig):
     checkpoint_retry_delay_secs: float = 30.0
     checkpoint_retry_backoff: float = 2.0
     checkpoint_fallback_to_sync: bool = True
+    # Evaluation fields
+    eval_checkpoint_step: int | None = None
+    num_eval_batches: int | None = None
 
     @property
     @override

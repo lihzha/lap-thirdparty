@@ -1,9 +1,10 @@
+"""Evaluate token accuracy on a checkpoint using validation data."""
+
 import dataclasses
 import logging
 import math
 import os
 import platform
-from typing import Any
 
 import etils.epath as epath
 import flax.nnx as nnx
@@ -46,7 +47,8 @@ def init_logging():
 
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    logger.handlers[0].setFormatter(formatter)
+    if logger.handlers:
+        logger.handlers[0].setFormatter(formatter)
 
 
 def init_wandb(
@@ -145,7 +147,7 @@ class TokenAccuracyEvaluator:
             actions: _model.Actions,
         ):
             per_sample_loss = model.compute_loss(rng, observation, actions, train=False)
-            token_accuracy = getattr(model, "token_accuracy", None)
+            token_accuracy = getattr(model, 'token_accuracy', None)
             token_acc_value = token_accuracy.value if token_accuracy is not None else jnp.array(0.0)
             return jnp.mean(per_sample_loss), (per_sample_loss, token_acc_value)
 
@@ -161,12 +163,47 @@ class TokenAccuracyEvaluator:
         return info
 
 
-def load_checkpoint(
-    config: _config.TrainConfig,
-    mesh: jax.sharding.Mesh,
-    checkpoint_path: epath.Path,
-) -> tuple[training_utils.TrainState, Any]:
-    """Load checkpoint from the specified path."""
+def main(config: _config.TrainConfig):
+    init_logging()
+    effective_fsdp_devices = init_tpu(config)
+
+    rng = jax.random.key(config.seed)
+    eval_rng, init_rng = jax.random.split(rng)
+
+    mesh = sharding.make_mesh(effective_fsdp_devices)
+    data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+    # Human-readable mesh overview
+    sharding.log_mesh_and_sharding_header(mesh, title="Device mesh")
+    logging.info("Data sharding spec: %s", sharding.format_sharding(data_sharding))
+    logging.info("Replicated sharding spec: %s", sharding.format_sharding(replicated_sharding))
+
+    init_wandb(config, enabled=config.wandb_enabled)
+
+    # Initialize checkpoint manager
+    checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
+        config.checkpoint_dir,
+        keep_period=config.keep_period,
+        overwrite=False,  # Never overwrite for evaluation
+        resume=True,  # Always resume for evaluation
+        async_timeout_secs=config.checkpoint_async_timeout_secs,
+        async_enable=False,  # No async for evaluation
+    )
+
+    # Create validation data loader
+    data_loader = _data_loader.create_data_loader(
+        config,
+        sharding=data_sharding,
+        shuffle=False,
+        split="val",
+        seed=config.seed,
+        max_samples=getattr(config.data, "val_max_samples", None),
+    )
+
+    logging.info("Initialized validation data loader")
+
+    # Initialize train state shape and sharding
     from openpi.training import optimizer as _optimizer
 
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
@@ -186,66 +223,19 @@ def load_checkpoint(
             ema_params=None if config.ema_decay is None else params,
         )
 
-    rng = jax.random.key(config.seed)
-    train_state_shape = jax.eval_shape(init, rng)
-    state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
+    train_state_shape = jax.eval_shape(init, init_rng)
+    train_state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
-    # Initialize checkpoint manager
-    checkpoint_manager = _checkpoints.OrbaxCheckpointManager(
-        checkpoint_path,
-        keep_period=None,
-        async_timeout_secs=None,
-        async_enable=False,
+    # Restore checkpoint
+    train_state = _checkpoints.restore_state(
+        checkpoint_manager,
+        train_state_shape,
+        data_loader,
+        step=config.eval_checkpoint_step,
     )
 
-    # Restore the checkpoint
-    train_state = _checkpoints.restore_state(checkpoint_manager, train_state_shape, None)
-
-    logging.info(f"Loaded checkpoint from {checkpoint_path}, step: {train_state.step}")
-
-    return train_state, state_sharding
-
-
-def main(config: _config.TrainConfig, checkpoint_path: str, num_eval_batches: int | None = None):
-    init_logging()
-    effective_fsdp_devices = init_tpu(config)
-
-    rng = jax.random.key(config.seed)
-    eval_rng = rng
-
-    mesh = sharding.make_mesh(effective_fsdp_devices)
-    data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
-    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
-
-    # Human-readable mesh overview
-    sharding.log_mesh_and_sharding_header(mesh, title="Device mesh")
-    logging.info("Data sharding spec: %s", sharding.format_sharding(data_sharding))
-    logging.info("Replicated sharding spec: %s", sharding.format_sharding(replicated_sharding))
-
-    init_wandb(config, enabled=config.wandb_enabled)
-
-    # Load checkpoint
-    ckpt_path = epath.Path(checkpoint_path)
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"Checkpoint path {checkpoint_path} does not exist.")
-
-    logging.info(f"Loading checkpoint from: {checkpoint_path}")
-    train_state, train_state_sharding = load_checkpoint(config, mesh, ckpt_path)
-
-    logging.info(f"Loaded train state at step {train_state.step}")
+    logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
-
-    # Create validation data loader for evaluation
-    data_loader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=False,
-        split="val",
-        seed=config.seed,
-        max_samples=getattr(config.data, "val_max_samples", None),
-    )
-
-    logging.info("Initialized validation data loader")
 
     # Create evaluator
     evaluator = TokenAccuracyEvaluator(config)
@@ -255,6 +245,7 @@ def main(config: _config.TrainConfig, checkpoint_path: str, num_eval_batches: in
     )
 
     # Determine number of evaluation batches
+    num_eval_batches = config.num_eval_batches
     if num_eval_batches is None:
         if getattr(config.data, "val_max_samples", None):
             process_count = getattr(jax, "process_count", lambda: 1)()
@@ -275,6 +266,7 @@ def main(config: _config.TrainConfig, checkpoint_path: str, num_eval_batches: in
         total=num_eval_batches,
         dynamic_ncols=True,
         desc="Evaluating token accuracy",
+        disable=(jax.process_index() != 0),
     )
 
     with sharding.set_mesh(mesh):
@@ -292,12 +284,10 @@ def main(config: _config.TrainConfig, checkpoint_path: str, num_eval_batches: in
             if (batch_idx + 1) % 10 == 0:
                 stacked_infos = common_utils.stack_forest(eval_infos[-10:])
                 reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-                pbar.set_postfix(
-                    {
-                        "loss": f"{reduced_info['loss']:.4f}",
-                        "token_acc": f"{reduced_info['token_accuracy']:.4f}",
-                    }
-                )
+                pbar.set_postfix({
+                    "loss": f"{reduced_info['loss']:.4f}",
+                    "token_acc": f"{reduced_info['token_accuracy']:.4f}",
+                })
 
     # Compute final statistics
     stacked_infos = common_utils.stack_forest(eval_infos)
@@ -308,14 +298,14 @@ def main(config: _config.TrainConfig, checkpoint_path: str, num_eval_batches: in
     losses = jax.device_get(stacked_infos["loss"])
 
     results = {
-        "mean_token_accuracy": float(final_results["token_accuracy"]),
-        "mean_loss": float(final_results["loss"]),
-        "std_token_accuracy": float(jnp.std(token_accuracies)),
-        "std_loss": float(jnp.std(losses)),
-        "min_token_accuracy": float(jnp.min(token_accuracies)),
-        "max_token_accuracy": float(jnp.max(token_accuracies)),
-        "num_batches_evaluated": len(eval_infos),
-        "checkpoint_step": int(train_state.step),
+        "eval/mean_token_accuracy": float(final_results["token_accuracy"]),
+        "eval/mean_loss": float(final_results["loss"]),
+        "eval/std_token_accuracy": float(jnp.std(token_accuracies)),
+        "eval/std_loss": float(jnp.std(losses)),
+        "eval/min_token_accuracy": float(jnp.min(token_accuracies)),
+        "eval/max_token_accuracy": float(jnp.max(token_accuracies)),
+        "eval/num_batches_evaluated": len(eval_infos),
+        "eval/checkpoint_step": int(train_state.step),
     }
 
     # Log results
@@ -323,39 +313,17 @@ def main(config: _config.TrainConfig, checkpoint_path: str, num_eval_batches: in
     logging.info("EVALUATION RESULTS")
     logging.info("=" * 80)
     for key, value in results.items():
-        logging.info(f"{key:30s}: {value}")
+        logging.info(f"{key:40s}: {value}")
     logging.info("=" * 80)
 
     # Log to wandb
     if jax.process_index() == 0 and config.wandb_enabled:
-        wandb.log(results)
+        wandb.log(results, step=int(train_state.step))
         wandb.summary.update(results)
 
     return results
 
 
 if __name__ == "__main__":
-    import argparse
-
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Evaluate token accuracy on a checkpoint")
-    parser.add_argument(
-        "--checkpoint_path",
-        type=str,
-        required=True,
-        help="Path to the checkpoint directory",
-    )
-    parser.add_argument(
-        "--num_batches",
-        type=int,
-        default=None,
-        help="Number of batches to evaluate (default: auto-detect from config)",
-    )
-
-    args, remaining_args = parser.parse_known_args()
-
-    # Load config using the remaining arguments
-    config = _config.cli(remaining_args)
-
-    # Run evaluation
-    results = main(config, args.checkpoint_path, args.num_batches)
+    config = _config.cli()
+    main(config)
