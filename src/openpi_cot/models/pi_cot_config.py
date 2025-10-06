@@ -31,6 +31,7 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     pi05: bool = False
     discrete_state_input: bool = None
+    use_pi05_prompt_format: bool = True
 
     aug_wrist_image: bool = True
 

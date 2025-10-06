@@ -9,15 +9,18 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def __init__(
         self,
         max_len: int = 48,
+        use_pi05_prompt_format: bool = True,
     ):
         super().__init__(max_len)
         self._stop_token_id = self._tokenizer.eos_id()
+        self._use_pi05_prompt_format = use_pi05_prompt_format
 
     def tokenize_cot(
         self, prompt: str, reasoning: str | None = None, state: np.ndarray | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
         if state is not None:
+            assert self._use_pi05_prompt_format, "State should only be provided when using Pi05 format."
             # This is the Pi05 format, where the state is part of the discrete language input.
             # State vectors are padded with trailing zeros to action_dim in the dataset pipeline.
             # Only include up to the last unpadded (non-zero) dimension when discretizing.
@@ -42,6 +45,9 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             else:
                 state_str = ""
             cleaned_prompt = f"Task: {cleaned_prompt}, State: {state_str};\nAction: "
+        elif self._use_pi05_prompt_format:
+            cleaned_prompt = f"Task: {cleaned_prompt};\nAction: "
+
         # eos_id = self._tokenizer.eos_id()
         pad_id = self._tokenizer.pad_id()
 
