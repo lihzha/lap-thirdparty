@@ -494,12 +494,14 @@ def prepare_eval_batch(batch):
     for i in range(batch_size):
         prompt_tokens = obs.tokenized_prompt[i]
 
-        # Find position of token 108 (start of reasoning)
+        # Find position of token 108 (start of reasoning) - get the LAST occurrence
         # Ensure prompt_tokens is int32 for the comparison
         prompt_tokens_int32 = prompt_tokens.astype(jnp.int32)
-        pos_108 = jnp.where(prompt_tokens_int32 == 108, size=1, fill_value=-1)[0]
+        # Find all positions where token is 108, and take the maximum (last occurrence)
+        matches = jnp.where(prompt_tokens_int32 == 108, jnp.arange(len(prompt_tokens_int32)), -1)
+        pos_108 = jnp.max(matches)
 
-        if pos_108[0] >= 0:
+        if pos_108 >= 0:
             # Remove everything after token 108 (inclusive)
             prompt_without_reasoning = prompt_tokens[: pos_108[0] + 1]
             original_length = prompt_tokens.shape[0]

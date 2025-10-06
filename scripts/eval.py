@@ -502,7 +502,6 @@ def evaluate_rollout(
 
             # Prepare eval batch (remove reasoning) and replicate for JIT
             eval_batch = vis_tools.prepare_eval_batch(batch)
-            breakpoint()
             # Replicate the batch to match expected sharding
             eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
 
