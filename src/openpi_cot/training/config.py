@@ -298,7 +298,7 @@ class VQADataConfig(RLDSCoTDataConfig):
             outputs=[vqa_policy.VQAOutputs()],
         )
 
-        model_transforms = ModelTransformFactory()(model_config)
+        model_transforms = ModelTransformFactory(prompt_format=model_config.prompt_format)(model_config)
 
         return dataclasses.replace(
             base_cfg,
