@@ -711,14 +711,14 @@ class DroidCoTDataset(SingleCoTDataset):
                 to_encoding=self.config.action_encoding,
                 to_delta_cartesian_pose=True,
             )
-            # Pad actions to action_dim to ensure fixed shape for dataset interleaving
-            action_pad_amount = self.action_dim - tf.shape(actions)[-1]
-            actions = tf.pad(
-                actions,
-                [[0, 0], [0, action_pad_amount]],
-            )
-            # Set static shape for TensorFlow's shape inference
-            actions.set_shape([None, self.action_dim])
+            # # Pad actions to action_dim to ensure fixed shape for dataset interleaving
+            # action_pad_amount = self.action_dim - tf.shape(actions)[-1]
+            # actions = tf.pad(
+            #     actions,
+            #     [[0, 0], [0, action_pad_amount]],
+            # )
+            # # Set static shape for TensorFlow's shape inference
+            # actions.set_shape([None, self.action_dim])
 
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
@@ -772,14 +772,14 @@ class DroidCoTDataset(SingleCoTDataset):
                 state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
             )
 
-            # Pad state to action_dim to ensure fixed shape for dataset interleaving
-            state_pad_amount = self.action_dim - tf.shape(state)[-1]
-            state = tf.pad(
-                state,
-                [[0, 0], [0, state_pad_amount]],
-            )
-            # Set static shape for TensorFlow's shape inference
-            state.set_shape([None, self.action_dim])
+            # # Pad state to action_dim to ensure fixed shape for dataset interleaving
+            # state_pad_amount = self.action_dim - tf.shape(state)[-1]
+            # state = tf.pad(
+            #     state,
+            #     [[0, 0], [0, state_pad_amount]],
+            # )
+            # # Set static shape for TensorFlow's shape inference
+            # state.set_shape([None, self.action_dim])
 
             _return_dict = {
                 "actions": tf.cast(actions, tf.float32),
@@ -1219,16 +1219,16 @@ class OXECoTDatasets:
             )
             logging.info("Applying global normalization with stats: %s", global_stats)
 
-            # # Apply normalization at the frame level (after interleaving)
-            # def apply_global_norm(frame):
-            #     return NormalizeActionAndProprio(
-            #         norm_stats=global_stats,
-            #         normalization_type=action_proprio_normalization_type,
-            #         action_key="actions",
-            #         state_key="state",
-            #     )(frame)
+            # Apply normalization at the frame level (after interleaving)
+            def apply_global_norm(frame):
+                return NormalizeActionAndProprio(
+                    norm_stats=global_stats,
+                    normalization_type=action_proprio_normalization_type,
+                    action_key="actions",
+                    state_key="state",
+                )(frame)
 
-            # self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
+            self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
             self.global_statistics = global_stats
         else:
             self.global_statistics = None
