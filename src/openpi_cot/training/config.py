@@ -595,6 +595,32 @@ _CONFIGS = [
             kind="paligemma2", params_path="gs://pi0-cot/cache/paligemma2-3b-pt-224.b16.npz"
         ),
     ),
+    TrainConfig(
+        name="paligemma2_vqa_local",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=600,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+            use_pi05_prompt_format=False,
+        ),
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="/n/fs/robot-data/data/",
+            language_action_dir="/n/fs/robot-data/vlm-syn/droid-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="/n/fs/robot-data/data/",
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="paligemma2", params_path="/n/fs/robot-data/openpi-cot/paligemma2-3b-pt-224.b16.npz"
+        ),
+    ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]
 
