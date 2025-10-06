@@ -163,7 +163,7 @@ class CoTDataConfig(upstream_config.DataConfig):
 class ModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
 
-    use_pi05_prompt_format: bool = True
+    prompt_format: Literal["pi05", "pi0", "vqa"] = "pi05"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -175,7 +175,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     TokenizePromptAndReasoning(
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
-                            use_pi05_prompt_format=self.use_pi05_prompt_format,
+                            prompt_format=self.prompt_format,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                     ),
@@ -268,9 +268,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         #     # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
         # )
 
-        model_transforms = ModelTransformFactory(use_pi05_prompt_format=model_config.use_pi05_prompt_format)(
-            model_config
-        )
+        model_transforms = ModelTransformFactory(prompt_format=model_config.prompt_format)(model_config)
 
         return dataclasses.replace(
             base_cfg,
@@ -552,9 +550,7 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="paligemma_vqa_v4",
-        model=pi_cot_config.PiCoTConfig(
-            pi05=True, discrete_state_input=False, max_token_len=600, use_pi05_prompt_format=False
-        ),
+        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600, prompt_format="vqa"),
         data=VQADataConfig(
             repo_id="droid",
             asset_id="droid",
@@ -577,7 +573,7 @@ _CONFIGS = [
             max_token_len=600,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
-            use_pi05_prompt_format=False,
+            prompt_format="vqa",
         ),
         data=VQADataConfig(
             repo_id="droid",
@@ -603,7 +599,7 @@ _CONFIGS = [
             max_token_len=600,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
-            use_pi05_prompt_format=False,
+            prompt_format="vqa",
         ),
         data=VQADataConfig(
             repo_id="droid",

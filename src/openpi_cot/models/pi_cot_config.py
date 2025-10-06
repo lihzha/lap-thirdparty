@@ -17,6 +17,8 @@ import openpi_cot.models.gemma2 as _gemma2
 if TYPE_CHECKING:
     from openpi_cot.models.pi_cot import PiCoT
 
+from typing import Literal
+
 
 @dataclasses.dataclass(frozen=True)
 class PiCoTConfig(_model.BaseModelConfig):
@@ -31,7 +33,7 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     pi05: bool = False
     discrete_state_input: bool = None
-    use_pi05_prompt_format: bool = True
+    prompt_format: Literal["pi05", "pi0", "vqa"] = "pi05"
 
     aug_wrist_image: bool = True
 

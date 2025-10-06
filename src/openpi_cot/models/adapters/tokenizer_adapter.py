@@ -1,5 +1,6 @@
 import logging
 import re
+from typing import Literal
 
 import numpy as np
 from openpi.models import tokenizer as _tokenizer
@@ -9,18 +10,18 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def __init__(
         self,
         max_len: int = 48,
-        use_pi05_prompt_format: bool = True,
+        prompt_format: Literal["pi05", "pi0", "vqa"] = "pi05",
     ):
         super().__init__(max_len)
         self._stop_token_id = self._tokenizer.eos_id()
-        self._use_pi05_prompt_format = use_pi05_prompt_format
+        self._prompt_format = prompt_format
 
     def tokenize_cot(
         self, prompt: str, reasoning: str | None = None, state: np.ndarray | None = None
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
-        if state is not None:
-            assert self._use_pi05_prompt_format, "State should only be provided when using Pi05 format."
+        if self._prompt_format == "pi05":
+            assert state is not None, "State should only be provided when using Pi05 format."
             # This is the Pi05 format, where the state is part of the discrete language input.
             # State vectors are padded with trailing zeros to action_dim in the dataset pipeline.
             # Only include up to the last unpadded (non-zero) dimension when discretizing.
@@ -45,15 +46,13 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             else:
                 state_str = ""
             cleaned_prompt = f"Task: {cleaned_prompt}, State: {state_str};\nAction: "
-        elif self._use_pi05_prompt_format:
-            cleaned_prompt = f"Task: {cleaned_prompt};\nAction: "
+        elif self._prompt_format == "pi0":
+            assert state is None, "State should not be provided when using Pi0 format."
+            cleaned_prompt += "\n"
 
         # eos_id = self._tokenizer.eos_id()
         pad_id = self._tokenizer.pad_id()
-
         tokens = self._tokenizer.encode(cleaned_prompt, add_bos=True, add_eos=False)
-        if state is None:  # This is the Pi0 format, where the state is part of the continuous action expert input.
-            tokens += self._tokenizer.encode("\n")
 
         reasoning_start = len(tokens)
         if reasoning is not None:
