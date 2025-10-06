@@ -498,6 +498,7 @@ def prepare_eval_batch(batch):
         # Ensure prompt_tokens is int32 for the comparison
         prompt_tokens_int32 = prompt_tokens.astype(jnp.int32)
         pos_108 = jnp.where(prompt_tokens_int32 == 108, size=1, fill_value=-1)[0]
+        breakpoint()
 
         if pos_108[0] >= 0:
             # Remove everything after token 108 (inclusive)
