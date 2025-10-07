@@ -71,7 +71,7 @@ class Config:
     final_logits_softcap: float | None = None  # new in gemma2
     attn_logits_softcap: float | None = None  # new in gemma2
     post_norms: bool = False  # new in gemma2
-    param_dtype: jnp.dtype = jnp.bfloat16  # parameter storage dtype
+    param_dtype: str = "bfloat16"  # parameter storage dtype
 
 
 Variant = Literal["gemma2_300m", "gemma2_2b"]
@@ -138,23 +138,24 @@ def get_config(variant: Variant) -> Config:
 class RMSNormBF16(nn.Module):
     """RMSNorm with explicit bfloat16 parameter dtype."""
 
-    param_dtype: jnp.dtype = jnp.bfloat16
+    param_dtype: str = "bfloat16"
 
     @nn.compact
     def __call__(self, x, cond):
         dtype = x.dtype  # original dtype, could be half-precision
         var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)  # compute variance in float32
         normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))  # compute normalization in float32
+        pdtype = jnp.dtype(self.param_dtype)
         if cond is None:
             # regular RMSNorm
-            scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],), self.param_dtype)
+            scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],), pdtype)
             normed_inputs = normed_inputs * (
                 1 + scale.astype(jnp.float32)
             )  # scale by learned parameter in float32 (matches Flax implementation)
             return normed_inputs.astype(dtype), None  # return in original dtype
 
         # adaptive RMSNorm
-        modulation = nn.Dense(x.shape[-1] * 3, kernel_init=nn.initializers.zeros, dtype=dtype, param_dtype=self.param_dtype)(cond)
+        modulation = nn.Dense(x.shape[-1] * 3, kernel_init=nn.initializers.zeros, dtype=dtype, param_dtype=pdtype)(cond)
         scale, shift, gate = jnp.split(modulation[:, None, :], 3, axis=-1)
         normed_inputs = normed_inputs * (1 + scale) + shift  # scale and shift in float32
         return normed_inputs.astype(dtype), gate
@@ -166,14 +167,15 @@ class EmbedderBF16(nn.Module):
 
     vocab_size: int
     embed_dim: int
-    param_dtype: jnp.dtype = jnp.bfloat16
+    param_dtype: str = "bfloat16"
 
     def setup(self):
+        pdtype = jnp.dtype(self.param_dtype)
         self.input_embedding_table = self.param(
             "input_embedding",
             nn.initializers.normal(),
             (self.vocab_size, self.embed_dim),
-            self.param_dtype,
+            pdtype,
         )
 
     def encode(self, x):
@@ -195,18 +197,19 @@ class EinsumBF16(nn.Module):
     # If not None, apply LoRA to the weight.
     lora_config: lora.LoRAConfig | None = None
     # Parameter dtype
-    param_dtype: jnp.dtype = jnp.bfloat16
+    param_dtype: str = "bfloat16"
 
     def setup(self):
-        self.w = self.param("w", self.init_fn, self.shape, self.param_dtype)
+        pdtype = jnp.dtype(self.param_dtype)
+        self.w = self.param("w", self.init_fn, self.shape, pdtype)
 
         if config := self.lora_config:
             # Setup LoRA parameters.
             shape_a, shape_b = list(self.shape), list(self.shape)
             shape_a[config.axes[1]] = config.rank
             shape_b[config.axes[0]] = config.rank
-            self.w_a = self.param("lora_a", config.init_fn, shape_a, self.param_dtype)
-            self.w_b = self.param("lora_b", config.init_fn, shape_b, self.param_dtype)
+            self.w_a = self.param("lora_a", config.init_fn, shape_a, pdtype)
+            self.w_b = self.param("lora_b", config.init_fn, shape_b, pdtype)
 
     @nn.compact
     def __call__(self, eqn: str, x):
@@ -251,34 +254,35 @@ class FeedForwardBF16(nn.Module):
     # If not None, apply LoRA to the weight.
     lora_config: lora.LoRAConfig | None = None
     # Parameter dtype
-    param_dtype: jnp.dtype = jnp.bfloat16
+    param_dtype: str = "bfloat16"
 
     def setup(self):
+        pdtype = jnp.dtype(self.param_dtype)
         self.w_gating = self.param(
             "gating_einsum",
             nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
             (2, self.features, self.hidden_dim),
-            self.param_dtype,
+            pdtype,
         )
         self.w_linear = self.param(
             "linear",
             nn.initializers.lecun_normal(in_axis=-2, out_axis=-1),
             (self.hidden_dim, self.features),
-            self.param_dtype,
+            pdtype,
         )
         self.w_gating_lora = None
         self.w_linear_lora = None
         if self.lora_config:
             # Setup LoRA parameters.
             self.w_gating_lora = (
-                self.param("gating_einsum_lora_a", self.lora_config.init_fn, (2, self.features, self.lora_config.rank), self.param_dtype),
+                self.param("gating_einsum_lora_a", self.lora_config.init_fn, (2, self.features, self.lora_config.rank), pdtype),
                 self.param(
-                    "gating_einsum_lora_b", self.lora_config.init_fn, (2, self.lora_config.rank, self.hidden_dim), self.param_dtype
+                    "gating_einsum_lora_b", self.lora_config.init_fn, (2, self.lora_config.rank, self.hidden_dim), pdtype
                 ),
             )
             self.w_linear_lora = (
-                self.param("linear_lora_a", self.lora_config.init_fn, (self.hidden_dim, self.lora_config.rank), self.param_dtype),
-                self.param("linear_lora_b", self.lora_config.init_fn, (self.lora_config.rank, self.features), self.param_dtype),
+                self.param("linear_lora_a", self.lora_config.init_fn, (self.hidden_dim, self.lora_config.rank), pdtype),
+                self.param("linear_lora_b", self.lora_config.init_fn, (self.lora_config.rank, self.features), pdtype),
             )
 
     @nn.compact
