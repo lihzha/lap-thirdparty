@@ -71,6 +71,7 @@ class Config:
     final_logits_softcap: float | None = None  # new in gemma2
     attn_logits_softcap: float | None = None  # new in gemma2
     post_norms: bool = False  # new in gemma2
+    param_dtype: jnp.dtype = jnp.bfloat16  # parameter storage dtype
 
 
 Variant = Literal["gemma2_300m", "gemma2_2b"]
@@ -134,6 +135,181 @@ def get_config(variant: Variant) -> Config:
 
 
 @at.typecheck
+class RMSNormBF16(nn.Module):
+    """RMSNorm with explicit bfloat16 parameter dtype."""
+
+    param_dtype: jnp.dtype = jnp.bfloat16
+
+    @nn.compact
+    def __call__(self, x, cond):
+        dtype = x.dtype  # original dtype, could be half-precision
+        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)  # compute variance in float32
+        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))  # compute normalization in float32
+        if cond is None:
+            # regular RMSNorm
+            scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],), self.param_dtype)
+            normed_inputs = normed_inputs * (
+                1 + scale.astype(jnp.float32)
+            )  # scale by learned parameter in float32 (matches Flax implementation)
+            return normed_inputs.astype(dtype), None  # return in original dtype
+
+        # adaptive RMSNorm
+        modulation = nn.Dense(x.shape[-1] * 3, kernel_init=nn.initializers.zeros, dtype=dtype, param_dtype=self.param_dtype)(cond)
+        scale, shift, gate = jnp.split(modulation[:, None, :], 3, axis=-1)
+        normed_inputs = normed_inputs * (1 + scale) + shift  # scale and shift in float32
+        return normed_inputs.astype(dtype), gate
+
+
+@at.typecheck
+class EmbedderBF16(nn.Module):
+    """Embedder module with explicit bfloat16 parameter dtype."""
+
+    vocab_size: int
+    embed_dim: int
+    param_dtype: jnp.dtype = jnp.bfloat16
+
+    def setup(self):
+        self.input_embedding_table = self.param(
+            "input_embedding",
+            nn.initializers.normal(),
+            (self.vocab_size, self.embed_dim),
+            self.param_dtype,
+        )
+
+    def encode(self, x):
+        x = self.input_embedding_table[(x,)]
+        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
+        return x
+
+    def decode(self, x):
+        return jnp.dot(x, self.input_embedding_table.T)
+
+
+class EinsumBF16(nn.Module):
+    """Einsum with LoRA support and explicit bfloat16 parameter dtype."""
+
+    # Shape of the weight.
+    shape: tuple[int, ...]
+    # Initialization function for the weight.
+    init_fn: nn.initializers.Initializer = nn.initializers.zeros
+    # If not None, apply LoRA to the weight.
+    lora_config: lora.LoRAConfig | None = None
+    # Parameter dtype
+    param_dtype: jnp.dtype = jnp.bfloat16
+
+    def setup(self):
+        self.w = self.param("w", self.init_fn, self.shape, self.param_dtype)
+
+        if config := self.lora_config:
+            # Setup LoRA parameters.
+            shape_a, shape_b = list(self.shape), list(self.shape)
+            shape_a[config.axes[1]] = config.rank
+            shape_b[config.axes[0]] = config.rank
+            self.w_a = self.param("lora_a", config.init_fn, shape_a, self.param_dtype)
+            self.w_b = self.param("lora_b", config.init_fn, shape_b, self.param_dtype)
+
+    @nn.compact
+    def __call__(self, eqn: str, x):
+        dtype = x.dtype  # original dtype, could be half-precision
+        result = jnp.einsum(eqn, x, self.w.astype(dtype))
+
+        if config := self.lora_config:
+            eqn_a, eqn_b = self._make_lora_eqns(eqn)
+            lora_result = jnp.einsum(eqn_a, x, self.w_a.astype(dtype))
+            lora_result = jnp.einsum(eqn_b, lora_result, self.w_b.astype(dtype))
+            result = result + lora_result * config.scaling_value
+
+        return result
+
+    def _make_lora_eqns(self, eqn: str) -> tuple[str, str]:
+        import re
+        if "L" in eqn:
+            raise ValueError(f"L already in eqn: {eqn}")
+        if not (m := re.match("(.*),(.*)->(.*)", eqn)):
+            raise ValueError(f"Unsupported einsum eqn: {eqn}")
+        lhs, rhs, out = m.groups()
+
+        assert self.lora_config is not None
+        a_label, b_label = (rhs[x] for x in self.lora_config.axes)
+        label = self.lora_config.label
+
+        a_rhs = rhs.replace(b_label, label)
+        a_out = out.replace(b_label, label)
+        eqn_a = f"{lhs},{a_rhs}->{a_out}"
+
+        b_rhs = rhs.replace(a_label, label)
+        eqn_b = f"{a_out},{b_rhs}->{out}"
+
+        return eqn_a, eqn_b
+
+
+class FeedForwardBF16(nn.Module):
+    """Feed forward module with explicit bfloat16 parameter dtype."""
+
+    features: int
+    hidden_dim: int
+    # If not None, apply LoRA to the weight.
+    lora_config: lora.LoRAConfig | None = None
+    # Parameter dtype
+    param_dtype: jnp.dtype = jnp.bfloat16
+
+    def setup(self):
+        self.w_gating = self.param(
+            "gating_einsum",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
+            (2, self.features, self.hidden_dim),
+            self.param_dtype,
+        )
+        self.w_linear = self.param(
+            "linear",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1),
+            (self.hidden_dim, self.features),
+            self.param_dtype,
+        )
+        self.w_gating_lora = None
+        self.w_linear_lora = None
+        if self.lora_config:
+            # Setup LoRA parameters.
+            self.w_gating_lora = (
+                self.param("gating_einsum_lora_a", self.lora_config.init_fn, (2, self.features, self.lora_config.rank), self.param_dtype),
+                self.param(
+                    "gating_einsum_lora_b", self.lora_config.init_fn, (2, self.lora_config.rank, self.hidden_dim), self.param_dtype
+                ),
+            )
+            self.w_linear_lora = (
+                self.param("linear_lora_a", self.lora_config.init_fn, (self.hidden_dim, self.lora_config.rank), self.param_dtype),
+                self.param("linear_lora_b", self.lora_config.init_fn, (self.lora_config.rank, self.features), self.param_dtype),
+            )
+
+    @nn.compact
+    def __call__(self, x):
+        dtype = x.dtype  # original dtype, could be half-precision
+        ff_gate = self._dot(
+            x,
+            self.w_gating[0],
+            None if self.w_gating_lora is None else (self.w_gating_lora[0][0], self.w_gating_lora[1][0]),
+        )
+        gate_value = nn.gelu(ff_gate)
+
+        ff1 = self._dot(
+            x,
+            self.w_gating[1],
+            None if self.w_gating_lora is None else (self.w_gating_lora[0][1], self.w_gating_lora[1][1]),
+        )
+        activations = gate_value * ff1
+
+        outputs = self._dot(activations, self.w_linear, self.w_linear_lora)
+        assert outputs.dtype == dtype
+        return outputs
+
+    def _dot(self, x: at.Array, w: at.Array, lora_weights: tuple[at.Array, at.Array] | None) -> at.Array:
+        base = jnp.dot(x, w.astype(x.dtype))
+        if lora_weights is None:
+            return base
+        return base + jnp.dot(jnp.dot(x, lora_weights[0].astype(x.dtype)), lora_weights[1].astype(x.dtype))
+
+
+@at.typecheck
 class Attention(nn.Module):
     """Attention module."""
 
@@ -153,26 +329,29 @@ class Attention(nn.Module):
             if x is None:
                 continue
             if config.num_kv_heads == config.num_heads:
-                qkv_einsum = lora.Einsum(
+                qkv_einsum = EinsumBF16(
                     shape=(3, config.num_heads, config.width, config.head_dim),
                     name=_name("qkv_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0, 1)),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=config.param_dtype,
                 )
                 qkvs.append(qkv_einsum("BSD,3KDH->3BSKH", x))
             else:
-                q_einsum = lora.Einsum(
+                q_einsum = EinsumBF16(
                     shape=(config.num_heads, config.width, config.head_dim),
                     name=_name("q_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=config.param_dtype,
                 )
                 q = q_einsum("BTD,NDH->BTNH", x)
-                kv_einsum = lora.Einsum(
+                kv_einsum = EinsumBF16(
                     shape=(2, config.num_kv_heads, config.width, config.head_dim),
                     name=_name("kv_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0, 1)),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=config.param_dtype,
                 )
                 k, v = kv_einsum("BSD,2KDH->2BSKH", x)
                 qkvs.append((q, k, v))
@@ -224,11 +403,12 @@ class Attention(nn.Module):
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is not None:
                 end = start + x.shape[1]
-                out_einsum = lora.Einsum(
+                out_einsum = EinsumBF16(
                     shape=(config.num_heads, config.head_dim, config.width),
                     name=_name("attn_vec_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=(-3, -2), out_axis=-1),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=config.param_dtype,
                 )
                 out.append(out_einsum("BTNH,NHD->BTD", encoded[:, start:end]))
                 start = end
@@ -256,7 +436,7 @@ class Block(_Block):
         gates = []
         for i, x in enumerate(xs):
             if x is not None:
-                x, gate = RMSNorm(name=_name("pre_attention_norm", i))(x, adarms_cond[i])  # noqa: PLW2901
+                x, gate = RMSNormBF16(name=_name("pre_attention_norm", i), param_dtype=self.configs[i].param_dtype)(x, adarms_cond[i])  # noqa: PLW2901
             pre_attn.append(x)
             gates.append(gate if x is not None else None)
 
@@ -269,7 +449,7 @@ class Block(_Block):
             post_attn_normed = []
             for i, x in enumerate(post_attn):
                 if x is not None and i == 0:
-                    x, _ = RMSNorm(name="post_attention_norm")(x, None)  # noqa: PLW2901
+                    x, _ = RMSNormBF16(name="post_attention_norm", param_dtype=self.configs[i].param_dtype)(x, None)  # noqa: PLW2901
                 post_attn_normed.append(x)
             post_attn = post_attn_normed
 
@@ -281,12 +461,13 @@ class Block(_Block):
         gates = []
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is not None:
-                x, gate = RMSNorm(name=_name("pre_ffw_norm", i))(x, adarms_cond[i])  # noqa: PLW2901
-                x = lora.FeedForward(  # noqa: PLW2901
+                x, gate = RMSNormBF16(name=_name("pre_ffw_norm", i), param_dtype=config.param_dtype)(x, adarms_cond[i])  # noqa: PLW2901
+                x = FeedForwardBF16(  # noqa: PLW2901
                     features=config.width,
                     hidden_dim=config.mlp_dim,
                     name=_name("mlp", i),
                     lora_config=config.lora_configs.get("ffn"),
+                    param_dtype=config.param_dtype,
                 )(x)
             out.append(x)
             gates.append(gate if x is not None else None)
@@ -299,7 +480,7 @@ class Block(_Block):
             out_normed = []
             for i, x in enumerate(out):
                 if x is not None and i == 0:
-                    x, _ = RMSNorm(name="post_ffw_norm")(x, None)  # noqa: PLW2901
+                    x, _ = RMSNormBF16(name="post_ffw_norm", param_dtype=self.configs[i].param_dtype)(x, None)  # noqa: PLW2901
                 out_normed.append(x)
             out = out_normed
 
@@ -324,9 +505,10 @@ class Module(nn.Module):
         # all experts must have the same depth
         assert all(config.depth == self.configs[0].depth for config in self.configs)
 
-        self.embedder = Embedder(
+        self.embedder = EmbedderBF16(
             vocab_size=PALIGEMMA_VOCAB_SIZE,
             embed_dim=self.configs[0].width,  # embedder for first expert only
+            param_dtype=self.configs[0].param_dtype,
             name="embedder",
         )
         block_cls = nn.remat(
@@ -353,7 +535,7 @@ class Module(nn.Module):
             dropout_bdims=self.dropout_bdims,
             post_norms=self.configs[0].post_norms,
         )
-        self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
+        self.final_norms = [RMSNormBF16(name=_name("final_norm", i), param_dtype=self.configs[i].param_dtype) for i in range(len(self.configs))]
 
     @at.typecheck
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
