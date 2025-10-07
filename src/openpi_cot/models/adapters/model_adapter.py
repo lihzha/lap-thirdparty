@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import copy
 import dataclasses
 from enum import Enum
 import logging
@@ -37,7 +38,7 @@ class ExtendedModelType(str, Enum):
 @struct.dataclass
 class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
-    # images: dict[str, at.Float[ArrayT, "*b t h w c"]]
+    images: dict[str, at.Float[ArrayT, "*b t h w c"]]
     tokenized_reasoning_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_numeric_mask: at.Bool[ArrayT, "*b l"] | None = None
     example_mask: at.Bool[ArrayT, "*b"] | None = None
@@ -49,10 +50,10 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
         # Build the base Observation first (handles images, masks, dtype fixes, etc.)
         data_dict = dict(data)
-        base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict)
-        # data_dict_downsampled = copy.deepcopy(data_dict)
-        # data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
-        # base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict_downsampled)
+        # base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict)
+        data_dict_downsampled = copy.deepcopy(data_dict)
+        data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
+        base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict_downsampled)
         # Pull CoT extras from either flat keys or a namespaced location.
         cot_src = data.get("extras", {}).get("cot", {})
 
@@ -62,9 +63,9 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
 
         # Construct subclass using base fields
         base_dict = dataclasses.asdict(base)
-        # base_dict["images"] = {
-        #     k: v.astype(np.float32) / 255.0 * 2.0 - 1.0 for k, v in data_dict["image"].items() if v is not None
-        # }
+        base_dict["images"] = {
+            k: v.astype(np.float32) / 255.0 * 2.0 - 1.0 for k, v in data_dict["image"].items() if v is not None
+        }
         return cls(
             **base_dict,
             tokenized_reasoning_mask=getk("tokenized_reasoning_mask"),
