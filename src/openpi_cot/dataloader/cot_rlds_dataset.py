@@ -35,6 +35,7 @@ def make_decode_images_fn(
     wrist_key: str | None,
     use_wrist_image: bool,
     resize_to: tuple[int, int] | None = (224, 224),
+    vis_dataset: bool = False,
 ):
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors.
     Preserves aspect ratio, pads symmetrically, and returns the original dtype semantics
@@ -103,20 +104,22 @@ def make_decode_images_fn(
         return img
 
     def _decode_frame(traj: dict) -> dict:
-        traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
-        if use_wrist_image and wrist_key is not None:
-            traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
-        # traj["observation"][primary_key] = tf.map_fn(
-        #     _decode_single,
-        #     traj["observation"][primary_key],
-        #     fn_output_signature=tf.uint8,
-        # )
-        # if use_wrist_image and wrist_key is not None:
-        #     traj["observation"][wrist_key] = tf.map_fn(
-        #         _decode_single,
-        #         traj["observation"][wrist_key],
-        #         fn_output_signature=tf.uint8,
-        #     )
+        if not vis_dataset:
+            traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
+            if use_wrist_image and wrist_key is not None:
+                traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
+        else:
+            traj["observation"][primary_key] = tf.map_fn(
+                _decode_single,
+                traj["observation"][primary_key],
+                fn_output_signature=tf.uint8,
+            )
+            if use_wrist_image and wrist_key is not None:
+                traj["observation"][wrist_key] = tf.map_fn(
+                    _decode_single,
+                    traj["observation"][wrist_key],
+                    fn_output_signature=tf.uint8,
+                )
         return traj
 
     return _decode_frame
@@ -134,6 +137,7 @@ def prepare_batched_dataset(
     resize_resolution,
     primary_image_key,
     wrist_image_key,
+    vis_dataset: bool = False,
 ):
     if (not want_val) and shuffle and max_samples is None:
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
@@ -145,6 +149,7 @@ def prepare_batched_dataset(
         wrist_key=wrist_image_key,
         use_wrist_image=use_wrist_image,
         resize_to=resize_resolution,
+        vis_dataset=vis_dataset,
     )
     dataset = dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
 
@@ -335,6 +340,7 @@ class SingleCoTDataset:
                 resize_resolution=config.resize_resolution,
                 primary_image_key=self.spec.primary_image_key,
                 wrist_image_key=self.spec.wrist_image_key,
+                vis_dataset=self.vis_dataset,
             )
 
     def build_dataset_builder(self, ds_name, data_dir):
@@ -1251,6 +1257,7 @@ class OXECoTDatasets:
             resize_resolution=config.resize_resolution,
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
+            vis_dataset=config.vis_dataset,
         )
 
     def _compute_or_load_global_stats(
