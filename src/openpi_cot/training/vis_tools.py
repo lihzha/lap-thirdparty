@@ -759,12 +759,8 @@ def eval_step(
         ids = _utils.to_local_array(id_buf)
         # Be robust to bounds: clamp final index
         t_host = int(np.clip(_utils.to_local_scalar(t_final), 0, ids.shape[1] - 1))
-        # Prepare images now to compute consistent local count
-        first_cam_key = next(iter(gt_batch[0].images))
-        imgs = _utils.to_local_array(gt_batch[0].images[first_cam_key])
-        imgs_u8 = ((np.asarray(imgs) + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
         # Derive safe local loop bound across all sources
-        k_decode = int(min(k_local, ids.shape[0], imgs_u8.shape[0], len(gt_texts)))
+        k_decode = int(min(k_local, ids.shape[0], len(gt_texts)))
         pred_texts: list[str] = []
         for bi in range(k_decode):
             seq = ids[bi, : t_host + 1, 0].astype(np.int32)
@@ -785,6 +781,10 @@ def eval_step(
             return None, None
 
         if vis_dataset:
+            # Prepare images now to compute consistent local count
+            first_cam_key = next(iter(gt_batch[0].images))
+            imgs = _utils.to_local_array(gt_batch[0].images[first_cam_key])
+            imgs_u8 = ((np.asarray(imgs) + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
             to_log: list[np.ndarray] = []
             # Prepare annotated images for a subset
             # Choose a camera to display

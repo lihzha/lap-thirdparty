@@ -588,7 +588,7 @@ _CONFIGS = [
         batch_size=16,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="paligemma2", params_path="gs://pi0-cot/cache/paligemma2-3b-pt-224.b16.npz"
+            kind="paligemma2", params_path="gs://pi0-cot/cache/paligemma2-3b-mix-224.b16.npz"
         ),
     ),
     TrainConfig(
@@ -614,7 +614,7 @@ _CONFIGS = [
         batch_size=1,
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="paligemma2", params_path="/n/fs/robot-data/openpi-cot/paligemma2-3b-pt-224.b16.npz"
+            kind="paligemma2", params_path="/n/fs/robot-data/openpi-cot/paligemma2-3b-mix-224.b16.npz"
         ),
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001
