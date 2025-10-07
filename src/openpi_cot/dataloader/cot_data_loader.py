@@ -115,6 +115,7 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
             if self._is_batched:
                 # Transforms are designed to be applied to individual samples. So we need to split the batch into
                 # individual samples and apply the transform to each sample individually.
+                breakpoint()
                 batch_size = next(v.shape[0] for v in sample.values())
 
                 # Split batch into individual samples using tree_map
