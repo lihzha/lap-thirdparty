@@ -168,7 +168,7 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
 
     # Final gripper value from last step
     g_last = float(arr[-1, 6])
-    parts.append(f"set gripper to {g_last:.2f}")
+    parts.append(f"set gripper to {g_last:.1f}")
 
     return " and ".join(parts)
 
