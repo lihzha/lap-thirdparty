@@ -170,7 +170,7 @@ def create_data_loader(
 
         # 2) transforms (split-aware)
         tx = _make_iterable_transforms(data_cfg, skip_norm_stats=data_cfg.norm_stats is None, split=split)
-        iterable = IterableTransformedDataset(ds, tx, batch_size=config.batch_size, is_batched=True)
+        iterable = IterableTransformedDataset(config.batch_size, ds, tx, is_batched=True)
 
         return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg)
 
