@@ -281,13 +281,13 @@ class TrainingStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            per_sample_loss = model.compute_loss(rng, observation, actions, train=True)
-            return jnp.mean(per_sample_loss), per_sample_loss
+            per_sample_loss, token_accuracy = model.compute_loss(rng, observation, actions, train=True)
+            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy)
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
-        (loss, per_sample_loss), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+        (loss, (per_sample_loss, token_accuracy)), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
             model, train_rng, observation, actions
         )
 
@@ -317,19 +317,13 @@ class TrainingStepRunner:
             ),
         )
 
-        # Get token_accuracy from model if available
-        token_accuracy = getattr(model, "token_accuracy", None)
-        token_acc_value = token_accuracy.value if token_accuracy is not None else None
-
         info = {
             "loss": loss,
             "per_sample_loss": per_sample_loss,
             "grad_norm": optax.global_norm(grads),
             "param_norm": optax.global_norm(kernel_params),
+            "token_accuracy": token_accuracy,
         }
-
-        if token_acc_value is not None:
-            info["token_accuracy"] = token_acc_value
 
         return new_state, info
 
@@ -355,15 +349,15 @@ class ValidationStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            val_loss = model.compute_loss(rng, observation, actions, train=False)
-            return jnp.mean(val_loss)
+            val_loss, token_accuracy = model.compute_loss(rng, observation, actions, train=False)
+            return jnp.mean(val_loss), token_accuracy
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         if hasattr(model, "compute_eval_metrics"):
             return model.compute_eval_metrics(eval_rng, observation, actions)
-        loss = loss_fn(model, eval_rng, observation, actions)
-        return {"val_loss": loss}
+        loss, token_accuracy = loss_fn(model, eval_rng, observation, actions)
+        return {"val_loss": loss, "val_token_accuracy": token_accuracy}
 
 
 def main(config: _config.TrainConfig):

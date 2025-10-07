@@ -127,9 +127,6 @@ class PiCoT(_pi0.Pi0):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
-        # Token accuracy metric
-        self.token_accuracy = nnx.Variable(jnp.array(0.0))
-
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
@@ -182,7 +179,7 @@ class PiCoT(_pi0.Pi0):
         actions: _model.Actions,
         *,
         train: bool = False,
-    ) -> at.Float[at.Array, "*b ah"]:
+    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, ""]]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
         observation = preprocess_observation(
@@ -192,6 +189,7 @@ class PiCoT(_pi0.Pi0):
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
 
         total_loss = 0.0
+        token_accuracy = jnp.array(0.0)
 
         # Cross-entropy (language/reasoning) loss
         if self.enable_reasoning_training:
@@ -230,8 +228,7 @@ class PiCoT(_pi0.Pi0):
             correct = (predictions == shift_labels).astype(jnp.float32)
             masked_correct = correct * token_mask
             num_tokens = jnp.maximum(token_mask.sum(), 1.0)
-            accuracy = masked_correct.sum() / num_tokens
-            self.token_accuracy.value = accuracy
+            token_accuracy = masked_correct.sum() / num_tokens
 
         # Diffusion (actions) loss
         if self.enable_action_training:
@@ -253,7 +250,7 @@ class PiCoT(_pi0.Pi0):
             action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
             total_loss = total_loss + self.action_loss_weight * action_loss
 
-        return total_loss
+        return total_loss, token_accuracy
 
     @override
     def sample_actions(

@@ -149,10 +149,8 @@ class TokenAccuracyEvaluator:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            per_sample_loss = model.compute_loss(rng, observation, actions, train=False)
-            token_accuracy = getattr(model, "token_accuracy", None)
-            token_acc_value = token_accuracy.value if token_accuracy is not None else jnp.array(0.0)
-            return jnp.mean(per_sample_loss), (per_sample_loss, token_acc_value)
+            per_sample_loss, token_accuracy = model.compute_loss(rng, observation, actions, train=False)
+            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy)
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
