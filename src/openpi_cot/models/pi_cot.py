@@ -127,6 +127,9 @@ class PiCoT(_pi0.Pi0):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
+        # Token accuracy metric
+        self.token_accuracy = nnx.Variable(jnp.array(0.0))
+
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
@@ -221,6 +224,14 @@ class PiCoT(_pi0.Pi0):
                 per_example=True,
             )
             total_loss = total_loss + self.language_loss_weight * lang_loss
+
+            # Compute token accuracy
+            predictions = jnp.argmax(shift_logits, axis=-1)
+            correct = (predictions == shift_labels).astype(jnp.float32)
+            masked_correct = correct * token_mask
+            num_tokens = jnp.maximum(token_mask.sum(), 1.0)
+            accuracy = masked_correct.sum() / num_tokens
+            self.token_accuracy.value = accuracy
 
         # Diffusion (actions) loss
         if self.enable_action_training:

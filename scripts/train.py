@@ -316,12 +316,21 @@ class TrainingStepRunner:
                 lambda _, x: x.value.ndim > 1,
             ),
         )
+
+        # Get token_accuracy from model if available
+        token_accuracy = getattr(model, "token_accuracy", None)
+        token_acc_value = token_accuracy.value if token_accuracy is not None else None
+
         info = {
             "loss": loss,
             "per_sample_loss": per_sample_loss,
             "grad_norm": optax.global_norm(grads),
             "param_norm": optax.global_norm(kernel_params),
         }
+
+        if token_acc_value is not None:
+            info["token_accuracy"] = token_acc_value
+
         return new_state, info
 
 
