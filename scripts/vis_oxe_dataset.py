@@ -2,7 +2,6 @@ import logging
 import os
 import platform
 
-import cv2
 import etils.epath as epath
 import jax
 import numpy as np
@@ -192,7 +191,9 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     area: (x0, y0, x1, y1) in image coordinates.
     """
     try:
-        import cv2
+        from PIL import Image
+        from PIL import ImageDraw
+        from PIL import ImageFont
     except Exception:
         return img
     x0, y0, x1, y1 = area
@@ -200,59 +201,90 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     y0 = max(0, y0)
     x1 = min(img.shape[1], x1)
     y1 = min(img.shape[0], y1)
-    overlay = img.copy()
-    # Semi-transparent background (lighter to reduce apparent black area)
-    cv2.rectangle(overlay, (x0, y0), (x1, y1), (0, 0, 0), thickness=-1)
-    alpha = 0.5
-    img = cv2.addWeighted(overlay, alpha, img, 1 - alpha, 0)
+
+    # Convert to PIL Image
+    pil_img = Image.fromarray(img)
+
+    # Create semi-transparent overlay
+    overlay = Image.new("RGBA", pil_img.size, (0, 0, 0, 0))
+    draw_overlay = ImageDraw.Draw(overlay)
+    draw_overlay.rectangle([x0, y0, x1, y1], fill=(0, 0, 0, 128))  # 50% alpha
+
+    # Composite overlay onto image
+    pil_img = pil_img.convert("RGBA")
+    pil_img = Image.alpha_composite(pil_img, overlay)
+    pil_img = pil_img.convert("RGB")
+
     # Text parameters scaled by height
     block_h = max(1, y1 - y0)
     base_scale = 1.2
-    font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(0.4, min(1.2, block_h / 110.0)) * base_scale
-    thickness = 2
-    color = (255, 255, 255)
-    outline = (0, 0, 0)
+    font_size = int(12 * scale)
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+    draw = ImageDraw.Draw(pil_img)
     max_chars = 45
     lines = _wrap_text_to_lines(text, max_chars)
     line_h = max(10, int(10 * scale))
-    y = y0 - 10
+    y = y0 + 10
+
     for line in lines:
-        # Outline
-        cv2.putText(img, line, (x0 + 8, y), font, scale, outline, thickness + 3, cv2.LINE_AA)
-        # Text
-        cv2.putText(img, line, (x0 + 8, y), font, scale, color, thickness, cv2.LINE_AA)
+        # Draw outline (black)
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                if dx != 0 or dy != 0:
+                    draw.text((x0 + 8 + dx, y + dy), line, font=font, fill=(0, 0, 0))
+        # Draw text (white)
+        draw.text((x0 + 8, y), line, font=font, fill=(255, 255, 255))
         y += line_h + 10
-    return img
+
+    return np.array(pil_img)
 
 
 def _make_legend_bar(width: int, height: int = 28) -> np.ndarray:
     try:
-        import cv2
+        from PIL import Image
+        from PIL import ImageDraw
+        from PIL import ImageFont
     except Exception:
-        cv2 = None
-    bar = np.zeros((height, width, 3), dtype=np.uint8)
-    bar[:] = 32  # dark gray
+        bar = np.zeros((height, width, 3), dtype=np.uint8)
+        bar[:] = 32  # dark gray
+        return bar
+
+    # Create dark gray background
+    bar = Image.new("RGB", (width, height), color=(32, 32, 32))
+    draw = ImageDraw.Draw(bar)
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 12)
+        except Exception:
+            font = ImageFont.load_default()
+
     cx = 12
     items = [((0, 255, 255), "GT start"), ((0, 0, 255), "Pred end"), ((0, 255, 0), "GT end")]
+
     try:
-        if cv2 is not None:
-            for color, label in items:
-                cv2.circle(bar, (cx, height // 2), 6, color, -1)
-                cv2.putText(
-                    bar,
-                    label,
-                    (cx + 12, height // 2 + 4),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (255, 255, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
-                cx += 110
+        for color, label in items:
+            # Draw circle (using ellipse with same width/height)
+            radius = 6
+            draw.ellipse([cx - radius, height // 2 - radius, cx + radius, height // 2 + radius], fill=color)
+            # Draw text
+            draw.text((cx + 12, height // 2 - 6), label, font=font, fill=(255, 255, 255))
+            cx += 110
     except Exception:
         pass
-    return bar
+
+    return np.array(bar)
 
 
 def _compose_pages(rows: list[np.ndarray], target_max_height: int = 1600) -> list[np.ndarray]:
@@ -393,20 +425,16 @@ def main(config: _config.TrainConfig):
             vis_rows.append(row)
         if vis_rows:
             pages = _compose_pages(vis_rows, target_max_height=1600)
-            if wandb_enabled and wandb is not None:
-                wandb.log(
-                    {
-                        "vis_dataset/pages": [
-                            wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
-                        ]
-                    },
-                    step=j,
-                )
-            else:
-                for pi, page in enumerate(pages):
-                    path = f"grid_page_{j}_{pi:02d}.png"
-                    cv2.imwrite(path, page)
-                    logging.info("wrote visualization page to %s", path)
+            assert wandb_enabled and wandb is not None
+            wandb.log(
+                {
+                    "vis_dataset/pages": [
+                        wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
+                    ]
+                },
+                step=j,
+            )
+
         batch = next(data_iter)
 
     if wandb_enabled and wandb is not None and getattr(wandb, "run", None) is not None:
