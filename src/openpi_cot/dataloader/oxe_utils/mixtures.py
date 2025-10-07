@@ -78,7 +78,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("berkeley_autolab_ur5", 3.0),
         # # # ("toto", 1.0),
         # # # ("language_table", 0.1),
-        ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0),
+        # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0),
         # # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),
         # # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),
         # ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
@@ -91,7 +91,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # ("berkeley_fanuc_manipulation", 2.0),   # join state
         # ("cmu_stretch", 5.0),  # almost all movements are "move up"
         # ("fmb", 1.0),
-        # # # ("dobbe", 0.2),  # question
+        ("dobbe", 0.2),  # question
     ],
 }
 

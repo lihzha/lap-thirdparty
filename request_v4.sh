@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-TPU_NAME="pi0"
+TPU_NAME="pi2"
 ZONE="us-central2-b"
 TYPE="v4"
 TOPOLOGY="1x2x2"
