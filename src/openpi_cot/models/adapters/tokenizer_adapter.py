@@ -86,16 +86,22 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
         if end_idx > start_idx:
             reasoning_mask[start_idx:end_idx] = True
-        # Build numeric mask: mark tokens that contain digits within reasoning span only
+        # Build critical token mask: mark tokens that contain digits or directional words within reasoning span only
         pieces = [self._tokenizer.id_to_piece(t) for t in tokens]
 
-        def _has_digit(p: str) -> bool:
-            return bool(re.search(r"[0-9]", p))
+        def _is_critical(p: str) -> bool:
+            # Check for digits
+            if re.search(r"[0-9]", p):
+                return True
+            # Check for directional words (case-insensitive)
+            p_lower = p.lower()
+            directional_words = ["right", "left", "forward", "up", "down", "back"]
+            return any(word in p_lower for word in directional_words)
 
         for i in range(start_idx, end_idx):
             if i < 0 or i >= len(pieces):
                 continue
-            if _has_digit(pieces[i]):
+            if _is_critical(pieces[i]):
                 numeric_mask[i] = True
 
         return (

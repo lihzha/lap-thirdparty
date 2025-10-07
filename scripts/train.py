@@ -281,13 +281,13 @@ class TrainingStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            per_sample_loss, token_accuracy = model.compute_loss(rng, observation, actions, train=True)
-            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy)
+            per_sample_loss, token_accuracy, critical_token_accuracy = model.compute_loss(rng, observation, actions, train=True)
+            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy, critical_token_accuracy)
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
-        (loss, (per_sample_loss, token_accuracy)), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+        (loss, (per_sample_loss, token_accuracy, critical_token_accuracy)), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
             model, train_rng, observation, actions
         )
 
@@ -323,6 +323,7 @@ class TrainingStepRunner:
             "grad_norm": optax.global_norm(grads),
             "param_norm": optax.global_norm(kernel_params),
             "token_accuracy": token_accuracy,
+            "critical_token_accuracy": critical_token_accuracy,
         }
 
         return new_state, info
@@ -349,15 +350,15 @@ class ValidationStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            val_loss, token_accuracy = model.compute_loss(rng, observation, actions, train=False)
-            return jnp.mean(val_loss), token_accuracy
+            val_loss, token_accuracy, critical_token_accuracy = model.compute_loss(rng, observation, actions, train=False)
+            return jnp.mean(val_loss), token_accuracy, critical_token_accuracy
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         if hasattr(model, "compute_eval_metrics"):
             return model.compute_eval_metrics(eval_rng, observation, actions)
-        loss, token_accuracy = loss_fn(model, eval_rng, observation, actions)
-        return {"val_loss": loss, "val_token_accuracy": token_accuracy}
+        loss, token_accuracy, critical_token_accuracy = loss_fn(model, eval_rng, observation, actions)
+        return {"val_loss": loss, "val_token_accuracy": token_accuracy, "val_critical_token_accuracy": critical_token_accuracy}
 
 
 def main(config: _config.TrainConfig):

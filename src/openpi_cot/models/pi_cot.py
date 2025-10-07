@@ -179,7 +179,7 @@ class PiCoT(_pi0.Pi0):
         actions: _model.Actions,
         *,
         train: bool = False,
-    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, ""]]:
+    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, ""], at.Float[at.Array, ""]]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
         observation = preprocess_observation(
@@ -190,6 +190,7 @@ class PiCoT(_pi0.Pi0):
 
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
+        critical_token_accuracy = jnp.array(0.0)
 
         # Cross-entropy (language/reasoning) loss
         if self.enable_reasoning_training:
@@ -230,6 +231,12 @@ class PiCoT(_pi0.Pi0):
             num_tokens = jnp.maximum(token_mask.sum(), 1.0)
             token_accuracy = masked_correct.sum() / num_tokens
 
+            # Compute critical token accuracy
+            critical_token_mask = observation.tokenized_numeric_mask[:, 1:] * ex_mask
+            critical_correct = correct * critical_token_mask
+            num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
+            critical_token_accuracy = critical_correct.sum() / num_critical_tokens
+
         # Diffusion (actions) loss
         if self.enable_action_training:
             batch_shape = actions.shape[:-2]
@@ -250,7 +257,7 @@ class PiCoT(_pi0.Pi0):
             action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
             total_loss = total_loss + self.action_loss_weight * action_loss
 
-        return total_loss, token_accuracy
+        return total_loss, token_accuracy, critical_token_accuracy
 
     @override
     def sample_actions(

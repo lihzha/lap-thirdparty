@@ -276,7 +276,7 @@ class TrainingStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            per_sample_loss, _ = model.compute_loss(rng, observation, actions, train=True)
+            per_sample_loss, _, _ = model.compute_loss(rng, observation, actions, train=True)
             return jnp.mean(per_sample_loss), per_sample_loss
 
         train_rng = jax.random.fold_in(rng, state.step)
@@ -341,7 +341,7 @@ class ValidationStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            val_loss, _ = model.compute_loss(rng, observation, actions, train=False)
+            val_loss, _, _ = model.compute_loss(rng, observation, actions, train=False)
             return jnp.mean(val_loss)
 
         eval_rng = jax.random.fold_in(rng, state.step)
