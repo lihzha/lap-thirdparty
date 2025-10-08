@@ -225,7 +225,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
                         # Parse and summarize numeric actions
                         raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in pred_lang_used]
-                        pred_lang_str = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                        # Filter out None values (from empty padding strings)
+                        raw_array = [x for x in raw_array if x is not None]
+                        if raw_array:
+                            pred_lang_str = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                        else:
+                            pred_lang_str = None
                     else:
                         # Text case: filter out empty strings (padding)
                         seq = to_str_list(pred_lang)

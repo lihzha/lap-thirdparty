@@ -1296,7 +1296,7 @@ def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["eef_state"] = tf.concat(
+    trajectory["observation"]["state"] = tf.concat(
         (
             trajectory["observation"]["base_pose_tool_reached"][:, :3],
             trajectory["observation"]["base_pose_tool_reached"][:, 3:7],
