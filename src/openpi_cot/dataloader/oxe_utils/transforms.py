@@ -999,7 +999,6 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
@@ -1008,18 +1007,19 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            (trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3]) * 100,
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
+    # movement_actions = tf.concat(
+    #     (
+    #         trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+    #         euler_diff(
+    #             trajectory["observation"]["state"][1:, 3:6],
+    #             trajectory["observation"]["state"][:-1, 3:6],
+    #         ),
+    #     ),
+    #     axis=-1,
+    # )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    traj_truncated["action"] = trajectory["action"][-1:]
     return traj_truncated
 
     # trajectory["language_instruction"] = tf.fill(
