@@ -122,12 +122,12 @@ def make_decode_images_fn(
                 h, w = resize_to
                 decoded_frames.set_shape([None, h, w, 3])
             return decoded_frames
-        elif rank == 4:  # [T, H, W, C] - already decoded with time dimension
+        if rank == 4:  # [T, H, W, C] - already decoded with time dimension
             # Apply resize if needed (shouldn't normally happen in this path)
             return img_tensor
-        else:  # rank == 0 (scalar string) or rank == 3 ([H, W, C])
-            # Single frame: decode if string, otherwise return as-is
-            return _decode_single(img_tensor)
+        # rank == 0 (scalar string) or rank == 3 ([H, W, C])
+        # Single frame: decode if string, otherwise return as-is
+        return _decode_single(img_tensor)
 
     def _decode_frame(traj: dict) -> dict:
         traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
@@ -585,7 +585,7 @@ class SingleCoTDataset:
                     indices = tf.minimum(indices, traj_len - 1)
 
                     # Gather language actions
-                    lang_window = tf.gather(traj["language_actions"], indices)
+                    lang_window = tf.gather(traj["raw_language_actions"], indices)
 
                     # Pad to summation_steps
                     pad_len = summation_steps - actual_len
