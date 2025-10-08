@@ -48,9 +48,9 @@ def binarize_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
     is_open_float = tf.cast(open_mask, tf.float32)
 
     def scan_fn(carry, i):
-        return tf.cond(in_between_mask[i], lambda: tf.cast(carry, tf.float32), lambda: is_open_float[i])
+        return tf.cond(in_between_mask[i], lambda: carry, lambda: is_open_float[i])
 
-    return tf.scan(scan_fn, tf.range(tf.shape(actions)[0]), actions[-1], reverse=True)
+    return tf.scan(scan_fn, tf.range(tf.shape(actions)[0]), tf.cast(actions[-1], tf.float32), reverse=True)
 
 
 def invert_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
