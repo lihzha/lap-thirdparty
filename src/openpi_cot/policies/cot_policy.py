@@ -17,21 +17,72 @@ from openpi_cot.policies.utils import summarize_numeric_actions
 from openpi_cot.policies.utils import to_str_list
 
 
+@dataclasses.dataclass(frozen=True)
+class LanguageActionConfig:
+    """Configuration for how to format and summarize language actions.
+
+    This allows easy extension to support different action description formats
+    by defining new LanguageActionConfig instances with custom settings.
+    """
+    name: str = "default"
+    sum_decimal: str = "0f"  # Decimal format for numeric action summaries
+    include_rotation: bool = False  # Whether to include rotation in action descriptions
+    # Future extensions could include:
+    # - coordinate_frame: str = "robot"  # "robot", "world", "camera"
+    # - unit: str = "m"  # "m", "cm", "mm"
+    # - description_style: str = "natural"  # "natural", "structured", "terse"
+
+
+# Predefined language action configurations
+DEFAULT_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
+    name="default",
+    sum_decimal="0f",
+    include_rotation=False,
+)
+
+WITH_ROTATION_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
+    name="with_rotation",
+    sum_decimal="0f",
+    include_rotation=True,
+)
+
+PRECISION_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
+    name="precision",
+    sum_decimal="2f",  # 2 decimal places for more precision
+    include_rotation=False,
+)
+
+
 # TODO: during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
 @dataclasses.dataclass(frozen=True)
 class CoTInputs(upstream_transforms.DataTransformFn):
     # The action dimension of the model. Will be used to pad state and actions.
     action_dim: int
-    sum_decimal: str = "0f"
+    # Language action configuration (how to format/summarize actions)
+    language_action_config: LanguageActionConfig = dataclasses.field(default_factory=lambda: DEFAULT_LANGUAGE_ACTION_CONFIG)
+    # Legacy fields for backward compatibility - will use language_action_config if not None
+    sum_decimal: str | None = None
+    include_rotation: bool | None = None
     # Train-time dropout probs (set to 0.0 for val/inference)
     wrist_image_dropout_prob: float = 0.0
     # Determines which model will be used.
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
-    include_rotation: bool = False
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     # Prediction training parameters
     enable_prediction_training: bool = False
     prediction_prompt: str = "What is the robot's movement between two frames?"
+
+    def __post_init__(self):
+        # Handle backward compatibility: if sum_decimal or include_rotation are set,
+        # create a custom LanguageActionConfig
+        if self.sum_decimal is not None or self.include_rotation is not None:
+            config = LanguageActionConfig(
+                name="custom",
+                sum_decimal=self.sum_decimal if self.sum_decimal is not None else self.language_action_config.sum_decimal,
+                include_rotation=self.include_rotation if self.include_rotation is not None else self.language_action_config.include_rotation,
+            )
+            # Use object.__setattr__ because this is a frozen dataclass
+            object.__setattr__(self, "language_action_config", config)
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert "observation" in data
@@ -171,13 +222,25 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
                 # Use bimanual summarization for bimanual datasets
                 if is_bimanual:
-                    summed = summarize_bimanual_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                    summed = summarize_bimanual_numeric_actions(
+                        raw_array,
+                        self.language_action_config.sum_decimal,
+                        self.language_action_config.include_rotation
+                    )
                 else:
-                    summed = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                    summed = summarize_numeric_actions(
+                        raw_array,
+                        self.language_action_config.sum_decimal,
+                        self.language_action_config.include_rotation
+                    )
                 return summed
             seq = to_str_list(la)
             if seq is not None:
-                summed = sum_language_actions(seq, self.sum_decimal, self.include_rotation)
+                summed = sum_language_actions(
+                    seq,
+                    self.language_action_config.sum_decimal,
+                    self.language_action_config.include_rotation
+                )
                 if summed is not None and len(summed) > 0:
                     return summed
             else:
@@ -194,7 +257,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # stores as float32 (C,H,W), gets skipped for policy inference
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         inputs = self._prepare_inputs(data)
-        if self.include_rotation:
+        if self.language_action_config.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
         # Always prepare regular language actions for reasoning loss
@@ -245,9 +308,17 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                                 is_bimanual = is_bimanual.item()
 
                             if is_bimanual:
-                                pred_lang_str = summarize_bimanual_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                                pred_lang_str = summarize_bimanual_numeric_actions(
+                                    raw_array,
+                                    self.language_action_config.sum_decimal,
+                                    self.language_action_config.include_rotation
+                                )
                             else:
-                                pred_lang_str = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                                pred_lang_str = summarize_numeric_actions(
+                                    raw_array,
+                                    self.language_action_config.sum_decimal,
+                                    self.language_action_config.include_rotation
+                                )
                         else:
                             pred_lang_str = None
                     else:
@@ -256,7 +327,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                         if seq is not None:
                             # Remove empty/whitespace-only strings (padding)
                             seq_trimmed = [s for s in seq if s and s.strip()]
-                            pred_lang_str = sum_language_actions(seq_trimmed, self.sum_decimal, self.include_rotation)
+                            pred_lang_str = sum_language_actions(
+                                seq_trimmed,
+                                self.language_action_config.sum_decimal,
+                                self.language_action_config.include_rotation
+                            )
                         else:
                             pred_lang_str = None
                 else:
