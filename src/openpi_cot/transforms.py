@@ -101,7 +101,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             if prediction_lang and prediction_lang.strip():
                 # Use prediction-specific tokenization
                 pred_tokens, pred_pad_mask, pred_reasoning_mask, pred_numeric_mask = self.tokenizer.tokenize_prediction(
-                    prediction_prompt_str, prediction_lang, state=None
+                    prediction_prompt_str, prediction_lang
                 )
 
                 # Add prediction-specific fields

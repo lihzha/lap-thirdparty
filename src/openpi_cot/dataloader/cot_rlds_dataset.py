@@ -104,10 +104,10 @@ def make_decode_images_fn(
 
     def decode_with_time_dim(img_tensor):
         """Decode images that may have time dimension."""
-        # Check shape: could be [H,W,C] or [T,H,W,C] or string (encoded)
-        if img_tensor.dtype == tf.string:
-            # Single encoded image
-            return _decode_single(img_tensor)
+        # # Check shape: could be [H,W,C] or [T,H,W,C] or string (encoded)
+        # if img_tensor.dtype == tf.string:
+        #     # Single encoded image
+        #     return _decode_single(img_tensor)
 
         # Check rank to determine if has time dimension
         img_shape = tf.shape(img_tensor)
