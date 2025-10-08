@@ -732,7 +732,7 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
-    "r1_lite": {
+    "sample_r1_lite": {
         "image_obs_keys": {
             "primary": "image_camera_head",
             "secondary": None,
@@ -1170,7 +1170,7 @@ OXE_DATASET_METADATA = {
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
-    "r1_lite": {
+    "sample_r1_lite": {
         "control_frequency": 15,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Single Arm",
