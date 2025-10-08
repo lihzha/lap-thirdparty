@@ -881,12 +881,12 @@ class DroidCoTDataset(SingleCoTDataset):
                 def _empty_lang():
                     return tf.fill([traj_len], tf.constant(""))
 
-                # Check if lookup succeeded (not the default value)
-                lang_tensor = tf.cond(
+                # Check if lookup succeeded (not the default value and not empty)
+                has_valid_lang = tf.logical_and(
                     tf.not_equal(lang_bytes, self.spec.default_lang_value),
-                    _parse_lang,
-                    _empty_lang,
+                    tf.greater(tf.strings.length(lang_bytes), 0),
                 )
+                lang_tensor = tf.cond(has_valid_lang, _parse_lang, _empty_lang)
             else:
                 lang_tensor = tf.fill([traj_len], tf.constant(""))
             # Sample instruction from merged table
@@ -899,12 +899,12 @@ class DroidCoTDataset(SingleCoTDataset):
             def _use_fallback():
                 return tf.random.shuffle(self.spec.fallback_instructions, seed=self.seed)[0]
 
-            # Check if instruction bytes are valid (not empty default)
-            instruction = tf.cond(
+            # Check if instruction bytes are valid (not empty and has content)
+            has_valid_instr = tf.logical_and(
                 tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
-                _sample_from_table,
-                _use_fallback,
+                tf.greater(tf.strings.length(instr_bytes), 0),
             )
+            instruction = tf.cond(has_valid_instr, _sample_from_table, _use_fallback)
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
 
             if self.use_json_actions:
@@ -1024,7 +1024,11 @@ class DroidCoTDataset(SingleCoTDataset):
 
         def _has_instruction(traj):
             instr_bytes = self.instr_table.lookup(traj["trajectory_id"][0])
-            return tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string))
+            # Check both that it's not empty and has reasonable length for a serialized tensor
+            return tf.logical_and(
+                tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
+                tf.greater(tf.strings.length(instr_bytes), 10),  # Minimum length for valid serialized tensor
+            )
 
         # Filter out any unsuccessful trajectories -- we use the file name to check this
         # Prefer cheap regex path filter first, then id/lang checks
