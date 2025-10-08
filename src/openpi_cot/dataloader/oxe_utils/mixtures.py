@@ -92,6 +92,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("cmu_stretch", 5.0),  # almost all movements are "move up"
         # ("fmb", 1.0),
         # ("dobbe", 0.2),  # question
+        ("sample_r1_lite", 0.2),
     ],
 }
 

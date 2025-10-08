@@ -431,7 +431,7 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["ee_states"][:, -16:], [-1, 4, 4])
-    state_matrix = tf.transpose(state_matrix, [0, 2, 1])
+    # state_matrix = tf.transpose(state_matrix, [0, 2, 1])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
         (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["gripper_states"]),
