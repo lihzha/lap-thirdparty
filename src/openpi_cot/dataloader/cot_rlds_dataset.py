@@ -258,6 +258,7 @@ class SingleCoTDataset:
         batch_size: int = 1,
         max_samples: int | None = None,
         skip_normalization: bool = False,
+        enable_prediction_training: bool = False,
     ):
         self.config = config
         self.seed = seed
@@ -269,6 +270,7 @@ class SingleCoTDataset:
         self.use_wrist_image = bool(config.use_wrist_image)
         self.standalone = standalone
         self.skip_normalization = skip_normalization
+        self.enable_prediction_training = enable_prediction_training
         dataset_kwargs = load_dataset_kwargs(dataset_name, data_dir, load_camera_views=("primary", "wrist"))
 
         logging.info(f"Dataset kwargs: {dataset_kwargs}")
@@ -501,10 +503,14 @@ class SingleCoTDataset:
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
         def add_prediction_pairs(traj):
-            """Add prediction frame pairs and corresponding language actions."""
+            """Add prediction frame pairs and corresponding language actions.
+
+            Derives prediction language actions from raw_action (same as language_actions),
+            padded to summation_steps for consistency.
+            """
             traj_len = tf.shape(traj[action_key])[0]
 
-            if not getattr(self.config, "enable_prediction_training", False):
+            if not self.enable_prediction_training:
                 # Backward compatibility: add time dimension with single frame
                 traj["observation"][self.spec.primary_image_key] = tf.expand_dims(
                     traj["observation"][self.spec.primary_image_key], axis=1
@@ -513,10 +519,13 @@ class SingleCoTDataset:
                 if self.use_wrist_image:
                     traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
                         traj["observation"][self.spec.wrist_image_key], axis=1
-                    )
+                    )  # [T, 1, H, W, C]
 
-                # No prediction language action needed
-                traj["prediction_language_action"] = tf.fill([traj_len], tf.constant("", dtype=tf.string))
+                # No prediction language action needed - empty padded tensor
+                empty_row = tf.fill([summation_steps], tf.constant("", dtype=tf.string))
+                traj["prediction_language_action"] = tf.tile(
+                    tf.expand_dims(empty_row, 0), [traj_len, 1]
+                )  # [T, summation_steps]
                 return traj
 
             # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
@@ -543,33 +552,75 @@ class SingleCoTDataset:
             if self.use_wrist_image:
                 traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
                     traj["observation"][self.spec.wrist_image_key], axis=1
+                )  # [T, 1, H, W, C]
+
+            # Derive prediction language actions from raw_action, similar to language_actions
+            # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps
+            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
+
+            if self.use_json_actions:
+                # JSON case: gather from language_actions
+                def gather_and_pad_json(t_idx, delta):
+                    """Gather language actions from t_idx to t_idx+delta-1, pad to summation_steps."""
+                    # Clamp delta to not exceed trimmed_len
+                    actual_len = tf.minimum(delta, trimmed_len)
+                    # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
+                    indices = tf.range(actual_len) + t_idx
+                    indices = tf.minimum(indices, traj_len - 1)
+
+                    # Gather language actions
+                    lang_window = tf.gather(traj["language_actions"], indices)
+
+                    # Pad to summation_steps
+                    pad_len = summation_steps - actual_len
+                    padded = tf.cond(
+                        pad_len > 0,
+                        lambda: tf.concat([lang_window, tf.fill([pad_len], tf.constant("", dtype=tf.string))], axis=0),
+                        lambda: lang_window[:summation_steps],
+                    )
+                    return padded
+
+                prediction_lang_actions = tf.map_fn(
+                    lambda x: gather_and_pad_json(x[0], x[1]),
+                    (tf.range(traj_len, dtype=tf.int32), deltas),
+                    fn_output_signature=tf.TensorSpec(shape=[summation_steps], dtype=tf.string),
+                )
+            else:
+                # Numeric case: gather from raw_action and serialize
+                def gather_and_pad_numeric(t_idx, delta):
+                    """Gather actions from t_idx to t_idx+delta-1, serialize, pad to summation_steps."""
+                    # Clamp delta to not exceed trimmed_len
+                    actual_len = tf.minimum(delta, trimmed_len)
+                    # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
+                    indices = tf.range(actual_len) + t_idx
+                    indices = tf.minimum(indices, traj_len - 1)
+
+                    # Gather raw actions: [actual_len, A]
+                    actions_window = tf.gather(traj["raw_action"], indices)
+
+                    # Serialize each action row
+                    serialized = tf.map_fn(
+                        lambda v: tf.io.serialize_tensor(v),
+                        actions_window,
+                        fn_output_signature=tf.string,
+                    )
+
+                    # Pad to summation_steps
+                    pad_len = summation_steps - actual_len
+                    padded = tf.cond(
+                        pad_len > 0,
+                        lambda: tf.concat([serialized, tf.fill([pad_len], tf.constant("", dtype=tf.string))], axis=0),
+                        lambda: serialized[:summation_steps],
+                    )
+                    return padded
+
+                prediction_lang_actions = tf.map_fn(
+                    lambda x: gather_and_pad_numeric(x[0], x[1]),
+                    (tf.range(traj_len, dtype=tf.int32), deltas),
+                    fn_output_signature=tf.TensorSpec(shape=[summation_steps], dtype=tf.string),
                 )
 
-            # Gather and aggregate language actions between current and future frame
-            # traj["language_actions"] has shape [T] with strings
-            def gather_prediction_language(t_idx, delta):
-                """Gather language actions from t_idx to t_idx+delta."""
-                # Create range [t_idx, t_idx+1, ..., t_idx+delta-1]
-                # Clamp to valid range
-                indices = tf.range(delta) + t_idx
-                indices = tf.minimum(indices, traj_len - 1)
-
-                # Gather language actions for these steps
-                lang_steps = tf.gather(traj["language_actions"], indices)
-
-                # Aggregate: concatenate with "; " separator
-                aggregated = tf.strings.reduce_join(lang_steps, separator="; ")
-
-                return aggregated
-
-            # Vectorized version: for each timestep, gather delta steps worth of language
-            prediction_lang_actions = tf.map_fn(
-                lambda x: gather_prediction_language(x[0], x[1]),
-                (tf.range(traj_len, dtype=tf.int32), deltas),
-                fn_output_signature=tf.string,
-            )
-
-            traj["prediction_language_action"] = prediction_lang_actions  # [T]
+            traj["prediction_language_action"] = prediction_lang_actions  # [T, summation_steps]
             traj["prediction_delta"] = deltas  # Store for debugging
 
             return traj
@@ -973,6 +1024,7 @@ class DroidCoTDataset(SingleCoTDataset):
         max_samples: int | None = None,
         train_dataset=None,
         skip_normalization: bool = False,
+        enable_prediction_training: bool = False,
     ):
         self.use_json_actions = config.use_json_actions
 
@@ -1023,6 +1075,7 @@ class DroidCoTDataset(SingleCoTDataset):
             batch_size=batch_size,
             max_samples=max_samples,
             skip_normalization=skip_normalization,
+            enable_prediction_training=enable_prediction_training,
         )
 
 
@@ -1204,6 +1257,7 @@ class OXECoTDatasets:
         train_dataset=None,
         standalone=True,
         use_global_normalization: bool = True,
+        enable_prediction_training: bool = False,
     ):
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
@@ -1252,6 +1306,7 @@ class OXECoTDatasets:
                 num_parallel_calls=threads,
                 standalone=False,
                 skip_normalization=use_global_normalization,
+                enable_prediction_training=enable_prediction_training,
             )
             if dataset_name == "droid":
                 ds = DroidCoTDataset(

@@ -262,7 +262,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     include_rotation=base_cfg.include_rotation,
                     action_encoding=base_cfg.action_encoding,
                     # Add prediction fields
-                    enable_prediction_training=getattr(model_config, 'enable_prediction_training', False),
+                    enable_prediction_training=model_config.enable_prediction_training,
                     prediction_prompt=base_cfg.prediction_prompt,
                 )
             ],

@@ -23,6 +23,7 @@ def _create_rlds_dataset(
     batch_size: int,
     action_horizon: int,
     action_dim: int,
+    enable_prediction_training: bool = False,
     *,
     shuffle: bool,
     seed: int,
@@ -65,6 +66,7 @@ def _create_rlds_dataset(
         train_dataset=train_dataset,
         standalone=True,
         action_proprio_normalization_type=NormalizationType.NORMAL,
+        enable_prediction_training=enable_prediction_training,
     )
 
     return dataset_cls(**kwargs)
@@ -161,6 +163,7 @@ def create_data_loader(
             batch_size=config.batch_size,
             action_horizon=config.model.action_horizon,
             action_dim=config.model.action_dim,
+            enable_prediction_training=config.model.enable_prediction_training,
             shuffle=shuffle,
             seed=seed,
             max_samples=max_samples if max_samples is not None else getattr(data_cfg, "max_samples", None),

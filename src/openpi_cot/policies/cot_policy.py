@@ -197,16 +197,59 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 "Prediction language action found in data but prediction training not enabled in policy."
             )
             pred_lang = data["prediction_language_action"]
-            if isinstance(pred_lang, bytes):
-                pred_lang = pred_lang.decode("utf-8")
-            elif isinstance(pred_lang, np.ndarray):
-                pred_lang = pred_lang.item()
+
+            # Handle padding: prediction_language_action has shape [summation_steps]
+            # Only use the non-padded portion according to control_frequency or prediction_delta
+            if isinstance(pred_lang, np.ndarray) and len(pred_lang.shape) > 0:
+                # Array case: [summation_steps] with potential padding
+                # Check if first element is serialized tensor (numeric case)
+                if len(pred_lang) > 0 and isinstance(pred_lang[0], bytes):
+                    if maybe_parse_serialized_tensor_to_ndarray(pred_lang[0]) is not None:
+                        # Numeric case: use control_frequency to trim padding
+                        cf_val = data.get("control_frequency")
+                        try:
+                            cf = int(np.asarray(cf_val).item()) if cf_val is not None else None
+                        except Exception:
+                            cf = None
+
+                        # Also check prediction_delta if available (more accurate)
+                        delta_val = data.get("prediction_delta")
+                        try:
+                            delta = int(np.asarray(delta_val).item()) if delta_val is not None else None
+                        except Exception:
+                            delta = None
+
+                        # Use delta if available, otherwise control_frequency
+                        trim_len = delta if delta is not None else (cf if cf is not None else len(pred_lang))
+                        pred_lang_used = pred_lang[:trim_len]
+
+                        # Parse and summarize numeric actions
+                        raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in pred_lang_used]
+                        pred_lang_str = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                    else:
+                        # Text case: filter out empty strings (padding)
+                        seq = to_str_list(pred_lang)
+                        if seq is not None:
+                            # Remove empty/whitespace-only strings (padding)
+                            seq_trimmed = [s for s in seq if s and s.strip()]
+                            pred_lang_str = sum_language_actions(seq_trimmed, self.sum_decimal, self.include_rotation)
+                        else:
+                            pred_lang_str = None
+                else:
+                    pred_lang_str = None
+            else:
+                # Scalar/single value case (shouldn't happen with new format, but handle for compatibility)
                 if isinstance(pred_lang, bytes):
-                    pred_lang = pred_lang.decode("utf-8")
+                    pred_lang_str = pred_lang.decode("utf-8")
+                elif isinstance(pred_lang, np.ndarray):
+                    pred_lang_item = pred_lang.item()
+                    pred_lang_str = pred_lang_item.decode("utf-8") if isinstance(pred_lang_item, bytes) else str(pred_lang_item)
+                else:
+                    pred_lang_str = str(pred_lang)
 
             # Pass through prediction language action and prompt if prediction language exists
-            if pred_lang and pred_lang.strip():
-                inputs["prediction_language_action"] = pred_lang
+            if pred_lang_str and pred_lang_str.strip():
+                inputs["prediction_language_action"] = pred_lang_str
                 inputs["prediction_prompt"] = self.prediction_prompt
         else:
             assert not self.enable_prediction_training, (
