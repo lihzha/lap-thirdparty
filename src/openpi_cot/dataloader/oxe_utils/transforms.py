@@ -22,7 +22,7 @@ from typing import Any
 import tensorflow as tf
 
 
-def binarize_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
+def binarize_gripper_actions(actions: tf.Tensor, threshold: float = 0.95) -> tf.Tensor:
     """
     Converts gripper actions from continuous to binary values (0 and 1).
 
@@ -43,7 +43,7 @@ def binarize_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
                 carry = float(open_mask[i])
             new_actions[i] = carry
     """
-    open_mask, closed_mask = actions > 0.95, actions < 0.05
+    open_mask, closed_mask = actions > threshold, actions < (1 - threshold)
     in_between_mask = tf.logical_not(tf.logical_or(open_mask, closed_mask))
     is_open_float = tf.cast(open_mask, tf.float32)
 

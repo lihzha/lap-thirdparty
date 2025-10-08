@@ -296,7 +296,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
                         # Use delta if available, otherwise control_frequency
                         trim_len = delta if delta is not None else (cf if cf is not None else len(pred_lang))
-                        breakpoint()
                         pred_lang_used = pred_lang[:trim_len]
 
                         # Parse and summarize numeric actions

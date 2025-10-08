@@ -861,7 +861,7 @@ class DroidCoTDataset(SingleCoTDataset):
             actions = tf.concat(
                 (
                     tf.cast(traj["observation"]["cartesian_position"], tf.float32),
-                    binarize_gripper_actions(traj["action_dict"]["gripper_position"]),
+                    binarize_gripper_actions(1 - traj["action_dict"]["gripper_position"], threshold=0.5),
                 ),
                 axis=-1,
             )
@@ -927,7 +927,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
             )
 
-            state = tf.concat([cartesian, binarize_gripper_actions(gripper)], axis=-1)
+            state = tf.concat([cartesian, binarize_gripper_actions(1 - gripper, threshold=0.5)], axis=-1)
             state = convert_state_encoding(
                 state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
             )
