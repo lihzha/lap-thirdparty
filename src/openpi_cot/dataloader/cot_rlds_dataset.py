@@ -528,7 +528,7 @@ class SingleCoTDataset:
             """
             traj_len = tf.shape(traj[action_key])[0]
 
-            if self.enable_prediction_training:
+            if not self.enable_prediction_training:
                 # Backward compatibility: add time dimension with single frame
                 traj["observation"][self.spec.primary_image_key] = tf.expand_dims(
                     traj["observation"][self.spec.primary_image_key], axis=1
