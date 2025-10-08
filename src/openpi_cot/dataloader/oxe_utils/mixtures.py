@@ -74,7 +74,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("jaco_play", 1.0),
         # # # ("berkeley_cable_routing", 1.0),
         # # # ("roboturk", 2.0),
-        # # ("viola", 2.0),   # joint state
+        ("viola", 2.0),  # joint state
         # ("berkeley_autolab_ur5", 3.0),
         # # # ("toto", 1.0),
         # # # ("language_table", 0.1),
@@ -87,7 +87,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions
         # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         # # # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),   # joint state
-        ("utaustin_mutex", 1.0),  # joint state
+        # ("utaustin_mutex", 1.0),  # joint state
         # # ("berkeley_fanuc_manipulation", 2.0),   # join state
         # ("cmu_stretch", 5.0),  # almost all movements are "move up"
         # ("fmb", 1.0),
