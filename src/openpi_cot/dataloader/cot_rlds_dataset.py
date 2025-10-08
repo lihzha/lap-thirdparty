@@ -470,6 +470,9 @@ class SingleCoTDataset:
             # Note: self.control_frequency is a Python int constant per dataset instance
             trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
             if self.use_json_actions:
+                # Save raw language actions (shape [T]) before windowing for use in prediction
+                raw_lang_actions = traj["language_actions"]
+
                 la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
                 pad_len = summation_steps - trimmed_len
 
@@ -480,6 +483,9 @@ class SingleCoTDataset:
                 traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
                 # Set static shape for TensorFlow's shape inference
                 traj["language_actions"].set_shape([None, summation_steps])
+
+                # Store raw for prediction (shape [T])
+                traj["raw_language_actions"] = raw_lang_actions
             else:
                 # Gather numeric actions for the future window up to control frequency: [T, trimmed_len, A]
                 actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])

@@ -754,12 +754,17 @@ OXE_DATASET_CONFIGS = {
     },
     "agibot_dataset": {
         "image_obs_keys": {
-            "primary": "image_camera_head",
+            "primary": "head_image",
             "secondary": None,
             "wrist": "image_camera_wrist_left",
             "wrist_right": "image_camera_wrist_right",
         },
-        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "depth_obs_keys": {
+            "primary": None,
+            "secondary": None,
+            "wrist": "hand_left_image",
+            "wrist_right": "hand_right_image",
+        },
         "state_obs_keys": [
             # "joint_position_torso",
             "joint_position_arm_left",
