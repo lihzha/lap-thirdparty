@@ -1091,7 +1091,7 @@ OXE_DATASET_METADATA = {
         "has_suboptimal": "Yes",
     },
     "dobbe": {
-        "control_frequency": 3.75,
+        "control_frequency": 15,  # 3.75
         "language_annotations": "Natural",
         "robot_morphology": "Mobile Manipulator",
         "has_suboptimal": "No",

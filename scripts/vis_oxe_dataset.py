@@ -217,9 +217,9 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
 
     # Text parameters scaled by height
     block_h = max(1, y1 - y0)
-    base_scale = 2.5
+    base_scale = 0.9
     scale = max(0.4, min(1.5, block_h / 110.0)) * base_scale
-    font_size = int(18 * scale)
+    font_size = int(10 * scale)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
@@ -230,20 +230,23 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
             font = ImageFont.load_default()
 
     draw = ImageDraw.Draw(pil_img)
-    max_chars = 45
+    # Calculate max chars based on available width
+    available_width = x1 - x0 - 20  # subtract padding
+    avg_char_width = font_size * 0.6  # rough estimate
+    max_chars = max(20, int(available_width / avg_char_width))
     lines = _wrap_text_to_lines(text, max_chars)
-    line_h = max(15, int(18 * scale))
-    y = y0 + 12
+    line_h = max(12, int(14 * scale))
+    y = y0 + 8
 
     for line in lines:
         # Draw outline (black)
-        for dx in [-2, -1, 0, 1, 2]:
-            for dy in [-2, -1, 0, 1, 2]:
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
                 if dx != 0 or dy != 0:
-                    draw.text((x0 + 10 + dx, y + dy), line, font=font, fill=(0, 0, 0))
+                    draw.text((x0 + 8 + dx, y + dy), line, font=font, fill=(0, 0, 0))
         # Draw text (white)
-        draw.text((x0 + 10, y), line, font=font, fill=(255, 255, 255))
-        y += line_h + 12
+        draw.text((x0 + 8, y), line, font=font, fill=(255, 255, 255))
+        y += line_h + 8
 
     return np.array(pil_img)
 
@@ -420,7 +423,7 @@ def main(config: _config.TrainConfig):
                 continue
             row = np.concatenate(panels, axis=1)
             # Single bottom overlay spanning the entire row
-            band_h_row = max(80, row.shape[0] // 6)
+            band_h_row = max(50, row.shape[0] // 8)
             row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
             vis_rows.append(row)
         if vis_rows:
