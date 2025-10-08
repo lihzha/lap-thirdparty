@@ -21,6 +21,7 @@ from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.dataloader.oxe_utils.transforms import binarize_gripper_actions
 from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 from openpi_cot.transforms import NormalizeActionAndProprio
@@ -290,6 +291,7 @@ class SingleCoTDataset:
         self.state_obs_keys = dataset_kwargs["state_obs_keys"]
         self.state_encoding = dataset_kwargs["state_encoding"]
         self.action_encoding = dataset_kwargs["action_encoding"]
+        self.is_bimanual = dataset_kwargs.get("is_bimanual", False)
 
         self.num_parallel_reads = tf.data.AUTOTUNE if num_parallel_reads == -1 else num_parallel_reads
         self.num_parallel_calls = tf.data.AUTOTUNE if num_parallel_calls == -1 else num_parallel_calls
@@ -846,7 +848,7 @@ class DroidCoTDataset(SingleCoTDataset):
             actions = tf.concat(
                 (
                     traj["observation"]["cartesian_position"],
-                    traj["action_dict"]["gripper_position"],
+                    binarize_gripper_actions(traj["action_dict"]["gripper_position"]),
                 ),
                 axis=-1,
             )
@@ -912,7 +914,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
             )
 
-            state = tf.concat([cartesian, gripper], axis=-1)
+            state = tf.concat([cartesian, binarize_gripper_actions(gripper)], axis=-1)
             state = convert_state_encoding(
                 state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
             )
@@ -940,6 +942,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
                 # Attach control_frequency per step for downstream windowing/summarization
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
+                "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # DROID is single-arm
             }
 
             step_id = (
@@ -1189,6 +1192,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "trajectory_id": traj["trajectory_id"],
                 "raw_action": tf.cast(traj["action"], tf.float32),
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
+                "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
             }
 
             return traj

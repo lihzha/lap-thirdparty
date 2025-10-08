@@ -12,6 +12,7 @@ from openpi_cot.policies.utils import is_trivial_image
 from openpi_cot.policies.utils import maybe_parse_serialized_tensor_to_ndarray
 from openpi_cot.policies.utils import parse_image
 from openpi_cot.policies.utils import sum_language_actions
+from openpi_cot.policies.utils import summarize_bimanual_numeric_actions
 from openpi_cot.policies.utils import summarize_numeric_actions
 from openpi_cot.policies.utils import to_str_list
 
@@ -151,6 +152,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             la = data["language_actions"]
             assert isinstance(la[0], bytes)
             if maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
+                # Check if dataset is bimanual
+                is_bimanual = data.get("is_bimanual", False)
+                if isinstance(is_bimanual, np.ndarray):
+                    is_bimanual = is_bimanual.item()
+
                 # Only use the non-padded portion according to control_frequency, if present
                 cf_val = data.get("control_frequency")
                 try:
@@ -162,7 +168,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 else:
                     la_used = la
                 raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
-                summed = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+
+                # Use bimanual summarization for bimanual datasets
+                if is_bimanual:
+                    summed = summarize_bimanual_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                else:
+                    summed = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
                 return summed
             seq = to_str_list(la)
             if seq is not None:
@@ -228,7 +239,15 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                         # Filter out None values (from empty padding strings)
                         raw_array = [x for x in raw_array if x is not None]
                         if raw_array:
-                            pred_lang_str = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                            # Check if dataset is bimanual
+                            is_bimanual = data.get("is_bimanual", False)
+                            if isinstance(is_bimanual, np.ndarray):
+                                is_bimanual = is_bimanual.item()
+
+                            if is_bimanual:
+                                pred_lang_str = summarize_bimanual_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
+                            else:
+                                pred_lang_str = summarize_numeric_actions(raw_array, self.sum_decimal, self.include_rotation)
                         else:
                             pred_lang_str = None
                     else:

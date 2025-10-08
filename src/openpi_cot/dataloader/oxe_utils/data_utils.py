@@ -251,8 +251,10 @@ def load_dataset_kwargs(
         raise ValueError(f"Cannot load `{dataset_name}`; language annotations required!")
 
     robot_morphology = dataset_kwargs.get("robot_morphology", "")
-    if robot_morphology.lower() == "bi-manual":
-        raise ValueError(f"Cannot load `{dataset_name}`; bi-manual datasets are not supported!")
+    is_bimanual = robot_morphology.lower() == "bi-manual"
+
+    # Add bimanual flag to dataset kwargs
+    dataset_kwargs["is_bimanual"] = is_bimanual
 
     has_suboptimal = dataset_kwargs.get("has_suboptimal")
     if isinstance(has_suboptimal, str):
