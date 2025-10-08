@@ -736,7 +736,7 @@ OXE_DATASET_CONFIGS = {
         "image_obs_keys": {
             "primary": "image_camera_head",
             "secondary": None,
-            "wrist_left": "image_camera_wrist_left",
+            "wrist": "image_camera_wrist_left",
             "wrist_right": "image_camera_wrist_right",
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
