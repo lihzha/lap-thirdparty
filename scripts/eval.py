@@ -514,9 +514,7 @@ def evaluate_rollout(
             # Process results on host
             if jax.process_index() == 0:
                 k_local = min(config.batch_size, batch[0].state.shape[0])
-                l2_cm_values, to_log = vis_tools.eval_step(
-                    batch, id_buf, t_final, tokenizer, k_local, vis_dataset=getattr(config.data, "vis_dataset", False)
-                )
+                l2_cm_values, to_log = vis_tools.eval_step(batch, id_buf, t_final, tokenizer, k_local)
 
                 if l2_cm_values:
                     l2_cm_values_all.extend(l2_cm_values)

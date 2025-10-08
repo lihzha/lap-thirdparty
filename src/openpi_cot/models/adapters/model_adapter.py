@@ -45,8 +45,6 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
-    # For prediction training: raw language action describing movement between frames
-    prediction_language_action: ArrayT | None = None
     # Tokenized prediction fields (prediction_prompt + prediction_language_action combined)
     tokenized_prediction: at.Int[ArrayT, "*b l"] | None = None
     tokenized_prediction_mask: at.Bool[ArrayT, "*b l"] | None = None
@@ -66,9 +64,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         if has_time_dim:
             # For base Observation, use first frame only
             data_dict_downsampled = copy.deepcopy(data_dict)
-            data_dict_downsampled["image"] = {
-                k: v[:, 0] for k, v in data_dict["image"].items() if v is not None
-            }
+            data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
         else:
             data_dict_downsampled = data_dict
 
@@ -100,7 +96,6 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             camera_intrinsics=getk("camera_intrinsics"),
             camera_extrinsics=getk("camera_extrinsics"),
             cartesian_position_window=getk("cartesian_position_window"),
-            prediction_language_action=getk("prediction_language_action"),
             tokenized_prediction=getk("tokenized_prediction"),
             tokenized_prediction_mask=getk("tokenized_prediction_mask"),
             tokenized_prediction_reasoning_mask=getk("tokenized_prediction_reasoning_mask"),
@@ -239,7 +234,6 @@ def preprocess_observation(
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),
         cartesian_position_window=getattr(observation, "cartesian_position_window", None),
-        prediction_language_action=getattr(observation, "prediction_language_action", None),
         tokenized_prediction=getattr(observation, "tokenized_prediction", None),
         tokenized_prediction_mask=getattr(observation, "tokenized_prediction_mask", None),
         tokenized_prediction_reasoning_mask=getattr(observation, "tokenized_prediction_reasoning_mask", None),

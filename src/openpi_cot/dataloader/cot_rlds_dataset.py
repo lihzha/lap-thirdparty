@@ -35,7 +35,6 @@ def make_decode_images_fn(
     wrist_key: str | None,
     use_wrist_image: bool,
     resize_to: tuple[int, int] | None = (224, 224),
-    vis_dataset: bool = False,
 ):
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors.
     Preserves aspect ratio, pads symmetrically, and returns the original dtype semantics
@@ -117,31 +116,14 @@ def make_decode_images_fn(
         if rank == 4:  # [T, H, W, C] - has time dimension
             # Decode each frame
             return tf.map_fn(_decode_single, img_tensor, fn_output_signature=tf.uint8)
-        else:  # [H, W, C] - single frame
-            return _decode_single(img_tensor)
+        # [H, W, C] - single frame
+        return _decode_single(img_tensor)
 
     def _decode_frame(traj: dict) -> dict:
-        if not vis_dataset:
-            traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
-            if use_wrist_image and wrist_key is not None:
-                traj["observation"][wrist_key] = decode_with_time_dim(traj["observation"][wrist_key])
-        else:
-            # In vis_dataset mode, images already have summation_steps dimension
-            # Need to handle both [T, S, H, W, C] and potential [T, S, encoded_bytes]
-            primary_img = traj["observation"][primary_key]
-            # Apply decode to the innermost dimension
-            traj["observation"][primary_key] = tf.map_fn(
-                lambda frames: tf.map_fn(_decode_single, frames, fn_output_signature=tf.uint8),
-                primary_img,
-                fn_output_signature=tf.uint8,
-            )
-            if use_wrist_image and wrist_key is not None:
-                wrist_img = traj["observation"][wrist_key]
-                traj["observation"][wrist_key] = tf.map_fn(
-                    lambda frames: tf.map_fn(_decode_single, frames, fn_output_signature=tf.uint8),
-                    wrist_img,
-                    fn_output_signature=tf.uint8,
-                )
+        traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
+        if use_wrist_image and wrist_key is not None:
+            traj["observation"][wrist_key] = decode_with_time_dim(traj["observation"][wrist_key])
+
         return traj
 
     return _decode_frame
@@ -159,7 +141,6 @@ def prepare_batched_dataset(
     resize_resolution,
     primary_image_key,
     wrist_image_key,
-    vis_dataset: bool = False,
 ):
     if (not want_val) and shuffle and max_samples is None:
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
@@ -171,7 +152,6 @@ def prepare_batched_dataset(
         wrist_key=wrist_image_key,
         use_wrist_image=use_wrist_image,
         resize_to=resize_resolution,
-        vis_dataset=vis_dataset,
     )
     dataset = dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
 
@@ -362,7 +342,6 @@ class SingleCoTDataset:
                 resize_resolution=config.resize_resolution,
                 primary_image_key=self.spec.primary_image_key,
                 wrist_image_key=self.spec.wrist_image_key,
-                vis_dataset=self.vis_dataset,
             )
 
     def build_dataset_builder(self, ds_name, data_dir):
@@ -517,13 +496,6 @@ class SingleCoTDataset:
                 )
                 # Set static shape for TensorFlow's shape inference
                 traj["language_actions"].set_shape([None, summation_steps])
-            if self.vis_dataset:
-                grouped_images = tf.gather(traj["observation"][self.spec.primary_image_key], summation_indices)
-                traj["observation"][self.spec.primary_image_key] = grouped_images
-
-                grouped_wrist_images = tf.gather(traj["observation"][self.spec.wrist_image_key], summation_indices)
-                traj["observation"][self.spec.wrist_image_key] = grouped_wrist_images
-
             return traj
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
@@ -532,7 +504,7 @@ class SingleCoTDataset:
             """Add prediction frame pairs and corresponding language actions."""
             traj_len = tf.shape(traj[action_key])[0]
 
-            if not getattr(self.config, 'enable_prediction_training', False):
+            if not getattr(self.config, "enable_prediction_training", False):
                 # Backward compatibility: add time dimension with single frame
                 traj["observation"][self.spec.primary_image_key] = tf.expand_dims(
                     traj["observation"][self.spec.primary_image_key], axis=1
@@ -548,7 +520,7 @@ class SingleCoTDataset:
                 return traj
 
             # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
-            max_horizon = getattr(self.config, 'max_prediction_horizon', 30)
+            max_horizon = getattr(self.config, "max_prediction_horizon", 30)
             max_horizon_clamped = tf.minimum(max_horizon, traj_len - 1)
             max_horizon_clamped = tf.maximum(max_horizon_clamped, 1)  # Ensure at least 1
 
@@ -556,12 +528,9 @@ class SingleCoTDataset:
                 [traj_len],
                 minval=1,  # At least 1 step into future
                 maxval=max_horizon_clamped + 1,
-                dtype=tf.int32
+                dtype=tf.int32,
             )
-            future_indices = tf.minimum(
-                tf.range(traj_len, dtype=tf.int32) + deltas,
-                traj_len - 1
-            )
+            future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
 
             # Stack current and future images (primary only)
             current_imgs = traj["observation"][self.spec.primary_image_key]
@@ -1360,7 +1329,6 @@ class OXECoTDatasets:
             resize_resolution=config.resize_resolution,
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
-            vis_dataset=config.vis_dataset,
         )
 
     def _compute_or_load_global_stats(
