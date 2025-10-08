@@ -1414,4 +1414,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "ego4d_split_3": human_dataset_transform,
     "ego4d_split_4": human_dataset_transform,
     "sample_r1_lite": sample_r1_lite_dataset_transform,
+    "agibot_dataset": agibot_dataset_transform,
 }
