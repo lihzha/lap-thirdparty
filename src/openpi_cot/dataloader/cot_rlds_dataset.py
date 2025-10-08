@@ -847,7 +847,7 @@ class DroidCoTDataset(SingleCoTDataset):
             """Reformat observation and action keys, sample language instruction."""
             actions = tf.concat(
                 (
-                    traj["observation"]["cartesian_position"],
+                    tf.cast(traj["observation"]["cartesian_position"], tf.float32),
                     binarize_gripper_actions(traj["action_dict"]["gripper_position"]),
                 ),
                 axis=-1,
@@ -905,7 +905,7 @@ class DroidCoTDataset(SingleCoTDataset):
                     lambda: traj["observation"][self.spec.images_list[1]],
                 )
 
-            cartesian = traj["observation"]["cartesian_position"]
+            cartesian = tf.cast(traj["observation"]["cartesian_position"], tf.float32)
             gripper = traj["observation"]["gripper_position"]
 
             gripper = tf.cond(
