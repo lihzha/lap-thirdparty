@@ -312,7 +312,6 @@ class SingleCoTDataset:
         self.get_traj_identifier()
 
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
-        breakpoint()
         if cached_stats is not None:
             # Prefer early filtering when stats are already available to reduce downstream work.
             self.apply_traj_filters(action_key="action")
@@ -321,6 +320,7 @@ class SingleCoTDataset:
             self.dataset_statistics = cached_stats
         else:
             # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
+            self.apply_traj_filters(action_key="actions")
             self.apply_restructure()
             self.dataset_statistics = get_dataset_statistics(
                 self.dataset,
@@ -328,7 +328,6 @@ class SingleCoTDataset:
                 action_key="actions",
                 state_key="state",
             )
-            self.apply_traj_filters(action_key="actions")
             self.split_val(split_seed=seed)
 
         self.apply_traj_transforms(
@@ -604,6 +603,7 @@ class SingleCoTDataset:
                     (tf.range(traj_len, dtype=tf.int32), deltas),
                     fn_output_signature=tf.TensorSpec(shape=[summation_steps], dtype=tf.string),
                 )
+                traj.pop("raw_language_actions")  # No longer needed
             else:
                 # Numeric case: gather from raw_action and serialize
                 def gather_and_pad_numeric(t_idx, delta):
