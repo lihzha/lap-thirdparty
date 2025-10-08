@@ -624,11 +624,17 @@ class SingleCoTDataset:
                         fn_output_signature=tf.string,
                     )
 
-                    # Pad to summation_steps
+                    # Pad to summation_steps with serialized dummy tensors
                     pad_len = summation_steps - actual_len
                     padded = tf.cond(
                         pad_len > 0,
-                        lambda: tf.concat([serialized, tf.fill([pad_len], tf.constant("", dtype=tf.string))], axis=0),
+                        lambda: tf.concat([
+                            serialized,
+                            tf.tile(
+                                [tf.io.serialize_tensor(tf.zeros(tf.shape(traj["raw_action"])[-1:], dtype=traj["raw_action"].dtype))],
+                                [pad_len]
+                            )
+                        ], axis=0),
                         lambda: serialized[:summation_steps],
                     )
                     return padded
