@@ -1284,42 +1284,7 @@ def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 
 
 def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"]["world_vector"],
-            trajectory["action"]["rotation_delta"],
-            gripper_actiDatason[:, None],
-        ),
-        axis=-1,
-    )
-    trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
-
-    trajectory["observation"]["state"] = tf.concat(
-        (
-            trajectory["observation"]["base_pose_tool_reached"][:, :3],
-            trajectory["observation"]["base_pose_tool_reached"][:, 3:7],
-        ),
-        axis=-1,
-    )
-
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["base_pose_tool_reached"][1:, :3]
-            - trajectory["observation"]["base_pose_tool_reached"][:-1, :3],
-            euler_diff(
-                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][1:, 3:7]),
-                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][:-1, 3:7]),
-            ),
-        ),
-        axis=-1,
-    )
-    # movement_actions = transform_actions_xyz(movement_actions)
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-
-    return traj_truncated
+    return trajectory
 
 
 # === Registry ===

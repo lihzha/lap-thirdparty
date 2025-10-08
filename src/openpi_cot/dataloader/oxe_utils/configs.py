@@ -1198,7 +1198,7 @@ OXE_DATASET_METADATA = {
     "agibot_dataset": {
         "control_frequency": 15,
         "language_annotations": "Natual detailed instructions",
-        "robot_morphology": "Single Arm",
+        "robot_morphology": "Bi-Manual",
         "has_suboptimal": "No",
     },
 }
