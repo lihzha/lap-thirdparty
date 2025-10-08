@@ -1222,7 +1222,7 @@ class OXECoTDatasets:
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
 
         # Apply global normalization if requested
-        if use_global_normalization:
+        if use_global_normalization and not config.vis_dataset:
             global_stats_dir = data_dir
             global_stats = self._compute_or_load_global_stats(
                 datasets=datasets,
