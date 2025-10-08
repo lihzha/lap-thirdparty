@@ -493,6 +493,33 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
 
 
 @tf.function
+def matrix_to_xyzrpy(T, eps=1e-6):
+    """
+    Extract position and Euler angles from 4x4 transformation matrix.
+
+    Args:
+        T: tensor of shape (..., 4, 4) - homogeneous transformation matrix
+        eps: epsilon for gimbal lock handling
+
+    Returns:
+        tensor of shape (..., 6) - [x, y, z, roll, pitch, yaw]
+    """
+    T = tf.convert_to_tensor(T)
+
+    # Extract translation (position)
+    xyz = T[..., :3, 3]
+
+    # Extract rotation matrix (top-left 3x3)
+    R = T[..., :3, :3]
+
+    # Convert rotation matrix to Euler XYZ (roll, pitch, yaw)
+    rpy = _euler_xyz_from_R(R, eps=eps)
+
+    # Concatenate position and orientation
+    return tf.concat([xyz, rpy], axis=-1)
+
+
+@tf.function
 def coordinate_transform_bcz(movement_actions):
     """
     movement_actions: (..., 6) where [:3] = translation deltas (xyz),
