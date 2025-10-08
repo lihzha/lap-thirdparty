@@ -24,6 +24,7 @@ class LanguageActionConfig:
     This allows easy extension to support different action description formats
     by defining new LanguageActionConfig instances with custom settings.
     """
+
     name: str = "default"
     sum_decimal: str = "0f"  # Decimal format for numeric action summaries
     include_rotation: bool = False  # Whether to include rotation in action descriptions
@@ -59,7 +60,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # The action dimension of the model. Will be used to pad state and actions.
     action_dim: int
     # Language action configuration (how to format/summarize actions)
-    language_action_config: LanguageActionConfig = dataclasses.field(default_factory=lambda: DEFAULT_LANGUAGE_ACTION_CONFIG)
+    language_action_config: LanguageActionConfig = dataclasses.field(
+        default_factory=lambda: DEFAULT_LANGUAGE_ACTION_CONFIG
+    )
     # Legacy fields for backward compatibility - will use language_action_config if not None
     sum_decimal: str | None = None
     include_rotation: bool | None = None
@@ -78,8 +81,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if self.sum_decimal is not None or self.include_rotation is not None:
             config = LanguageActionConfig(
                 name="custom",
-                sum_decimal=self.sum_decimal if self.sum_decimal is not None else self.language_action_config.sum_decimal,
-                include_rotation=self.include_rotation if self.include_rotation is not None else self.language_action_config.include_rotation,
+                sum_decimal=self.sum_decimal
+                if self.sum_decimal is not None
+                else self.language_action_config.sum_decimal,
+                include_rotation=self.include_rotation
+                if self.include_rotation is not None
+                else self.language_action_config.include_rotation,
             )
             # Use object.__setattr__ because this is a frozen dataclass
             object.__setattr__(self, "language_action_config", config)
@@ -223,23 +230,17 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 # Use bimanual summarization for bimanual datasets
                 if is_bimanual:
                     summed = summarize_bimanual_numeric_actions(
-                        raw_array,
-                        self.language_action_config.sum_decimal,
-                        self.language_action_config.include_rotation
+                        raw_array, self.language_action_config.sum_decimal, self.language_action_config.include_rotation
                     )
                 else:
                     summed = summarize_numeric_actions(
-                        raw_array,
-                        self.language_action_config.sum_decimal,
-                        self.language_action_config.include_rotation
+                        raw_array, self.language_action_config.sum_decimal, self.language_action_config.include_rotation
                     )
                 return summed
             seq = to_str_list(la)
             if seq is not None:
                 summed = sum_language_actions(
-                    seq,
-                    self.language_action_config.sum_decimal,
-                    self.language_action_config.include_rotation
+                    seq, self.language_action_config.sum_decimal, self.language_action_config.include_rotation
                 )
                 if summed is not None and len(summed) > 0:
                     return summed
@@ -295,6 +296,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
                         # Use delta if available, otherwise control_frequency
                         trim_len = delta if delta is not None else (cf if cf is not None else len(pred_lang))
+                        breakpoint()
                         pred_lang_used = pred_lang[:trim_len]
 
                         # Parse and summarize numeric actions
@@ -311,13 +313,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                                 pred_lang_str = summarize_bimanual_numeric_actions(
                                     raw_array,
                                     self.language_action_config.sum_decimal,
-                                    self.language_action_config.include_rotation
+                                    self.language_action_config.include_rotation,
                                 )
                             else:
                                 pred_lang_str = summarize_numeric_actions(
                                     raw_array,
                                     self.language_action_config.sum_decimal,
-                                    self.language_action_config.include_rotation
+                                    self.language_action_config.include_rotation,
                                 )
                         else:
                             pred_lang_str = None
@@ -330,21 +332,22 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                             pred_lang_str = sum_language_actions(
                                 seq_trimmed,
                                 self.language_action_config.sum_decimal,
-                                self.language_action_config.include_rotation
+                                self.language_action_config.include_rotation,
                             )
                         else:
                             pred_lang_str = None
                 else:
                     pred_lang_str = None
+            # Scalar/single value case (shouldn't happen with new format, but handle for compatibility)
+            elif isinstance(pred_lang, bytes):
+                pred_lang_str = pred_lang.decode("utf-8")
+            elif isinstance(pred_lang, np.ndarray):
+                pred_lang_item = pred_lang.item()
+                pred_lang_str = (
+                    pred_lang_item.decode("utf-8") if isinstance(pred_lang_item, bytes) else str(pred_lang_item)
+                )
             else:
-                # Scalar/single value case (shouldn't happen with new format, but handle for compatibility)
-                if isinstance(pred_lang, bytes):
-                    pred_lang_str = pred_lang.decode("utf-8")
-                elif isinstance(pred_lang, np.ndarray):
-                    pred_lang_item = pred_lang.item()
-                    pred_lang_str = pred_lang_item.decode("utf-8") if isinstance(pred_lang_item, bytes) else str(pred_lang_item)
-                else:
-                    pred_lang_str = str(pred_lang)
+                pred_lang_str = str(pred_lang)
 
             # Pass through prediction language action and prompt if prediction language exists
             if pred_lang_str and pred_lang_str.strip():
