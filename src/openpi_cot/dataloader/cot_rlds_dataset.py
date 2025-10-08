@@ -1098,6 +1098,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
         batch_size: int = 1,
         max_samples: int | None = None,
         skip_normalization: bool = False,
+        enable_prediction_training: bool = False,
     ):
         self.use_json_actions = False
 
@@ -1117,6 +1118,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
             batch_size=batch_size,
             max_samples=max_samples,
             skip_normalization=skip_normalization,
+            enable_prediction_training=enable_prediction_training,
         )
 
     def apply_restructure(self):
