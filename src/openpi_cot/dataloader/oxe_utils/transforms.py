@@ -1283,6 +1283,12 @@ def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     return trajectory
 
 
+def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    trajectory["action"] = trajectory["action"][..., :7]  # exclude base action
+    # Apply Agibot specific transformations
+    return trajectory
+
+
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,

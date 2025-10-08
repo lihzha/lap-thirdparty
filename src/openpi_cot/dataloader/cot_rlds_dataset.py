@@ -103,21 +103,31 @@ def make_decode_images_fn(
         return img
 
     def decode_with_time_dim(img_tensor):
-        """Decode images that may have time dimension."""
-        # # Check shape: could be [H,W,C] or [T,H,W,C] or string (encoded)
-        # if img_tensor.dtype == tf.string:
-        #     # Single encoded image
-        #     return _decode_single(img_tensor)
+        """Decode images that may have time dimension.
 
-        # Check rank to determine if has time dimension
-        img_shape = tf.shape(img_tensor)
+        Handles:
+        - Rank 0: scalar encoded string (single image)
+        - Rank 1: [T] vector of encoded strings (prediction mode with multiple frames)
+        - Rank 3: [H, W, C] single decoded image
+        - Rank 4: [T, H, W, C] decoded images with time dimension
+        """
         rank = len(img_tensor.shape)
 
-        if rank == 4:  # [T, H, W, C] - has time dimension
-            # Decode each frame
-            return tf.map_fn(_decode_single, img_tensor, fn_output_signature=tf.uint8)
-        # [H, W, C] - single frame
-        return _decode_single(img_tensor)
+        if rank == 1:  # [T] - multiple encoded strings (prediction mode)
+            # Decode each encoded string separately
+            # Output: [T, H, W, C] after decoding
+            decoded_frames = tf.map_fn(_decode_single, img_tensor, fn_output_signature=tf.uint8)
+            # Set explicit shape for downstream processing
+            if resize_to is not None:
+                h, w = resize_to
+                decoded_frames.set_shape([None, h, w, 3])
+            return decoded_frames
+        elif rank == 4:  # [T, H, W, C] - already decoded with time dimension
+            # Apply resize if needed (shouldn't normally happen in this path)
+            return img_tensor
+        else:  # rank == 0 (scalar string) or rank == 3 ([H, W, C])
+            # Single frame: decode if string, otherwise return as-is
+            return _decode_single(img_tensor)
 
     def _decode_frame(traj: dict) -> dict:
         traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
