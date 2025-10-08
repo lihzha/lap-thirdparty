@@ -323,7 +323,7 @@ OXE_DATASET_CONFIGS = {
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["state"],
-        "state_encoding": StateEncoding.POS_QUAT,
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "bc_z": {
@@ -485,7 +485,7 @@ OXE_DATASET_CONFIGS = {
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["state"],
-        "state_encoding": StateEncoding.JOINT,
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "berkeley_fanuc_manipulation": {
