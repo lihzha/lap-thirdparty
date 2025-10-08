@@ -747,8 +747,10 @@ OXE_DATASET_CONFIGS = {
             "gripper_state_left",
             "gripper_state_right",
         ],
-        "state_encoding": StateEncoding.JOINT_BIMANUAL,
-        "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
+        # "state_encoding": StateEncoding.JOINT_BIMANUAL,
+        # "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
     },
 }
 
