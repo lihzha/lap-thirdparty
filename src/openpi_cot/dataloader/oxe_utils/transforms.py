@@ -1019,7 +1019,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     # )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     # traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-    traj_truncated["action"] = trajectory["action"][-1:]
+    # traj_truncated["action"] = trajectory["action"][-1:]
     return traj_truncated
 
     # trajectory["language_instruction"] = tf.fill(
