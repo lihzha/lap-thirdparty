@@ -1109,7 +1109,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
             traj.pop("trajectory_id")
             traj["prompt"] = traj["language_instruction"]
             traj.pop("language_instruction")
-            traj.pop("raw_action")
+            # traj.pop("raw_action")
             return traj
 
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
