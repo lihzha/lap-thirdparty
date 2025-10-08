@@ -399,6 +399,7 @@ def main(config: _config.TrainConfig):
     for j in range(10):
         # Visualize language-action projection per example
         obs = batch[0]
+        breakpoint()
         # Decode reasoning strings
         reasoning_texts = _decode_reasoning_strings(obs, tok)
         # Prepare start/end images for the first camera view
