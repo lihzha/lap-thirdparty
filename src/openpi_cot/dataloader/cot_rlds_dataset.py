@@ -547,7 +547,7 @@ class SingleCoTDataset:
                 return traj
 
             # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
-            max_horizon = getattr(self.config, "max_prediction_horizon", 30)
+            max_horizon = getattr(self.config, "max_prediction_horizon", summation_steps)
             max_horizon_clamped = tf.minimum(max_horizon, traj_len - 1)
             max_horizon_clamped = tf.maximum(max_horizon_clamped, 1)  # Ensure at least 1
 
@@ -873,9 +873,20 @@ class DroidCoTDataset(SingleCoTDataset):
             episode_id = traj["trajectory_id"][0]
             if self.use_json_actions:
                 lang_bytes = self.lang_table.lookup(episode_id)
-                lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-                # Language actions may include an extra terminal step; crop to match action length
-                lang_tensor = lang_tensor[:traj_len]
+
+                def _parse_lang():
+                    parsed = tf.io.parse_tensor(lang_bytes, tf.string)
+                    return parsed[:traj_len]  # Crop to match action length
+
+                def _empty_lang():
+                    return tf.fill([traj_len], tf.constant(""))
+
+                # Check if lookup succeeded (not the default value)
+                lang_tensor = tf.cond(
+                    tf.not_equal(lang_bytes, self.spec.default_lang_value),
+                    _parse_lang,
+                    _empty_lang,
+                )
             else:
                 lang_tensor = tf.fill([traj_len], tf.constant(""))
             # Sample instruction from merged table
@@ -885,7 +896,15 @@ class DroidCoTDataset(SingleCoTDataset):
                 arr = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
                 return tf.random.shuffle(arr, seed=self.seed)[0]
 
-            instruction = _sample_from_table()
+            def _use_fallback():
+                return tf.random.shuffle(self.spec.fallback_instructions, seed=self.seed)[0]
+
+            # Check if instruction bytes are valid (not empty default)
+            instruction = tf.cond(
+                tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
+                _sample_from_table,
+                _use_fallback,
+            )
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
 
             if self.use_json_actions:
