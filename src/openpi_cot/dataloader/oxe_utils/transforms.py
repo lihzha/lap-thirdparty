@@ -1277,6 +1277,12 @@ def human_dataset_transform(sample: dict[str, Any]) -> dict[str, Any]:
     return sample
 
 
+def r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    trajectory["action"] = trajectory["action"][..., :14]  # exclude torso action
+    # Apply R1 Lite specific transformations
+    return trajectory
+
+
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,
@@ -1368,4 +1374,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "ego4d_split_2": human_dataset_transform,
     "ego4d_split_3": human_dataset_transform,
     "ego4d_split_4": human_dataset_transform,
+    "r1_lite": r1_lite_dataset_transform,
 }

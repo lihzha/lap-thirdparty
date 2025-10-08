@@ -733,11 +733,22 @@ OXE_DATASET_CONFIGS = {
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "sample_r1_lite": {
-        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": "wrist_image"},
+        "image_obs_keys": {
+            "primary": "image_camera_head",
+            "secondary": None,
+            "wrist_left": "image_camera_wrist_left",
+            "wrist_right": "image_camera_wrist_right",
+        },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": ["EEF_state", None, "gripper_state"],
-        "state_encoding": StateEncoding.POS_EULER,
-        "action_encoding": ActionEncoding.EEF_POS,
+        "state_obs_keys": [
+            # "joint_position_torso",
+            "joint_position_arm_left",
+            "joint_position_arm_right",
+            "gripper_state_left",
+            "gripper_state_right",
+        ],
+        "state_encoding": StateEncoding.JOINT_BIMANUAL,
+        "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
     },
 }
 
