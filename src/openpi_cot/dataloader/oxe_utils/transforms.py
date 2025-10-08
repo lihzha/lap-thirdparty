@@ -704,8 +704,8 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_bcz
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-    from openpi_cot.dataloader.oxe_utils.data_utils import transform_actions_xyz
 
     trajectory["action"] = tf.concat(
         (
@@ -717,7 +717,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["eef_state"] = transform_actions_xyz(
+    trajectory["observation"]["eef_state"] = coordinate_transform_bcz(
         tf.concat(
             (
                 trajectory["observation"]["present/xyz"][:, :3],
@@ -747,7 +747,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
-    movement_actions = transform_actions_xyz(movement_actions)
+    movement_actions = coordinate_transform_bcz(movement_actions)
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
@@ -1076,8 +1076,30 @@ def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 def dobbe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # every input feature is batched, ie has leading batch dimension
-    trajectory["observation"]["proprio"] = trajectory["observation"]["state"]
-    return trajectory
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_dobbe
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    # every input feature is batched, ie has leading batch dimension
+    trajectory["observation"]["proprio"] = tf.concat(
+        (
+            coordinate_transform_dobbe(trajectory["observation"]["state"][:, :6]),
+            trajectory["observation"]["state"][:, -1:],
+        ),
+        axis=-1,
+    )
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["proprio"][1:, :3] - trajectory["observation"]["proprio"][:-1, :3],
+            euler_diff(trajectory["observation"]["proprio"][1:, 3:6], trajectory["observation"]["proprio"][:-1, 3:6]),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def roboset_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
