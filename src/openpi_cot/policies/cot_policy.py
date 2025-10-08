@@ -28,22 +28,50 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
     include_rotation: bool = False
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
+    # Prediction training parameters
+    enable_prediction_training: bool = False
+    prediction_prompt: str = "What is the robot's movement between two frames?"
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert "observation" in data
         assert "exterior_image_1_left" in data["observation"]
-        base_image = parse_image(data["observation"]["exterior_image_1_left"])
+
+        base_image_raw = data["observation"]["exterior_image_1_left"]
+
+        # Check for time dimension: [T, H, W, C] or [H, W, C]
+        has_time_dim = len(base_image_raw.shape) == 4
+
+        if has_time_dim:
+            # Parse each frame: shape [T, H, W, C]
+            base_image = np.stack([parse_image(base_image_raw[i]) for i in range(base_image_raw.shape[0])])
+        else:
+            base_image = parse_image(base_image_raw)
+
         if base_image is None:
             raise ValueError("Base image missing from observation")
         if "wrist_image_left" in data["observation"]:
-            wrist_image = parse_image(data["observation"]["wrist_image_left"])
+            wrist_raw = data["observation"]["wrist_image_left"]
+            # Wrist image: always single frame (kept as [1, H, W, C] or [H, W, C])
+            if len(wrist_raw.shape) == 4:
+                wrist_image = parse_image(wrist_raw[0])
+            else:
+                wrist_image = parse_image(wrist_raw)
+
             if np.all(wrist_image == 0.0):
-                wrist_image = np.zeros_like(base_image)
+                # Create zeros with matching shape to base_image first frame
+                if has_time_dim:
+                    wrist_image = np.zeros_like(base_image[0])
+                else:
+                    wrist_image = np.zeros_like(base_image)
                 wrist_image_mask = np.False_
             else:
                 wrist_image_mask = np.True_
         else:
-            wrist_image = np.zeros_like(base_image)
+            # Create zeros with matching shape to base_image first frame
+            if has_time_dim:
+                wrist_image = np.zeros_like(base_image[0])
+            else:
+                wrist_image = np.zeros_like(base_image)
             wrist_image_mask = np.False_
 
         if np.all(base_image == 0):
@@ -157,9 +185,33 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         inputs = self._prepare_inputs(data)
         if self.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
+
+        # Always prepare regular language actions for reasoning loss
         language_actions = self._prepare_language_actions(data)
         if language_actions is not None:
             inputs["language_actions"] = language_actions
+
+        # Additionally prepare prediction if available (independent of regular reasoning)
+        if "prediction_language_action" in data:
+            assert self.enable_prediction_training, (
+                "Prediction language action found in data but prediction training not enabled in policy."
+            )
+            pred_lang = data["prediction_language_action"]
+            if isinstance(pred_lang, bytes):
+                pred_lang = pred_lang.decode("utf-8")
+            elif isinstance(pred_lang, np.ndarray):
+                pred_lang = pred_lang.item()
+                if isinstance(pred_lang, bytes):
+                    pred_lang = pred_lang.decode("utf-8")
+
+            # Pass through prediction language action and prompt if prediction language exists
+            if pred_lang and pred_lang.strip():
+                inputs["prediction_language_action"] = pred_lang
+                inputs["prediction_prompt"] = self.prediction_prompt
+        else:
+            assert not self.enable_prediction_training, (
+                "Prediction training enabled in policy but no prediction language action found in data."
+            )
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

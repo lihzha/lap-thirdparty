@@ -17,10 +17,15 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         self._prompt_format = prompt_format
 
     def tokenize_cot(
-        self, prompt: str, reasoning: str | None = None, state: np.ndarray | None = None
+        self,
+        prompt: str,
+        reasoning: str | None = None,
+        state: np.ndarray | None = None,
+        prompt_format: str | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
-        if self._prompt_format == "pi05":
+        prompt_format = prompt_format or self._prompt_format
+        if prompt_format == "pi05":
             assert state is not None, "State should only be provided when using Pi05 format."
             # This is the Pi05 format, where the state is part of the discrete language input.
             # State vectors are padded with trailing zeros to action_dim in the dataset pipeline.
@@ -46,7 +51,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             else:
                 state_str = ""
             cleaned_prompt = f"Task: {cleaned_prompt}, State: {state_str};\nAction: "
-        elif self._prompt_format == "pi0":
+        elif prompt_format == "pi0":
             assert state is None, "State should not be provided when using Pi0 format."
             cleaned_prompt += "\n"
 
@@ -120,3 +125,18 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
         return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
+
+    def tokenize_prediction(
+        self, prediction_prompt: str, prediction_language: str
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize for prediction task.
+
+        Uses the prediction language action as the reasoning to be predicted.
+
+        Args:
+            prediction_prompt: The prompt for prediction task
+            prediction_language: The prediction language action (reasoning target)
+            state: Optional state for discrete state input
+        """
+        # The reasoning is the prediction language action
+        return self.tokenize_cot(prediction_prompt, reasoning=prediction_language, state=None, prompt_format="vqa")

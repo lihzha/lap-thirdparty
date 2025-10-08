@@ -45,15 +45,35 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
+    # For prediction training: raw language action describing movement between frames
+    prediction_language_action: ArrayT | None = None
+    # Tokenized prediction fields (prediction_prompt + prediction_language_action combined)
+    tokenized_prediction: at.Int[ArrayT, "*b l"] | None = None
+    tokenized_prediction_mask: at.Bool[ArrayT, "*b l"] | None = None
+    tokenized_prediction_reasoning_mask: at.Bool[ArrayT, "*b l"] | None = None
+    tokenized_prediction_numeric_mask: at.Bool[ArrayT, "*b l"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
         # Build the base Observation first (handles images, masks, dtype fixes, etc.)
         data_dict = dict(data)
-        # base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict)
-        data_dict_downsampled = copy.deepcopy(data_dict)
-        data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
+
+        # Check if images have time dimension (shape will be [B, T, H, W, C])
+        image_data = data_dict["image"]
+        sample_image = next(iter(image_data.values()))
+        has_time_dim = sample_image.ndim == 5  # [B, T, H, W, C]
+
+        if has_time_dim:
+            # For base Observation, use first frame only
+            data_dict_downsampled = copy.deepcopy(data_dict)
+            data_dict_downsampled["image"] = {
+                k: v[:, 0] for k, v in data_dict["image"].items() if v is not None
+            }
+        else:
+            data_dict_downsampled = data_dict
+
         base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict_downsampled)
+
         # Pull CoT extras from either flat keys or a namespaced location.
         cot_src = data.get("extras", {}).get("cot", {})
 
@@ -61,11 +81,17 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         def getk(k):
             return data.get(k, cot_src.get(k, None))
 
+        # Process images: normalize to [-1, 1]
+        images_processed = {}
+        for k, v in data_dict["image"].items():
+            if v is not None:
+                # Handle both [B, H, W, C] and [B, T, H, W, C]
+                images_processed[k] = v.astype(np.float32) / 255.0 * 2.0 - 1.0
+
         # Construct subclass using base fields
         base_dict = dataclasses.asdict(base)
-        base_dict["images"] = {
-            k: v.astype(np.float32) / 255.0 * 2.0 - 1.0 for k, v in data_dict["image"].items() if v is not None
-        }
+        base_dict["images"] = images_processed
+
         return cls(
             **base_dict,
             tokenized_reasoning_mask=getk("tokenized_reasoning_mask"),
@@ -74,6 +100,11 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             camera_intrinsics=getk("camera_intrinsics"),
             camera_extrinsics=getk("camera_extrinsics"),
             cartesian_position_window=getk("cartesian_position_window"),
+            prediction_language_action=getk("prediction_language_action"),
+            tokenized_prediction=getk("tokenized_prediction"),
+            tokenized_prediction_mask=getk("tokenized_prediction_mask"),
+            tokenized_prediction_reasoning_mask=getk("tokenized_prediction_reasoning_mask"),
+            tokenized_prediction_numeric_mask=getk("tokenized_prediction_numeric_mask"),
         )
 
 
@@ -98,37 +129,90 @@ def preprocess_observation(
     out_images = {}
     for key in image_keys:
         image = observation.images[key]
-        if image.shape[1:3] != image_resolution:
-            logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
-            image = image_tools.resize_with_pad(image, *image_resolution)
 
-        if train:
-            # Convert from [-1, 1] to [0, 1] for augmax.
-            image = image / 2.0 + 0.5
+        # Detect time dimension: [b, t, h, w, c] vs [b, h, w, c]
+        has_time_dim = image.ndim == 5
 
-            transforms = []
-            if "wrist" in key and aug_wrist_image:
-                height, width = image.shape[1:3]
+        if has_time_dim:
+            b, t, h, w, c = image.shape
+
+            # Resize if needed (before augmentation)
+            if (h, w) != image_resolution:
+                logger.info(f"Resizing image {key} from {(h, w)} to {image_resolution}")
+                # Process each frame
+                frames_resized = []
+                for i in range(t):
+                    frame_resized = image_tools.resize_with_pad(image[:, i], *image_resolution)
+                    frames_resized.append(frame_resized)
+                image = jnp.stack(frames_resized, axis=1)  # [b, t, h', w', c]
+
+            if train:
+                # Augmentation: apply to each frame independently
+                # Flatten: [b*t, h, w, c]
+                h_new, w_new = image_resolution
+                image_flat = image.reshape(b * t, h_new, w_new, c)
+
+                # Convert to [0, 1]
+                image_flat = image_flat / 2.0 + 0.5
+
+                # Build transforms
+                transforms = []
+                if "wrist" in key and aug_wrist_image:
+                    transforms += [
+                        augmax.RandomCrop(int(w_new * 0.95), int(h_new * 0.95)),
+                        augmax.Resize(w_new, h_new),
+                        augmax.Rotate((-5, 5)),
+                    ]
+                else:
+                    transforms += [
+                        augmax.RandomCrop(int(w_new * 0.95), int(h_new * 0.95)),
+                        augmax.Resize(w_new, h_new),
+                        augmax.Rotate((-5, 5)),
+                    ]
+                transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
+
+                # Apply augmentation
+                sub_rngs = jax.random.split(rng, b * t)
+                image_flat = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image_flat)
+
+                # Back to [-1, 1]
+                image_flat = image_flat * 2.0 - 1.0
+
+                # Reshape: [b, t, h', w', c]
+                image = image_flat.reshape(b, t, h_new, w_new, c)
+        else:
+            # Single frame: existing code
+            if image.shape[1:3] != image_resolution:
+                logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
+                image = image_tools.resize_with_pad(image, *image_resolution)
+
+            if train:
+                # Convert from [-1, 1] to [0, 1] for augmax.
+                image = image / 2.0 + 0.5
+
+                transforms = []
+                if "wrist" in key and aug_wrist_image:
+                    height, width = image.shape[1:3]
+                    transforms += [
+                        augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
+                        augmax.Resize(width, height),
+                        augmax.Rotate((-5, 5)),
+                    ]
+                else:
+                    height, width = image.shape[1:3]
+                    transforms += [
+                        augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
+                        augmax.Resize(width, height),
+                        augmax.Rotate((-5, 5)),
+                    ]
                 transforms += [
-                    augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
-                    augmax.Resize(width, height),
-                    augmax.Rotate((-5, 5)),
+                    augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5),
                 ]
-            else:
-                height, width = image.shape[1:3]
-                transforms += [
-                    augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
-                    augmax.Resize(width, height),
-                    augmax.Rotate((-5, 5)),
-                ]
-            transforms += [
-                augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5),
-            ]
-            sub_rngs = jax.random.split(rng, image.shape[0])
-            image = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
+                sub_rngs = jax.random.split(rng, image.shape[0])
+                image = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
 
-            # Back to [-1, 1].
-            image = image * 2.0 - 1.0
+                # Back to [-1, 1].
+                image = image * 2.0 - 1.0
 
         out_images[key] = image
 
@@ -155,4 +239,9 @@ def preprocess_observation(
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),
         cartesian_position_window=getattr(observation, "cartesian_position_window", None),
+        prediction_language_action=getattr(observation, "prediction_language_action", None),
+        tokenized_prediction=getattr(observation, "tokenized_prediction", None),
+        tokenized_prediction_mask=getattr(observation, "tokenized_prediction_mask", None),
+        tokenized_prediction_reasoning_mask=getattr(observation, "tokenized_prediction_reasoning_mask", None),
+        tokenized_prediction_numeric_mask=getattr(observation, "tokenized_prediction_numeric_mask", None),
     )

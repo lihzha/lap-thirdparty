@@ -146,6 +146,10 @@ class CoTDataConfig(upstream_config.DataConfig):
     resize_resolution: tuple[int, int] = (224, 224)
     include_rotation: bool = False
 
+    # Prediction training parameters
+    max_prediction_horizon: int = 30
+    prediction_prompt: str = "What is the robot's movement between two frames?"
+
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
     language_action_dir: str | None = None
@@ -164,6 +168,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
 
     prompt_format: Literal["pi05", "pi0", "vqa"] = "pi05"
+    prediction_prompt: str = "What is the robot's movement between two frames?"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -178,6 +183,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             prompt_format=self.prompt_format,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
+                        prediction_prompt=self.prediction_prompt,
                     ),
                     upstream_transforms.PadStatesAndActions(model_config.action_dim),
                 ],
@@ -255,6 +261,9 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     include_rotation=base_cfg.include_rotation,
                     action_encoding=base_cfg.action_encoding,
+                    # Add prediction fields
+                    enable_prediction_training=getattr(model_config, 'enable_prediction_training', False),
+                    prediction_prompt=base_cfg.prediction_prompt,
                 )
             ],
             outputs=[cot_policy.CoTOutputs()],
@@ -268,7 +277,10 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         #     # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
         # )
 
-        model_transforms = ModelTransformFactory(prompt_format=model_config.prompt_format)(model_config)
+        model_transforms = ModelTransformFactory(
+            prompt_format=model_config.prompt_format,
+            prediction_prompt=base_cfg.prediction_prompt,
+        )(model_config)
 
         return dataclasses.replace(
             base_cfg,
@@ -298,7 +310,10 @@ class VQADataConfig(RLDSCoTDataConfig):
             outputs=[vqa_policy.VQAOutputs()],
         )
 
-        model_transforms = ModelTransformFactory(prompt_format=model_config.prompt_format)(model_config)
+        model_transforms = ModelTransformFactory(
+            prompt_format=model_config.prompt_format,
+            prediction_prompt=base_cfg.prediction_prompt,
+        )(model_config)
 
         return dataclasses.replace(
             base_cfg,
@@ -364,7 +379,9 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         #     # outputs=[upstream_transforms.AbsoluteActions(delta_action_mask)],
         # )
 
-        model_transforms = ModelTransformFactory()(model_config)
+        model_transforms = ModelTransformFactory(
+            prediction_prompt=base_cfg.prediction_prompt,
+        )(model_config)
 
         return dataclasses.replace(
             base_cfg,

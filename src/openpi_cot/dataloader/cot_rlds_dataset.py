@@ -103,21 +103,43 @@ def make_decode_images_fn(
             img = _tf_resize_with_pad(img, h, w)
         return img
 
+    def decode_with_time_dim(img_tensor):
+        """Decode images that may have time dimension."""
+        # Check shape: could be [H,W,C] or [T,H,W,C] or string (encoded)
+        if img_tensor.dtype == tf.string:
+            # Single encoded image
+            return _decode_single(img_tensor)
+
+        # Check rank to determine if has time dimension
+        img_shape = tf.shape(img_tensor)
+        rank = len(img_tensor.shape)
+
+        if rank == 4:  # [T, H, W, C] - has time dimension
+            # Decode each frame
+            return tf.map_fn(_decode_single, img_tensor, fn_output_signature=tf.uint8)
+        else:  # [H, W, C] - single frame
+            return _decode_single(img_tensor)
+
     def _decode_frame(traj: dict) -> dict:
         if not vis_dataset:
-            traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
+            traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
             if use_wrist_image and wrist_key is not None:
-                traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
+                traj["observation"][wrist_key] = decode_with_time_dim(traj["observation"][wrist_key])
         else:
+            # In vis_dataset mode, images already have summation_steps dimension
+            # Need to handle both [T, S, H, W, C] and potential [T, S, encoded_bytes]
+            primary_img = traj["observation"][primary_key]
+            # Apply decode to the innermost dimension
             traj["observation"][primary_key] = tf.map_fn(
-                _decode_single,
-                traj["observation"][primary_key],
+                lambda frames: tf.map_fn(_decode_single, frames, fn_output_signature=tf.uint8),
+                primary_img,
                 fn_output_signature=tf.uint8,
             )
             if use_wrist_image and wrist_key is not None:
+                wrist_img = traj["observation"][wrist_key]
                 traj["observation"][wrist_key] = tf.map_fn(
-                    _decode_single,
-                    traj["observation"][wrist_key],
+                    lambda frames: tf.map_fn(_decode_single, frames, fn_output_signature=tf.uint8),
+                    wrist_img,
                     fn_output_signature=tf.uint8,
                 )
         return traj
@@ -505,6 +527,85 @@ class SingleCoTDataset:
             return traj
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
+
+        def add_prediction_pairs(traj):
+            """Add prediction frame pairs and corresponding language actions."""
+            traj_len = tf.shape(traj[action_key])[0]
+
+            if not getattr(self.config, 'enable_prediction_training', False):
+                # Backward compatibility: add time dimension with single frame
+                traj["observation"][self.spec.primary_image_key] = tf.expand_dims(
+                    traj["observation"][self.spec.primary_image_key], axis=1
+                )  # [T, 1, H, W, C]
+
+                if self.use_wrist_image:
+                    traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                        traj["observation"][self.spec.wrist_image_key], axis=1
+                    )
+
+                # No prediction language action needed
+                traj["prediction_language_action"] = tf.fill([traj_len], tf.constant("", dtype=tf.string))
+                return traj
+
+            # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
+            max_horizon = getattr(self.config, 'max_prediction_horizon', 30)
+            max_horizon_clamped = tf.minimum(max_horizon, traj_len - 1)
+            max_horizon_clamped = tf.maximum(max_horizon_clamped, 1)  # Ensure at least 1
+
+            deltas = tf.random.uniform(
+                [traj_len],
+                minval=1,  # At least 1 step into future
+                maxval=max_horizon_clamped + 1,
+                dtype=tf.int32
+            )
+            future_indices = tf.minimum(
+                tf.range(traj_len, dtype=tf.int32) + deltas,
+                traj_len - 1
+            )
+
+            # Stack current and future images (primary only)
+            current_imgs = traj["observation"][self.spec.primary_image_key]
+            future_imgs = tf.gather(current_imgs, future_indices)
+            traj["observation"][self.spec.primary_image_key] = tf.stack(
+                [current_imgs, future_imgs], axis=1
+            )  # [T, 2, H, W, C]
+
+            # Wrist image: single frame only
+            if self.use_wrist_image:
+                traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                    traj["observation"][self.spec.wrist_image_key], axis=1
+                )
+
+            # Gather and aggregate language actions between current and future frame
+            # traj["language_actions"] has shape [T] with strings
+            def gather_prediction_language(t_idx, delta):
+                """Gather language actions from t_idx to t_idx+delta."""
+                # Create range [t_idx, t_idx+1, ..., t_idx+delta-1]
+                # Clamp to valid range
+                indices = tf.range(delta) + t_idx
+                indices = tf.minimum(indices, traj_len - 1)
+
+                # Gather language actions for these steps
+                lang_steps = tf.gather(traj["language_actions"], indices)
+
+                # Aggregate: concatenate with "; " separator
+                aggregated = tf.strings.reduce_join(lang_steps, separator="; ")
+
+                return aggregated
+
+            # Vectorized version: for each timestep, gather delta steps worth of language
+            prediction_lang_actions = tf.map_fn(
+                lambda x: gather_prediction_language(x[0], x[1]),
+                (tf.range(traj_len, dtype=tf.int32), deltas),
+                fn_output_signature=tf.string,
+            )
+
+            traj["prediction_language_action"] = prediction_lang_actions  # [T]
+            traj["prediction_delta"] = deltas  # Store for debugging
+
+            return traj
+
+        self.dataset = self.dataset.traj_map(add_prediction_pairs, self.num_parallel_calls)
 
     def apply_repack_transforms(self):
         raise NotImplementedError

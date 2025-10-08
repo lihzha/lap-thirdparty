@@ -42,9 +42,12 @@ class PiCoTConfig(_model.BaseModelConfig):
     enable_action_training: bool = False
     # When True, enables training on language (reasoning) tokens with cross-entropy.
     enable_reasoning_training: bool = True
+    # When True, enables prediction loss (predicting movement between current and future frame).
+    enable_prediction_training: bool = False
     # Scalar weights to combine losses when multiple are enabled
     language_loss_weight: float = 1.0
     action_loss_weight: float = 1.0
+    prediction_loss_weight: float = 1.0
 
     def __post_init__(self):
         if self.max_token_len is None:

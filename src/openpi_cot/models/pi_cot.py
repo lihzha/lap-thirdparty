@@ -83,8 +83,10 @@ class PiCoT(_pi0.Pi0):
         # Loss/control knobs
         self.enable_action_training = bool(getattr(config, "enable_action_training", False))
         self.enable_reasoning_training = bool(getattr(config, "enable_reasoning_training", True))
+        self.enable_prediction_training = bool(getattr(config, "enable_prediction_training", False))
         self.language_loss_weight = float(getattr(config, "language_loss_weight", 1.0))
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
+        self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 1.0))
         # Backward compatibility flag used in a few places
         self.lang_action_only = not self.enable_action_training
         if "gemma2" in config.paligemma_variant:
@@ -143,20 +145,47 @@ class PiCoT(_pi0.Pi0):
         _img_ar_masks = []
         # embed images
         for name in obs.images:
-            image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
+            image = obs.images[name]
 
-            tokens.append(image_tokens)
-            input_mask.append(
-                einops.repeat(
-                    obs.image_masks[name],
-                    "b -> b s",
-                    s=image_tokens.shape[1],
+            # Check for time dimension: [b, t, h, w, c]
+            if image.ndim == 5:
+                b, t, h, w, c = image.shape
+                # Flatten: [b*t, h, w, c]
+                image_flat = image.reshape(b * t, h, w, c)
+                image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
+                # image_tokens: [b*t, num_patches, d]
+
+                num_patches = image_tokens.shape[1]
+                # Reshape: [b, t*num_patches, d]
+                image_tokens = image_tokens.reshape(b, t * num_patches, -1)
+
+                tokens.append(image_tokens)
+                input_mask.append(
+                    einops.repeat(
+                        obs.image_masks[name],
+                        "b -> b s",
+                        s=t * num_patches,
+                    )
                 )
-            )
-            # image tokens attend to each other. broadcast to (B, S)
-            _img_ar_masks += [False] * image_tokens.shape[1]
+                # All image tokens attend to each other
+                _img_ar_masks += [False] * (t * num_patches)
+            else:
+                # Single frame: [b, h, w, c]
+                image_tokens, _ = self.PaliGemma.img(image, train=False)
+
+                tokens.append(image_tokens)
+                input_mask.append(
+                    einops.repeat(
+                        obs.image_masks[name],
+                        "b -> b s",
+                        s=image_tokens.shape[1],
+                    )
+                )
+                # image tokens attend to each other. broadcast to (B, S)
+                _img_ar_masks += [False] * image_tokens.shape[1]
+
         img_ar_mask = jnp.array(_img_ar_masks)
-        img_ar_mask = einops.repeat(img_ar_mask, "s -> b s", b=image_tokens.shape[0])
+        img_ar_mask = einops.repeat(img_ar_mask, "s -> b s", b=tokens[0].shape[0])
 
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:
@@ -236,6 +265,39 @@ class PiCoT(_pi0.Pi0):
             critical_correct = correct * critical_token_mask
             num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
             critical_token_accuracy = critical_correct.sum() / num_critical_tokens
+
+        # Prediction (cross-entropy) loss - independent of reasoning loss
+        if self.enable_prediction_training and observation.tokenized_prediction is not None:
+            # Use prediction-specific tokens and masks
+            pred_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
+            pred_positions = jnp.cumsum(prefix_mask, axis=1) - 1
+            (prefix_out_pred, _), _ = self.PaliGemma.llm(
+                [prefix_tokens, None], mask=pred_attn_mask, positions=pred_positions
+            )
+
+            # Predict next tokens over the prediction reasoning span
+            shift_labels_pred = observation.tokenized_prediction[:, 1:]
+            max_len_pred = observation.tokenized_prediction_reasoning_mask.shape[1]
+            shift_tokens_pred = prefix_out_pred[:, -max_len_pred:-1, :]
+            shift_logits_pred = self.PaliGemma.llm(shift_tokens_pred, method="decode")
+
+            prediction_and_pad_mask = jnp.logical_and(
+                observation.tokenized_prediction_reasoning_mask[:, 1:],
+                observation.tokenized_prediction_mask[:, 1:],
+            )
+
+            ex_mask_pred = jnp.asarray(observation.example_mask)[..., None] if observation.example_mask is not None else jnp.ones_like(prediction_and_pad_mask[:, :1])
+            token_mask_pred = prediction_and_pad_mask * ex_mask_pred
+
+            pred_loss = cross_entropy_loss(
+                shift_logits_pred,
+                shift_labels_pred,
+                mask=token_mask_pred,
+                axis=-1,
+                train=True,
+                per_example=True,
+            )
+            total_loss = total_loss + self.prediction_loss_weight * pred_loss
 
         # Diffusion (actions) loss
         if self.enable_action_training:
