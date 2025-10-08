@@ -429,7 +429,9 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
+    # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["ee_states"][:, -16:], [-1, 4, 4])
+    state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
         (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["gripper_states"]),
         axis=-1,
@@ -999,29 +1001,29 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
-    state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
-    # trajectory["observation"]["state"] = tf.concat(
-    #     (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
-    #     axis=-1,
-    # )
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
+    # Reshape from column-major flattened format and transpose to row-major
+    state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
+    state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (trajectory["observation"]["state"][:, -16:], trajectory["observation"]["state"][:, 7:8]),
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
         axis=-1,
     )
 
-    # movement_actions = tf.concat(
-    #     (
-    #         trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-    #         euler_diff(
-    #             trajectory["observation"]["state"][1:, 3:6],
-    #             trajectory["observation"]["state"][:-1, 3:6],
-    #         ),
-    #     ),
-    #     axis=-1,
-    # )
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    # traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
     return traj_truncated
 
     # trajectory["language_instruction"] = tf.fill(
