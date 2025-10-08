@@ -906,7 +906,7 @@ class DroidCoTDataset(SingleCoTDataset):
                     lambda: traj["observation"][self.spec.images_list[1]],
                 )
 
-            cartesian = traj["observation"]["cartesian_position"]
+            cartesian = tf.cast(traj["observation"]["cartesian_position"], tf.float32)
             gripper = traj["observation"]["gripper_position"]
 
             gripper = tf.cond(
