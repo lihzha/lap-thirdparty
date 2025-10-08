@@ -413,18 +413,47 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     gripper_action = tf.clip_by_value(gripper_action, 0, 1)
     gripper_action = invert_gripper_actions(gripper_action)
 
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"]["world_vector"],
-            trajectory["action"]["rotation_delta"],
-            gripper_action,
-        ),
-        axis=-1,
-    )
+    # trajectory["action"] = tf.concat(
+    #     (
+    #         trajectory["action"]["world_vector"],
+    #         trajectory["action"]["rotation_delta"],
+    #         gripper_action,
+    #     ),
+    #     axis=-1,
+    # )
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["observation"]["natural_language_instruction"]), ""
     # )  # delete uninformative language instruction
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+
+    state_matrix = tf.reshape(trajectory["observation"]["ee_states"][:, -16:], [-1, 4, 4])
+    trajectory["observation"]["state"] = tf.concat(
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["gripper_states"]),
+        axis=-1,
+    )
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, gripper_action[:-1]], axis=1)
+    return traj_truncated
+
+    # trajectory["language_instruction"] = tf.fill(
+    #     tf.shape(trajectory["language_instruction"]), ""
+    # )  # delete uninformative language instruction
+    return trajectory
+
     return trajectory
 
 
@@ -981,7 +1010,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 
     movement_actions = tf.concat(
         (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            (trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3]) * 100,
             euler_diff(
                 trajectory["observation"]["state"][1:, 3:6],
                 trajectory["observation"]["state"][:-1, 3:6],
@@ -996,7 +1025,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["language_instruction"]), ""
     # )  # delete uninformative language instruction
-    return trajectory
+    # return trajectory
 
 
 def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:

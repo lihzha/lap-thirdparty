@@ -162,8 +162,8 @@ OXE_DATASET_CONFIGS = {
             "wrist": "eye_in_hand_rgb",
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": ["joint_states", "gripper_states"],
-        "state_encoding": StateEncoding.JOINT,
+        "state_obs_keys": ["state"],
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "berkeley_autolab_ur5": {
