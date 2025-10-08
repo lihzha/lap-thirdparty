@@ -1006,7 +1006,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     # )
 
     trajectory["observation"]["state"] = tf.concat(
-        (state_matrix, trajectory["observation"]["state"][:, 7:8]),
+        (trajectory["observation"]["state"][:, -16:], trajectory["observation"]["state"][:, 7:8]),
         axis=-1,
     )
 
