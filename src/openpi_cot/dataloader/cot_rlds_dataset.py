@@ -21,6 +21,7 @@ from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.dataloader.oxe_utils.transforms import binarize_gripper_actions
 from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 from openpi_cot.transforms import NormalizeActionAndProprio
@@ -311,6 +312,7 @@ class SingleCoTDataset:
         self.get_traj_identifier()
 
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
+        breakpoint()
         if cached_stats is not None:
             # Prefer early filtering when stats are already available to reduce downstream work.
             self.apply_traj_filters(action_key="action")
@@ -846,9 +848,8 @@ class DroidCoTDataset(SingleCoTDataset):
             """Reformat observation and action keys, sample language instruction."""
             actions = tf.concat(
                 (
-                    traj["observation"]["cartesian_position"],
-                    # binarize_gripper_actions(traj["action_dict"]["gripper_position"]),
-                    traj["action_dict"]["gripper_position"],
+                    tf.cast(traj["observation"]["cartesian_position"], tf.float32),
+                    binarize_gripper_actions(traj["action_dict"]["gripper_position"]),
                 ),
                 axis=-1,
             )
@@ -905,7 +906,6 @@ class DroidCoTDataset(SingleCoTDataset):
                     lambda: traj["observation"][self.spec.images_list[1]],
                 )
 
-            # cartesian = tf.cast(traj["observation"]["cartesian_position"], tf.float32)
             cartesian = traj["observation"]["cartesian_position"]
             gripper = traj["observation"]["gripper_position"]
 
@@ -915,8 +915,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
             )
 
-            # state = tf.concat([cartesian, binarize_gripper_actions(gripper)], axis=-1)
-            state = tf.concat([cartesian, gripper], axis=-1)
+            state = tf.concat([cartesian, binarize_gripper_actions(gripper)], axis=-1)
             state = convert_state_encoding(
                 state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
             )
