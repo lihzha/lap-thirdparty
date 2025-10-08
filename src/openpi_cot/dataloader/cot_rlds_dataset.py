@@ -320,7 +320,7 @@ class SingleCoTDataset:
             self.dataset_statistics = cached_stats
         else:
             # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
-            self.apply_traj_filters(action_key="actions")
+            self.apply_traj_filters(action_key="action")
             self.apply_restructure()
             self.dataset_statistics = get_dataset_statistics(
                 self.dataset,
