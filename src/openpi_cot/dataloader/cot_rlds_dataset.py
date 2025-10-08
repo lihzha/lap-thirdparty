@@ -609,9 +609,8 @@ class SingleCoTDataset:
                 def gather_and_pad_numeric(t_idx, delta):
                     """Gather actions from t_idx to t_idx+delta-1, serialize, pad to summation_steps."""
                     # Clamp delta to not exceed trimmed_len
-                    actual_len = tf.minimum(delta, trimmed_len)
                     # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
-                    indices = tf.range(actual_len) + t_idx
+                    indices = tf.range(delta) + t_idx
                     indices = tf.minimum(indices, traj_len - 1)
 
                     # Gather raw actions: [actual_len, A]
@@ -625,16 +624,23 @@ class SingleCoTDataset:
                     )
 
                     # Pad to summation_steps with serialized dummy tensors
-                    pad_len = summation_steps - actual_len
+                    pad_len = summation_steps - delta
                     padded = tf.cond(
                         pad_len > 0,
-                        lambda: tf.concat([
-                            serialized,
-                            tf.tile(
-                                [tf.io.serialize_tensor(tf.zeros(tf.shape(traj["raw_action"])[-1:], dtype=traj["raw_action"].dtype))],
-                                [pad_len]
-                            )
-                        ], axis=0),
+                        lambda: tf.concat(
+                            [
+                                serialized,
+                                tf.tile(
+                                    [
+                                        tf.io.serialize_tensor(
+                                            tf.zeros(tf.shape(traj["raw_action"])[-1:], dtype=traj["raw_action"].dtype)
+                                        )
+                                    ],
+                                    [pad_len],
+                                ),
+                            ],
+                            axis=0,
+                        ),
                         lambda: serialized[:summation_steps],
                     )
                     return padded
