@@ -96,7 +96,6 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     dx_m = float(arr[..., 0].sum())
     dy_m = float(arr[..., 1].sum())
     dz_m = float(arr[..., 2].sum())
-    breakpoint()
     dx = round(abs(dx_m * 100.0), decimals)
     dy = round(abs(dy_m * 100.0), decimals)
     dz = round(abs(dz_m * 100.0), decimals)

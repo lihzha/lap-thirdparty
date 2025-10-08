@@ -397,7 +397,7 @@ class SingleCoTDataset:
         - drop_goal_or_instruction
         - subsample_length
         """
-        if not self.skip_normalization:
+        if not self.skip_normalization and not self.vis_dataset:
             self.dataset = self.dataset.traj_map(
                 NormalizeActionAndProprio(
                     norm_stats=self.dataset_statistics,
