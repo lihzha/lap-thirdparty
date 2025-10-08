@@ -286,7 +286,11 @@ class PiCoT(_pi0.Pi0):
                 observation.tokenized_prediction_mask[:, 1:],
             )
 
-            ex_mask_pred = jnp.asarray(observation.example_mask)[..., None] if observation.example_mask is not None else jnp.ones_like(prediction_and_pad_mask[:, :1])
+            ex_mask_pred = (
+                jnp.asarray(observation.example_mask)[..., None]
+                if observation.example_mask is not None
+                else jnp.ones_like(prediction_and_pad_mask[:, :1])
+            )
             token_mask_pred = prediction_and_pad_mask * ex_mask_pred
 
             pred_loss = cross_entropy_loss(
@@ -298,6 +302,7 @@ class PiCoT(_pi0.Pi0):
                 per_example=True,
             )
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
+            breakpoint()
 
         # Diffusion (actions) loss
         if self.enable_action_training:
