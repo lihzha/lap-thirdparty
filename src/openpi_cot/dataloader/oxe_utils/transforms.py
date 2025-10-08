@@ -999,11 +999,14 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
-
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
+    # trajectory["observation"]["state"] = tf.concat(
+    #     (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
+    #     axis=-1,
+    # )
+
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
+        (state_matrix, trajectory["observation"]["state"][:, 7:8]),
         axis=-1,
     )
 
