@@ -550,11 +550,11 @@ class SingleCoTDataset:
                         traj["observation"][self.spec.wrist_image_key], axis=1
                     )  # [T, 1, H, W, C]
 
-                # Handle right wrist for bimanual datasets
-                if self.is_bimanual and self.spec.wrist_image_right_key in traj["observation"]:
-                    traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                        traj["observation"][self.spec.wrist_image_right_key], axis=1
-                    )  # [T, 1, H, W, C]
+                    # Handle right wrist (for all datasets - bimanual and non-bimanual)
+                    if self.spec.wrist_image_right_key in traj["observation"]:
+                        traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                            traj["observation"][self.spec.wrist_image_right_key], axis=1
+                        )  # [T, 1, H, W, C]
 
                 # No prediction language action needed - empty padded tensor
                 empty_row = tf.fill([summation_steps], tf.constant("", dtype=tf.string))
@@ -589,11 +589,11 @@ class SingleCoTDataset:
                     traj["observation"][self.spec.wrist_image_key], axis=1
                 )  # [T, 1, H, W, C]
 
-            # Right wrist image: single frame only (for bimanual datasets)
-            if self.is_bimanual and self.spec.wrist_image_right_key in traj["observation"]:
-                traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                    traj["observation"][self.spec.wrist_image_right_key], axis=1
-                )  # [T, 1, H, W, C]
+                # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
+                if self.spec.wrist_image_right_key in traj["observation"]:
+                    traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                        traj["observation"][self.spec.wrist_image_right_key], axis=1
+                    )  # [T, 1, H, W, C]
 
             # Derive prediction language actions from raw_action, similar to language_actions
             # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps
@@ -993,6 +993,9 @@ class DroidCoTDataset(SingleCoTDataset):
 
             if self.use_wrist_image:
                 _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"][self.spec.wrist_image_key]
+                # Always add right wrist image for consistency (zeros for DROID which is single-arm)
+                _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
+
             return _return_dict
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
@@ -1195,6 +1198,8 @@ class SingleOXECoTDataset(SingleCoTDataset):
             )
 
             for new, old in self.image_obs_keys.items():
+                if not self.use_wrist_image and new == "wrist":
+                    continue
                 if "primary" in new:
                     img_key = self.spec.primary_image_key
                 elif new == "wrist_right":
@@ -1203,16 +1208,15 @@ class SingleOXECoTDataset(SingleCoTDataset):
                     img_key = self.spec.wrist_image_key
                 else:
                     raise ValueError(f"Unknown image key: {new}")
-                if not self.use_wrist_image and new == "wrist":
-                    continue
-                # Skip right wrist if not bimanual
-                if new == "wrist_right" and not self.is_bimanual:
-                    continue
                 # Check if key exists in observation dict
                 if old is None or old not in old_obs:
                     new_obs[img_key] = tf.repeat("", traj_len)  # padding
                 else:
                     new_obs[img_key] = old_obs[old]
+
+            # Always add right wrist image for consistency (zeros for non-bimanual)
+            if self.spec.wrist_image_right_key not in new_obs and self.use_wrist_image:
+                new_obs[self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
 
             if self.state_obs_keys:
                 # Note: instead of padding with zeros, we drop the key if it is None

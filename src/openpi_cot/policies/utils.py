@@ -55,14 +55,6 @@ def to_str_list(x):
     return out
 
 
-def is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
-    if np.all(img == 0):
-        if mask == np.False_:
-            return False
-        return True
-    return np.all(img == 0) or np.all(img == 255)
-
-
 def _format_numeric(val: float, sum_decimal: str) -> str:
     # Match droid policy formatting for numbers
 
