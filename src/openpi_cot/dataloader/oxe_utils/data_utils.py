@@ -270,13 +270,18 @@ def load_dataset_kwargs(
     else:
         raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
 
+    # For bimanual datasets, also load wrist_right camera if available
+    camera_views_to_load = load_camera_views
+    if is_bimanual and "wrist_right" in dataset_kwargs["image_obs_keys"]:
+        camera_views_to_load = tuple(set(load_camera_views) | {"wrist_right"})
+
     # Adjust Loaded Camera Views
-    if len(missing_keys := (set(load_camera_views) - set(dataset_kwargs["image_obs_keys"]))) > 0:
+    if len(missing_keys := (set(camera_views_to_load) - set(dataset_kwargs["image_obs_keys"]))) > 0:
         raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
 
     # Filter
     dataset_kwargs["image_obs_keys"] = {
-        k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in load_camera_views
+        k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in camera_views_to_load
     }
     for k, v in dataset_kwargs["image_obs_keys"].items():
         if k == "primary":

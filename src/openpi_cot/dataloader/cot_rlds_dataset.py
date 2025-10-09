@@ -34,7 +34,9 @@ def make_decode_images_fn(
     *,
     primary_key: str,
     wrist_key: str | None,
+    wrist_right_key: str | None = None,
     use_wrist_image: bool,
+    use_wrist_right_image: bool = False,
     resize_to: tuple[int, int] | None = (224, 224),
 ):
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors.
@@ -134,6 +136,8 @@ def make_decode_images_fn(
         traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
         if use_wrist_image and wrist_key is not None:
             traj["observation"][wrist_key] = decode_with_time_dim(traj["observation"][wrist_key])
+        if use_wrist_right_image and wrist_right_key is not None:
+            traj["observation"][wrist_right_key] = decode_with_time_dim(traj["observation"][wrist_right_key])
 
         return traj
 
@@ -152,6 +156,8 @@ def prepare_batched_dataset(
     resize_resolution,
     primary_image_key,
     wrist_image_key,
+    wrist_image_right_key=None,
+    use_wrist_right_image=False,
 ):
     if (not want_val) and shuffle and max_samples is None:
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
@@ -161,7 +167,9 @@ def prepare_batched_dataset(
     decode_fn = make_decode_images_fn(
         primary_key=primary_image_key,
         wrist_key=wrist_image_key,
+        wrist_right_key=wrist_image_right_key,
         use_wrist_image=use_wrist_image,
+        use_wrist_right_image=use_wrist_right_image,
         resize_to=resize_resolution,
     )
     dataset = dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
@@ -219,6 +227,7 @@ class CoTRldsDatasetSpec:
     images_list: tuple[str, str] = ("exterior_image_1_left", "exterior_image_2_left")
     primary_image_key: str = "exterior_image_1_left"
     wrist_image_key: str = "wrist_image_left"
+    wrist_image_right_key: str = "wrist_image_right"
     default_lang_value: tf.Tensor = field(
         default_factory=lambda: tf.io.serialize_tensor(tf.constant([], dtype=tf.string))
     )
@@ -356,6 +365,8 @@ class SingleCoTDataset:
                 resize_resolution=config.resize_resolution,
                 primary_image_key=self.spec.primary_image_key,
                 wrist_image_key=self.spec.wrist_image_key,
+                wrist_image_right_key=self.spec.wrist_image_right_key,
+                use_wrist_right_image=self.is_bimanual,
             )
 
     def build_dataset_builder(self, ds_name, data_dir):
@@ -539,6 +550,12 @@ class SingleCoTDataset:
                         traj["observation"][self.spec.wrist_image_key], axis=1
                     )  # [T, 1, H, W, C]
 
+                # Handle right wrist for bimanual datasets
+                if self.is_bimanual and self.spec.wrist_image_right_key in traj["observation"]:
+                    traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                        traj["observation"][self.spec.wrist_image_right_key], axis=1
+                    )  # [T, 1, H, W, C]
+
                 # No prediction language action needed - empty padded tensor
                 empty_row = tf.fill([summation_steps], tf.constant("", dtype=tf.string))
                 traj["prediction_language_action"] = tf.tile(
@@ -570,6 +587,12 @@ class SingleCoTDataset:
             if self.use_wrist_image:
                 traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
                     traj["observation"][self.spec.wrist_image_key], axis=1
+                )  # [T, 1, H, W, C]
+
+            # Right wrist image: single frame only (for bimanual datasets)
+            if self.is_bimanual and self.spec.wrist_image_right_key in traj["observation"]:
+                traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                    traj["observation"][self.spec.wrist_image_right_key], axis=1
                 )  # [T, 1, H, W, C]
 
             # Derive prediction language actions from raw_action, similar to language_actions
@@ -1174,11 +1197,16 @@ class SingleOXECoTDataset(SingleCoTDataset):
             for new, old in self.image_obs_keys.items():
                 if "primary" in new:
                     img_key = self.spec.primary_image_key
+                elif new == "wrist_right":
+                    img_key = self.spec.wrist_image_right_key
                 elif "wrist" in new:
                     img_key = self.spec.wrist_image_key
                 else:
                     raise ValueError(f"Unknown image key: {new}")
                 if not self.use_wrist_image and new == "wrist":
+                    continue
+                # Skip right wrist if not bimanual
+                if new == "wrist_right" and not self.is_bimanual:
                     continue
                 if old is None:
                     new_obs[img_key] = tf.repeat("", traj_len)  # padding
@@ -1325,6 +1353,7 @@ class OXECoTDatasets:
         logging.info("Reads per Dataset: %s", reads_per_dataset)
 
         datasets, dataset_sizes, all_dataset_statistics = [], [], {}
+        has_bimanual_dataset = False
         logging.info("Constructing datasets...")
         for dataset_name, threads, reads in zip(  # noqa: B905
             dataset_names,
@@ -1361,6 +1390,9 @@ class OXECoTDatasets:
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_name] = dataset_statistics
+            # Track if any dataset is bimanual
+            if ds.is_bimanual:
+                has_bimanual_dataset = True
 
         # Get the indices of the "primary" datasets (i.e., datasets with sample_weight == 1.0)
         # primary_dataset_indices = np.array([idx for idx in range(len(sample_weights)) if sample_weights[idx] == 1.0])
@@ -1423,6 +1455,8 @@ class OXECoTDatasets:
             resize_resolution=config.resize_resolution,
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
+            wrist_image_right_key=self.spec.wrist_image_right_key,
+            use_wrist_right_image=has_bimanual_dataset,
         )
 
     def _compute_or_load_global_stats(

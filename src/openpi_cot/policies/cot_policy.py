@@ -138,6 +138,32 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         else:
             base_image_mask = np.True_
 
+        # Handle right wrist image for bimanual datasets
+        if "wrist_image_right" in data["observation"]:
+            wrist_right_raw = data["observation"]["wrist_image_right"]
+            # Wrist right image: always single frame (kept as [1, H, W, C] or [H, W, C])
+            if len(wrist_right_raw.shape) == 4:
+                wrist_right_image = parse_image(wrist_right_raw[0])
+            else:
+                wrist_right_image = parse_image(wrist_right_raw)
+
+            if np.all(wrist_right_image == 0.0):
+                # Create zeros with matching shape to base_image first frame
+                if has_time_dim:
+                    wrist_right_image = np.zeros_like(base_image[0])
+                else:
+                    wrist_right_image = np.zeros_like(base_image)
+                wrist_right_image_mask = np.False_
+            else:
+                wrist_right_image_mask = np.True_
+        else:
+            # Create zeros with matching shape to base_image first frame
+            if has_time_dim:
+                wrist_right_image = np.zeros_like(base_image[0])
+            else:
+                wrist_right_image = np.zeros_like(base_image)
+            wrist_right_image_mask = np.False_
+
         # Optional dropout: randomly mask out wrist image
         if self.wrist_image_dropout_prob > 0.0:
             if np.random.rand() < float(self.wrist_image_dropout_prob):
@@ -149,10 +175,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         images = (
             base_image,
             wrist_image,
+            wrist_right_image,
         )
         image_masks = (
             base_image_mask,
             wrist_image_mask,
+            wrist_right_image_mask,
         )
         inputs = {
             "state": data["observation"]["state"],
@@ -182,6 +210,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         images_for_check = {
             "base_0_rgb": [base_image, image_masks[0]],
             "left_wrist_0_rgb": [wrist_image, image_masks[1]],
+            "right_wrist_0_rgb": [wrist_right_image, image_masks[2]],
         }
 
         if any(is_trivial_image(img, mask) for img, mask in images_for_check.values()) or (
