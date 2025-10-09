@@ -537,16 +537,15 @@ class SingleCoTDataset:
                     traj["observation"][self.spec.primary_image_key], axis=1
                 )  # [T, 1, H, W, C]
 
-                if self.use_wrist_image:
-                    traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-                        traj["observation"][self.spec.wrist_image_key], axis=1
-                    )  # [T, 1, H, W, C]
+                traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                    traj["observation"][self.spec.wrist_image_key], axis=1
+                )  # [T, 1, H, W, C]
 
-                    # Handle right wrist (for all datasets - bimanual and non-bimanual)
-                    if self.spec.wrist_image_right_key in traj["observation"]:
-                        traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                            traj["observation"][self.spec.wrist_image_right_key], axis=1
-                        )  # [T, 1, H, W, C]
+                # Handle right wrist (for all datasets - bimanual and non-bimanual)
+                if self.spec.wrist_image_right_key in traj["observation"]:
+                    traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                        traj["observation"][self.spec.wrist_image_right_key], axis=1
+                    )  # [T, 1, H, W, C]
 
                 # No prediction language action needed - empty padded tensor
                 empty_row = tf.fill([summation_steps], tf.constant("", dtype=tf.string))
@@ -576,16 +575,15 @@ class SingleCoTDataset:
             )  # [T, 2, H, W, C]
 
             # Wrist image: single frame only
-            if self.use_wrist_image:
-                traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-                    traj["observation"][self.spec.wrist_image_key], axis=1
-                )  # [T, 1, H, W, C]
+            traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                traj["observation"][self.spec.wrist_image_key], axis=1
+            )  # [T, 1, H, W, C]
 
-                # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
-                if self.spec.wrist_image_right_key in traj["observation"]:
-                    traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                        traj["observation"][self.spec.wrist_image_right_key], axis=1
-                    )  # [T, 1, H, W, C]
+            # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
+            if self.spec.wrist_image_right_key in traj["observation"]:
+                traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                    traj["observation"][self.spec.wrist_image_right_key], axis=1
+                )  # [T, 1, H, W, C]
 
             # Derive prediction language actions from raw_action, similar to language_actions
             # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps

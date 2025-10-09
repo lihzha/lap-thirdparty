@@ -272,8 +272,8 @@ def load_dataset_kwargs(
 
     # For bimanual datasets, also load wrist_right camera if available
     camera_views_to_load = load_camera_views
-    if is_bimanual and "wrist_right" in dataset_kwargs["image_obs_keys"]:
-        camera_views_to_load = tuple(set(load_camera_views) | {"wrist_right"})
+    # if is_bimanual and "wrist_right" in dataset_kwargs["image_obs_keys"]:
+    #     camera_views_to_load = tuple(set(load_camera_views) | {"wrist_right"})
 
     # # Adjust Loaded Camera Views
     # if len(missing_keys := (set(camera_views_to_load) - set(dataset_kwargs["image_obs_keys"]))) > 0:
@@ -281,8 +281,12 @@ def load_dataset_kwargs(
 
     # Filter
     dataset_kwargs["image_obs_keys"] = {
-        k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in camera_views_to_load
+        k: dataset_kwargs["image_obs_keys"][k] if k in camera_views_to_load else None for k in load_camera_views
     }
+
+    # dataset_kwargs["image_obs_keys"] = {
+    #     k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in camera_views_to_load
+    # }
     for k, v in dataset_kwargs["image_obs_keys"].items():
         if k == "primary":
             assert v is not None, f"primary image is required for {dataset_name}"
