@@ -1284,7 +1284,29 @@ def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 
 
 def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    return trajectory
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+            invert_gripper_actions(trajectory["action"][:-1, 6:7]),
+            trajectory["observation"]["state"][1:, 7:10] - trajectory["observation"]["state"][:-1, 7:10],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 10:13],
+                trajectory["observation"]["state"][:-1, 10:13],
+            ),
+            invert_gripper_actions(trajectory["action"][:-1, 13:14]),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = movement_actions
+
+    return traj_truncated
 
 
 # === Registry ===

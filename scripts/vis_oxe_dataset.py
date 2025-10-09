@@ -122,33 +122,6 @@ def _decode_reasoning_strings(obs, tokenizer) -> list[str]:
     return out
 
 
-def _parse_language_delta_cm(text: str) -> np.ndarray:
-    """Parse summed language action text -> net [right, forward, down] in cm."""
-    import re
-
-    totals = {"left": 0.0, "right": 0.0, "forward": 0.0, "backward": 0.0, "up": 0.0, "down": 0.0}
-    for part in filter(None, [p.strip() for p in text.split(" and ")]):
-        m = re.match(r"move\s+(\w+)\s+([-+]?\d*\.?\d+)\s*(\w+)", part)
-        if not m:
-            continue
-        direction = m.group(1).lower()
-        try:
-            value = float(m.group(2))
-        except Exception:
-            continue
-        unit = m.group(3).lower()
-        # Convert to cm
-        if unit.startswith("mm"):
-            value = value / 10.0
-        elif unit.startswith("m") and not unit.startswith("mm"):
-            value = value * 100.0
-        totals[direction] = totals.get(direction, 0.0) + value
-    right = totals["right"] - totals["left"]
-    forward = totals["forward"] - totals["backward"]
-    down = totals["down"] - totals["up"]
-    return np.array([right, forward, down], dtype=np.float32)
-
-
 def _ensure_color(img: np.ndarray | None) -> np.ndarray | None:
     if img is None:
         return None
