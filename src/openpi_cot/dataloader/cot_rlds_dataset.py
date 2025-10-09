@@ -291,7 +291,9 @@ class SingleCoTDataset:
         self.standalone = standalone
         self.skip_normalization = skip_normalization
         self.enable_prediction_training = enable_prediction_training
-        dataset_kwargs = load_dataset_kwargs(dataset_name, data_dir, load_camera_views=("primary", "wrist"))
+        dataset_kwargs = load_dataset_kwargs(
+            dataset_name, data_dir, load_camera_views=("primary", "wrist", "wrist_right")
+        )
 
         logging.info(f"Dataset kwargs: {dataset_kwargs}")
         self.control_frequency: int = int(dataset_kwargs["control_frequency"])  # constant for this dataset

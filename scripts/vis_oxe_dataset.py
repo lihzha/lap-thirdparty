@@ -107,10 +107,10 @@ def log_batch_sharding(batch):
 
 def _decode_reasoning_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the reasoning (language action) tokens per example."""
-    if obs.tokenized_prediction is None or obs.tokenized_prediction_reasoning_mask is None:
+    if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
         return []
     tokens = jax.device_get(obs.tokenized_prediction)
-    rmask = jax.device_get(obs.tokenized_prediction_reasoning_mask)
+    rmask = jax.device_get(obs.tokenized_prediction_langact_mask)
     out: list[str] = []
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]

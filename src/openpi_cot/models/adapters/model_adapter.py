@@ -39,17 +39,17 @@ class ExtendedModelType(str, Enum):
 class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
     images: dict[str, at.Float[ArrayT, "*b t h w c"]]
-    tokenized_reasoning_mask: at.Bool[ArrayT, "*b l"] | None = None
-    tokenized_numeric_mask: at.Bool[ArrayT, "*b l"] | None = None
-    example_mask: at.Bool[ArrayT, "*b"] | None = None
+    tokenized_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
+    crictical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
+    sample_mask: at.Bool[ArrayT, "*b"] | None = None
     camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
     # Tokenized prediction fields (prediction_prompt + prediction_language_action combined)
     tokenized_prediction: at.Int[ArrayT, "*b l"] | None = None
     tokenized_prediction_mask: at.Bool[ArrayT, "*b l"] | None = None
-    tokenized_prediction_reasoning_mask: at.Bool[ArrayT, "*b l"] | None = None
-    tokenized_prediction_numeric_mask: at.Bool[ArrayT, "*b l"] | None = None
+    tokenized_prediction_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
+    prediction_crictical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
@@ -82,16 +82,16 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
 
         return cls(
             **base_dict,
-            tokenized_reasoning_mask=getk("tokenized_reasoning_mask"),
-            tokenized_numeric_mask=getk("tokenized_numeric_mask"),
-            example_mask=getk("example_mask"),
+            tokenized_langact_mask=getk("tokenized_langact_mask"),
+            crictical_token_mask=getk("crictical_token_mask"),
+            sample_mask=getk("sample_mask"),
             camera_intrinsics=getk("camera_intrinsics"),
             camera_extrinsics=getk("camera_extrinsics"),
             cartesian_position_window=getk("cartesian_position_window"),
             tokenized_prediction=getk("tokenized_prediction"),
             tokenized_prediction_mask=getk("tokenized_prediction_mask"),
-            tokenized_prediction_reasoning_mask=getk("tokenized_prediction_reasoning_mask"),
-            tokenized_prediction_numeric_mask=getk("tokenized_prediction_numeric_mask"),
+            tokenized_prediction_langact_mask=getk("tokenized_prediction_langact_mask"),
+            prediction_crictical_token_mask=getk("prediction_crictical_token_mask"),
         )
 
 
@@ -183,14 +183,14 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
-        tokenized_reasoning_mask=observation.tokenized_reasoning_mask,
-        tokenized_numeric_mask=getattr(observation, "tokenized_numeric_mask", None),
-        example_mask=getattr(observation, "example_mask", None),
+        tokenized_langact_mask=observation.tokenized_langact_mask,
+        crictical_token_mask=getattr(observation, "crictical_token_mask", None),
+        sample_mask=getattr(observation, "sample_mask", None),
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),
         cartesian_position_window=getattr(observation, "cartesian_position_window", None),
         tokenized_prediction=getattr(observation, "tokenized_prediction", None),
         tokenized_prediction_mask=getattr(observation, "tokenized_prediction_mask", None),
-        tokenized_prediction_reasoning_mask=getattr(observation, "tokenized_prediction_reasoning_mask", None),
-        tokenized_prediction_numeric_mask=getattr(observation, "tokenized_prediction_numeric_mask", None),
+        tokenized_prediction_langact_mask=getattr(observation, "tokenized_prediction_langact_mask", None),
+        prediction_crictical_token_mask=getattr(observation, "prediction_crictical_token_mask", None),
     )

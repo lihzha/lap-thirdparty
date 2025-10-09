@@ -4,6 +4,7 @@ import re
 import numpy as np
 from openpi import transforms
 
+from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 from openpi_cot.policies.utils import parse_image
 
@@ -147,9 +148,6 @@ def reasoning_to_action(
     # Assemble [dx, dy, dz, ax, ay, az, grip]
     out = np.concatenate([v_m, axis_angle, np.array([grip_action], dtype=float)], axis=0)
     return out
-
-
-import numpy as np
 
 
 def _axis_angle_to_quat(w: np.ndarray) -> np.ndarray:
@@ -303,22 +301,14 @@ class LiberoInputs(transforms.DataTransformFn):
         # right wrist image below.
         base_image = parse_image(data["observation/image"])
         wrist_image = parse_image(data["observation/wrist_image"])
+        image = [base_image, wrist_image, np.zeros_like(base_image)]
+        image_mask = [np.True_, np.True_, np.True_ if self.model_type == ExtendedModelType.PI0_FAST else np.False_]
 
         # Create inputs dict. Do not change the keys in the dict below.
         inputs = {
             "state": data["observation/state"],
-            "image": {
-                "base_0_rgb": base_image,
-                "left_wrist_0_rgb": wrist_image,
-                # Pad any non-existent images with zero-arrays of the appropriate shape.
-                "right_wrist_0_rgb": np.zeros_like(base_image),
-            },
-            "image_mask": {
-                "base_0_rgb": np.True_,
-                "left_wrist_0_rgb": np.True_,
-                # We only mask padding images for pi0 model, not pi0-FAST. Do not change this for your own dataset.
-                "right_wrist_0_rgb": np.True_ if self.model_type == ExtendedModelType.PI0_FAST else np.False_,
-            },
+            "image": dict.fromkeys(IMAGE_KEYS, image),
+            "image_mask": dict.fromkeys(IMAGE_KEYS, image_mask),
         }
 
         # Pad actions to the model action dimension. Keep this for your own dataset.

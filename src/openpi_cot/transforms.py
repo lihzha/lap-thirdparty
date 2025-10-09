@@ -70,7 +70,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             return not any_nonzero
 
         is_idle = _is_idle_language_action(language_actions)
-        example_mask = not is_idle
+        sample_mask = not is_idle
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
@@ -79,10 +79,10 @@ class TokenizePromptAndReasoning(DataTransformFn):
             **data,
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
-            "tokenized_reasoning_mask": reasoning_mask,
+            "tokenized_langact_mask": reasoning_mask,
             # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
-            "tokenized_numeric_mask": numeric_mask,
-            "example_mask": np.asarray(example_mask, dtype=bool),
+            "crictical_token_mask": numeric_mask,
+            "sample_mask": np.asarray(sample_mask, dtype=bool),
         }
 
         # Additionally tokenize prediction if prediction_language_action is present
@@ -107,8 +107,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
                 # Add prediction-specific fields
                 result["tokenized_prediction"] = pred_tokens
                 result["tokenized_prediction_mask"] = pred_pad_mask
-                result["tokenized_prediction_reasoning_mask"] = pred_reasoning_mask
-                result["tokenized_prediction_numeric_mask"] = pred_numeric_mask
+                result["tokenized_prediction_langact_mask"] = pred_reasoning_mask
+                result["prediction_crictical_token_mask"] = pred_numeric_mask
 
         return result
 

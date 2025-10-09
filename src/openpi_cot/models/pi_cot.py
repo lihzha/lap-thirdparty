@@ -147,42 +147,26 @@ class PiCoT(_pi0.Pi0):
         for name in obs.images:
             image = obs.images[name]
 
-            # Check for time dimension: [b, t, h, w, c]
-            if image.ndim == 5:
-                b, t, h, w, c = image.shape
-                # Flatten: [b*t, h, w, c]
-                image_flat = image.reshape(b * t, h, w, c)
-                image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
-                # image_tokens: [b*t, num_patches, d]
+            b, t, h, w, c = image.shape
+            # Flatten: [b*t, h, w, c]
+            image_flat = image.reshape(b * t, h, w, c)
+            image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
+            # image_tokens: [b*t, num_patches, d]
 
-                num_patches = image_tokens.shape[1]
-                # Reshape: [b, t*num_patches, d]
-                image_tokens = image_tokens.reshape(b, t * num_patches, -1)
+            num_patches = image_tokens.shape[1]
+            # Reshape: [b, t*num_patches, d]
+            image_tokens = image_tokens.reshape(b, t * num_patches, -1)
 
-                tokens.append(image_tokens)
-                input_mask.append(
-                    einops.repeat(
-                        obs.image_masks[name],
-                        "b -> b s",
-                        s=t * num_patches,
-                    )
+            tokens.append(image_tokens)
+            input_mask.append(
+                einops.repeat(
+                    obs.image_masks[name],
+                    "b -> b s",
+                    s=t * num_patches,
                 )
-                # All image tokens attend to each other
-                _img_ar_masks += [False] * (t * num_patches)
-            else:
-                # Single frame: [b, h, w, c]
-                image_tokens, _ = self.PaliGemma.img(image, train=False)
-
-                tokens.append(image_tokens)
-                input_mask.append(
-                    einops.repeat(
-                        obs.image_masks[name],
-                        "b -> b s",
-                        s=image_tokens.shape[1],
-                    )
-                )
-                # image tokens attend to each other. broadcast to (B, S)
-                _img_ar_masks += [False] * image_tokens.shape[1]
+            )
+            # All image tokens attend to each other
+            _img_ar_masks += [False] * (t * num_patches)
 
         img_ar_mask = jnp.array(_img_ar_masks)
         img_ar_mask = einops.repeat(img_ar_mask, "s -> b s", b=tokens[0].shape[0])
@@ -193,7 +177,7 @@ class PiCoT(_pi0.Pi0):
             tokens.append(text_tokens)
             input_mask.append(obs.tokenized_prompt_mask)
             # full attention between image and language inputs. reasoning tokens casual attention.
-            text_ar_mask = obs.tokenized_reasoning_mask
+            text_ar_mask = obs.tokenized_langact_mask
 
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
@@ -231,16 +215,16 @@ class PiCoT(_pi0.Pi0):
 
             # Predict next tokens over the reasoning span
             shift_labels = observation.tokenized_prompt[:, 1:]
-            max_len = observation.tokenized_reasoning_mask.shape[1]
+            max_len = observation.tokenized_langact_mask.shape[1]
             shift_tokens = prefix_out[:, -max_len:-1, :]
             shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
 
             reasoning_and_pad_mask = jnp.logical_and(
-                observation.tokenized_reasoning_mask[:, 1:],
+                observation.tokenized_langact_mask[:, 1:],
                 observation.tokenized_prompt_mask[:, 1:],
             )
 
-            ex_mask = jnp.asarray(observation.example_mask)[..., None]
+            ex_mask = jnp.asarray(observation.sample_mask)[..., None]
             token_mask = reasoning_and_pad_mask * ex_mask
 
             lang_loss = cross_entropy_loss(
@@ -261,7 +245,7 @@ class PiCoT(_pi0.Pi0):
             token_accuracy = masked_correct.sum() / num_tokens
 
             # Compute critical token accuracy
-            critical_token_mask = observation.tokenized_numeric_mask[:, 1:] * ex_mask
+            critical_token_mask = observation.crictical_token_mask[:, 1:] * ex_mask
             critical_correct = correct * critical_token_mask
             num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
             critical_token_accuracy = critical_correct.sum() / num_critical_tokens
@@ -277,18 +261,18 @@ class PiCoT(_pi0.Pi0):
 
             # Predict next tokens over the prediction reasoning span
             shift_labels_pred = observation.tokenized_prediction[:, 1:]
-            max_len_pred = observation.tokenized_prediction_reasoning_mask.shape[1]
+            max_len_pred = observation.tokenized_prediction_langact_mask.shape[1]
             shift_tokens_pred = prefix_out_pred[:, -max_len_pred:-1, :]
             shift_logits_pred = self.PaliGemma.llm(shift_tokens_pred, method="decode")
 
             prediction_and_pad_mask = jnp.logical_and(
-                observation.tokenized_prediction_reasoning_mask[:, 1:],
+                observation.tokenized_prediction_langact_mask[:, 1:],
                 observation.tokenized_prediction_mask[:, 1:],
             )
 
             ex_mask_pred = (
-                jnp.asarray(observation.example_mask)[..., None]
-                if observation.example_mask is not None
+                jnp.asarray(observation.sample_mask)[..., None]
+                if observation.sample_mask is not None
                 else jnp.ones_like(prediction_and_pad_mask[:, :1])
             )
             token_mask_pred = prediction_and_pad_mask * ex_mask_pred
