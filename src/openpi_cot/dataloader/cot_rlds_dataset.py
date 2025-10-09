@@ -345,9 +345,6 @@ class SingleCoTDataset:
             action_horizon=action_horizon,
         )
 
-        ds = dataset_size(self.dataset)
-        logging.info(f"Dataset size after filtering: {ds} episodes")
-
         self.apply_repack_transforms()
 
         # self.dataset = self.dataset.shuffle(60_000, seed=self.seed)
@@ -355,10 +352,6 @@ class SingleCoTDataset:
         self.apply_flatten()
 
         self.apply_frame_filters()
-
-        ds = dataset_size(self.dataset)
-        logging.info(f"Dataset size after flattening: {ds} samples")
-        breakpoint()
 
         if standalone:
             # Apply common shuffling/take/cache behavior
