@@ -1208,7 +1208,8 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 # Skip right wrist if not bimanual
                 if new == "wrist_right" and not self.is_bimanual:
                     continue
-                if old is None:
+                # Check if key exists in observation dict
+                if old is None or old not in old_obs:
                     new_obs[img_key] = tf.repeat("", traj_len)  # padding
                 else:
                     new_obs[img_key] = old_obs[old]
