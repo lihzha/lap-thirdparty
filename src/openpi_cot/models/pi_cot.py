@@ -82,7 +82,7 @@ class PiCoT(_pi0.Pi0):
         self.aug_wrist_image = config.aug_wrist_image
         # Loss/control knobs
         self.enable_action_training = bool(getattr(config, "enable_action_training", False))
-        self.enable_reasoning_training = bool(getattr(config, "enable_reasoning_training", True))
+        self.enable_langact_training = bool(getattr(config, "enable_langact_training", True))
         self.enable_prediction_training = bool(getattr(config, "enable_prediction_training", False))
         self.language_loss_weight = float(getattr(config, "language_loss_weight", 1.0))
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
@@ -132,22 +132,35 @@ class PiCoT(_pi0.Pi0):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
-    @at.typecheck
-    def embed_prefix(
-        self, obs: CoTObservation
+    def _embed_images(
+        self, obs: CoTObservation, num_frames: int | None = None
     ) -> tuple[
         at.Float[at.Array, "b s emb"],
         at.Bool[at.Array, "b s"],
         at.Bool[at.Array, "b s"],
     ]:
+        """Embed images, optionally limiting to first num_frames.
+
+        Args:
+            obs: Observation containing images with shape [b, t, h, w, c]
+            num_frames: If specified, only use first num_frames. If None, use all frames.
+
+        Returns:
+            (image_tokens, image_mask, image_ar_mask)
+        """
         input_mask = []
         tokens = []
         _img_ar_masks = []
-        # embed images
+
         for name in obs.images:
             image = obs.images[name]
-
             b, t, h, w, c = image.shape
+
+            # Limit to num_frames if specified
+            if num_frames is not None:
+                image = image[:, :num_frames]
+                t = num_frames
+
             # Flatten: [b*t, h, w, c]
             image_flat = image.reshape(b * t, h, w, c)
             image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
@@ -168,20 +181,56 @@ class PiCoT(_pi0.Pi0):
             # All image tokens attend to each other
             _img_ar_masks += [False] * (t * num_patches)
 
+        tokens = jnp.concatenate(tokens, axis=1)
+        input_mask = jnp.concatenate(input_mask, axis=1)
         img_ar_mask = jnp.array(_img_ar_masks)
-        img_ar_mask = einops.repeat(img_ar_mask, "s -> b s", b=tokens[0].shape[0])
+        img_ar_mask = einops.repeat(img_ar_mask, "s -> b s", b=tokens.shape[0])
+
+        return tokens, input_mask, img_ar_mask
+
+    def _embed_text(
+        self, tokenized_text, text_mask, text_ar_mask
+    ) -> tuple[
+        at.Float[at.Array, "b s emb"],
+        at.Bool[at.Array, "b s"],
+        at.Bool[at.Array, "b s"],
+    ]:
+        """Embed tokenized text."""
+        text_tokens = self.PaliGemma.llm(tokenized_text, method="embed")
+        return text_tokens, text_mask, text_ar_mask
+
+    @at.typecheck
+    def embed_prefix(
+        self, obs: CoTObservation, num_frames: int | None = None
+    ) -> tuple[
+        at.Float[at.Array, "b s emb"],
+        at.Bool[at.Array, "b s"],
+        at.Bool[at.Array, "b s"],
+    ]:
+        """Embed images and text for the prefix.
+
+        Args:
+            obs: Observation containing images and tokenized text
+            num_frames: If specified, only use first num_frames of images. If None, use all frames.
+
+        Returns:
+            (prefix_tokens, prefix_mask, prefix_ar_mask)
+        """
+        img_tokens, img_mask, img_ar_mask = self._embed_images(obs, num_frames)
 
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:
-            text_tokens = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
-            tokens.append(text_tokens)
-            input_mask.append(obs.tokenized_prompt_mask)
-            # full attention between image and language inputs. reasoning tokens casual attention.
-            text_ar_mask = obs.tokenized_langact_mask
+            text_tokens, text_mask, text_ar_mask = self._embed_text(
+                obs.tokenized_prompt,
+                obs.tokenized_prompt_mask,
+                obs.tokenized_langact_mask,
+            )
+            tokens = jnp.concatenate([img_tokens, text_tokens], axis=1)
+            input_mask = jnp.concatenate([img_mask, text_mask], axis=1)
+            ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
+        else:
+            tokens, input_mask, ar_mask = img_tokens, img_mask, img_ar_mask
 
-        tokens = jnp.concatenate(tokens, axis=1)
-        input_mask = jnp.concatenate(input_mask, axis=1)
-        ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
         return tokens, input_mask, ar_mask
 
     @override
@@ -199,14 +248,42 @@ class PiCoT(_pi0.Pi0):
             preprocess_rng, observation, train=train, aug_wrist_image=self.aug_wrist_image
         )
 
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        # Optimization: if prediction training is enabled, encode all frames once and reuse
+        if self.enable_prediction_training and observation.tokenized_prediction is not None:
+            # Encode all frames once
+            img_tokens_all, img_mask_all, img_ar_mask_all = self._embed_images(observation, num_frames=None)
+
+            # Get number of patches per frame per image
+            # Assuming all images have the same number of frames (should be true)
+            sample_image = next(iter(observation.images.values()))
+            num_frames_total = sample_image.shape[1]  # t dimension
+            num_patches = img_tokens_all.shape[1] // (len(observation.images) * num_frames_total)
+            tokens_per_frame = len(observation.images) * num_patches
+
+            # Extract first frame tokens for langact/action losses
+            img_tokens_first = img_tokens_all[:, :tokens_per_frame]
+            img_mask_first = img_mask_all[:, :tokens_per_frame]
+            img_ar_mask_first = img_ar_mask_all[:, :tokens_per_frame]
+        else:
+            # Only encode first frame
+            img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
+
+        # Build prefix for langact/action losses (first frame + regular text)
+        text_tokens, text_mask, text_ar_mask = self._embed_text(
+            observation.tokenized_prompt,
+            observation.tokenized_prompt_mask,
+            observation.tokenized_langact_mask,
+        )
+        prefix_tokens = jnp.concatenate([img_tokens_first, text_tokens], axis=1)
+        prefix_mask = jnp.concatenate([img_mask_first, text_mask], axis=1)
+        prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
 
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
         critical_token_accuracy = jnp.array(0.0)
 
         # Cross-entropy (language/reasoning) loss
-        if self.enable_reasoning_training:
+        if self.enable_langact_training:
             attn_mask_lang = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
             positions_lang = jnp.cumsum(prefix_mask, axis=1) - 1
             (prefix_out, _), _ = self.PaliGemma.llm(
@@ -219,13 +296,13 @@ class PiCoT(_pi0.Pi0):
             shift_tokens = prefix_out[:, -max_len:-1, :]
             shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
 
-            reasoning_and_pad_mask = jnp.logical_and(
+            langact_and_pad_mask = jnp.logical_and(
                 observation.tokenized_langact_mask[:, 1:],
                 observation.tokenized_prompt_mask[:, 1:],
             )
 
             ex_mask = jnp.asarray(observation.sample_mask)[..., None]
-            token_mask = reasoning_and_pad_mask * ex_mask
+            token_mask = langact_and_pad_mask * ex_mask
 
             lang_loss = cross_entropy_loss(
                 shift_logits,
@@ -250,16 +327,27 @@ class PiCoT(_pi0.Pi0):
             num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
             critical_token_accuracy = critical_correct.sum() / num_critical_tokens
 
-        # Prediction (cross-entropy) loss - independent of reasoning loss
+        # Prediction (cross-entropy) loss - independent of langact loss
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
-            # Use prediction-specific tokens and masks
-            pred_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
-            pred_positions = jnp.cumsum(prefix_mask, axis=1) - 1
+            # Reuse already-encoded image tokens (img_tokens_all was computed above)
+            # Create separate prefix for prediction: all frames + prediction text
+            text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
+                observation.tokenized_prediction,
+                observation.tokenized_prediction_mask,
+                observation.tokenized_prediction_langact_mask,
+            )
+            prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
+            prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
+            prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
+
+            # Use prediction-specific prefix
+            pred_attn_mask = _pi0.make_attn_mask(prefix_mask_pred, prefix_ar_mask_pred)
+            pred_positions = jnp.cumsum(prefix_mask_pred, axis=1) - 1
             (prefix_out_pred, _), _ = self.PaliGemma.llm(
-                [prefix_tokens, None], mask=pred_attn_mask, positions=pred_positions
+                [prefix_tokens_pred, None], mask=pred_attn_mask, positions=pred_positions
             )
 
-            # Predict next tokens over the prediction reasoning span
+            # Predict next tokens over the prediction langact span
             shift_labels_pred = observation.tokenized_prediction[:, 1:]
             max_len_pred = observation.tokenized_prediction_langact_mask.shape[1]
             shift_tokens_pred = prefix_out_pred[:, -max_len_pred:-1, :]
@@ -286,7 +374,6 @@ class PiCoT(_pi0.Pi0):
                 per_example=True,
             )
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
-            breakpoint()
 
         # Diffusion (actions) loss
         if self.enable_action_training:
@@ -375,7 +462,8 @@ class PiCoT(_pi0.Pi0):
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
         observation = preprocess_observation(None, observation, train=False, aug_wrist_image=self.aug_wrist_image)
-        p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation)  # (B,Tp,D) + (B,Tp)
+        # Inference: only use first frame
+        p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation, num_frames=1)  # (B,Tp,D) + (B,Tp)
         b, tp, d = *p_tokens.shape[:2], p_tokens.shape[-1]
         gen_len = observation.tokenized_prompt.shape[1]
         max_len = gen_len + tp

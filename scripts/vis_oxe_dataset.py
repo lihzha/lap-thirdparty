@@ -105,8 +105,8 @@ def log_batch_sharding(batch):
         logging.info("Batch sharding summary:\n" + "\n".join(lines))
 
 
-def _decode_reasoning_strings(obs, tokenizer) -> list[str]:
-    """Extract and decode the reasoning (language action) tokens per example."""
+def _decode_langact_strings(obs, tokenizer) -> list[str]:
+    """Extract and decode the langact (language action) tokens per example."""
     if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
         return []
     tokens = jax.device_get(obs.tokenized_prediction)
@@ -372,8 +372,8 @@ def main(config: _config.TrainConfig):
     for j in range(10):
         # Visualize language-action projection per example
         obs = batch[0]
-        # Decode reasoning strings
-        reasoning_texts = _decode_reasoning_strings(obs, tok)
+        # Decode langact strings
+        langact_texts = _decode_langact_strings(obs, tok)
         # Prepare start/end images for the first camera view
         first_cam_key = next(iter(obs.images))
         imgs = obs.images[first_cam_key]
@@ -385,7 +385,7 @@ def main(config: _config.TrainConfig):
         for i in range(B):
             start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
             end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-            la_text = reasoning_texts[i] if i < len(reasoning_texts) else ""
+            la_text = langact_texts[i] if i < len(langact_texts) else ""
             logging.info(f"la_text: {la_text}")
             col1 = np.copy(_ensure_color(start_u8))
             col2 = np.copy(_ensure_color(end_u8))

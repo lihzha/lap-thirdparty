@@ -106,7 +106,7 @@ def log_batch_sharding(batch):
         logging.info("Batch sharding summary:\n" + "\n".join(lines))
 
 
-def _decode_reasoning_strings(obs, tokenizer) -> list[str]:
+def _decode_langact_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the reasoning (language action) tokens per example."""
     if obs.tokenized_prompt is None or obs.tokenized_langact_mask is None:
         return []
@@ -436,8 +436,8 @@ def main(config: _config.TrainConfig):
     for j in range(10):
         # Visualize language-action projection per example
         obs = batch[0]
-        # Decode reasoning strings
-        reasoning_texts = _decode_reasoning_strings(obs, tok)
+        # Decode langact strings
+        langact_texts = _decode_langact_strings(obs, tok)
         # Prepare start/end images for the first camera view
         first_cam_key = next(iter(obs.images))
         imgs = obs.images[first_cam_key]
@@ -479,8 +479,8 @@ def main(config: _config.TrainConfig):
             )
             # Predicted end via language action delta in camera frame
             pred_end_xy = None
-            if reasoning_texts:
-                v_cm = _parse_language_delta_cm(reasoning_texts[i] if i < len(reasoning_texts) else "")
+            if langact_texts:
+                v_cm = _parse_language_delta_cm(langact_texts[i] if i < len(langact_texts) else "")
                 t_cam = _invert_camera_axis_map(v_cm)
                 # Approximate base-frame delta by inverting camera->base rotation
                 if extr is not None and start_xyz is not None:
@@ -489,7 +489,7 @@ def main(config: _config.TrainConfig):
                     pred_xyz = start_xyz + t_base
                     pred_end_xy = _project_point(pred_xyz, extr, intr, (H, W))
             # Build three-column row and annotate text overlay
-            la_text = reasoning_texts[i] if i < len(reasoning_texts) else ""
+            la_text = langact_texts[i] if i < len(langact_texts) else ""
             col1 = _draw_dot(np.copy(_ensure_color(start_u8)), start_xy, (0, 255, 255))  # GT start
             if pred_end_xy is not None:
                 col1 = _draw_dot(col1, pred_end_xy, (0, 0, 255))  # Pred end on start frame for side-by-side comparison

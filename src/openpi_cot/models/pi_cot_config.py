@@ -42,7 +42,7 @@ class PiCoTConfig(_model.BaseModelConfig):
     # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
     enable_action_training: bool = False
     # When True, enables training on language (reasoning) tokens with cross-entropy.
-    enable_reasoning_training: bool = True
+    enable_langact_training: bool = True
     # When True, enables prediction loss (predicting movement between current and future frame).
     enable_prediction_training: bool = False
     # Scalar weights to combine losses when multiple are enabled
