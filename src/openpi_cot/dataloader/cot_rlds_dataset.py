@@ -994,7 +994,7 @@ class DroidCoTDataset(SingleCoTDataset):
             _return_dict["passes_filter"] = passes_filter
 
             if self.use_wrist_image:
-                _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"][self.spec.wrist_image_key]
+                _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"]["wrist_image_left"]
                 # Always add right wrist image for consistency (zeros for DROID which is single-arm)
                 _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
 
