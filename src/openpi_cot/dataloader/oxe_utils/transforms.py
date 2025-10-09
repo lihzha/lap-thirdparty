@@ -1043,7 +1043,7 @@ def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     trajectory["action"] = tf.concat(
         (
             trajectory["action"],
-            invert_gripper_actions(trajectory["observation"]["gripper_state"]),
+            invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]),
         ),
         axis=-1,
     )
