@@ -189,6 +189,18 @@ def print_memory_usage(label):
     logging.info(f"[{label}] Memory usage: {mem:.2f} MB")
 
 
+def create_encoded_placeholder_image():
+    """Create an encoded placeholder image (1x1 black pixel) that can be decoded.
+
+    This creates a minimal encoded PNG that will properly decode through the image
+    decoding pipeline and get resized to the target resolution.
+    """
+    # Create a minimal 1x1 black pixel image and encode it as PNG
+    black_pixel = tf.constant([[[0, 0, 0]]], dtype=tf.uint8)  # [1, 1, 3]
+    encoded = tf.io.encode_png(black_pixel)
+    return encoded
+
+
 def compute_window_indices(sequence_length: tf.Tensor, window_size: int) -> tf.Tensor:
     """Return [T, window] indices for gathering sliding windows with end padding.
 
@@ -1007,9 +1019,10 @@ class DroidCoTDataset(SingleCoTDataset):
 
             if self.use_wrist_image:
                 _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"]["wrist_image_left"]
-                # Always add right wrist image for consistency (empty strings for DROID which is single-arm)
-                # Empty strings will be decoded to zero images later, matching the decoded image shape
-                _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
+                # Always add right wrist image for consistency (encoded placeholder for DROID which is single-arm)
+                # Use encoded 1x1 black image that will decode and resize properly to match other images
+                placeholder = create_encoded_placeholder_image()
+                _return_dict["observation"][self.spec.wrist_image_right_key] = tf.fill([traj_len], placeholder)
 
             return _return_dict
 
@@ -1226,14 +1239,17 @@ class SingleOXECoTDataset(SingleCoTDataset):
                     raise ValueError(f"Unknown image key: {new}")
                 # Check if key exists in observation dict
                 if old is None or old not in old_obs:
-                    new_obs[img_key] = tf.repeat("", traj_len)  # padding
+                    # Use encoded 1x1 black image that will decode and resize properly
+                    placeholder = create_encoded_placeholder_image()
+                    new_obs[img_key] = tf.fill([traj_len], placeholder)
                 else:
                     new_obs[img_key] = old_obs[old]
 
-            # Always add right wrist image for consistency (empty strings for non-bimanual)
-            # Empty strings will be decoded to zero images later, matching the decoded image shape
+            # Always add right wrist image for consistency (encoded placeholder for non-bimanual)
+            # Use encoded 1x1 black image that will decode and resize properly to match other images
             if self.spec.wrist_image_right_key not in new_obs and self.use_wrist_image:
-                new_obs[self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
+                placeholder = create_encoded_placeholder_image()
+                new_obs[self.spec.wrist_image_right_key] = tf.fill([traj_len], placeholder)
 
             if self.state_obs_keys:
                 # Note: instead of padding with zeros, we drop the key if it is None
