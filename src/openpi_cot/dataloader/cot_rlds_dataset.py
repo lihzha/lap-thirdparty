@@ -1007,11 +1007,9 @@ class DroidCoTDataset(SingleCoTDataset):
 
             if self.use_wrist_image:
                 _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"]["wrist_image_left"]
-                # Always add right wrist image for consistency (zeros for DROID which is single-arm)
-                # Match the shape of the wrist image (and by extension, base_0_rgb)
-                _return_dict["observation"][self.spec.wrist_image_right_key] = tf.zeros_like(
-                    _return_dict["observation"][self.spec.wrist_image_key]
-                )
+                # Always add right wrist image for consistency (empty strings for DROID which is single-arm)
+                # Empty strings will be decoded to zero images later, matching the decoded image shape
+                _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
 
             return _return_dict
 
@@ -1232,16 +1230,10 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 else:
                     new_obs[img_key] = old_obs[old]
 
-            # Always add right wrist image for consistency (zeros for non-bimanual)
+            # Always add right wrist image for consistency (empty strings for non-bimanual)
+            # Empty strings will be decoded to zero images later, matching the decoded image shape
             if self.spec.wrist_image_right_key not in new_obs and self.use_wrist_image:
-                # Match the shape of the primary image
-                if self.spec.primary_image_key in new_obs:
-                    # If primary image exists, match its shape (typically [T] for encoded strings)
-                    primary_shape = tf.shape(new_obs[self.spec.primary_image_key])
-                    new_obs[self.spec.wrist_image_right_key] = tf.fill(primary_shape, tf.constant("", dtype=tf.string))
-                else:
-                    # Fallback to traj_len if primary not yet populated
-                    new_obs[self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
+                new_obs[self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
 
             if self.state_obs_keys:
                 # Note: instead of padding with zeros, we drop the key if it is None
