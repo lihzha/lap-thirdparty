@@ -1,14 +1,11 @@
 import dataclasses
-import logging
 
 import numpy as np
 from openpi import transforms as upstream_transforms
-import wandb
 
 from openpi_cot.dataloader.helpers import ActionEncoding
 from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
-from openpi_cot.policies.utils import is_trivial_image
 from openpi_cot.policies.utils import maybe_parse_serialized_tensor_to_ndarray
 from openpi_cot.policies.utils import parse_image
 from openpi_cot.policies.utils import sum_language_actions
@@ -92,103 +89,43 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             object.__setattr__(self, "language_action_config", config)
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
+        assert self.model_type == ExtendedModelType.PI_COT
         assert "observation" in data
         assert "exterior_image_1_left" in data["observation"]
-
-        base_image_raw = data["observation"]["exterior_image_1_left"]
-
-        # Check for time dimension: [T, H, W, C] or [H, W, C]
-        has_time_dim = len(base_image_raw.shape) == 4
-
-        if has_time_dim:
-            # Parse each frame: shape [T, H, W, C]
-            base_image = np.stack([parse_image(base_image_raw[i]) for i in range(base_image_raw.shape[0])])
-        else:
-            base_image = parse_image(base_image_raw)
-
+        base_image = parse_image(data["observation"]["exterior_image_1_left"])
         if base_image is None:
             raise ValueError("Base image missing from observation")
-        if "wrist_image_left" in data["observation"]:
-            wrist_raw = data["observation"]["wrist_image_left"]
-            # Wrist image: always single frame (kept as [1, H, W, C] or [H, W, C])
-            if len(wrist_raw.shape) == 4:
-                wrist_image = parse_image(wrist_raw[0])
-            else:
-                wrist_image = parse_image(wrist_raw)
+        base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
+        images = [base_image]
+        image_masks = [base_image_mask]
 
-            if np.all(wrist_image == 0.0):
-                # Create zeros with matching shape to base_image first frame
-                if has_time_dim:
-                    wrist_image = np.zeros_like(base_image[0])
-                else:
+        for k in ("wrist_image_left", "wrist_image_right"):
+            if k in data["observation"]:
+                wrist_image = parse_image(data["observation"][k])
+                if np.all(wrist_image == 0.0):
                     wrist_image = np.zeros_like(base_image)
-                wrist_image_mask = np.False_
-            else:
-                wrist_image_mask = np.True_
-        else:
-            # Create zeros with matching shape to base_image first frame
-            if has_time_dim:
-                wrist_image = np.zeros_like(base_image[0])
+                    wrist_image_mask = np.False_
+                else:
+                    wrist_image_mask = np.True_
             else:
                 wrist_image = np.zeros_like(base_image)
-            wrist_image_mask = np.False_
-
-        if np.all(base_image == 0):
-            base_image_mask = np.False_
-        else:
-            base_image_mask = np.True_
-
-        # Handle right wrist image for bimanual datasets
-        if "wrist_image_right" in data["observation"]:
-            wrist_right_raw = data["observation"]["wrist_image_right"]
-            # Wrist right image: always single frame (kept as [1, H, W, C] or [H, W, C])
-            if len(wrist_right_raw.shape) == 4:
-                wrist_right_image = parse_image(wrist_right_raw[0])
-            else:
-                wrist_right_image = parse_image(wrist_right_raw)
-
-            if np.all(wrist_right_image == 0.0):
-                # Create zeros with matching shape to base_image first frame
-                if has_time_dim:
-                    wrist_right_image = np.zeros_like(base_image[0])
-                else:
-                    wrist_right_image = np.zeros_like(base_image)
-                wrist_right_image_mask = np.False_
-            else:
-                wrist_right_image_mask = np.True_
-        else:
-            # Create zeros with matching shape to base_image first frame
-            if has_time_dim:
-                wrist_right_image = np.zeros_like(base_image[0])
-            else:
-                wrist_right_image = np.zeros_like(base_image)
-            wrist_right_image_mask = np.False_
-
-        # Optional dropout: randomly mask out wrist image
-        if self.wrist_image_dropout_prob > 0.0:
-            if np.random.rand() < float(self.wrist_image_dropout_prob):
                 wrist_image_mask = np.False_
 
-        assert self.model_type == ExtendedModelType.PI_COT
-        names = IMAGE_KEYS
+            # Optional dropout: randomly mask out wrist image
+            if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
+                wrist_image_mask = np.False_
 
-        images = (
-            base_image,
-            wrist_image,
-            wrist_right_image,
-        )
-        image_masks = (
-            base_image_mask,
-            wrist_image_mask,
-            wrist_right_image_mask,
-        )
+            images.append(wrist_image)
+            image_masks.append(wrist_image_mask)
+
         inputs = {
             "state": data["observation"]["state"],
-            "image": dict(zip(names, images, strict=True)),
-            "image_mask": dict(zip(names, image_masks, strict=True)),
+            "image": dict(zip(IMAGE_KEYS, images, strict=True)),
+            "image_mask": dict(zip(IMAGE_KEYS, image_masks, strict=True)),
         }
 
         prompt_val = data.get("prompt")
+        breakpoint()
         prompt_str = None
         if prompt_val is not None:
             if isinstance(prompt_val, bytes):
@@ -207,30 +144,30 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
 
-        images_for_check = {
-            "base_0_rgb": [base_image, image_masks[0]],
-            "left_wrist_0_rgb": [wrist_image, image_masks[1]],
-            "right_wrist_0_rgb": [wrist_right_image, image_masks[2]],
-        }
+        # images_for_check = {
+        #     "base_0_rgb": [base_image, image_masks[0]],
+        #     "left_wrist_0_rgb": [wrist_image, image_masks[1]],
+        #     "right_wrist_0_rgb": [wrist_right_image, image_masks[2]],
+        # }
 
-        if any(is_trivial_image(img, mask) for img, mask in images_for_check.values()) or (
-            prompt_str is None or prompt_str.strip() == ""
-        ):
-            log_payload = {
-                "policy/anomaly_base": wandb.Image(
-                    base_image, caption=f"Dataset: {data['dataset_name'].decode('utf-8')}, prompt: {prompt_str}"
-                )
-                if base_image is not None
-                else None,
-                "policy/anomaly_wrist": wandb.Image(
-                    wrist_image,
-                    caption=f"Dataset: {data['dataset_name'].decode('utf-8')}, language actions: {inputs['language_actions']}",
-                )
-                if wrist_image is not None
-                else None,
-            }
-            wandb.log({k: v for k, v in log_payload.items() if v is not None})
-            logging.warning("Invalid policy inputs: trivial image or missing prompt")
+        # if any(is_trivial_image(img, mask) for img, mask in images_for_check.values()) or (
+        #     prompt_str is None or prompt_str.strip() == ""
+        # ):
+        #     log_payload = {
+        #         "policy/anomaly_base": wandb.Image(
+        #             base_image, caption=f"Dataset: {data['dataset_name'].decode('utf-8')}, prompt: {prompt_str}"
+        #         )
+        #         if base_image is not None
+        #         else None,
+        #         "policy/anomaly_wrist": wandb.Image(
+        #             wrist_image,
+        #             caption=f"Dataset: {data['dataset_name'].decode('utf-8')}, language actions: {inputs['language_actions']}",
+        #         )
+        #         if wrist_image is not None
+        #         else None,
+        #     }
+        #     wandb.log({k: v for k, v in log_payload.items() if v is not None})
+        #     logging.warning("Invalid policy inputs: trivial image or missing prompt")
 
         return inputs
 

@@ -25,8 +25,10 @@ def parse_image(image) -> np.ndarray:
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
+    if image.shape[0] == 3 and len(image.shape) == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    if image.shape[1] == 3 and len(image.shape) == 4:
+        image = einops.rearrange(image, "t c h w -> t h w c")
     return image
 
 
@@ -187,7 +189,7 @@ def summarize_bimanual_numeric_actions(arr_like, sum_decimal: str, include_rotat
 
     # Split into left and right arms
     left_actions = arr[..., :7]  # [x, y, z, r, p, y, gripper]
-    right_actions = np.concatenate([arr[..., 7:13], arr[..., 13:14]], axis=-1)  # [x, y, z, r, p, y, gripper]
+    right_actions = arr[..., 7:14]  # [x, y, z, r, p, y, gripper]
 
     # Summarize each arm separately
     left_summary = summarize_numeric_actions(left_actions, sum_decimal, include_rotation)

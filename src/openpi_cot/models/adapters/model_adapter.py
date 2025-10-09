@@ -56,17 +56,9 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         # Build the base Observation first (handles images, masks, dtype fixes, etc.)
         data_dict = dict(data)
 
-        # Check if images have time dimension (shape will be [B, T, H, W, C])
-        image_data = data_dict["image"]
-        sample_image = next(iter(image_data.values()))
-        has_time_dim = sample_image.ndim == 5  # [B, T, H, W, C]
-
-        if has_time_dim:
-            # For base Observation, use first frame only
-            data_dict_downsampled = copy.deepcopy(data_dict)
-            data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
-        else:
-            data_dict_downsampled = data_dict
+        # For base Observation, use first frame only
+        data_dict_downsampled = copy.deepcopy(data_dict)
+        data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
 
         base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict_downsampled)
 
@@ -125,89 +117,52 @@ def preprocess_observation(
     for key in image_keys:
         image = observation.images[key]
 
-        # Detect time dimension: [b, t, h, w, c] vs [b, h, w, c]
-        has_time_dim = image.ndim == 5
+        b, t, h, w, c = image.shape
 
-        if has_time_dim:
-            b, t, h, w, c = image.shape
+        # Resize if needed (before augmentation)
+        if (h, w) != image_resolution:
+            logger.info(f"Resizing image {key} from {(h, w)} to {image_resolution}")
+            # Process each frame
+            frames_resized = []
+            for i in range(t):
+                frame_resized = image_tools.resize_with_pad(image[:, i], *image_resolution)
+                frames_resized.append(frame_resized)
+            image = jnp.stack(frames_resized, axis=1)  # [b, t, h', w', c]
 
-            # Resize if needed (before augmentation)
-            if (h, w) != image_resolution:
-                logger.info(f"Resizing image {key} from {(h, w)} to {image_resolution}")
-                # Process each frame
-                frames_resized = []
-                for i in range(t):
-                    frame_resized = image_tools.resize_with_pad(image[:, i], *image_resolution)
-                    frames_resized.append(frame_resized)
-                image = jnp.stack(frames_resized, axis=1)  # [b, t, h', w', c]
+        if train:
+            # Augmentation: apply to each frame independently
+            # Flatten: [b*t, h, w, c]
+            h_new, w_new = image_resolution
+            image_flat = image.reshape(b * t, h_new, w_new, c)
 
-            if train:
-                # Augmentation: apply to each frame independently
-                # Flatten: [b*t, h, w, c]
-                h_new, w_new = image_resolution
-                image_flat = image.reshape(b * t, h_new, w_new, c)
+            # Convert to [0, 1]
+            image_flat = image_flat / 2.0 + 0.5
 
-                # Convert to [0, 1]
-                image_flat = image_flat / 2.0 + 0.5
-
-                # Build transforms
-                transforms = []
-                if "wrist" in key and aug_wrist_image:
-                    transforms += [
-                        augmax.RandomCrop(int(w_new * 0.95), int(h_new * 0.95)),
-                        augmax.Resize(w_new, h_new),
-                        augmax.Rotate((-5, 5)),
-                    ]
-                else:
-                    transforms += [
-                        augmax.RandomCrop(int(w_new * 0.95), int(h_new * 0.95)),
-                        augmax.Resize(w_new, h_new),
-                        augmax.Rotate((-5, 5)),
-                    ]
-                transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
-
-                # Apply augmentation
-                sub_rngs = jax.random.split(rng, b * t)
-                image_flat = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image_flat)
-
-                # Back to [-1, 1]
-                image_flat = image_flat * 2.0 - 1.0
-
-                # Reshape: [b, t, h', w', c]
-                image = image_flat.reshape(b, t, h_new, w_new, c)
-        else:
-            # Single frame: existing code
-            if image.shape[1:3] != image_resolution:
-                logger.info(f"Resizing image {key} from {image.shape[1:3]} to {image_resolution}")
-                image = image_tools.resize_with_pad(image, *image_resolution)
-
-            if train:
-                # Convert from [-1, 1] to [0, 1] for augmax.
-                image = image / 2.0 + 0.5
-
-                transforms = []
-                if "wrist" in key and aug_wrist_image:
-                    height, width = image.shape[1:3]
-                    transforms += [
-                        augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
-                        augmax.Resize(width, height),
-                        augmax.Rotate((-5, 5)),
-                    ]
-                else:
-                    height, width = image.shape[1:3]
-                    transforms += [
-                        augmax.RandomCrop(int(width * 0.95), int(height * 0.95)),
-                        augmax.Resize(width, height),
-                        augmax.Rotate((-5, 5)),
-                    ]
+            # Build transforms
+            transforms = []
+            if "wrist" in key and aug_wrist_image:
                 transforms += [
-                    augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5),
+                    augmax.RandomCrop(int(w_new * 0.95), int(h_new * 0.95)),
+                    augmax.Resize(w_new, h_new),
+                    augmax.Rotate((-5, 5)),
                 ]
-                sub_rngs = jax.random.split(rng, image.shape[0])
-                image = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
+            else:
+                transforms += [
+                    augmax.RandomCrop(int(w_new * 0.95), int(h_new * 0.95)),
+                    augmax.Resize(w_new, h_new),
+                    augmax.Rotate((-5, 5)),
+                ]
+            transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
 
-                # Back to [-1, 1].
-                image = image * 2.0 - 1.0
+            # Apply augmentation
+            sub_rngs = jax.random.split(rng, b * t)
+            image_flat = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image_flat)
+
+            # Back to [-1, 1]
+            image_flat = image_flat * 2.0 - 1.0
+
+            # Reshape: [b, t, h', w', c]
+            image = image_flat.reshape(b, t, h_new, w_new, c)
 
         out_images[key] = image
 
