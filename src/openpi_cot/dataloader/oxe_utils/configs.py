@@ -1196,7 +1196,7 @@ OXE_DATASET_METADATA = {
         "has_suboptimal": "No",
     },
     "agibot_dataset": {
-        "control_frequency": 15,
+        "control_frequency": 30,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Bi-Manual",
         "has_suboptimal": "No",
