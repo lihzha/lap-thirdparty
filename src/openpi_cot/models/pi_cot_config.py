@@ -10,6 +10,7 @@ from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
+from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 import openpi_cot.models.gemma2 as _gemma2
@@ -73,16 +74,8 @@ class PiCoTConfig(_model.BaseModelConfig):
 
         with at.disable_typechecking():
             observation_spec = CoTObservation(
-                images={
-                    "base_0_rgb": image_spec,
-                    "left_wrist_0_rgb": image_spec,
-                    # "right_wrist_0_rgb": image_spec,
-                },
-                image_masks={
-                    "base_0_rgb": image_mask_spec,
-                    "left_wrist_0_rgb": image_mask_spec,
-                    # "right_wrist_0_rgb": image_mask_spec,
-                },
+                images=dict.fromkeys(IMAGE_KEYS, image_spec),
+                image_masks=dict.fromkeys(IMAGE_KEYS, image_mask_spec),
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),

@@ -225,9 +225,9 @@ class CoTRldsDatasetSpec:
     droid_language_annotations_file: str = "droid_language_annotations.json"
     keep_ranges_file: str = "keep_ranges_1_0_1.json"
     images_list: tuple[str, str] = ("exterior_image_1_left", "exterior_image_2_left")
-    primary_image_key: str = "exterior_image_1_left"
-    wrist_image_key: str = "wrist_image_left"
-    wrist_image_right_key: str = "wrist_image_right"
+    primary_image_key: str = "base_0_rgb"
+    wrist_image_key: str = "left_wrist_0_rgb"
+    wrist_image_right_key: str = "right_wrist_0_rgb"
     default_lang_value: tf.Tensor = field(
         default_factory=lambda: tf.io.serialize_tensor(tf.constant([], dtype=tf.string))
     )
@@ -797,9 +797,9 @@ class DroidCoTDataset(SingleCoTDataset):
 
             calib_camera_name = serial_to_name[camera_serial]
             if calib_camera_name == "ext1_cam_serial":
-                calib_image_name = "exterior_image_1_left"
+                calib_image_name = self.spec.images_list[0]  # "exterior_image_1_left"
             elif calib_camera_name == "ext2_cam_serial":
-                calib_image_name = "exterior_image_2_left"
+                calib_image_name = self.spec.images_list[1]  # "exterior_image_2_left"
             else:
                 raise ValueError(f"Unknown camera name: {calib_camera_name}")
 
