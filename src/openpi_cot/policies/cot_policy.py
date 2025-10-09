@@ -174,6 +174,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     def _prepare_language_actions(self, data: dict) -> dict:
         if "language_actions" in data:
             la = data["language_actions"]
+            breakpoint()
             assert isinstance(la[0], bytes)
             if maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None:  # oxe case
                 # Check if dataset is bimanual
@@ -244,6 +245,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             if isinstance(pred_lang, np.ndarray) and len(pred_lang.shape) > 0:
                 # Array case: [summation_steps] with potential padding
                 # Check if first element is serialized tensor (numeric case)
+                breakpoint()
                 if len(pred_lang) > 0 and isinstance(pred_lang[0], bytes):
                     if maybe_parse_serialized_tensor_to_ndarray(pred_lang[0]) is not None:
                         # Numeric case: use control_frequency to trim padding
