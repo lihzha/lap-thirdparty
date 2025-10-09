@@ -336,7 +336,7 @@ class SingleCoTDataset:
                 action_key="actions",
                 state_key="state",
             )
-            self.apply_traj_filters(action_key="action")
+            self.apply_traj_filters(action_key="actions")
             self.split_val(split_seed=seed)
 
         self.apply_traj_transforms(
