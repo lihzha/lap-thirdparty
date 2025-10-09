@@ -280,9 +280,7 @@ def load_dataset_kwargs(
     #     raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
 
     # Filter
-    dataset_kwargs["image_obs_keys"] = {
-        k: dataset_kwargs["image_obs_keys"][k] if k in camera_views_to_load else None for k in load_camera_views
-    }
+    dataset_kwargs["image_obs_keys"] = {k: dataset_kwargs["image_obs_keys"].get(k, None) for k in load_camera_views}
 
     # dataset_kwargs["image_obs_keys"] = {
     #     k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in camera_views_to_load
