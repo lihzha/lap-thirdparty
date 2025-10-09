@@ -35,8 +35,6 @@ def make_decode_images_fn(
     primary_key: str,
     wrist_key: str | None,
     wrist_right_key: str | None = None,
-    use_wrist_image: bool,
-    use_wrist_right_image: bool = False,
     resize_to: tuple[int, int] | None = (224, 224),
 ):
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors.
@@ -134,10 +132,8 @@ def make_decode_images_fn(
 
     def _decode_frame(traj: dict) -> dict:
         traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
-        if use_wrist_image and wrist_key is not None:
-            traj["observation"][wrist_key] = decode_with_time_dim(traj["observation"][wrist_key])
-        if use_wrist_right_image and wrist_right_key is not None:
-            traj["observation"][wrist_right_key] = decode_with_time_dim(traj["observation"][wrist_right_key])
+        traj["observation"][wrist_key] = decode_with_time_dim(traj["observation"][wrist_key])
+        traj["observation"][wrist_right_key] = decode_with_time_dim(traj["observation"][wrist_right_key])
 
         return traj
 
@@ -152,12 +148,10 @@ def prepare_batched_dataset(
     seed,
     max_samples,
     batch_size,
-    use_wrist_image,
     resize_resolution,
     primary_image_key,
     wrist_image_key,
     wrist_image_right_key=None,
-    use_wrist_right_image=False,
 ):
     if (not want_val) and shuffle and max_samples is None:
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
@@ -168,8 +162,6 @@ def prepare_batched_dataset(
         primary_key=primary_image_key,
         wrist_key=wrist_image_key,
         wrist_right_key=wrist_image_right_key,
-        use_wrist_image=use_wrist_image,
-        use_wrist_right_image=use_wrist_right_image,
         resize_to=resize_resolution,
     )
     dataset = dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
@@ -187,18 +179,6 @@ def print_memory_usage(label):
     process = psutil.Process(os.getpid())
     mem = process.memory_info().rss / (1024**2)  # in MB
     logging.info(f"[{label}] Memory usage: {mem:.2f} MB")
-
-
-def create_encoded_placeholder_image():
-    """Create an encoded placeholder image (1x1 black pixel) that can be decoded.
-
-    This creates a minimal encoded PNG that will properly decode through the image
-    decoding pipeline and get resized to the target resolution.
-    """
-    # Create a minimal 1x1 black pixel image and encode it as PNG
-    black_pixel = tf.constant([[[0, 0, 0]]], dtype=tf.uint8)  # [1, 1, 3]
-    encoded = tf.io.encode_png(black_pixel)
-    return encoded
 
 
 def compute_window_indices(sequence_length: tf.Tensor, window_size: int) -> tf.Tensor:
@@ -375,12 +355,10 @@ class SingleCoTDataset:
                 seed=seed,
                 max_samples=max_samples,
                 batch_size=batch_size,
-                use_wrist_image=self.use_wrist_image,
                 resize_resolution=config.resize_resolution,
                 primary_image_key=self.spec.primary_image_key,
                 wrist_image_key=self.spec.wrist_image_key,
                 wrist_image_right_key=self.spec.wrist_image_right_key,
-                use_wrist_right_image=self.is_bimanual,
             )
 
     def build_dataset_builder(self, ds_name, data_dir):
@@ -1019,10 +997,11 @@ class DroidCoTDataset(SingleCoTDataset):
 
             if self.use_wrist_image:
                 _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"]["wrist_image_left"]
-                # Always add right wrist image for consistency (encoded placeholder for DROID which is single-arm)
-                # Use encoded 1x1 black image that will decode and resize properly to match other images
-                placeholder = create_encoded_placeholder_image()
-                _return_dict["observation"][self.spec.wrist_image_right_key] = tf.fill([traj_len], placeholder)
+                # Always add right wrist image for consistency (empty strings for DROID which is single-arm)
+                # Empty strings will be decoded to zero images later, matching the decoded image shape
+            else:
+                _return_dict["observation"][self.spec.wrist_image_key] = tf.repeat("", traj_len)
+            _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
 
             return _return_dict
 
@@ -1239,17 +1218,9 @@ class SingleOXECoTDataset(SingleCoTDataset):
                     raise ValueError(f"Unknown image key: {new}")
                 # Check if key exists in observation dict
                 if old is None or old not in old_obs:
-                    # Use encoded 1x1 black image that will decode and resize properly
-                    placeholder = create_encoded_placeholder_image()
-                    new_obs[img_key] = tf.fill([traj_len], placeholder)
+                    new_obs[img_key] = tf.repeat("", traj_len)  # padding
                 else:
                     new_obs[img_key] = old_obs[old]
-
-            # Always add right wrist image for consistency (encoded placeholder for non-bimanual)
-            # Use encoded 1x1 black image that will decode and resize properly to match other images
-            if self.spec.wrist_image_right_key not in new_obs and self.use_wrist_image:
-                placeholder = create_encoded_placeholder_image()
-                new_obs[self.spec.wrist_image_right_key] = tf.fill([traj_len], placeholder)
 
             if self.state_obs_keys:
                 # Note: instead of padding with zeros, we drop the key if it is None
@@ -1489,12 +1460,10 @@ class OXECoTDatasets:
             seed=seed,
             max_samples=max_samples,
             batch_size=batch_size,
-            use_wrist_image=config.use_wrist_image,
             resize_resolution=config.resize_resolution,
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
             wrist_image_right_key=self.spec.wrist_image_right_key,
-            use_wrist_right_image=has_bimanual_dataset,
         )
 
     def _compute_or_load_global_stats(

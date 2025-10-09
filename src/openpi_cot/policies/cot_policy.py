@@ -101,7 +101,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         for k in IMAGE_KEYS[1:]:
             if k in data["observation"]:
-                breakpoint()
                 wrist_image = parse_image(data["observation"][k])
                 wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
             else:
