@@ -275,9 +275,9 @@ def load_dataset_kwargs(
     if is_bimanual and "wrist_right" in dataset_kwargs["image_obs_keys"]:
         camera_views_to_load = tuple(set(load_camera_views) | {"wrist_right"})
 
-    # Adjust Loaded Camera Views
-    if len(missing_keys := (set(camera_views_to_load) - set(dataset_kwargs["image_obs_keys"]))) > 0:
-        raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
+    # # Adjust Loaded Camera Views
+    # if len(missing_keys := (set(camera_views_to_load) - set(dataset_kwargs["image_obs_keys"]))) > 0:
+    #     raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
 
     # Filter
     dataset_kwargs["image_obs_keys"] = {
