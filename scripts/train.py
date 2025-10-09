@@ -430,6 +430,7 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
+    breakpoint()
     train_runner = TrainingStepRunner(config)
     # ptrain_step = jax.jit(
     #     train_runner,
