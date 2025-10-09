@@ -91,15 +91,15 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type == ExtendedModelType.PI_COT
         assert "observation" in data
-        assert "exterior_image_1_left" in data["observation"]
-        base_image = parse_image(data["observation"]["exterior_image_1_left"])
+        assert IMAGE_KEYS[0] in data["observation"]
+        base_image = parse_image(data["observation"][IMAGE_KEYS[0]])
         if base_image is None:
             raise ValueError("Base image missing from observation")
         base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
         images = [base_image]
         image_masks = [base_image_mask]
 
-        for k in ("wrist_image_left", "wrist_image_right"):
+        for k in IMAGE_KEYS[1:]:
             if k in data["observation"]:
                 wrist_image = parse_image(data["observation"][k])
                 wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_

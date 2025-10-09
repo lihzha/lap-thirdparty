@@ -450,7 +450,7 @@ def main(config: _config.TrainConfig):
             train_dataset=data_loader.dataset,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
-        tok = data_loader.tokenizer
+        # tok = data_loader.tokenizer
         val_runner = ValidationStepRunner(config)
         pval_step = jax.jit(
             val_runner,
@@ -458,17 +458,17 @@ def main(config: _config.TrainConfig):
         )
 
         # Jitted reasoning sampler returning only (id_buf, t)
-        def _sample_reasoning_ids_t(state: training_utils.TrainState, observation: CoTObservation):
-            model_local = nnx.merge(state.model_def, state.params)
-            id_buf, t, *_ = model_local.sample_reasoning(observation)
-            return id_buf, t
+        # def _sample_reasoning_ids_t(state: training_utils.TrainState, observation: CoTObservation):
+        #     model_local = nnx.merge(state.model_def, state.params)
+        #     id_buf, t, *_ = model_local.sample_reasoning(observation)
+        #     return id_buf, t
 
-        psample_reasoning = jax.jit(
-            _sample_reasoning_ids_t,
-            # Expect observation replicated; return replicated outputs for consistent host access
-            in_shardings=(train_state_sharding, replicated_sharding),
-            out_shardings=(replicated_sharding, replicated_sharding),
-        )
+        # psample_reasoning = jax.jit(
+        #     _sample_reasoning_ids_t,
+        #     # Expect observation replicated; return replicated outputs for consistent host access
+        #     in_shardings=(train_state_sharding, replicated_sharding),
+        #     out_shardings=(replicated_sharding, replicated_sharding),
+        # )
         # Determine how many validation batches to evaluate each time.
         # If a fixed validation subset size is configured, compute batches from it;
         # otherwise fall back to a heuristic constant divided by global batch size.
@@ -489,10 +489,10 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    hard_example_tracker = vis_tools.HardExampleTracker(
-        tokenizer=data_loader.tokenizer,
-        hard_quantile=0.99,
-    )
+    # hard_example_tracker = vis_tools.HardExampleTracker(
+    #     tokenizer=data_loader.tokenizer,
+    #     hard_quantile=0.99,
+    # )
     host_batch_cache = HostBatchCache()
 
     for step in pbar:
@@ -564,9 +564,8 @@ def main(config: _config.TrainConfig):
                 dynamic_ncols=True,
                 disable=(jax.process_index() != 0),
             )
-            img_log_step_idx = np.random.randint(0, num_val_batches)
-            # img_log_step_idx = 0
-            num_images_to_log = 64
+            # img_log_step_idx = np.random.randint(0, num_val_batches)
+            # num_images_to_log = 64
             with sharding.set_mesh(mesh):
                 val_infos = []
                 # Collect L2 distances (in cm) between parsed vectors from GT and predicted texts
