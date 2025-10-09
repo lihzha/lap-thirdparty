@@ -1036,8 +1036,6 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
     # trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :6]
     # trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, 6:7]
 
@@ -1060,19 +1058,21 @@ def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["observation"]["state"][:-1, -1:]], axis=1)
-    return traj_truncated
+    return trajectory
+
+    # movement_actions = tf.concat(
+    #     (
+    #         trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+    #         euler_diff(
+    #             trajectory["observation"]["state"][1:, 3:6],
+    #             trajectory["observation"]["state"][:-1, 3:6],
+    #         ),
+    #     ),
+    #     axis=-1,
+    # )
+    # traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    # traj_truncated["action"] = tf.concat([movement_actions, trajectory["observation"]["state"][:-1, -1:]], axis=1)
+    # return traj_truncated
 
 
 def cmu_playing_with_food_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
