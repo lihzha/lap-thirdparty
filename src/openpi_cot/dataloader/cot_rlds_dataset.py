@@ -21,6 +21,7 @@ from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.dataloader.oxe_utils.transforms import binarize_gripper_actions
 from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 from openpi_cot.transforms import NormalizeActionAndProprio
@@ -33,9 +34,8 @@ def make_decode_images_fn(
     *,
     primary_key: str,
     wrist_key: str | None,
-    use_wrist_image: bool,
+    wrist_right_key: str | None = None,
     resize_to: tuple[int, int] | None = (224, 224),
-    vis_dataset: bool = False,
 ):
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors.
     Preserves aspect ratio, pads symmetrically, and returns the original dtype semantics
@@ -103,23 +103,38 @@ def make_decode_images_fn(
             img = _tf_resize_with_pad(img, h, w)
         return img
 
+    def decode_with_time_dim(img_tensor):
+        """Decode images that may have time dimension.
+
+        Handles:
+        - Rank 0: scalar encoded string (single image)
+        - Rank 1: [T] vector of encoded strings (prediction mode with multiple frames)
+        - Rank 3: [H, W, C] single decoded image
+        - Rank 4: [T, H, W, C] decoded images with time dimension
+        """
+        rank = len(img_tensor.shape)
+
+        if rank == 1:  # [T] - multiple encoded strings (prediction mode)
+            # Decode each encoded string separately
+            # Output: [T, H, W, C] after decoding
+            decoded_frames = tf.map_fn(_decode_single, img_tensor, fn_output_signature=tf.uint8)
+            # Set explicit shape for downstream processing
+            if resize_to is not None:
+                h, w = resize_to
+                decoded_frames.set_shape([None, h, w, 3])
+            return decoded_frames
+        if rank == 4:  # [T, H, W, C] - already decoded with time dimension
+            # Apply resize if needed (shouldn't normally happen in this path)
+            return img_tensor
+        # rank == 0 (scalar string) or rank == 3 ([H, W, C])
+        # Single frame: decode if string, otherwise return as-is
+        return _decode_single(img_tensor)
+
     def _decode_frame(traj: dict) -> dict:
-        if not vis_dataset:
-            traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
-            if use_wrist_image and wrist_key is not None:
-                traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
-        else:
-            traj["observation"][primary_key] = tf.map_fn(
-                _decode_single,
-                traj["observation"][primary_key],
-                fn_output_signature=tf.uint8,
-            )
-            if use_wrist_image and wrist_key is not None:
-                traj["observation"][wrist_key] = tf.map_fn(
-                    _decode_single,
-                    traj["observation"][wrist_key],
-                    fn_output_signature=tf.uint8,
-                )
+        traj["observation"][primary_key] = decode_with_time_dim(traj["observation"][primary_key])
+        traj["observation"][wrist_key] = decode_with_time_dim(traj["observation"][wrist_key])
+        traj["observation"][wrist_right_key] = decode_with_time_dim(traj["observation"][wrist_right_key])
+
         return traj
 
     return _decode_frame
@@ -133,11 +148,10 @@ def prepare_batched_dataset(
     seed,
     max_samples,
     batch_size,
-    use_wrist_image,
     resize_resolution,
     primary_image_key,
     wrist_image_key,
-    vis_dataset: bool = False,
+    wrist_image_right_key=None,
 ):
     if (not want_val) and shuffle and max_samples is None:
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
@@ -147,9 +161,8 @@ def prepare_batched_dataset(
     decode_fn = make_decode_images_fn(
         primary_key=primary_image_key,
         wrist_key=wrist_image_key,
-        use_wrist_image=use_wrist_image,
+        wrist_right_key=wrist_image_right_key,
         resize_to=resize_resolution,
-        vis_dataset=vis_dataset,
     )
     dataset = dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
 
@@ -204,10 +217,11 @@ class CoTRldsDatasetSpec:
     droid_language_annotations_file: str = "droid_language_annotations.json"
     keep_ranges_file: str = "keep_ranges_1_0_1.json"
     images_list: tuple[str, str] = ("exterior_image_1_left", "exterior_image_2_left")
-    primary_image_key: str = "exterior_image_1_left"
-    wrist_image_key: str = "wrist_image_left"
-    default_lang_value: tf.Tensor = field(
-        default_factory=lambda: tf.io.serialize_tensor(tf.constant([], dtype=tf.string))
+    primary_image_key: str = "base_0_rgb"
+    wrist_image_key: str = "left_wrist_0_rgb"
+    wrist_image_right_key: str = "right_wrist_0_rgb"
+    default_lang_value: bytes = field(
+        default_factory=lambda: tf.io.serialize_tensor(tf.constant([], dtype=tf.string)).numpy()
     )
     default_ep_value: tf.Tensor = field(default_factory=lambda: tf.constant("", dtype=tf.string))
     fallback_instructions = tf.constant(
@@ -256,6 +270,7 @@ class SingleCoTDataset:
         batch_size: int = 1,
         max_samples: int | None = None,
         skip_normalization: bool = False,
+        enable_prediction_training: bool = False,
     ):
         self.config = config
         self.seed = seed
@@ -267,7 +282,10 @@ class SingleCoTDataset:
         self.use_wrist_image = bool(config.use_wrist_image)
         self.standalone = standalone
         self.skip_normalization = skip_normalization
-        dataset_kwargs = load_dataset_kwargs(dataset_name, data_dir, load_camera_views=("primary", "wrist"))
+        self.enable_prediction_training = enable_prediction_training
+        dataset_kwargs = load_dataset_kwargs(
+            dataset_name, data_dir, load_camera_views=("primary", "wrist", "wrist_right")
+        )
 
         logging.info(f"Dataset kwargs: {dataset_kwargs}")
         self.control_frequency: int = int(dataset_kwargs["control_frequency"])  # constant for this dataset
@@ -276,6 +294,7 @@ class SingleCoTDataset:
         self.state_obs_keys = dataset_kwargs["state_obs_keys"]
         self.state_encoding = dataset_kwargs["state_encoding"]
         self.action_encoding = dataset_kwargs["action_encoding"]
+        self.is_bimanual = dataset_kwargs.get("is_bimanual", False)
 
         self.num_parallel_reads = tf.data.AUTOTUNE if num_parallel_reads == -1 else num_parallel_reads
         self.num_parallel_calls = tf.data.AUTOTUNE if num_parallel_calls == -1 else num_parallel_calls
@@ -336,16 +355,17 @@ class SingleCoTDataset:
                 seed=seed,
                 max_samples=max_samples,
                 batch_size=batch_size,
-                use_wrist_image=self.use_wrist_image,
                 resize_resolution=config.resize_resolution,
                 primary_image_key=self.spec.primary_image_key,
                 wrist_image_key=self.spec.wrist_image_key,
-                vis_dataset=self.vis_dataset,
+                wrist_image_right_key=self.spec.wrist_image_right_key,
             )
 
     def build_dataset_builder(self, ds_name, data_dir):
         if ds_name == "fmb":
             ds_name = "fmb:1.0.0"
+        if ds_name == "dobbe":
+            ds_name = "dobbe:0.0.1"
         return tfds.builder(ds_name, data_dir=data_dir)
 
     def build_dataset(self, builder):
@@ -395,7 +415,7 @@ class SingleCoTDataset:
         - drop_goal_or_instruction
         - subsample_length
         """
-        if not self.skip_normalization:
+        if not self.skip_normalization and not self.vis_dataset:
             self.dataset = self.dataset.traj_map(
                 NormalizeActionAndProprio(
                     norm_stats=self.dataset_statistics,
@@ -455,6 +475,9 @@ class SingleCoTDataset:
             # Note: self.control_frequency is a Python int constant per dataset instance
             trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
             if self.use_json_actions:
+                # Save raw language actions (shape [T]) before windowing for use in prediction
+                raw_lang_actions = traj["language_actions"]
+
                 la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
                 pad_len = summation_steps - trimmed_len
 
@@ -465,6 +488,9 @@ class SingleCoTDataset:
                 traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
                 # Set static shape for TensorFlow's shape inference
                 traj["language_actions"].set_shape([None, summation_steps])
+
+                # Store raw for prediction (shape [T])
+                traj["raw_language_actions"] = raw_lang_actions
             else:
                 # Gather numeric actions for the future window up to control frequency: [T, trimmed_len, A]
                 actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
@@ -493,16 +519,157 @@ class SingleCoTDataset:
                 )
                 # Set static shape for TensorFlow's shape inference
                 traj["language_actions"].set_shape([None, summation_steps])
-            if self.vis_dataset:
-                grouped_images = tf.gather(traj["observation"][self.spec.primary_image_key], summation_indices)
-                traj["observation"][self.spec.primary_image_key] = grouped_images
-
-                grouped_wrist_images = tf.gather(traj["observation"][self.spec.wrist_image_key], summation_indices)
-                traj["observation"][self.spec.wrist_image_key] = grouped_wrist_images
-
             return traj
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
+
+        def add_prediction_pairs(traj):
+            """Add prediction frame pairs and corresponding language actions.
+
+            Derives prediction language actions from raw_action (same as language_actions),
+            padded to summation_steps for consistency.
+            """
+            traj_len = tf.shape(traj[action_key])[0]
+
+            if not self.enable_prediction_training:
+                # Backward compatibility: add time dimension with single frame
+                traj["observation"][self.spec.primary_image_key] = tf.expand_dims(
+                    traj["observation"][self.spec.primary_image_key], axis=1
+                )  # [T, 1, H, W, C]
+
+                traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                    traj["observation"][self.spec.wrist_image_key], axis=1
+                )  # [T, 1, H, W, C]
+
+                # Handle right wrist (for all datasets - bimanual and non-bimanual)
+                if self.spec.wrist_image_right_key in traj["observation"]:
+                    traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                        traj["observation"][self.spec.wrist_image_right_key], axis=1
+                    )  # [T, 1, H, W, C]
+
+                # No prediction language action needed - empty padded tensor
+                empty_row = tf.fill([summation_steps], tf.constant("", dtype=tf.string))
+                traj["prediction_language_action"] = tf.tile(
+                    tf.expand_dims(empty_row, 0), [traj_len, 1]
+                )  # [T, summation_steps]
+                return traj
+
+            # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
+            max_horizon = getattr(self.config, "max_prediction_horizon", summation_steps)
+            max_horizon_clamped = tf.minimum(max_horizon, traj_len - 1)
+            max_horizon_clamped = tf.maximum(max_horizon_clamped, 1)  # Ensure at least 1
+
+            deltas = tf.random.uniform(
+                [traj_len],
+                minval=1,  # At least 1 step into future
+                maxval=max_horizon_clamped + 1,
+                dtype=tf.int32,
+            )
+            future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
+
+            # Stack current and future images (primary only)
+            current_imgs = traj["observation"][self.spec.primary_image_key]
+            future_imgs = tf.gather(current_imgs, future_indices)
+            traj["observation"][self.spec.primary_image_key] = tf.stack(
+                [current_imgs, future_imgs], axis=1
+            )  # [T, 2, H, W, C]
+
+            # Wrist image: single frame only
+            traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                traj["observation"][self.spec.wrist_image_key], axis=1
+            )  # [T, 1, H, W, C]
+
+            # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
+            if self.spec.wrist_image_right_key in traj["observation"]:
+                traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                    traj["observation"][self.spec.wrist_image_right_key], axis=1
+                )  # [T, 1, H, W, C]
+
+            # Derive prediction language actions from raw_action, similar to language_actions
+            # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps
+            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
+
+            if self.use_json_actions:
+                # JSON case: gather from language_actions
+                def gather_and_pad_json(t_idx, delta):
+                    """Gather language actions from t_idx to t_idx+delta-1, pad to summation_steps."""
+                    # Clamp delta to not exceed trimmed_len
+                    actual_len = tf.minimum(delta, trimmed_len)
+                    # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
+                    indices = tf.range(actual_len) + t_idx
+                    indices = tf.minimum(indices, traj_len - 1)
+
+                    # Gather language actions
+                    lang_window = tf.gather(traj["raw_language_actions"], indices)
+
+                    # Pad to summation_steps
+                    pad_len = summation_steps - actual_len
+                    padded = tf.cond(
+                        pad_len > 0,
+                        lambda: tf.concat([lang_window, tf.fill([pad_len], tf.constant("", dtype=tf.string))], axis=0),
+                        lambda: lang_window[:summation_steps],
+                    )
+                    return padded
+
+                prediction_lang_actions = tf.map_fn(
+                    lambda x: gather_and_pad_json(x[0], x[1]),
+                    (tf.range(traj_len, dtype=tf.int32), deltas),
+                    fn_output_signature=tf.TensorSpec(shape=[summation_steps], dtype=tf.string),
+                )
+                traj.pop("raw_language_actions")  # No longer needed
+            else:
+                # Numeric case: gather from raw_action and serialize
+                def gather_and_pad_numeric(t_idx, delta):
+                    """Gather actions from t_idx to t_idx+delta-1, serialize, pad to summation_steps."""
+                    # Clamp delta to not exceed trimmed_len
+                    # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
+                    indices = tf.range(delta) + t_idx
+                    indices = tf.minimum(indices, traj_len - 1)
+
+                    # Gather raw actions: [actual_len, A]
+                    actions_window = tf.gather(traj["raw_action"], indices)
+
+                    # Serialize each action row
+                    serialized = tf.map_fn(
+                        lambda v: tf.io.serialize_tensor(v),
+                        actions_window,
+                        fn_output_signature=tf.string,
+                    )
+
+                    # Pad to summation_steps with serialized dummy tensors
+                    pad_len = summation_steps - delta
+                    padded = tf.cond(
+                        pad_len > 0,
+                        lambda: tf.concat(
+                            [
+                                serialized,
+                                tf.tile(
+                                    [
+                                        tf.io.serialize_tensor(
+                                            tf.zeros(tf.shape(traj["raw_action"])[-1:], dtype=traj["raw_action"].dtype)
+                                        )
+                                    ],
+                                    [pad_len],
+                                ),
+                            ],
+                            axis=0,
+                        ),
+                        lambda: serialized[:summation_steps],
+                    )
+                    return padded
+
+                prediction_lang_actions = tf.map_fn(
+                    lambda x: gather_and_pad_numeric(x[0], x[1]),
+                    (tf.range(traj_len, dtype=tf.int32), deltas),
+                    fn_output_signature=tf.TensorSpec(shape=[summation_steps], dtype=tf.string),
+                )
+
+            traj["prediction_language_action"] = prediction_lang_actions  # [T, summation_steps]
+            traj["prediction_delta"] = deltas  # Store for debugging
+
+            return traj
+
+        self.dataset = self.dataset.traj_map(add_prediction_pairs, self.num_parallel_calls)
 
     def apply_repack_transforms(self):
         raise NotImplementedError
@@ -620,9 +787,9 @@ class DroidCoTDataset(SingleCoTDataset):
 
             calib_camera_name = serial_to_name[camera_serial]
             if calib_camera_name == "ext1_cam_serial":
-                calib_image_name = "exterior_image_1_left"
+                calib_image_name = self.spec.images_list[0]  # "exterior_image_1_left"
             elif calib_camera_name == "ext2_cam_serial":
-                calib_image_name = "exterior_image_2_left"
+                calib_image_name = self.spec.images_list[1]  # "exterior_image_2_left"
             else:
                 raise ValueError(f"Unknown camera name: {calib_camera_name}")
 
@@ -706,8 +873,8 @@ class DroidCoTDataset(SingleCoTDataset):
             """Reformat observation and action keys, sample language instruction."""
             actions = tf.concat(
                 (
-                    traj["observation"]["cartesian_position"],
-                    traj["action_dict"]["gripper_position"],
+                    tf.cast(traj["observation"]["cartesian_position"], tf.float32),
+                    binarize_gripper_actions(1 - traj["action_dict"]["gripper_position"], threshold=0.5),
                 ),
                 axis=-1,
             )
@@ -731,17 +898,29 @@ class DroidCoTDataset(SingleCoTDataset):
             episode_id = traj["trajectory_id"][0]
             if self.use_json_actions:
                 lang_bytes = self.lang_table.lookup(episode_id)
-                lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-                # Language actions may include an extra terminal step; crop to match action length
-                lang_tensor = lang_tensor[:traj_len]
+                # Check if lang_bytes is valid before parsing
+                lang_tensor = tf.cond(
+                    tf.not_equal(lang_bytes, tf.constant(self.spec.default_lang_value, dtype=tf.string)),
+                    lambda: tf.io.parse_tensor(lang_bytes, tf.string)[:traj_len],
+                    lambda: tf.fill([traj_len], tf.constant("", dtype=tf.string)),
+                )
+
             else:
                 lang_tensor = tf.fill([traj_len], tf.constant(""))
             # Sample instruction from merged table
             instr_bytes = self.instr_table.lookup(episode_id)
 
             def _sample_from_table():
-                arr = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
-                return tf.random.shuffle(arr, seed=self.seed)[0]
+                # Check if instr_bytes is empty (default value)
+                # If empty, return empty string - these will be filtered by _has_instruction later
+                return tf.cond(
+                    tf.logical_and(
+                        tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
+                        tf.greater(tf.strings.length(instr_bytes), 10),
+                    ),
+                    lambda: tf.random.shuffle(tf.io.parse_tensor(instr_bytes, out_type=tf.string), seed=self.seed)[0],
+                    lambda: tf.constant("", dtype=tf.string),
+                )
 
             instruction = _sample_from_table()
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
@@ -764,7 +943,7 @@ class DroidCoTDataset(SingleCoTDataset):
                     lambda: traj["observation"][self.spec.images_list[1]],
                 )
 
-            cartesian = traj["observation"]["cartesian_position"]
+            cartesian = tf.cast(traj["observation"]["cartesian_position"], tf.float32)
             gripper = traj["observation"]["gripper_position"]
 
             gripper = tf.cond(
@@ -773,7 +952,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
             )
 
-            state = tf.concat([cartesian, gripper], axis=-1)
+            state = tf.concat([cartesian, binarize_gripper_actions(1 - gripper, threshold=0.5)], axis=-1)
             state = convert_state_encoding(
                 state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
             )
@@ -801,6 +980,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
                 # Attach control_frequency per step for downstream windowing/summarization
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
+                "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # DROID is single-arm
             }
 
             step_id = (
@@ -814,7 +994,13 @@ class DroidCoTDataset(SingleCoTDataset):
             _return_dict["passes_filter"] = passes_filter
 
             if self.use_wrist_image:
-                _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"][self.spec.wrist_image_key]
+                _return_dict["observation"][self.spec.wrist_image_key] = traj["observation"]["wrist_image_left"]
+                # Always add right wrist image for consistency (empty strings for DROID which is single-arm)
+                # Empty strings will be decoded to zero images later, matching the decoded image shape
+            else:
+                _return_dict["observation"][self.spec.wrist_image_key] = tf.repeat("", traj_len)
+            _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
+
             return _return_dict
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
@@ -849,11 +1035,12 @@ class DroidCoTDataset(SingleCoTDataset):
                 return tf.constant(value=False, dtype=tf.bool)
             # Look up by episode_id (NOT episode_path). Using episode_path here would filter everything out.
             lang = self.lang_table.lookup(episode_id)
-            if tf.equal(lang, self.spec.default_lang_value):
+            default_lang_const = tf.constant(self.spec.default_lang_value, dtype=tf.string)
+            if tf.equal(lang, default_lang_const):
                 return tf.constant(value=False, dtype=tf.bool)
             return tf.logical_and(
                 tf.not_equal(episode_id, self.spec.default_ep_value),
-                tf.not_equal(lang, self.spec.default_lang_value),
+                tf.not_equal(lang, default_lang_const),
             )
 
         def _path_ok(traj):
@@ -862,7 +1049,11 @@ class DroidCoTDataset(SingleCoTDataset):
 
         def _has_instruction(traj):
             instr_bytes = self.instr_table.lookup(traj["trajectory_id"][0])
-            return tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string))
+            # Check both that it's not empty and has reasonable length for a serialized tensor
+            return tf.logical_and(
+                tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
+                tf.greater(tf.strings.length(instr_bytes), 10),  # Minimum length for valid serialized tensor
+            )
 
         # Filter out any unsuccessful trajectories -- we use the file name to check this
         # Prefer cheap regex path filter first, then id/lang checks
@@ -901,6 +1092,7 @@ class DroidCoTDataset(SingleCoTDataset):
         max_samples: int | None = None,
         train_dataset=None,
         skip_normalization: bool = False,
+        enable_prediction_training: bool = False,
     ):
         self.use_json_actions = config.use_json_actions
 
@@ -951,6 +1143,7 @@ class DroidCoTDataset(SingleCoTDataset):
             batch_size=batch_size,
             max_samples=max_samples,
             skip_normalization=skip_normalization,
+            enable_prediction_training=enable_prediction_training,
         )
 
 
@@ -973,6 +1166,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
         batch_size: int = 1,
         max_samples: int | None = None,
         skip_normalization: bool = False,
+        enable_prediction_training: bool = False,
     ):
         self.use_json_actions = False
 
@@ -992,6 +1186,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
             batch_size=batch_size,
             max_samples=max_samples,
             skip_normalization=skip_normalization,
+            enable_prediction_training=enable_prediction_training,
         )
 
     def apply_restructure(self):
@@ -1009,15 +1204,16 @@ class SingleOXECoTDataset(SingleCoTDataset):
             )
 
             for new, old in self.image_obs_keys.items():
-                if "primary" in new:
+                if new == "primary":
                     img_key = self.spec.primary_image_key
-                elif "wrist" in new:
+                elif new == "wrist_right":
+                    img_key = self.spec.wrist_image_right_key
+                elif new == "wrist":
                     img_key = self.spec.wrist_image_key
                 else:
                     raise ValueError(f"Unknown image key: {new}")
-                if not self.use_wrist_image and new == "wrist":
-                    continue
-                if old is None:
+                # Check if key exists in observation dict
+                if old is None or old not in old_obs:
                     new_obs[img_key] = tf.repeat("", traj_len)  # padding
                 else:
                     new_obs[img_key] = old_obs[old]
@@ -1046,6 +1242,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "trajectory_id": traj["trajectory_id"],
                 "raw_action": tf.cast(traj["action"], tf.float32),
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
+                "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
             }
 
             return traj
@@ -1132,6 +1329,7 @@ class OXECoTDatasets:
         train_dataset=None,
         standalone=True,
         use_global_normalization: bool = True,
+        enable_prediction_training: bool = False,
     ):
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
@@ -1180,6 +1378,7 @@ class OXECoTDatasets:
                 num_parallel_calls=threads,
                 standalone=False,
                 skip_normalization=use_global_normalization,
+                enable_prediction_training=enable_prediction_training,
             )
             if dataset_name == "droid":
                 ds = DroidCoTDataset(
@@ -1220,7 +1419,7 @@ class OXECoTDatasets:
         self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
 
         # Apply global normalization if requested
-        if use_global_normalization:
+        if use_global_normalization and not config.vis_dataset:
             global_stats_dir = data_dir
             global_stats = self._compute_or_load_global_stats(
                 datasets=datasets,
@@ -1253,11 +1452,10 @@ class OXECoTDatasets:
             seed=seed,
             max_samples=max_samples,
             batch_size=batch_size,
-            use_wrist_image=config.use_wrist_image,
             resize_resolution=config.resize_resolution,
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
-            vis_dataset=config.vis_dataset,
+            wrist_image_right_key=self.spec.wrist_image_right_key,
         )
 
     def _compute_or_load_global_stats(

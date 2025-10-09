@@ -187,7 +187,7 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
     Returns one decoded string per example. If reasoning fields are absent, returns [].
     """
     tokens = _utils.to_local_array(obs.tokenized_prompt)
-    rmask = _utils.to_local_array(obs.tokenized_reasoning_mask)
+    rmask = _utils.to_local_array(obs.tokenized_langact_mask)
     reasonings: list[str] = []
     prompts: list[str] = []
     for i in range(tokens.shape[0]):
@@ -485,7 +485,7 @@ def log_hard_examples_payload(payload: dict[str, Any]) -> None:
 def prepare_eval_batch(batch):
     # Process the batch to remove reasoning and update masks
     obs, actions = batch
-    new_tokenized_prompt = obs.tokenized_prompt * (~obs.tokenized_reasoning_mask)
+    new_tokenized_prompt = obs.tokenized_prompt * (~obs.tokenized_langact_mask)
     new_obs = dataclasses.asdict(obs)
     new_obs["tokenized_prompt"] = new_tokenized_prompt
     new_obs = CoTObservation(**new_obs)
@@ -561,10 +561,10 @@ def prepare_eval_batch(batch):
     #     state=obs.state,
     #     tokenized_prompt=new_tokenized_prompt,
     #     tokenized_prompt_mask=new_tokenized_prompt_mask,
-    #     tokenized_reasoning_mask=new_tokenized_reasoning_mask,
+    #     tokenized_langact_mask=new_tokenized_reasoning_mask,
     #     token_ar_mask=obs.token_ar_mask,
     #     token_loss_mask=obs.token_loss_mask,
-    #     example_mask=obs.example_mask,
+    #     sample_mask=obs.sample_mask,
     # )
 
     # # Create new batch with modified observation

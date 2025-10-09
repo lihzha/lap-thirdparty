@@ -1,3 +1,4 @@
+import dataclasses
 import logging
 import re
 from typing import Literal
@@ -6,53 +7,164 @@ import numpy as np
 from openpi.models import tokenizer as _tokenizer
 
 
+@dataclasses.dataclass
+class StateDiscretizationConfig:
+    """Configuration for discretizing state vectors into text."""
+    bins: int = 256
+    min_dim: int = 7  # Minimum number of dimensions to include (avoid over-trimming)
+    range_min: float = -1.0
+    range_max: float = 1.0
+
+
+@dataclasses.dataclass
+class PromptFormat:
+    """Defines how to format prompts for tokenization.
+
+    This allows easy extension to support different prompt formats by defining
+    new PromptFormat instances with custom templates and configurations.
+    """
+    name: str
+    template: str  # Template string with {prompt}, {state}, etc. placeholders
+    include_state: bool = False
+    state_config: StateDiscretizationConfig | None = None
+
+    def format_prompt(self, prompt: str, state: np.ndarray | None = None) -> str:
+        """Format the prompt with optional state.
+
+        Args:
+            prompt: The task prompt/instruction
+            state: Optional state vector to discretize and include
+
+        Returns:
+            Formatted prompt string ready for tokenization
+        """
+        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
+
+        if self.include_state:
+            if state is None:
+                raise ValueError(f"State required for prompt format '{self.name}' but not provided")
+            if self.state_config is None:
+                raise ValueError(f"State config required for prompt format '{self.name}'")
+            state_str = self._discretize_state(state)
+            return self.template.format(prompt=cleaned_prompt, state=state_str)
+        else:
+            return self.template.format(prompt=cleaned_prompt)
+
+    def _discretize_state(self, state: np.ndarray) -> str:
+        """Discretize state vector into string representation.
+
+        Trims trailing zero-padded dimensions and discretizes to bins.
+        """
+        assert self.state_config is not None
+        state_arr = np.asarray(state)
+        eps = 1e-8
+
+        # Trim zero-padded dimensions
+        if state_arr.ndim == 1:
+            non_zero_mask = np.abs(state_arr) > eps
+            last_idx = int(np.nonzero(non_zero_mask)[0][-1]) + 1 if np.any(non_zero_mask) else 0
+            last_idx = max(last_idx, self.state_config.min_dim)
+            trimmed = state_arr[:last_idx]
+        else:
+            flat = state_arr.reshape(-1, state_arr.shape[-1])
+            non_zero_cols = np.any(np.abs(flat) > eps, axis=0)
+            last_idx = int(np.nonzero(non_zero_cols)[0][-1]) + 1 if np.any(non_zero_cols) else 0
+            last_idx = max(last_idx, self.state_config.min_dim)
+            trimmed = state_arr[..., :last_idx].reshape(-1)
+
+        if trimmed.size > 0:
+            bins = np.linspace(
+                self.state_config.range_min,
+                self.state_config.range_max,
+                self.state_config.bins + 1
+            )[:-1]
+            discretized_state = np.digitize(trimmed, bins=bins) - 1
+            return " ".join(map(str, discretized_state))
+        return ""
+
+
+# Predefined prompt formats - easily extensible by adding new instances
+PI05_PROMPT_FORMAT = PromptFormat(
+    name="pi05",
+    template="Task: {prompt}, State: {state};\nAction: ",
+    include_state=True,
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+)
+
+PI0_PROMPT_FORMAT = PromptFormat(
+    name="pi0",
+    template="{prompt}\n",
+    include_state=False,
+)
+
+VQA_PROMPT_FORMAT = PromptFormat(
+    name="vqa",
+    template="{prompt}",
+    include_state=False,
+)
+
+COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
+    name="coordinate_system",
+    template="Task: {prompt}, State: {state}. Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up. Actions: ",
+    include_state=True,
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+)
+
+# Registry for easy lookup
+PROMPT_FORMAT_REGISTRY = {
+    "pi05": PI05_PROMPT_FORMAT,
+    "pi0": PI0_PROMPT_FORMAT,
+    "vqa": VQA_PROMPT_FORMAT,
+    "coordinate_system": COORDINATE_SYSTEM_PROMPT_FORMAT,
+}
+
+
 class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def __init__(
         self,
         max_len: int = 48,
-        prompt_format: Literal["pi05", "pi0", "vqa"] = "pi05",
+        prompt_format: Literal["pi05", "pi0", "vqa", "coordinate_system"] | PromptFormat = "pi05",
     ):
         super().__init__(max_len)
         self._stop_token_id = self._tokenizer.eos_id()
-        self._prompt_format = prompt_format
+
+        # Support both string and PromptFormat instance
+        if isinstance(prompt_format, str):
+            if prompt_format not in PROMPT_FORMAT_REGISTRY:
+                raise ValueError(
+                    f"Unknown prompt format: {prompt_format}. "
+                    f"Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                )
+            self._prompt_format = PROMPT_FORMAT_REGISTRY[prompt_format]
+        else:
+            self._prompt_format = prompt_format
 
     def tokenize_cot(
-        self, prompt: str, reasoning: str | None = None, state: np.ndarray | None = None
+        self,
+        prompt: str,
+        reasoning: str | None = None,
+        state: np.ndarray | None = None,
+        prompt_format: PromptFormat | str | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
-        if self._prompt_format == "pi05":
-            assert state is not None, "State should only be provided when using Pi05 format."
-            # This is the Pi05 format, where the state is part of the discrete language input.
-            # State vectors are padded with trailing zeros to action_dim in the dataset pipeline.
-            # Only include up to the last unpadded (non-zero) dimension when discretizing.
-            state_arr = np.asarray(state)
-            # Compute last non-zero column along the final axis (robust to 1D or ND inputs)
-            eps = 1e-8
-            if state_arr.ndim == 1:
-                non_zero_mask = np.abs(state_arr) > eps
-                last_idx = int(np.nonzero(non_zero_mask)[0][-1]) + 1 if np.any(non_zero_mask) else 0
-                last_idx = max(last_idx, 7)  # 7 is the smallest number of dimensions that is not padded
-                trimmed = state_arr[:last_idx]
-            else:
-                flat = state_arr.reshape(-1, state_arr.shape[-1])
-                non_zero_cols = np.any(np.abs(flat) > eps, axis=0)
-                last_idx = int(np.nonzero(non_zero_cols)[0][-1]) + 1 if np.any(non_zero_cols) else 0
-                last_idx = max(last_idx, 7)
-                trimmed = state_arr[..., :last_idx].reshape(-1)
+        # Resolve prompt format
+        if prompt_format is None:
+            fmt = self._prompt_format
+        elif isinstance(prompt_format, str):
+            if prompt_format not in PROMPT_FORMAT_REGISTRY:
+                raise ValueError(
+                    f"Unknown prompt format: {prompt_format}. "
+                    f"Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                )
+            fmt = PROMPT_FORMAT_REGISTRY[prompt_format]
+        else:
+            fmt = prompt_format
 
-            if trimmed.size > 0:
-                discretized_state = np.digitize(trimmed, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-                state_str = " ".join(map(str, discretized_state))
-            else:
-                state_str = ""
-            cleaned_prompt = f"Task: {cleaned_prompt}, State: {state_str};\nAction: "
-        elif self._prompt_format == "pi0":
-            assert state is None, "State should not be provided when using Pi0 format."
-            cleaned_prompt += "\n"
+        # Format the prompt using the PromptFormat
+        formatted_prompt = fmt.format_prompt(prompt, state)
 
-        # eos_id = self._tokenizer.eos_id()
+        # Tokenize
         pad_id = self._tokenizer.pad_id()
-        tokens = self._tokenizer.encode(cleaned_prompt, add_bos=True, add_eos=False)
+        tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         reasoning_start = len(tokens)
         if reasoning is not None:
@@ -120,3 +232,23 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
         return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
+
+    def tokenize_prediction(
+        self, prediction_prompt: str, prediction_language: str
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize for prediction task.
+
+        Uses the prediction language action as the reasoning to be predicted.
+
+        Args:
+            prediction_prompt: The prompt for prediction task
+            prediction_language: The prediction language action (reasoning target)
+        """
+        # The reasoning is the prediction language action
+        # Use VQA format (no state) for prediction tasks
+        return self.tokenize_cot(
+            prediction_prompt,
+            reasoning=prediction_language,
+            state=None,
+            prompt_format=VQA_PROMPT_FORMAT
+        )

@@ -162,8 +162,8 @@ OXE_DATASET_CONFIGS = {
             "wrist": "eye_in_hand_rgb",
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": ["joint_states", "gripper_states"],
-        "state_encoding": StateEncoding.JOINT,
+        "state_obs_keys": ["state"],
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "berkeley_autolab_ur5": {
@@ -323,7 +323,7 @@ OXE_DATASET_CONFIGS = {
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["state"],
-        "state_encoding": StateEncoding.POS_QUAT,
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "bc_z": {
@@ -485,7 +485,7 @@ OXE_DATASET_CONFIGS = {
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["state"],
-        "state_encoding": StateEncoding.JOINT,
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "berkeley_fanuc_manipulation": {
@@ -495,8 +495,8 @@ OXE_DATASET_CONFIGS = {
             "wrist": "wrist_image",
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": ["joint_state", None, "gripper_state"],
-        "state_encoding": StateEncoding.JOINT,
+        "state_obs_keys": ["state"],
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "cmu_playing_with_food": {
@@ -729,6 +729,45 @@ OXE_DATASET_CONFIGS = {
         "image_obs_keys": {"primary": "image", "secondary": None, "wrist": "wrist_image"},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["EEF_state", None, "gripper_state"],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
+    "sample_r1_lite": {
+        "image_obs_keys": {
+            "primary": "image_camera_head",
+            "secondary": None,
+            "wrist": "image_camera_wrist_left",
+            "wrist_right": "image_camera_wrist_right",
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            # "joint_position_torso",
+            "joint_position_arm_left",
+            "joint_position_arm_right",
+            "gripper_state_left",
+            "gripper_state_right",
+        ],
+        # "state_encoding": StateEncoding.JOINT_BIMANUAL,
+        # "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
+    "agibot_dataset": {
+        "image_obs_keys": {
+            "primary": "head_image",
+            "secondary": None,
+            "wrist": "image_camera_wrist_left",
+            "wrist_right": "image_camera_wrist_right",
+        },
+        "depth_obs_keys": {
+            "primary": None,
+            "secondary": None,
+            "wrist": "hand_left_image",
+            "wrist_right": "hand_right_image",
+        },
+        "state_obs_keys": ["state"],
+        # "state_encoding": StateEncoding.JOINT_BIMANUAL,
+        # "action_encoding": ActionEncoding.JOINT_POS_BIMANUAL,
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
@@ -1091,7 +1130,7 @@ OXE_DATASET_METADATA = {
         "has_suboptimal": "Yes",
     },
     "dobbe": {
-        "control_frequency": 3.75,
+        "control_frequency": 15,  # 3.75
         "language_annotations": "Natural",
         "robot_morphology": "Mobile Manipulator",
         "has_suboptimal": "No",
@@ -1148,6 +1187,18 @@ OXE_DATASET_METADATA = {
         "control_frequency": 20,
         "language_annotations": "None",
         "robot_morphology": "Single Arm",
+        "has_suboptimal": "No",
+    },
+    "sample_r1_lite": {
+        "control_frequency": 15,
+        "language_annotations": "Natual detailed instructions",
+        "robot_morphology": "Single Arm",
+        "has_suboptimal": "No",
+    },
+    "agibot_dataset": {
+        "control_frequency": 30,
+        "language_annotations": "Natual detailed instructions",
+        "robot_morphology": "Bi-Manual",
         "has_suboptimal": "No",
     },
 }

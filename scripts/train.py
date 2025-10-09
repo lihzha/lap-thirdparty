@@ -281,15 +281,17 @@ class TrainingStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            per_sample_loss, token_accuracy, critical_token_accuracy = model.compute_loss(rng, observation, actions, train=True)
+            per_sample_loss, token_accuracy, critical_token_accuracy = model.compute_loss(
+                rng, observation, actions, train=True
+            )
             return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy, critical_token_accuracy)
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
-        (loss, (per_sample_loss, token_accuracy, critical_token_accuracy)), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
-            model, train_rng, observation, actions
-        )
+        (loss, (per_sample_loss, token_accuracy, critical_token_accuracy)), grads = nnx.value_and_grad(
+            loss_fn, argnums=diff_state, has_aux=True
+        )(model, train_rng, observation, actions)
 
         params = state.params.filter(self.config.trainable_filter)
         updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -350,7 +352,9 @@ class ValidationStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            val_loss, token_accuracy, critical_token_accuracy = model.compute_loss(rng, observation, actions, train=False)
+            val_loss, token_accuracy, critical_token_accuracy = model.compute_loss(
+                rng, observation, actions, train=False
+            )
             return jnp.mean(val_loss), token_accuracy, critical_token_accuracy
 
         eval_rng = jax.random.fold_in(rng, state.step)
@@ -358,7 +362,11 @@ class ValidationStepRunner:
         if hasattr(model, "compute_eval_metrics"):
             return model.compute_eval_metrics(eval_rng, observation, actions)
         loss, token_accuracy, critical_token_accuracy = loss_fn(model, eval_rng, observation, actions)
-        return {"val_loss": loss, "val_token_accuracy": token_accuracy, "val_critical_token_accuracy": critical_token_accuracy}
+        return {
+            "val_loss": loss,
+            "val_token_accuracy": token_accuracy,
+            "val_critical_token_accuracy": critical_token_accuracy,
+        }
 
 
 def main(config: _config.TrainConfig):
@@ -422,13 +430,15 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
+    breakpoint()
     train_runner = TrainingStepRunner(config)
-    ptrain_step = jax.jit(
-        train_runner,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-        out_shardings=(train_state_sharding, replicated_sharding),
-        donate_argnums=(1,),
-    )
+    # ptrain_step = jax.jit(
+    #     train_runner,
+    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    #     out_shardings=(train_state_sharding, replicated_sharding),
+    #     donate_argnums=(1,),
+    # )
+    ptrain_step = train_runner
 
     if config.do_val:
         val_loader = _data_loader.create_data_loader(
@@ -440,7 +450,7 @@ def main(config: _config.TrainConfig):
             train_dataset=data_loader.dataset,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
-        tok = data_loader.tokenizer
+        # tok = data_loader.tokenizer
         val_runner = ValidationStepRunner(config)
         pval_step = jax.jit(
             val_runner,
@@ -448,17 +458,17 @@ def main(config: _config.TrainConfig):
         )
 
         # Jitted reasoning sampler returning only (id_buf, t)
-        def _sample_reasoning_ids_t(state: training_utils.TrainState, observation: CoTObservation):
-            model_local = nnx.merge(state.model_def, state.params)
-            id_buf, t, *_ = model_local.sample_reasoning(observation)
-            return id_buf, t
+        # def _sample_reasoning_ids_t(state: training_utils.TrainState, observation: CoTObservation):
+        #     model_local = nnx.merge(state.model_def, state.params)
+        #     id_buf, t, *_ = model_local.sample_reasoning(observation)
+        #     return id_buf, t
 
-        psample_reasoning = jax.jit(
-            _sample_reasoning_ids_t,
-            # Expect observation replicated; return replicated outputs for consistent host access
-            in_shardings=(train_state_sharding, replicated_sharding),
-            out_shardings=(replicated_sharding, replicated_sharding),
-        )
+        # psample_reasoning = jax.jit(
+        #     _sample_reasoning_ids_t,
+        #     # Expect observation replicated; return replicated outputs for consistent host access
+        #     in_shardings=(train_state_sharding, replicated_sharding),
+        #     out_shardings=(replicated_sharding, replicated_sharding),
+        # )
         # Determine how many validation batches to evaluate each time.
         # If a fixed validation subset size is configured, compute batches from it;
         # otherwise fall back to a heuristic constant divided by global batch size.
@@ -479,10 +489,10 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    hard_example_tracker = vis_tools.HardExampleTracker(
-        tokenizer=data_loader.tokenizer,
-        hard_quantile=0.99,
-    )
+    # hard_example_tracker = vis_tools.HardExampleTracker(
+    #     tokenizer=data_loader.tokenizer,
+    #     hard_quantile=0.99,
+    # )
     host_batch_cache = HostBatchCache()
 
     for step in pbar:
@@ -554,39 +564,18 @@ def main(config: _config.TrainConfig):
                 dynamic_ncols=True,
                 disable=(jax.process_index() != 0),
             )
-            img_log_step_idx = np.random.randint(0, num_val_batches)
-            # img_log_step_idx = 0
-            num_images_to_log = 64
+            # img_log_step_idx = np.random.randint(0, num_val_batches)
+            # num_images_to_log = 64
             with sharding.set_mesh(mesh):
                 val_infos = []
                 # Collect L2 distances (in cm) between parsed vectors from GT and predicted texts
                 l2_cm_values: list[float] = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
-                for val_step_idx in val_pbar:
+                for _ in val_pbar:
                     val_batch = next(val_iter)
                     val_info = pval_step(train_rng, train_state, val_batch)
                     val_infos.append(val_info)
-
-                    if config.data.vis_dataset and val_step_idx == img_log_step_idx:
-                        k_local = int(min(num_images_to_log, val_batch[0].state.shape[0]))
-                        eval_batch = vis_tools.prepare_eval_batch(val_batch)
-                        eval_idx = jax.random.choice(
-                            rng,
-                            eval_batch[0].state.shape[0],
-                            shape=(k_local,),
-                            replace=False,
-                        )
-                        eval_batch = vis_tools.subsample_batch(eval_batch, eval_idx)
-                        gt_batch = vis_tools.subsample_batch(val_batch, eval_idx)
-                        # Ensure observation for sampling is replicated across devices
-                        obs_local = jax.device_put(eval_batch[0], replicated_sharding)
-                        id_buf, t_final = psample_reasoning(train_state, obs_local)
-                        if jax.process_index() == 0:
-                            l2_cm_values, to_log = vis_tools.eval_step(gt_batch, id_buf, t_final, tok, k_local)
-                        if to_log and jax.process_index() == 0:
-                            images_to_log = [wandb.Image(img) for img in to_log]
-                            wandb.log({"val/annotated": images_to_log}, step=step)
 
                 stacked_val = common_utils.stack_forest(val_infos)
                 reduced_val = jax.device_get(jax.tree.map(jnp.mean, stacked_val))

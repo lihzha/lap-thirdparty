@@ -19,9 +19,6 @@ from openpi_cot.dataloader.oxe_utils.configs import OXE_DATASET_CONFIGS
 from openpi_cot.dataloader.oxe_utils.configs import ActionEncoding
 from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
 
-# Fixed frame transform: x'=-y, y'=-x, z'=-z
-_C = tf.constant([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=tf.float32)
-
 
 def _tf_pi(dtype):
     return tf.constant(3.141592653589793, dtype=dtype)
@@ -254,8 +251,10 @@ def load_dataset_kwargs(
         raise ValueError(f"Cannot load `{dataset_name}`; language annotations required!")
 
     robot_morphology = dataset_kwargs.get("robot_morphology", "")
-    if robot_morphology.lower() == "bi-manual":
-        raise ValueError(f"Cannot load `{dataset_name}`; bi-manual datasets are not supported!")
+    is_bimanual = robot_morphology.lower() == "bi-manual"
+
+    # Add bimanual flag to dataset kwargs
+    dataset_kwargs["is_bimanual"] = is_bimanual
 
     has_suboptimal = dataset_kwargs.get("has_suboptimal")
     if isinstance(has_suboptimal, str):
@@ -271,14 +270,21 @@ def load_dataset_kwargs(
     else:
         raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
 
-    # Adjust Loaded Camera Views
-    if len(missing_keys := (set(load_camera_views) - set(dataset_kwargs["image_obs_keys"]))) > 0:
-        raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
+    # For bimanual datasets, also load wrist_right camera if available
+    camera_views_to_load = load_camera_views
+    # if is_bimanual and "wrist_right" in dataset_kwargs["image_obs_keys"]:
+    #     camera_views_to_load = tuple(set(load_camera_views) | {"wrist_right"})
+
+    # # Adjust Loaded Camera Views
+    # if len(missing_keys := (set(camera_views_to_load) - set(dataset_kwargs["image_obs_keys"]))) > 0:
+    #     raise ValueError(f"Cannot load `{dataset_name}`; missing camera views `{missing_keys}`")
 
     # Filter
-    dataset_kwargs["image_obs_keys"] = {
-        k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in load_camera_views
-    }
+    dataset_kwargs["image_obs_keys"] = {k: dataset_kwargs["image_obs_keys"].get(k, None) for k in load_camera_views}
+
+    # dataset_kwargs["image_obs_keys"] = {
+    #     k: v for k, v in dataset_kwargs["image_obs_keys"].items() if k in camera_views_to_load
+    # }
     for k, v in dataset_kwargs["image_obs_keys"].items():
         if k == "primary":
             assert v is not None, f"primary image is required for {dataset_name}"
@@ -496,17 +502,75 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
 
 
 @tf.function
-def transform_actions_xyz(movement_actions):
+def matrix_to_xyzrpy(T, eps=1e-6):
+    """
+    Extract position and Euler angles from 4x4 transformation matrix.
+
+    Args:
+        T: tensor of shape (..., 4, 4) - homogeneous transformation matrix
+        eps: epsilon for gimbal lock handling
+
+    Returns:
+        tensor of shape (..., 6) - [x, y, z, roll, pitch, yaw]
+    """
+    T = tf.convert_to_tensor(T)
+
+    # Extract translation (position)
+    xyz = T[..., :3, 3]
+
+    # Extract rotation matrix (top-left 3x3)
+    R = T[..., :3, :3]
+
+    # Convert rotation matrix to Euler XYZ (roll, pitch, yaw)
+    rpy = _euler_xyz_from_R(R, eps=eps)
+
+    # Concatenate position and orientation
+    return tf.concat([xyz, rpy], axis=-1)
+
+
+@tf.function
+def coordinate_transform_bcz(movement_actions):
     """
     movement_actions: (..., 6) where [:3] = translation deltas (xyz),
                       [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
     Returns transformed actions under x'=-y, y'=-x, z'=-z.
+
+    """
+    # Fixed frame transform: x'=-y, y'=-x, z'=-z
+    movement_actions = tf.convert_to_tensor(movement_actions)
+    dtype = movement_actions.dtype
+
+    # Ensure _C matches input dtype
+    C = tf.constant([[0.0, -1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, -1.0]], dtype=dtype)
+
+    # translations: t' = C t
+    t = movement_actions[..., :3]
+    t_prime = tf.linalg.matvec(C, t)
+
+    # rotations: R' = C R C^T, then back to Euler XYZ
+    e = movement_actions[..., 3:6]
+    R = _R_from_euler_xyz(e)
+    # _C is symmetric here, but keep transpose for clarity / generality
+    CT = tf.linalg.matrix_transpose(C)
+    R_prime = tf.linalg.matmul(tf.linalg.matmul(C, R), CT)
+    e_prime = _euler_xyz_from_R(R_prime)
+
+    return tf.concat([t_prime, e_prime], axis=-1)
+
+
+@tf.function
+def coordinate_transform_dobbe(movement_actions):
+    """
+    movement_actions: (..., 6) where [:3] = translation deltas (xyz),
+                      [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
+    Returns transformed actions under x'=y, y'=-x, z'=z.
+
     """
     movement_actions = tf.convert_to_tensor(movement_actions)
     dtype = movement_actions.dtype
 
     # Ensure _C matches input dtype
-    C = tf.cast(_C, dtype)
+    C = tf.constant([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=dtype)
 
     # translations: t' = C t
     t = movement_actions[..., :3]

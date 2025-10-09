@@ -27,6 +27,7 @@ DataDict: TypeAlias = at.PyTree
 class TokenizePromptAndReasoning(DataTransformFn):
     tokenizer: PaligemmaCoTTokenizer
     discrete_state_input: bool = False
+    prediction_prompt: str = "What is the robot's movement between two frames?"
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -41,6 +42,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
         else:
             state = None
 
+        # Always tokenize regular reasoning (prompt + language_actions)
         language_actions = data.pop("language_actions", None)  # if None, inference
         if language_actions is not None and not isinstance(language_actions, str):
             language_actions = language_actions.item()
@@ -68,19 +70,47 @@ class TokenizePromptAndReasoning(DataTransformFn):
             return not any_nonzero
 
         is_idle = _is_idle_language_action(language_actions)
-        example_mask = not is_idle
+        sample_mask = not is_idle
 
+        # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
 
-        return {
+        result = {
             **data,
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
-            "tokenized_reasoning_mask": reasoning_mask,
+            "tokenized_langact_mask": reasoning_mask,
             # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
-            "tokenized_numeric_mask": numeric_mask,
-            "example_mask": np.asarray(example_mask, dtype=bool),
+            "crictical_token_mask": numeric_mask,
+            "sample_mask": np.asarray(sample_mask, dtype=bool),
         }
+
+        # Additionally tokenize prediction if prediction_language_action is present
+        prediction_lang = data.pop("prediction_language_action", None)
+        prediction_prompt_str = data.pop("prediction_prompt", self.prediction_prompt)
+        if prediction_lang is not None:
+            # Parse prediction language action
+            if isinstance(prediction_lang, bytes):
+                prediction_lang = prediction_lang.decode("utf-8")
+            elif not isinstance(prediction_lang, str):
+                prediction_lang = (
+                    str(prediction_lang) if hasattr(prediction_lang, "__str__") else prediction_lang.item()
+                )
+
+            # Skip empty prediction language actions
+            if prediction_lang and prediction_lang.strip():
+                # Use prediction-specific tokenization
+                pred_tokens, pred_pad_mask, pred_reasoning_mask, pred_numeric_mask = self.tokenizer.tokenize_prediction(
+                    prediction_prompt_str, prediction_lang
+                )
+
+                # Add prediction-specific fields
+                result["tokenized_prediction"] = pred_tokens
+                result["tokenized_prediction_mask"] = pred_pad_mask
+                result["tokenized_prediction_langact_mask"] = pred_reasoning_mask
+                result["prediction_crictical_token_mask"] = pred_numeric_mask
+
+        return result
 
 
 @dataclasses.dataclass(frozen=True)

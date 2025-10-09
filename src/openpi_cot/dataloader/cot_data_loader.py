@@ -23,6 +23,7 @@ def _create_rlds_dataset(
     batch_size: int,
     action_horizon: int,
     action_dim: int,
+    enable_prediction_training: bool = False,
     *,
     shuffle: bool,
     seed: int,
@@ -65,6 +66,7 @@ def _create_rlds_dataset(
         train_dataset=train_dataset,
         standalone=True,
         action_proprio_normalization_type=NormalizationType.NORMAL,
+        enable_prediction_training=enable_prediction_training,
     )
 
     return dataset_cls(**kwargs)
@@ -107,18 +109,18 @@ def _make_iterable_transforms(
 
 
 class IterableTransformedDataset(up.IterableTransformedDataset):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, batch_size, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.batch_size = batch_size
 
     def __iter__(self):
         for sample in self._dataset:
             if self._is_batched:
                 # Transforms are designed to be applied to individual samples. So we need to split the batch into
                 # individual samples and apply the transform to each sample individually.
-                batch_size = next(v.shape[0] for v in sample.values())
 
                 # Split batch into individual samples using tree_map
-                individual_samples = [jax.tree.map(lambda x: x[i], sample) for i in range(batch_size)]  # noqa: B023
+                individual_samples = [jax.tree.map(lambda x: x[i], sample) for i in range(self.batch_size)]  # noqa: B023
 
                 # Transform each sample
                 transformed = [self._transform(s) for s in individual_samples]
@@ -161,6 +163,7 @@ def create_data_loader(
             batch_size=config.batch_size,
             action_horizon=config.model.action_horizon,
             action_dim=config.model.action_dim,
+            enable_prediction_training=config.model.enable_prediction_training,
             shuffle=shuffle,
             seed=seed,
             max_samples=max_samples if max_samples is not None else getattr(data_cfg, "max_samples", None),
@@ -170,7 +173,7 @@ def create_data_loader(
 
         # 2) transforms (split-aware)
         tx = _make_iterable_transforms(data_cfg, skip_norm_stats=data_cfg.norm_stats is None, split=split)
-        iterable = IterableTransformedDataset(ds, tx, is_batched=True)
+        iterable = IterableTransformedDataset(config.batch_size, ds, tx, is_batched=True)
 
         return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg)
 

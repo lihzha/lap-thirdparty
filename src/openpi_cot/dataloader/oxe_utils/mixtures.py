@@ -65,33 +65,35 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     #     ("roboturk", 2.0),
     # ],
     "oxe_pi_magic_soup": [
+        ("bc_z", 0.5),
         ("droid", 0.5),
-        # ("bc_z", 0.5),
         ("fractal20220817_data", 1.0),
-        # # ("kuka", 0.1),
+        # # ("kuka", 0.1),  # no language instructions
         ("bridge_v2_oxe", 1.0),
         ("taco_play", 1.0),
         ("jaco_play", 1.0),
-        # # ("berkeley_cable_routing", 1.0),
-        # # ("roboturk", 2.0),
-        # ("viola", 2.0),   # joint state
+        # # ("berkeley_cable_routing", 1.0),  # no language instructions
+        # # ("roboturk", 2.0),  # no prio
+        # # ("viola", 2.0),  # gripper mostly out of view
         ("berkeley_autolab_ur5", 3.0),
-        # # ("toto", 1.0),
+        # # ("toto", 1.0),   # no language instructions
         # # ("language_table", 0.1),
-        # # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0),
-        # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),
-        # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),
+        # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0),
+        # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),   # no language instructions
+        # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),  # no language instructions
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
-        # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # joint state
-        # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),
-        # # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),
+        ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # only joint state
+        # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions
+        # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions
         ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
-        # # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),   # joint state
-        # # ("utaustin_mutex", 1.0),  # joint state
-        # ("berkeley_fanuc_manipulation", 2.0),   # join state
-        ("cmu_stretch", 5.0),  # almost all movements are "move up"
+        # # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),   # only joint state
+        ("utaustin_mutex", 1.0),
+        ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
+        ("cmu_stretch", 2.0),  # almost all movements are "move up"
         ("fmb", 1.0),
-        # # ("dobbe", 0.2),  # question
+        ("dobbe", 0.2),  # question
+        # ("sample_r1_lite", 0.2),  # only joint position available for both actions and states
+        ("agibot_dataset", 0.2),
     ],
 }
 

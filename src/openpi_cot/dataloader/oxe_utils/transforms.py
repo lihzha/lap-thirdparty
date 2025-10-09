@@ -22,7 +22,7 @@ from typing import Any
 import tensorflow as tf
 
 
-def binarize_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
+def binarize_gripper_actions(actions: tf.Tensor, threshold: float = 0.95) -> tf.Tensor:
     """
     Converts gripper actions from continuous to binary values (0 and 1).
 
@@ -43,14 +43,14 @@ def binarize_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
                 carry = float(open_mask[i])
             new_actions[i] = carry
     """
-    open_mask, closed_mask = actions > 0.95, actions < 0.05
+    open_mask, closed_mask = actions > threshold, actions < (1 - threshold)
     in_between_mask = tf.logical_not(tf.logical_or(open_mask, closed_mask))
     is_open_float = tf.cast(open_mask, tf.float32)
 
     def scan_fn(carry, i):
-        return tf.cond(in_between_mask[i], lambda: tf.cast(carry, tf.float32), lambda: is_open_float[i])
+        return tf.cond(in_between_mask[i], lambda: carry, lambda: is_open_float[i])
 
-    return tf.scan(scan_fn, tf.range(tf.shape(actions)[0]), actions[-1], reverse=True)
+    return tf.scan(scan_fn, tf.range(tf.shape(actions)[0]), tf.cast(actions[-1], tf.float32), reverse=True)
 
 
 def invert_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
@@ -413,18 +413,50 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     gripper_action = tf.clip_by_value(gripper_action, 0, 1)
     gripper_action = invert_gripper_actions(gripper_action)
 
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"]["world_vector"],
-            trajectory["action"]["rotation_delta"],
-            gripper_action,
-        ),
-        axis=-1,
-    )
+    # trajectory["action"] = tf.concat(
+    #     (
+    #         trajectory["action"]["world_vector"],
+    #         trajectory["action"]["rotation_delta"],
+    #         gripper_action,
+    #     ),
+    #     axis=-1,
+    # )
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["observation"]["natural_language_instruction"]), ""
     # )  # delete uninformative language instruction
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+
+    # Reshape from column-major flattened format and transpose to row-major
+    state_matrix = tf.reshape(trajectory["observation"]["ee_states"][:, -16:], [-1, 4, 4])
+    # state_matrix = tf.transpose(state_matrix, [0, 2, 1])
+    state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
+    trajectory["observation"]["state"] = tf.concat(
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["gripper_states"]),
+        axis=-1,
+    )
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, gripper_action[:-1]], axis=1)
+    return traj_truncated
+
+    # trajectory["language_instruction"] = tf.fill(
+    #     tf.shape(trajectory["language_instruction"]), ""
+    # )  # delete uninformative language instruction
+    return trajectory
+
     return trajectory
 
 
@@ -688,6 +720,9 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+
     # invert gripper action + clip, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
         (
@@ -697,15 +732,33 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         axis=-1,
     )
 
+    trajectory["observation"]["state"] = tf.concat(
+        (matrix_to_xyzrpy(trajectory["observation"]["state_ee"]), trajectory["observation"]["state"][:, -1:]),
+        axis=-1,
+    )
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    return traj_truncated
+
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["language_instruction"]), ""
     # )  # delete uninformative language instruction
-    return trajectory
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_bcz
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-    from openpi_cot.dataloader.oxe_utils.data_utils import transform_actions_xyz
 
     trajectory["action"] = tf.concat(
         (
@@ -717,7 +770,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["eef_state"] = transform_actions_xyz(
+    trajectory["observation"]["eef_state"] = coordinate_transform_bcz(
         tf.concat(
             (
                 trajectory["observation"]["present/xyz"][:, :3],
@@ -747,7 +800,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
-    movement_actions = transform_actions_xyz(movement_actions)
+    movement_actions = coordinate_transform_bcz(movement_actions)
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
 
@@ -938,7 +991,7 @@ def uiuc_d3field_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]
 
 
 def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    trajectory["observation"]["state"] = trajectory["observation"]["state"][:, :8]
+    # trajectory["observation"]["state"] = trajectory["observation"]["state"][:, :8]
 
     # invert gripper action + clip, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
@@ -949,25 +1002,77 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+
+    # Reshape from column-major flattened format and transpose to row-major
+    state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
+    state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
+    trajectory["observation"]["state"] = tf.concat(
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
+        axis=-1,
+    )
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    return traj_truncated
+
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["language_instruction"]), ""
     # )  # delete uninformative language instruction
-    return trajectory
+    # return trajectory
 
 
 def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :6]
-    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, 6:7]
+    import tensorflow_graphics.geometry.transformation as tft
+
+    # trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :6]
+    # trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, 6:7]
 
     # dataset does not store gripper actions, so use gripper state info, invert so +1 = open, 0 = close
     trajectory["action"] = tf.concat(
         (
             trajectory["action"],
-            invert_gripper_actions(trajectory["observation"]["gripper_state"]),
+            invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]),
         ),
         axis=-1,
     )
+    # return trajectory
+
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["end_effector_state"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["end_effector_state"][:, 3:7]),
+            invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]),
+        ),
+        axis=-1,
+    )
+
     return trajectory
+
+    # movement_actions = tf.concat(
+    #     (
+    #         trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+    #         euler_diff(
+    #             trajectory["observation"]["state"][1:, 3:6],
+    #             trajectory["observation"]["state"][:-1, 3:6],
+    #         ),
+    #     ),
+    #     axis=-1,
+    # )
+    # traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    # traj_truncated["action"] = tf.concat([movement_actions, trajectory["observation"]["state"][:-1, -1:]], axis=1)
+    # return traj_truncated
 
 
 def cmu_playing_with_food_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -1076,8 +1181,30 @@ def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 def dobbe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # every input feature is batched, ie has leading batch dimension
-    trajectory["observation"]["proprio"] = trajectory["observation"]["state"]
-    return trajectory
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_dobbe
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    # every input feature is batched, ie has leading batch dimension
+    trajectory["observation"]["proprio"] = tf.concat(
+        (
+            coordinate_transform_dobbe(trajectory["observation"]["state"][:, :6]),
+            trajectory["observation"]["state"][:, -1:],
+        ),
+        axis=-1,
+    )
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["proprio"][1:, :3] - trajectory["observation"]["proprio"][:-1, :3],
+            euler_diff(trajectory["observation"]["proprio"][1:, 3:6], trajectory["observation"]["proprio"][:-1, 3:6]),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    return traj_truncated
 
 
 def roboset_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -1177,6 +1304,38 @@ def human_dataset_transform(sample: dict[str, Any]) -> dict[str, Any]:
     return sample
 
 
+def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    trajectory["action"] = trajectory["action"][..., :14]  # exclude torso action
+    # Apply R1 Lite specific transformations
+    return trajectory
+
+
+def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+            invert_gripper_actions(trajectory["action"][:-1, 6:7]),
+            trajectory["observation"]["state"][1:, 7:10] - trajectory["observation"]["state"][:-1, 7:10],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 10:13],
+                trajectory["observation"]["state"][:-1, 10:13],
+            ),
+            invert_gripper_actions(trajectory["action"][:-1, 13:14]),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = movement_actions
+
+    return traj_truncated
+
+
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,
@@ -1268,4 +1427,6 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "ego4d_split_2": human_dataset_transform,
     "ego4d_split_3": human_dataset_transform,
     "ego4d_split_4": human_dataset_transform,
+    "sample_r1_lite": sample_r1_lite_dataset_transform,
+    "agibot_dataset": agibot_dataset_transform,
 }

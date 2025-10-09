@@ -25,8 +25,10 @@ def parse_image(image) -> np.ndarray:
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
-    if image.shape[0] == 3:
+    if image.shape[0] == 3 and len(image.shape) == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    if image.shape[1] == 3 and len(image.shape) == 4:
+        image = einops.rearrange(image, "t c h w -> t h w c")
     return image
 
 
@@ -51,14 +53,6 @@ def to_str_list(x):
         else:
             out.append(str(item))
     return out
-
-
-def is_trivial_image(img: np.ndarray, mask: np.ndarray) -> bool:
-    if np.all(img == 0):
-        if mask == np.False_:
-            return False
-        return True
-    return np.all(img == 0) or np.all(img == 255)
 
 
 def _format_numeric(val: float, sum_decimal: str) -> str:
@@ -171,6 +165,32 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     parts.append(f"set gripper to {g_last:.1f}")
 
     return " and ".join(parts)
+
+
+def summarize_bimanual_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:
+    """Convert bimanual numeric delta EE actions into a language string.
+
+    Expects format: [left_ee_pose (6), left_gripper (1), right_ee_pose (6), right_gripper (1)] = 14 dims
+    left_ee_pose and right_ee_pose are [x, y, z, roll, pitch, yaw] in meters and radians.
+    """
+    arr = np.asarray(arr_like, dtype=float)
+    if arr.ndim == 1:
+        arr = arr[None, :]
+    if arr.shape[-1] < 14:
+        return None
+
+    # Split into left and right arms
+    left_actions = arr[..., :7]  # [x, y, z, r, p, y, gripper]
+    right_actions = arr[..., 7:14]  # [x, y, z, r, p, y, gripper]
+
+    # Summarize each arm separately
+    left_summary = summarize_numeric_actions(left_actions, sum_decimal, include_rotation)
+    right_summary = summarize_numeric_actions(right_actions, sum_decimal, include_rotation)
+
+    if left_summary is None or right_summary is None:
+        return None
+
+    return f"Left arm: {left_summary}. Right arm: {right_summary}"
 
 
 def sum_language_actions(actions_list, sum_decimal, include_rotation=False):

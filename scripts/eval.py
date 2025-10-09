@@ -180,7 +180,7 @@ class RolloutEvaluator:
         state: training_utils.TrainState,
         batch: tuple[CoTObservation, _model.Actions],
     ) -> tuple[jax.Array, jax.Array]:
-        """Sample reasoning tokens for rollout evaluation.
+        """Sample language action tokens for rollout evaluation.
 
         Returns:
             id_buf: Sampled token IDs [batch, seq_len, 1]
@@ -189,11 +189,11 @@ class RolloutEvaluator:
         model = nnx.merge(state.model_def, state.params)
         model.eval()
 
-        # Prepare eval batch (remove reasoning from ground truth)
+        # Prepare eval batch (remove language action from ground truth)
         observation, _ = batch
 
-        # Sample reasoning tokens
-        id_buf, t_final = model.sample_reasoning(observation)
+        # Sample language action tokens
+        id_buf, t_final = model.sample_language_actions(observation)
 
         return id_buf, t_final
 
@@ -503,7 +503,7 @@ def evaluate_rollout(
                 logging.info(f"Reached end of dataset at batch {batch_idx}")
                 break
 
-            # Prepare eval batch (remove reasoning) and replicate for JIT
+            # Prepare eval batch (remove language actions) and replicate for JIT
             eval_batch = vis_tools.prepare_eval_batch(batch)
             # Replicate the batch to match expected sharding
             eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
@@ -514,9 +514,7 @@ def evaluate_rollout(
             # Process results on host
             if jax.process_index() == 0:
                 k_local = min(config.batch_size, batch[0].state.shape[0])
-                l2_cm_values, to_log = vis_tools.eval_step(
-                    batch, id_buf, t_final, tokenizer, k_local, vis_dataset=getattr(config.data, "vis_dataset", False)
-                )
+                l2_cm_values, to_log = vis_tools.eval_step(batch, id_buf, t_final, tokenizer, k_local)
 
                 if l2_cm_values:
                     l2_cm_values_all.extend(l2_cm_values)
