@@ -228,8 +228,8 @@ class CoTRldsDatasetSpec:
     primary_image_key: str = "base_0_rgb"
     wrist_image_key: str = "left_wrist_0_rgb"
     wrist_image_right_key: str = "right_wrist_0_rgb"
-    default_lang_value: tf.Tensor = field(
-        default_factory=lambda: tf.io.serialize_tensor(tf.constant([], dtype=tf.string))
+    default_lang_value: bytes = field(
+        default_factory=lambda: tf.io.serialize_tensor(tf.constant([], dtype=tf.string)).numpy()
     )
     default_ep_value: tf.Tensor = field(default_factory=lambda: tf.constant("", dtype=tf.string))
     fallback_instructions = tf.constant(
@@ -345,6 +345,9 @@ class SingleCoTDataset:
             action_horizon=action_horizon,
         )
 
+        ds = dataset_size(self.dataset)
+        logging.info(f"Dataset size after filtering: {ds} episodes")
+
         self.apply_repack_transforms()
 
         # self.dataset = self.dataset.shuffle(60_000, seed=self.seed)
@@ -352,6 +355,10 @@ class SingleCoTDataset:
         self.apply_flatten()
 
         self.apply_frame_filters()
+
+        ds = dataset_size(self.dataset)
+        logging.info(f"Dataset size after flattening: {ds} samples")
+        breakpoint()
 
         if standalone:
             # Apply common shuffling/take/cache behavior
@@ -910,8 +917,12 @@ class DroidCoTDataset(SingleCoTDataset):
             episode_id = traj["trajectory_id"][0]
             if self.use_json_actions:
                 lang_bytes = self.lang_table.lookup(episode_id)
-                lang_tensor = tf.io.parse_tensor(lang_bytes, tf.string)
-                lang_tensor = lang_tensor[:traj_len]
+                # Check if lang_bytes is valid before parsing
+                lang_tensor = tf.cond(
+                    tf.not_equal(lang_bytes, tf.constant(self.spec.default_lang_value, dtype=tf.string)),
+                    lambda: tf.io.parse_tensor(lang_bytes, tf.string)[:traj_len],
+                    lambda: tf.fill([traj_len], tf.constant("", dtype=tf.string)),
+                )
 
             else:
                 lang_tensor = tf.fill([traj_len], tf.constant(""))
@@ -919,8 +930,16 @@ class DroidCoTDataset(SingleCoTDataset):
             instr_bytes = self.instr_table.lookup(episode_id)
 
             def _sample_from_table():
-                arr = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
-                return tf.random.shuffle(arr, seed=self.seed)[0]
+                # Check if instr_bytes is empty (default value)
+                # If empty, return empty string - these will be filtered by _has_instruction later
+                return tf.cond(
+                    tf.logical_and(
+                        tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
+                        tf.greater(tf.strings.length(instr_bytes), 10),
+                    ),
+                    lambda: tf.random.shuffle(tf.io.parse_tensor(instr_bytes, out_type=tf.string), seed=self.seed)[0],
+                    lambda: tf.constant("", dtype=tf.string),
+                )
 
             instruction = _sample_from_table()
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
@@ -1032,11 +1051,12 @@ class DroidCoTDataset(SingleCoTDataset):
                 return tf.constant(value=False, dtype=tf.bool)
             # Look up by episode_id (NOT episode_path). Using episode_path here would filter everything out.
             lang = self.lang_table.lookup(episode_id)
-            if tf.equal(lang, self.spec.default_lang_value):
+            default_lang_const = tf.constant(self.spec.default_lang_value, dtype=tf.string)
+            if tf.equal(lang, default_lang_const):
                 return tf.constant(value=False, dtype=tf.bool)
             return tf.logical_and(
                 tf.not_equal(episode_id, self.spec.default_ep_value),
-                tf.not_equal(lang, self.spec.default_lang_value),
+                tf.not_equal(lang, default_lang_const),
             )
 
         def _path_ok(traj):
