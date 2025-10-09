@@ -1206,13 +1206,11 @@ class SingleOXECoTDataset(SingleCoTDataset):
             )
 
             for new, old in self.image_obs_keys.items():
-                if not self.use_wrist_image and new == "wrist":
-                    continue
-                if "primary" in new:
+                if new == "primary":
                     img_key = self.spec.primary_image_key
                 elif new == "wrist_right":
                     img_key = self.spec.wrist_image_right_key
-                elif "wrist" in new:
+                elif new == "wrist":
                     img_key = self.spec.wrist_image_key
                 else:
                     raise ValueError(f"Unknown image key: {new}")
@@ -1362,7 +1360,6 @@ class OXECoTDatasets:
         logging.info("Reads per Dataset: %s", reads_per_dataset)
 
         datasets, dataset_sizes, all_dataset_statistics = [], [], {}
-        has_bimanual_dataset = False
         logging.info("Constructing datasets...")
         for dataset_name, threads, reads in zip(  # noqa: B905
             dataset_names,
@@ -1399,9 +1396,6 @@ class OXECoTDatasets:
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_name] = dataset_statistics
-            # Track if any dataset is bimanual
-            if ds.is_bimanual:
-                has_bimanual_dataset = True
 
         # Get the indices of the "primary" datasets (i.e., datasets with sample_weight == 1.0)
         # primary_dataset_indices = np.array([idx for idx in range(len(sample_weights)) if sample_weights[idx] == 1.0])
