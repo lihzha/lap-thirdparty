@@ -1034,18 +1034,45 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 
 
 def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :6]
-    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, 6:7]
+    import tensorflow_graphics.geometry.transformation as tft
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    # trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :6]
+    # trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, 6:7]
 
     # dataset does not store gripper actions, so use gripper state info, invert so +1 = open, 0 = close
-    trajectory["action"] = tf.concat(
+    # trajectory["action"] = tf.concat(
+    #     (
+    #         trajectory["action"],
+    #         invert_gripper_actions(trajectory["observation"]["gripper_state"]),
+    #     ),
+    #     axis=-1,
+    # )
+    # return trajectory
+
+    trajectory["observation"]["state"] = tf.concat(
         (
-            trajectory["action"],
-            invert_gripper_actions(trajectory["observation"]["gripper_state"]),
+            trajectory["observation"]["end_effector_state"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["end_effector_state"][:, 3:7]),
+            invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]),
         ),
         axis=-1,
     )
-    return trajectory
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["observation"]["state"][:-1, -1:]], axis=1)
+    return traj_truncated
 
 
 def cmu_playing_with_food_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:

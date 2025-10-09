@@ -495,8 +495,8 @@ OXE_DATASET_CONFIGS = {
             "wrist": "wrist_image",
         },
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": ["joint_state", None, "gripper_state"],
-        "state_encoding": StateEncoding.JOINT,
+        "state_obs_keys": ["state"],
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "cmu_playing_with_food": {
