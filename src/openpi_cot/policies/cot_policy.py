@@ -293,8 +293,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
         inputs["prompt"] = prompt_str
 
-        breakpoint()
-
         # Extract state_type if available
         state_type = data.get("state_type")
         if state_type is not None:
@@ -361,7 +359,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Always prepare regular language actions for reasoning loss
         inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
-        breakpoint()
 
         # Additionally prepare prediction if available (independent of regular reasoning)
         if "prediction_language_action" in data:
@@ -376,7 +373,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             assert not self.enable_prediction_training, (
                 "Prediction training enabled in policy but no prediction language action found in data."
             )
-        breakpoint()
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):
