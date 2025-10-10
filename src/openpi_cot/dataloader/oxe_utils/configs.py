@@ -812,7 +812,7 @@ OXE_DATASET_METADATA = {
         "has_suboptimal": "No",
     },
     "roboturk": {
-        "control_frequency": 10,
+        "control_frequency": 5,  # 10
         "language_annotations": "Templated",
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
