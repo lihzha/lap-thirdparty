@@ -1233,6 +1233,8 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 #     from_encoding=self.state_encoding,
                 #     to_encoding=self.config.state_encoding,
                 # )
+            else:
+                new_obs["state"] = tf.zeros((traj_len, 0), dtype=tf.float32)  # Empty state
 
             # Determine state type from state encoding
             state_type_str = state_encoding_to_type(self.config.state_encoding)

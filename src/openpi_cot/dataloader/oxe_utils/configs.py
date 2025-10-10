@@ -144,7 +144,7 @@ OXE_DATASET_CONFIGS = {
     "roboturk": {
         "image_obs_keys": {"primary": "front_rgb", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": [None, None, None, None, None, None, None, None],
+        "state_obs_keys": [],
         "state_encoding": StateEncoding.NONE,
         "action_encoding": ActionEncoding.EEF_POS,
     },
