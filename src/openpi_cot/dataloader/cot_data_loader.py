@@ -29,7 +29,7 @@ def _create_rlds_dataset(
     seed: int,
     max_samples: int | None,
     split: str,
-    train_dataset: up.Dataset | None = None,
+    hash_tables: dict | None = None,
 ) -> up.Dataset:
     # Per-host batching; avoids redundant slicing work in multi-process setups
     local_bsz = max(1, batch_size // jax.process_count())
@@ -63,7 +63,7 @@ def _create_rlds_dataset(
         split=split,
         action_horizon=action_horizon,
         action_dim=action_dim,
-        train_dataset=train_dataset,
+        hash_tables=hash_tables,
         standalone=True,
         action_proprio_normalization_type=NormalizationType.NORMAL,
         enable_prediction_training=enable_prediction_training,
@@ -142,7 +142,7 @@ def create_data_loader(
     max_samples: int | None = None,
     split: str = "train",
     framework: Literal["jax", "pytorch"] = "jax",
-    train_dataset: up.Dataset | None = None,
+    hash_tables: dict | None = None,
 ) -> up.DataLoader[tuple[CoTObservation, _model.Actions]]:
     # Avoid import-time side effects:
     # Only clear LEROBOT_HOME if we are about to construct a LeRobot dataset.
@@ -168,7 +168,7 @@ def create_data_loader(
             seed=seed,
             max_samples=max_samples if max_samples is not None else getattr(data_cfg, "max_samples", None),
             split=split,
-            train_dataset=train_dataset,
+            hash_tables=hash_tables,
         )
 
         # 2) transforms (split-aware)

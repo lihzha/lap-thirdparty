@@ -241,7 +241,7 @@ class PiCoT(_pi0.Pi0):
         actions: _model.Actions,
         *,
         train: bool = False,
-    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, ""], at.Float[at.Array, ""]]:
+    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, ""], at.Float[at.Array, ""], dict[str, at.Array]]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
         observation = preprocess_observation(
@@ -282,6 +282,9 @@ class PiCoT(_pi0.Pi0):
         token_accuracy = jnp.array(0.0)
         critical_token_accuracy = jnp.array(0.0)
 
+        # Additional metrics to return
+        metrics = {}
+
         # Cross-entropy (language/reasoning) loss
         if self.enable_langact_training:
             attn_mask_lang = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
@@ -312,6 +315,7 @@ class PiCoT(_pi0.Pi0):
                 train=True,
                 per_example=True,
             )
+            metrics["lang_loss"] = lang_loss
             total_loss = total_loss + self.language_loss_weight * lang_loss
 
             # Compute token accuracy
@@ -373,6 +377,24 @@ class PiCoT(_pi0.Pi0):
                 train=True,
                 per_example=True,
             )
+            metrics["pred_loss"] = pred_loss
+
+            # Compute prediction token accuracy
+            predictions_pred = jnp.argmax(shift_logits_pred, axis=-1)
+            correct_pred = (predictions_pred == shift_labels_pred).astype(jnp.float32)
+            masked_correct_pred = correct_pred * token_mask_pred
+            num_tokens_pred = jnp.maximum(token_mask_pred.sum(), 1.0)
+            pred_token_accuracy = masked_correct_pred.sum() / num_tokens_pred
+            metrics["pred_token_accuracy"] = pred_token_accuracy
+
+            # Compute prediction critical token accuracy if available
+            if hasattr(observation, "crictical_prediction_token_mask") and observation.crictical_prediction_token_mask is not None:
+                critical_pred_mask = observation.crictical_prediction_token_mask[:, 1:] * ex_mask_pred
+                critical_correct_pred = correct_pred * critical_pred_mask
+                num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)
+                pred_critical_token_accuracy = critical_correct_pred.sum() / num_critical_pred
+                metrics["pred_critical_token_accuracy"] = pred_critical_token_accuracy
+
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
 
         # Diffusion (actions) loss
@@ -393,9 +415,10 @@ class PiCoT(_pi0.Pi0):
             (_, suffix_out), _ = self.PaliGemma.llm([prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions)
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
             action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
+            metrics["action_loss"] = action_loss
             total_loss = total_loss + self.action_loss_weight * action_loss
 
-        return total_loss, token_accuracy, critical_token_accuracy
+        return total_loss, token_accuracy, critical_token_accuracy, metrics
 
     @override
     def sample_actions(

@@ -1090,7 +1090,7 @@ class DroidCoTDataset(SingleCoTDataset):
         shuffle: bool = False,
         batch_size: int = 1,
         max_samples: int | None = None,
-        train_dataset=None,
+        hash_tables: dict = None,
         skip_normalization: bool = False,
         enable_prediction_training: bool = False,
     ):
@@ -1102,12 +1102,12 @@ class DroidCoTDataset(SingleCoTDataset):
             num_parallel_reads = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
             num_parallel_calls = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
 
-        if train_dataset is not None:
-            self.cam_table = train_dataset.cam_table
-            self.lang_table = train_dataset.lang_table
-            self.ep_table = train_dataset.ep_table
-            self.instr_table = train_dataset.instr_table
-            self.filter_table = train_dataset.filter_table
+        if hash_tables is not None:
+            self.cam_table = hash_tables.get("cam_table")
+            self.lang_table = hash_tables.get("lang_table")
+            self.ep_table = hash_tables.get("ep_table")
+            self.instr_table = hash_tables.get("instr_table")
+            self.filter_table = hash_tables.get("filter_table")
 
         else:
             if self.spec.lang_action_dir_name in config.language_action_dir:
@@ -1326,11 +1326,13 @@ class OXECoTDatasets:
         max_samples: int | None = None,
         action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
         balance_weights: bool = True,  # noqa: FBT001, FBT002
-        train_dataset=None,
+        hash_tables: dict = None,
         standalone=True,
         use_global_normalization: bool = True,
         enable_prediction_training: bool = False,
     ):
+        self.hash_tables = hash_tables
+
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
         mixture_spec = OXE_NAMED_MIXTURES[config.data_mix]
@@ -1383,8 +1385,15 @@ class OXECoTDatasets:
             if dataset_name == "droid":
                 ds = DroidCoTDataset(
                     **kwargs,
-                    train_dataset=train_dataset,
+                    hash_tables=self.hash_tables,
                 )
+                self.hash_tables = {
+                    "cam_table": ds.cam_table,
+                    "lang_table": ds.lang_table,
+                    "ep_table": ds.ep_table,
+                    "instr_table": ds.instr_table,
+                    "filter_table": ds.filter_table,
+                }
             else:
                 ds = SingleOXECoTDataset(
                     dataset_name=dataset_name,

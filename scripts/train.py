@@ -281,15 +281,15 @@ class TrainingStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            per_sample_loss, token_accuracy, critical_token_accuracy = model.compute_loss(
+            per_sample_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
                 rng, observation, actions, train=True
             )
-            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy, critical_token_accuracy)
+            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy, critical_token_accuracy, metrics)
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
-        (loss, (per_sample_loss, token_accuracy, critical_token_accuracy)), grads = nnx.value_and_grad(
+        (loss, (per_sample_loss, token_accuracy, critical_token_accuracy, loss_metrics)), grads = nnx.value_and_grad(
             loss_fn, argnums=diff_state, has_aux=True
         )(model, train_rng, observation, actions)
 
@@ -328,6 +328,15 @@ class TrainingStepRunner:
             "critical_token_accuracy": critical_token_accuracy,
         }
 
+        # Add individual loss components from metrics
+        for key, value in loss_metrics.items():
+            if key.endswith("_loss"):
+                # For loss components, compute mean
+                info[key] = jnp.mean(value)
+            else:
+                # For accuracies, use as-is
+                info[key] = value
+
         return new_state, info
 
 
@@ -352,21 +361,32 @@ class ValidationStepRunner:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            val_loss, token_accuracy, critical_token_accuracy = model.compute_loss(
+            val_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
                 rng, observation, actions, train=False
             )
-            return jnp.mean(val_loss), token_accuracy, critical_token_accuracy
+            return jnp.mean(val_loss), token_accuracy, critical_token_accuracy, metrics
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         if hasattr(model, "compute_eval_metrics"):
             return model.compute_eval_metrics(eval_rng, observation, actions)
-        loss, token_accuracy, critical_token_accuracy = loss_fn(model, eval_rng, observation, actions)
-        return {
+        loss, token_accuracy, critical_token_accuracy, val_metrics = loss_fn(model, eval_rng, observation, actions)
+        result = {
             "val_loss": loss,
             "val_token_accuracy": token_accuracy,
             "val_critical_token_accuracy": critical_token_accuracy,
         }
+
+        # Add individual validation loss components from metrics
+        for key, value in val_metrics.items():
+            if key.endswith("_loss"):
+                # For loss components, compute mean and prefix with val_
+                result[f"val_{key}"] = jnp.mean(value)
+            else:
+                # For accuracies, prefix with val_
+                result[f"val_{key}"] = value
+
+        return result
 
 
 def main(config: _config.TrainConfig):
@@ -445,7 +465,7 @@ def main(config: _config.TrainConfig):
             shuffle=False,
             split="val",
             max_samples=getattr(config.data, "val_max_samples", None),
-            train_dataset=data_loader.dataset,
+            hash_tables=data_loader.hash_tables,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
