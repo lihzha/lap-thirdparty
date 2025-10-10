@@ -22,6 +22,7 @@ class LanguageActionFormat:
     This modular structure allows easy extension to support different
     action description formats and styles.
     """
+
     name: str
     # Style of formatting
     style: Literal["verbose", "compact", "directional_only"] = "verbose"
@@ -40,10 +41,10 @@ class LanguageActionFormat:
         """Convert to legacy sum_decimal format for backward compatibility."""
         if self.style == "compact":
             return "compact"
-        elif self.style == "directional_only":
+        if self.style == "directional_only":
             return "no_number"
-        else:  # verbose
-            return f"{self.decimal_places}f"
+        # verbose
+        return f"{self.decimal_places}f"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -52,6 +53,7 @@ class LanguageActionConfig:
 
     This is a wrapper around LanguageActionFormat for backward compatibility.
     """
+
     name: str = "default"
     format: LanguageActionFormat | None = None
     # Legacy fields for backward compatibility
@@ -74,6 +76,7 @@ class LanguageActionConfig:
                 style = "verbose"
                 # Extract decimal places from format like "0f" or "2f"
                 import re
+
                 m = re.fullmatch(r"(\d+)f", self.sum_decimal or "0f")
                 decimal_places = int(m.group(1)) if m else 0
                 use_schema_format = False
@@ -197,8 +200,7 @@ def get_language_action_format(name: str) -> LanguageActionFormat:
     """Get a language action format by name."""
     if name not in LANGUAGE_ACTION_FORMAT_REGISTRY:
         raise ValueError(
-            f"Unknown language action format: {name}. "
-            f"Available formats: {list(LANGUAGE_ACTION_FORMAT_REGISTRY.keys())}"
+            f"Unknown language action format: {name}. Available formats: {list(LANGUAGE_ACTION_FORMAT_REGISTRY.keys())}"
         )
     return LANGUAGE_ACTION_FORMAT_REGISTRY[name]
 
@@ -207,8 +209,7 @@ def get_language_action_config(name: str) -> LanguageActionConfig:
     """Get a language action config by name."""
     if name not in LANGUAGE_ACTION_CONFIG_REGISTRY:
         raise ValueError(
-            f"Unknown language action config: {name}. "
-            f"Available configs: {list(LANGUAGE_ACTION_CONFIG_REGISTRY.keys())}"
+            f"Unknown language action config: {name}. Available configs: {list(LANGUAGE_ACTION_CONFIG_REGISTRY.keys())}"
         )
     return LANGUAGE_ACTION_CONFIG_REGISTRY[name]
 
@@ -292,6 +293,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
         inputs["prompt"] = prompt_str
 
+        breakpoint()
+
         # Extract state_type if available
         state_type = data.get("state_type")
         if state_type is not None:
@@ -328,11 +331,15 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
             if is_bimanual:
                 summed = summarize_bimanual_numeric_actions(
-                    raw_array, self.language_action_config.get_sum_decimal(), self.language_action_config.get_include_rotation()
+                    raw_array,
+                    self.language_action_config.get_sum_decimal(),
+                    self.language_action_config.get_include_rotation(),
                 )
             else:
                 summed = summarize_numeric_actions(
-                    raw_array, self.language_action_config.get_sum_decimal(), self.language_action_config.get_include_rotation()
+                    raw_array,
+                    self.language_action_config.get_sum_decimal(),
+                    self.language_action_config.get_include_rotation(),
                 )
             return summed
         seq = to_str_list(la)
