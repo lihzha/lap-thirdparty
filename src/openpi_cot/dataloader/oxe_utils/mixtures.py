@@ -112,8 +112,8 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes.
         ### To be tested
-        ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
-        # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
+        # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
+        ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ### Bimanual
         # ("agibot_dataset", 0.2),

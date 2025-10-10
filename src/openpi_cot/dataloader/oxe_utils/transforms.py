@@ -803,15 +803,6 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
-    # invert gripper action + clip, +1 = open, 0 = close
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"][:, :6],
-            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
-        ),
-        axis=-1,
-    )
-
     trajectory["observation"]["state"] = tf.concat(
         (matrix_to_xyzrpy(trajectory["observation"]["state_ee"]), trajectory["observation"]["state"][:, -1:]),
         axis=-1,
@@ -828,7 +819,9 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         axis=-1,
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    traj_truncated["action"] = tf.concat(
+        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
+    )
 
     # Randomly pad empty language instructions with fallback text
     fallback_instructions = tf.constant(
