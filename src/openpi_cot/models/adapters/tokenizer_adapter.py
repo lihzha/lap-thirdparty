@@ -28,12 +28,13 @@ class PromptFormat:
     include_state: bool = False
     state_config: StateDiscretizationConfig | None = None
 
-    def format_prompt(self, prompt: str, state: np.ndarray | None = None) -> str:
-        """Format the prompt with optional state.
+    def format_prompt(self, prompt: str, state: np.ndarray | None = None, state_type: str | None = None) -> str:
+        """Format the prompt with optional state and state type.
 
         Args:
             prompt: The task prompt/instruction
             state: Optional state vector to discretize and include
+            state_type: Optional state type ("joint_pos", "eef_pose", "none")
 
         Returns:
             Formatted prompt string ready for tokenization
@@ -41,12 +42,23 @@ class PromptFormat:
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
 
         if self.include_state:
-            if state is None:
-                raise ValueError(f"State required for prompt format '{self.name}' but not provided")
-            if self.state_config is None:
-                raise ValueError(f"State config required for prompt format '{self.name}'")
-            state_str = self._discretize_state(state)
-            return self.template.format(prompt=cleaned_prompt, state=state_str)
+            # Determine state type label
+            if state_type == "none" or state is None:
+                state_label = "None"
+                state_str = ""
+            else:
+                # Map state_type to human-readable label
+                state_type_labels = {
+                    "joint_pos": "joint position",
+                    "eef_pose": "end-effector pose",
+                }
+                state_label = state_type_labels.get(state_type, state_type)
+
+                if self.state_config is None:
+                    raise ValueError(f"State config required for prompt format '{self.name}'")
+                state_str = self._discretize_state(state)
+
+            return self.template.format(prompt=cleaned_prompt, state=state_str, state_label=state_label)
         else:
             return self.template.format(prompt=cleaned_prompt)
 
@@ -86,7 +98,7 @@ class PromptFormat:
 # Predefined prompt formats - easily extensible by adding new instances
 PI05_PROMPT_FORMAT = PromptFormat(
     name="pi05",
-    template="Task: {prompt}, State: {state};\nAction: ",
+    template="Task: {prompt}, State ({state_label}): {state};\nAction: ",
     include_state=True,
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
 )
@@ -105,7 +117,7 @@ VQA_PROMPT_FORMAT = PromptFormat(
 
 COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     name="coordinate_system",
-    template="Task: {prompt}, State: {state}. Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up. Actions: ",
+    template="Task: {prompt}, State ({state_label}): {state}. Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up. Actions: ",
     include_state=True,
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
 )
@@ -144,6 +156,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         prompt: str,
         reasoning: str | None = None,
         state: np.ndarray | None = None,
+        state_type: str | None = None,
         prompt_format: PromptFormat | str | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Resolve prompt format
@@ -160,7 +173,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             fmt = prompt_format
 
         # Format the prompt using the PromptFormat
-        formatted_prompt = fmt.format_prompt(prompt, state)
+        formatted_prompt = fmt.format_prompt(prompt, state, state_type)
 
         # Tokenize
         pad_id = self._tokenizer.pad_id()

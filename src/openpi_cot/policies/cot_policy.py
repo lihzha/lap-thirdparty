@@ -130,6 +130,20 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
         inputs["prompt"] = prompt_str
 
+        # Extract state_type if available
+        state_type = data.get("state_type")
+        if state_type is not None:
+            if isinstance(state_type, bytes):
+                state_type_str = state_type.decode("utf-8")
+            elif isinstance(state_type, str):
+                state_type_str = state_type
+            else:
+                state_type_str = str(state_type)
+            inputs["state_type"] = state_type_str
+        else:
+            # Default to "eef_pose" if not provided (for backward compatibility)
+            inputs["state_type"] = "eef_pose"
+
         if "actions" in data:
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)

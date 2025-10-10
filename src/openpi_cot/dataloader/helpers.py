@@ -35,6 +35,25 @@ class NormalizationType(str, Enum):
     # fmt: on
 
 
+def state_encoding_to_type(encoding: StateEncoding) -> str:
+    """Map StateEncoding to human-readable state type string.
+
+    Args:
+        encoding: The StateEncoding enum value
+
+    Returns:
+        State type string: "none", "joint_pos", or "eef_pose"
+    """
+    if encoding == StateEncoding.NONE:
+        return "none"
+    elif encoding in (StateEncoding.JOINT, StateEncoding.JOINT_BIMANUAL):
+        return "joint_pos"
+    elif encoding in (StateEncoding.POS_EULER, StateEncoding.POS_QUAT, StateEncoding.EEF_R6):
+        return "eef_pose"
+    else:
+        raise ValueError(f"Unknown StateEncoding: {encoding}")
+
+
 def euler_xyz_to_rot(rx, ry, rz):
     # Build rotation matrix from XYZ intrinsic rotations
     cx, sx = np.cos(rx), np.sin(rx)
