@@ -747,26 +747,26 @@ def cmu_franka_exploration_dataset_transform(trajectory: dict[str, Any]) -> dict
 
 
 def ucsd_kitchen_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    # from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
-    trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :7]
+    # trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :7]
 
-    movement_actions = tf.concat(
-        (
-            trajectory["action"][1:, :3] - trajectory["action"][:-1, :3],
-            euler_diff(
-                trajectory["action"][1:, 3:6],
-                trajectory["action"][:-1, 3:6],
-            ),
-            trajectory["action"][1:, 6:7],
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = movement_actions
-    return traj_truncated
-    # trajectory["action"] = trajectory["action"][..., :-1]
-    # return trajectory
+    # movement_actions = tf.concat(
+    #     (
+    #         trajectory["action"][1:, :3] - trajectory["action"][:-1, :3],
+    #         euler_diff(
+    #             trajectory["action"][1:, 3:6],
+    #             trajectory["action"][:-1, 3:6],
+    #         ),
+    #         trajectory["action"][1:, 6:7],
+    #     ),
+    #     axis=-1,
+    # )
+    # traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    # traj_truncated["action"] = movement_actions
+    # return traj_truncated
+    trajectory["action"] = trajectory["action"][..., :-1]
+    return trajectory
 
 
 def ucsd_pick_place_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
