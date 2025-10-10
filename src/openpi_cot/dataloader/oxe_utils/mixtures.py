@@ -93,7 +93,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("fmb", 1.0),
         ("dobbe", 0.2),  # question
         # ("sample_r1_lite", 0.2),  # only joint position available for both actions and states
-        ("agibot_dataset", 0.2),
+        # ("agibot_dataset", 0.2),
     ],
 }
 

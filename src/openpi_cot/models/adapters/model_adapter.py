@@ -19,7 +19,7 @@ ArrayT = TypeVar("ArrayT", bound=jax.Array | np.ndarray)
 IMAGE_KEYS = (
     "base_0_rgb",
     "left_wrist_0_rgb",
-    "right_wrist_0_rgb",
+    # "right_wrist_0_rgb",
 )
 
 logger = logging.getLogger("openpi")
