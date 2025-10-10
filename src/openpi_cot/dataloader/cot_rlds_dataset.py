@@ -1445,24 +1445,29 @@ class OXECoTDatasets:
 
             # Create separate normalization functions for each state type
             # This avoids eager evaluation of state_type during graph execution
+            # Note: "none" state type doesn't need normalization (empty state)
             normalizers = {}
-            for state_type in ["joint_pos", "eef_pose", "none"]:
+            for state_type in ["joint_pos", "eef_pose"]:
                 state_key_name = f"state_{state_type}"
                 if state_key_name in global_stats:
                     frame_stats = {
                         "actions": global_stats["actions"],
                         "state": global_stats[state_key_name],
                     }
-                else:
-                    # Fallback: only normalize actions if state stats not available
-                    frame_stats = {"actions": global_stats["actions"]}
+                    normalizers[state_type] = NormalizeActionAndProprio(
+                        norm_stats=frame_stats,
+                        normalization_type=action_proprio_normalization_type,
+                        action_key="actions",
+                        state_key="state",
+                    )
 
-                normalizers[state_type] = NormalizeActionAndProprio(
-                    norm_stats=frame_stats,
-                    normalization_type=action_proprio_normalization_type,
-                    action_key="actions",
-                    state_key="state",
-                )
+            # For "none" state type, only normalize actions (no state to normalize)
+            normalizers["none"] = NormalizeActionAndProprio(
+                norm_stats={"actions": global_stats["actions"]},
+                normalization_type=action_proprio_normalization_type,
+                action_key="actions",
+                state_key="state",
+            )
 
             # Apply normalization at the frame level using TensorFlow conditionals
             def apply_global_norm(frame):
@@ -1474,7 +1479,7 @@ class OXECoTDatasets:
                         (tf.equal(state_type, "joint_pos"), lambda: normalizers["joint_pos"](frame)),
                         (tf.equal(state_type, "eef_pose"), lambda: normalizers["eef_pose"](frame)),
                     ],
-                    default=lambda: normalizers["none"](frame),  # Default to "none" normalization
+                    default=lambda: normalizers["none"](frame),  # Default: only normalize actions
                     exclusive=True,
                 )
 
@@ -1593,6 +1598,10 @@ class OXECoTDatasets:
         for state_type, ds_names in datasets_by_state_type.items():
             if not ds_names:
                 continue  # Skip if no datasets of this type
+
+            # Skip normalization for "none" state type (empty state)
+            if state_type == "none":
+                continue
 
             # Compute weighted statistics for this state type
             state_stats_subset = {name: all_dataset_statistics[name] for name in ds_names}
