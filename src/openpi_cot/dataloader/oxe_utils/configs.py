@@ -807,7 +807,7 @@ OXE_DATASET_METADATA = {
     },
     "berkeley_cable_routing": {
         "control_frequency": 10,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
