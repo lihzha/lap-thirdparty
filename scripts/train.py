@@ -430,15 +430,13 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
-    breakpoint()
     train_runner = TrainingStepRunner(config)
-    # ptrain_step = jax.jit(
-    #     train_runner,
-    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-    #     out_shardings=(train_state_sharding, replicated_sharding),
-    #     donate_argnums=(1,),
-    # )
-    ptrain_step = train_runner
+    ptrain_step = jax.jit(
+        train_runner,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(train_state_sharding, replicated_sharding),
+        donate_argnums=(1,),
+    )
 
     if config.do_val:
         val_loader = _data_loader.create_data_loader(
