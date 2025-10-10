@@ -465,7 +465,7 @@ def main(config: _config.TrainConfig):
             shuffle=False,
             split="val",
             max_samples=getattr(config.data, "val_max_samples", None),
-            hash_tables=data_loader.hash_tables,
+            hash_tables=data_loader.dataset.hash_tables,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
