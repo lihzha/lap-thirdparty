@@ -14,6 +14,7 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.helpers import StateEncoding
 from openpi_cot.dataloader.helpers import convert_action_encoding
 from openpi_cot.dataloader.helpers import extract_episode_path_from_file_path
 from openpi_cot.dataloader.helpers import state_encoding_to_type
@@ -332,6 +333,24 @@ class SingleCoTDataset:
             )
             self.apply_traj_filters(action_key="actions")
             self.split_val(split_seed=seed)
+
+        # If state encoding is NONE, replace state stats with dummy zero-padded stats
+        # This avoids computing statistics on empty state tensors
+        if self.state_encoding == StateEncoding.NONE:
+            from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+
+            num_transitions = self.dataset_statistics["actions"].num_transitions
+            num_trajectories = self.dataset_statistics["actions"].num_trajectories
+
+            # Create dummy state stats with zero-padded arrays
+            self.dataset_statistics["state"] = ExtendedNormStats(
+                mean=np.zeros(self.action_dim, dtype=np.float32),
+                std=np.ones(self.action_dim, dtype=np.float32),  # Std of 1 to avoid division by zero
+                q01=np.zeros(self.action_dim, dtype=np.float32),
+                q99=np.zeros(self.action_dim, dtype=np.float32),
+                num_transitions=num_transitions,
+                num_trajectories=num_trajectories,
+            )
 
         self.apply_traj_transforms(
             action_horizon=action_horizon,
@@ -1540,7 +1559,8 @@ class OXECoTDatasets:
             state_type = state_encoding_to_type(state_encoding)
             datasets_by_state_type[state_type].append(dataset_name)
 
-        # Compute weighted global statistics for actions (shared across all datasets)
+        # Compute weighted global statistics for actions
+        # Note: Action stats are shared across ALL datasets regardless of state type
         total_action_n = sum(stats["actions"].num_transitions for stats in all_dataset_statistics.values())
         action_weighted_sum = np.zeros_like(list(all_dataset_statistics.values())[0]["actions"].mean)
 
