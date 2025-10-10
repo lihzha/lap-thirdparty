@@ -1623,11 +1623,16 @@ class OXECoTDatasets:
             if total_state_n == 0:
                 continue  # Skip if no transitions
 
-            state_weighted_sum = np.zeros_like(list(state_stats_subset.values())[0]["state"].mean)
+            # Initialize with action_dim size (all states will be padded to this size)
+            state_weighted_sum = np.zeros(action_dim, dtype=np.float32)
 
             for dataset_name, stats in state_stats_subset.items():
                 state_n = stats["state"].num_transitions
-                state_weighted_sum += stats["state"].mean * state_n
+                # Pad state mean to action_dim before accumulating
+                state_mean_padded = np.pad(
+                    stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
+                )
+                state_weighted_sum += state_mean_padded * state_n
 
             state_global_mean = state_weighted_sum / total_state_n
 
