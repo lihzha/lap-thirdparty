@@ -111,8 +111,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("berkeley_autolab_ur5", 1.0),
         # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         ### To be tested
-        ("berkeley_cable_routing", 1.0),  # only joint pos, 1482 trajs
-        # ("roboturk", 2.0),  # no prio, 2144 trajs
+        ("roboturk", 2.0),  # no prio, 2144 trajs
         # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # only joint state
         # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),  # only joint state, 520 trajs
         # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
@@ -121,6 +120,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ### Bimanual
         # ("agibot_dataset", 0.2),
         ### TBD
+        # ("berkeley_cable_routing", 1.0),  # only joint pos, 1482 trajs, action scale incorrect and gripper not in view
         # # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0), 550 trajs
         # # ("sample_r1_lite", 0.2),  # only joint position available for both actions and states
         # # # ("kuka", 0.1),  # no language instructions, 580392 trajs
