@@ -1458,8 +1458,6 @@ class OXECoTDatasets:
 
         pprint_data_mixture(dataset_names, sample_weights)
 
-        self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
-
         # Apply global normalization if requested
         if use_global_normalization and not config.vis_dataset:
             global_stats_dir = data_dir
@@ -1473,53 +1471,35 @@ class OXECoTDatasets:
             )
             logging.info("Applying global normalization with stats: %s", global_stats)
 
-            # Create normalizers for each state type outside the map function
-            # This allows them to be reused across all frames
-            normalizers = {}
-            for state_type in ["joint_pos", "eef_pose", "none"]:
-                state_key_name = f"state_{state_type}"
+            # Apply state-type-specific normalization to each dataset BEFORE interleaving
+            # This avoids tf.case/tf.cond issues entirely
+            normalized_datasets = []
+            for ds_name, ds in zip(dataset_names, datasets):
+                state_enc = dataset_state_encodings[ds_name]
+                state_type = state_encoding_to_type(state_enc)
+
+                # Create normalizer for this state type
                 stats = {"actions": global_stats["actions"]}
+                state_key_name = f"state_{state_type}"
                 if state_key_name in global_stats:
                     stats["state"] = global_stats[state_key_name]
-                normalizers[state_type] = NormalizeActionAndProprio(
+
+                normalizer = NormalizeActionAndProprio(
                     norm_stats=stats,
                     normalization_type=action_proprio_normalization_type,
                     action_key="actions",
                     state_key="state",
                 )
 
-            # Apply normalization using Python function to select normalizer
-            def apply_global_norm(frame):
-                # Use py_function to eagerly select the right normalizer
-                state_type_tensor = frame.get("state_type")
+                # Apply normalizer to this dataset
+                normalized_datasets.append(ds.map(normalizer, num_parallel_calls=tf.data.AUTOTUNE))
 
-                @tf.function
-                def _normalize_with_type(state_type_val):
-                    # Decode state_type from bytes to string
-                    if state_type_val.dtype == tf.string:
-                        state_type_str = state_type_val
-                    else:
-                        state_type_str = tf.constant("eef_pose")  # fallback
-
-                    # Use tf.cond to select normalizer
-                    # Compare with constants to avoid nested conditionals
-                    is_joint = tf.equal(state_type_str, "joint_pos")
-                    is_eef = tf.equal(state_type_str, "eef_pose")
-
-                    result = tf.cond(
-                        is_joint,
-                        lambda: normalizers["joint_pos"](frame),
-                        lambda: tf.cond(
-                            is_eef, lambda: normalizers["eef_pose"](frame), lambda: normalizers["none"](frame)
-                        ),
-                    )
-                    return result
-
-                return _normalize_with_type(state_type_tensor)
-
-            self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
+            # Interleave the normalized datasets
+            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(normalized_datasets, self.sample_weights)
             self.global_statistics = global_stats
         else:
+            # No global normalization - just interleave the datasets
+            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
             self.global_statistics = None
 
         self.dataset = prepare_batched_dataset(

@@ -65,35 +65,66 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     #     ("roboturk", 2.0),
     # ],
     "oxe_pi_magic_soup": [
-        # ("bc_z", 0.5),
-        # ("droid", 0.5),
-        # ("fractal20220817_data", 1.0),
-        # # # ("kuka", 0.1),  # no language instructions, 580392 trajs
-        # ("bridge_v2_oxe", 1.0),
-        # ("taco_play", 1.0),
-        # ("jaco_play", 1.0),
-        # # ("berkeley_cable_routing", 1.0),  # no language instructions, only joint pos, 1482 trajs
+        ("bc_z", 0.5),
+        ("droid", 0.5),
+        ("fractal20220817_data", 1.0),
+        # # ("kuka", 0.1),  # no language instructions, 580392 trajs
+        ("bridge_v2_oxe", 1.0),
+        ("taco_play", 1.0),
+        ("jaco_play", 1.0),
+        # ("berkeley_cable_routing", 1.0),  # no language instructions, only joint pos, 1482 trajs
+        # ("roboturk", 2.0),  # no prio, 2144 trajs
+        # # ("viola", 2.0),  # gripper mostly out of view, 135 trajs
+        ("berkeley_autolab_ur5", 1.0),
+        # # ("toto", 1.0),   # no language instructions, 901 trajs
+        # # ("language_table", 0.1),  442226 trajs
+        # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0), 550 trajs
+        # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),   # no language instructions, 50 trajs
+        # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),  # no language instructions, 456 trajs
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # only joint state
+        # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
+        # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
+        # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),  # only joint state, 520 trajs
+        ("utaustin_mutex", 1.0),
+        ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
+        ("cmu_stretch", 2.0),  # almost all movements are "move up"
+        ("fmb", 1.0),
+        ("dobbe", 0.2),  # question
+        # ("sample_r1_lite", 0.2),  # only joint position available for both actions and states
+        ("agibot_dataset", 0.2),
+    ],
+    "oxe_pi_magic_soup_with_other_states_with_bimanual": [
+        ("bc_z", 0.5),
+        ("droid", 0.5),
+        ("fractal20220817_data", 1.0),
+        # # ("kuka", 0.1),  # no language instructions, 580392 trajs
+        ("bridge_v2_oxe", 1.0),
+        ("taco_play", 1.0),
+        ("jaco_play", 1.0),
+        ("berkeley_cable_routing", 1.0),  # no language instructions, only joint pos, 1482 trajs
         ("roboturk", 2.0),  # no prio, 2144 trajs
-        # # # ("viola", 2.0),  # gripper mostly out of view, 135 trajs
-        # ("berkeley_autolab_ur5", 1.0),
-        # # # ("toto", 1.0),   # no language instructions, 901 trajs
-        # # # ("language_table", 0.1),  442226 trajs
-        # # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0), 550 trajs
-        # # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),   # no language instructions, 50 trajs
-        # # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),  # no language instructions, 456 trajs
-        # ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        # # ("viola", 2.0),  # gripper mostly out of view, 135 trajs
+        ("berkeley_autolab_ur5", 1.0),
+        # # ("toto", 1.0),   # no language instructions, 901 trajs
+        # # ("language_table", 0.1),  442226 trajs
+        # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0), 550 trajs
+        # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),   # no language instructions, 50 trajs
+        # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),  # no language instructions, 456 trajs
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # only joint state
-        # # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
-        # # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
-        # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
+        # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
+        # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),  # only joint state, 520 trajs
-        # ("utaustin_mutex", 1.0),
-        # ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
-        # ("cmu_stretch", 2.0),  # almost all movements are "move up"
-        # ("fmb", 1.0),
-        # ("dobbe", 0.2),  # question
-        # # ("sample_r1_lite", 0.2),  # only joint position available for both actions and states
-        # ("agibot_dataset", 0.2),
+        ("utaustin_mutex", 1.0),
+        ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
+        ("cmu_stretch", 2.0),  # almost all movements are "move up"
+        ("fmb", 1.0),
+        ("dobbe", 0.2),  # question
+        # ("sample_r1_lite", 0.2),  # only joint position available for both actions and states
+        ("agibot_dataset", 0.2),
     ],
 }
 
