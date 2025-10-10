@@ -142,6 +142,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
         inputs["prompt"] = prompt_str
 
+        breakpoint()
+
         # Extract state_type if available
         state_type = data.get("state_type")
         if state_type is not None:
