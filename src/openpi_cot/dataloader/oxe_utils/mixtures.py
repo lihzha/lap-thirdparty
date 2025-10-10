@@ -72,7 +72,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("bridge_v2_oxe", 1.0),
         # ("taco_play", 1.0),
         # ("jaco_play", 1.0),
-        ("berkeley_cable_routing", 1.0),  # no language instructions, 1482 trajs
+        # # ("berkeley_cable_routing", 1.0),  # no language instructions, only joint pos, 1482 trajs
         # # # ("roboturk", 2.0),  # no prio, 2144 trajs
         # # # ("viola", 2.0),  # gripper mostly out of view, 135 trajs
         # ("berkeley_autolab_ur5", 1.0),
