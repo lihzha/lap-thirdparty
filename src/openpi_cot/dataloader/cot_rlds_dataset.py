@@ -322,6 +322,21 @@ class SingleCoTDataset:
             self.split_val(split_seed=seed)
             self.apply_restructure()
             self.dataset_statistics = cached_stats
+
+            # If state encoding is NONE, ensure state stats are properly padded
+            if self.state_encoding == StateEncoding.NONE:
+                from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+
+                # If cached stats have empty state arrays, pad them to action_dim
+                if len(self.dataset_statistics["state"].mean) == 0:
+                    self.dataset_statistics["state"] = ExtendedNormStats(
+                        mean=np.zeros(self.action_dim, dtype=np.float32),
+                        std=np.ones(self.action_dim, dtype=np.float32),
+                        q01=np.zeros(self.action_dim, dtype=np.float32),
+                        q99=np.zeros(self.action_dim, dtype=np.float32),
+                        num_transitions=self.dataset_statistics["state"].num_transitions,
+                        num_trajectories=self.dataset_statistics["state"].num_trajectories,
+                    )
         else:
             # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
             self.apply_restructure()
@@ -334,23 +349,19 @@ class SingleCoTDataset:
             self.apply_traj_filters(action_key="actions")
             self.split_val(split_seed=seed)
 
-        # If state encoding is NONE, replace state stats with dummy zero-padded stats
-        # This avoids computing statistics on empty state tensors
-        if self.state_encoding == StateEncoding.NONE:
-            from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+            # If state encoding is NONE, pad the empty state stats to action_dim
+            if self.state_encoding == StateEncoding.NONE:
+                from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
 
-            num_transitions = self.dataset_statistics["actions"].num_transitions
-            num_trajectories = self.dataset_statistics["actions"].num_trajectories
-
-            # Create dummy state stats with zero-padded arrays
-            self.dataset_statistics["state"] = ExtendedNormStats(
-                mean=np.zeros(self.action_dim, dtype=np.float32),
-                std=np.ones(self.action_dim, dtype=np.float32),  # Std of 1 to avoid division by zero
-                q01=np.zeros(self.action_dim, dtype=np.float32),
-                q99=np.zeros(self.action_dim, dtype=np.float32),
-                num_transitions=num_transitions,
-                num_trajectories=num_trajectories,
-            )
+                # Replace empty state stats with zero-padded stats
+                self.dataset_statistics["state"] = ExtendedNormStats(
+                    mean=np.zeros(self.action_dim, dtype=np.float32),
+                    std=np.ones(self.action_dim, dtype=np.float32),  # Std of 1 to avoid division by zero
+                    q01=np.zeros(self.action_dim, dtype=np.float32),
+                    q99=np.zeros(self.action_dim, dtype=np.float32),
+                    num_transitions=self.dataset_statistics["state"].num_transitions,
+                    num_trajectories=self.dataset_statistics["state"].num_trajectories,
+                )
 
         self.apply_traj_transforms(
             action_horizon=action_horizon,
