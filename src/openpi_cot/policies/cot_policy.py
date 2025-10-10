@@ -1,4 +1,5 @@
 import dataclasses
+from typing import Literal
 
 import numpy as np
 from openpi import transforms as upstream_transforms
@@ -15,52 +16,201 @@ from openpi_cot.policies.utils import to_str_list
 
 
 @dataclasses.dataclass(frozen=True)
+class LanguageActionFormat:
+    """Defines how to format language actions.
+
+    This modular structure allows easy extension to support different
+    action description formats and styles.
+    """
+    name: str
+    # Style of formatting
+    style: Literal["verbose", "compact", "directional_only"] = "verbose"
+    # For verbose style: decimal places for numeric values
+    decimal_places: int = 0
+    # Whether to include rotation components in descriptions
+    include_rotation: bool = False
+    # Optional units for translation (cm, m, mm)
+    translation_unit: str = "cm"
+    # Optional units for rotation (deg, rad)
+    rotation_unit: str = "deg"
+    # For compact style: use schema-based format like <+03 +05 -08 1>
+    use_schema_format: bool = False
+
+    def get_sum_decimal(self) -> str:
+        """Convert to legacy sum_decimal format for backward compatibility."""
+        if self.style == "compact":
+            return "compact"
+        elif self.style == "directional_only":
+            return "no_number"
+        else:  # verbose
+            return f"{self.decimal_places}f"
+
+
+@dataclasses.dataclass(frozen=True)
 class LanguageActionConfig:
     """Configuration for how to format and summarize language actions.
 
-    This allows easy extension to support different action description formats
-    by defining new LanguageActionConfig instances with custom settings.
+    This is a wrapper around LanguageActionFormat for backward compatibility.
     """
-
     name: str = "default"
-    sum_decimal: str = "0f"  # Decimal format for numeric action summaries
-    include_rotation: bool = False  # Whether to include rotation in action descriptions
-    # Future extensions could include:
-    # - coordinate_frame: str = "robot"  # "robot", "world", "camera"
-    # - unit: str = "m"  # "m", "cm", "mm"
-    # - description_style: str = "natural"  # "natural", "structured", "terse"
+    format: LanguageActionFormat | None = None
+    # Legacy fields for backward compatibility
+    sum_decimal: str | None = None
+    include_rotation: bool | None = None
+
+    def __post_init__(self):
+        """Handle backward compatibility."""
+        if self.format is None:
+            # Create format from legacy fields
+            if self.sum_decimal == "compact":
+                style = "compact"
+                decimal_places = 0
+                use_schema_format = True
+            elif self.sum_decimal == "no_number":
+                style = "directional_only"
+                decimal_places = 0
+                use_schema_format = False
+            else:
+                style = "verbose"
+                # Extract decimal places from format like "0f" or "2f"
+                import re
+                m = re.fullmatch(r"(\d+)f", self.sum_decimal or "0f")
+                decimal_places = int(m.group(1)) if m else 0
+                use_schema_format = False
+
+            format_obj = LanguageActionFormat(
+                name=self.name,
+                style=style,
+                decimal_places=decimal_places,
+                include_rotation=self.include_rotation if self.include_rotation is not None else False,
+                use_schema_format=use_schema_format,
+            )
+            object.__setattr__(self, "format", format_obj)
+
+    def get_sum_decimal(self) -> str:
+        """Get sum_decimal for backward compatibility with utils functions."""
+        return self.format.get_sum_decimal()
+
+    def get_include_rotation(self) -> bool:
+        """Get include_rotation for backward compatibility."""
+        return self.format.include_rotation
 
 
-# Predefined language action configurations
+# Predefined language action formats
+VERBOSE_FORMAT = LanguageActionFormat(
+    name="verbose",
+    style="verbose",
+    decimal_places=0,
+    include_rotation=False,
+)
+
+VERBOSE_WITH_ROTATION_FORMAT = LanguageActionFormat(
+    name="verbose_with_rotation",
+    style="verbose",
+    decimal_places=0,
+    include_rotation=True,
+)
+
+PRECISION_FORMAT = LanguageActionFormat(
+    name="precision",
+    style="verbose",
+    decimal_places=2,
+    include_rotation=False,
+)
+
+COMPACT_FORMAT = LanguageActionFormat(
+    name="compact",
+    style="compact",
+    decimal_places=0,
+    include_rotation=False,
+    use_schema_format=True,
+)
+
+COMPACT_WITH_ROTATION_FORMAT = LanguageActionFormat(
+    name="compact_with_rotation",
+    style="compact",
+    decimal_places=0,
+    include_rotation=True,
+    use_schema_format=True,
+)
+
+DIRECTIONAL_ONLY_FORMAT = LanguageActionFormat(
+    name="directional_only",
+    style="directional_only",
+    decimal_places=0,
+    include_rotation=False,
+)
+
+# Predefined language action configurations (backward compatible)
 DEFAULT_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
     name="default",
-    sum_decimal="0f",
-    include_rotation=False,
+    format=VERBOSE_FORMAT,
 )
 
 WITH_ROTATION_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
     name="with_rotation",
-    sum_decimal="0f",
-    include_rotation=True,
+    format=VERBOSE_WITH_ROTATION_FORMAT,
 )
 
 PRECISION_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
     name="precision",
-    sum_decimal="2f",  # 2 decimal places for more precision
-    include_rotation=False,
+    format=PRECISION_FORMAT,
 )
 
 COMPACT_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
     name="compact",
-    sum_decimal="compact",  # Compact format: <+03 +05 -08 1>
-    include_rotation=False,
+    format=COMPACT_FORMAT,
 )
 
 COMPACT_WITH_ROTATION_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
     name="compact_with_rotation",
-    sum_decimal="compact",  # Compact format with rotation: <+03 +05 -08 +10 +00 +02 1>
-    include_rotation=True,
+    format=COMPACT_WITH_ROTATION_FORMAT,
 )
+
+DIRECTIONAL_ONLY_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
+    name="directional_only",
+    format=DIRECTIONAL_ONLY_FORMAT,
+)
+
+# Registry for easy lookup of language action formats
+LANGUAGE_ACTION_FORMAT_REGISTRY = {
+    "verbose": VERBOSE_FORMAT,
+    "verbose_with_rotation": VERBOSE_WITH_ROTATION_FORMAT,
+    "precision": PRECISION_FORMAT,
+    "compact": COMPACT_FORMAT,
+    "compact_with_rotation": COMPACT_WITH_ROTATION_FORMAT,
+    "directional_only": DIRECTIONAL_ONLY_FORMAT,
+}
+
+# Registry for language action configs
+LANGUAGE_ACTION_CONFIG_REGISTRY = {
+    "default": DEFAULT_LANGUAGE_ACTION_CONFIG,
+    "with_rotation": WITH_ROTATION_LANGUAGE_ACTION_CONFIG,
+    "precision": PRECISION_LANGUAGE_ACTION_CONFIG,
+    "compact": COMPACT_LANGUAGE_ACTION_CONFIG,
+    "compact_with_rotation": COMPACT_WITH_ROTATION_LANGUAGE_ACTION_CONFIG,
+    "directional_only": DIRECTIONAL_ONLY_LANGUAGE_ACTION_CONFIG,
+}
+
+
+def get_language_action_format(name: str) -> LanguageActionFormat:
+    """Get a language action format by name."""
+    if name not in LANGUAGE_ACTION_FORMAT_REGISTRY:
+        raise ValueError(
+            f"Unknown language action format: {name}. "
+            f"Available formats: {list(LANGUAGE_ACTION_FORMAT_REGISTRY.keys())}"
+        )
+    return LANGUAGE_ACTION_FORMAT_REGISTRY[name]
+
+
+def get_language_action_config(name: str) -> LanguageActionConfig:
+    """Get a language action config by name."""
+    if name not in LANGUAGE_ACTION_CONFIG_REGISTRY:
+        raise ValueError(
+            f"Unknown language action config: {name}. "
+            f"Available configs: {list(LANGUAGE_ACTION_CONFIG_REGISTRY.keys())}"
+        )
+    return LANGUAGE_ACTION_CONFIG_REGISTRY[name]
 
 
 # TODO: during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
@@ -92,10 +242,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 name="custom",
                 sum_decimal=self.sum_decimal
                 if self.sum_decimal is not None
-                else self.language_action_config.sum_decimal,
+                else self.language_action_config.get_sum_decimal(),
                 include_rotation=self.include_rotation
                 if self.include_rotation is not None
-                else self.language_action_config.include_rotation,
+                else self.language_action_config.get_include_rotation(),
             )
             # Use object.__setattr__ because this is a frozen dataclass
             object.__setattr__(self, "language_action_config", config)
@@ -142,8 +292,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
         inputs["prompt"] = prompt_str
 
-        breakpoint()
-
         # Extract state_type if available
         state_type = data.get("state_type")
         if state_type is not None:
@@ -180,17 +328,17 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
             if is_bimanual:
                 summed = summarize_bimanual_numeric_actions(
-                    raw_array, self.language_action_config.sum_decimal, self.language_action_config.include_rotation
+                    raw_array, self.language_action_config.get_sum_decimal(), self.language_action_config.get_include_rotation()
                 )
             else:
                 summed = summarize_numeric_actions(
-                    raw_array, self.language_action_config.sum_decimal, self.language_action_config.include_rotation
+                    raw_array, self.language_action_config.get_sum_decimal(), self.language_action_config.get_include_rotation()
                 )
             return summed
         seq = to_str_list(la)
         assert seq is not None
         summed = sum_language_actions(
-            seq, self.language_action_config.sum_decimal, self.language_action_config.include_rotation
+            seq, self.language_action_config.get_sum_decimal(), self.language_action_config.get_include_rotation()
         )
         assert summed is not None
         assert len(summed) > 0
@@ -201,7 +349,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # stores as float32 (C,H,W), gets skipped for policy inference
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         inputs = self._prepare_inputs(data)
-        if self.language_action_config.include_rotation:
+        if self.language_action_config.get_include_rotation():
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
         # Always prepare regular language actions for reasoning loss

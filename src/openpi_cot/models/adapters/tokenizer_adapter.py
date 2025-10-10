@@ -17,16 +17,38 @@ class StateDiscretizationConfig:
 
 
 @dataclasses.dataclass
-class PromptFormat:
-    """Defines how to format prompts for tokenization.
+class PromptComponent:
+    """A modular component of a prompt.
 
-    This allows easy extension to support different prompt formats by defining
-    new PromptFormat instances with custom templates and configurations.
+    Each component can be one of:
+    - task_prefix: Format for task instruction (e.g., "Task: {prompt}")
+    - state_prefix: Format for state (e.g., "State ({state_label}): {state}")
+    - schema: Schema/instruction text (e.g., coordinate system description)
+    - action_prefix: Prefix before action output (e.g., "Action: ")
+    """
+    type: Literal["task_prefix", "state_prefix", "schema", "action_prefix"]
+    template: str
+    # Whether to include state type label in state prefix
+    include_state_type: bool = True
+
+
+@dataclasses.dataclass
+class PromptFormat:
+    """Defines how to format prompts for tokenization using modular components.
+
+    This allows easy extension to support different prompt formats by composing
+    components in different ways.
     """
     name: str
-    template: str  # Template string with {prompt}, {state}, etc. placeholders
-    include_state: bool = False
+    components: list[PromptComponent]
     state_config: StateDiscretizationConfig | None = None
+    # Separator between components (e.g., ", " or "\n")
+    separator: str = ""
+
+    @property
+    def include_state(self) -> bool:
+        """Check if this format includes state."""
+        return any(c.type == "state_prefix" for c in self.components)
 
     def format_prompt(self, prompt: str, state: np.ndarray | None = None, state_type: str | None = None) -> str:
         """Format the prompt with optional state and state type.
@@ -41,26 +63,45 @@ class PromptFormat:
         """
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
 
-        if self.include_state:
-            # Determine state type label
-            if state_type == "none" or state is None:
-                state_label = "None"
-                state_str = ""
-            else:
-                # Map state_type to human-readable label
-                state_type_labels = {
-                    "joint_pos": "joint position",
-                    "eef_pose": "end-effector pose",
-                }
-                state_label = state_type_labels.get(state_type, state_type)
+        # Prepare state-related variables
+        state_str = ""
+        state_label = ""
+        if state is not None and state_type != "none":
+            # Map state_type to human-readable label
+            state_type_labels = {
+                "joint_pos": "joint position",
+                "eef_pose": "end-effector pose",
+            }
+            state_label = state_type_labels.get(state_type, state_type) if state_type else ""
 
-                if self.state_config is None:
-                    raise ValueError(f"State config required for prompt format '{self.name}'")
+            if self.state_config is not None:
                 state_str = self._discretize_state(state)
 
-            return self.template.format(prompt=cleaned_prompt, state=state_str, state_label=state_label)
-        else:
-            return self.template.format(prompt=cleaned_prompt)
+        # Build prompt by chaining components
+        parts = []
+        for component in self.components:
+            if component.type == "task_prefix":
+                parts.append(component.template.format(prompt=cleaned_prompt))
+            elif component.type == "state_prefix":
+                if state is None or state_type == "none":
+                    # Skip state component if no state
+                    if component.include_state_type:
+                        parts.append(component.template.format(state="", state_label="None"))
+                    else:
+                        parts.append(component.template.format(state=""))
+                else:
+                    if self.state_config is None:
+                        raise ValueError(f"State config required for prompt format '{self.name}'")
+                    if component.include_state_type:
+                        parts.append(component.template.format(state=state_str, state_label=state_label))
+                    else:
+                        parts.append(component.template.format(state=state_str))
+            elif component.type == "schema":
+                parts.append(component.template)
+            elif component.type == "action_prefix":
+                parts.append(component.template)
+
+        return self.separator.join(parts)
 
     def _discretize_state(self, state: np.ndarray) -> str:
         """Discretize state vector into string representation.
@@ -98,35 +139,55 @@ class PromptFormat:
 # Predefined prompt formats - easily extensible by adding new instances
 PI05_PROMPT_FORMAT = PromptFormat(
     name="pi05",
-    template="Task: {prompt}, State ({state_label}): {state};\nAction: ",
-    include_state=True,
+    components=[
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("action_prefix", "Action: "),
+    ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=", ",
 )
 
 PI0_PROMPT_FORMAT = PromptFormat(
     name="pi0",
-    template="{prompt}\n",
-    include_state=False,
+    components=[
+        PromptComponent("task_prefix", "{prompt}\n"),
+    ],
+    state_config=None,
+    separator="",
 )
 
 VQA_PROMPT_FORMAT = PromptFormat(
     name="vqa",
-    template="{prompt}",
-    include_state=False,
+    components=[
+        PromptComponent("task_prefix", "{prompt}"),
+    ],
+    state_config=None,
+    separator="",
 )
 
 COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     name="coordinate_system",
-    template="Task: {prompt}, State ({state_label}): {state}. Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up. Actions: ",
-    include_state=True,
+    components=[
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("schema", "Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up."),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=", ",
 )
 
 SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     name="schema_compact",
-    template="Schema: <A dx dy dz droll dpitch dyaw grip>; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}.\nTask: {prompt}\nState ({state_label}): {state}\nActions: ",
-    include_state=True,
+    components=[
+        PromptComponent("schema", "Schema: <A dx dy dz droll dpitch dyaw grip>; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}."),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator="\n",
 )
 
 # Registry for easy lookup

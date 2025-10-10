@@ -1267,7 +1267,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 new_obs["state"] = tf.zeros((traj_len, 0), dtype=tf.float32)  # Empty state
 
             # Determine state type from state encoding
-            state_type_str = state_encoding_to_type(self.config.state_encoding)
+            state_type_str = state_encoding_to_type(self.state_encoding)
 
             # Build a deterministic per-trajectory identifier using a strong hash
             # of the dataset name and the serialized action tensor. This avoids
