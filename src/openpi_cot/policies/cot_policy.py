@@ -293,6 +293,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
         inputs["prompt"] = prompt_str
 
+        breakpoint()
+
         # Extract state_type if available
         state_type = data.get("state_type")
         if state_type is not None:
@@ -313,7 +315,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         return inputs
 
-    def _prepare_language_actions(self, data: dict, lang_action_key: str, trimmed_len_key: str) -> dict:
+    def _prepare_text(self, data: dict, lang_action_key: str, trimmed_len_key: str) -> dict:
         assert lang_action_key in data
         la = data[lang_action_key]
         assert isinstance(la[0], bytes)
@@ -358,14 +360,15 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
         # Always prepare regular language actions for reasoning loss
-        inputs["language_actions"] = self._prepare_language_actions(data, "language_actions", "control_frequency")
+        inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
+        breakpoint()
 
         # Additionally prepare prediction if available (independent of regular reasoning)
         if "prediction_language_action" in data:
             assert self.enable_prediction_training, (
                 "Prediction language action found in data but prediction training not enabled in policy."
             )
-            inputs["prediction_language_action"] = self._prepare_language_actions(
+            inputs["prediction_language_action"] = self._prepare_text(
                 data, "prediction_language_action", "prediction_delta"
             )
             inputs["prediction_prompt"] = self.prediction_prompt
@@ -373,6 +376,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             assert not self.enable_prediction_training, (
                 "Prediction training enabled in policy but no prediction language action found in data."
             )
+        breakpoint()
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):
