@@ -68,6 +68,49 @@ def _format_numeric(val: float, sum_decimal: str) -> str:
     return f"{val:.{decimals}f}"
 
 
+def _summarize_compact_numeric_actions(arr_like, include_rotation: bool = False) -> str:
+    """Convert numeric delta EE actions to compact format: <+03 +05 -08 +10 +00 +02 1>
+
+    Format: <dx dy dz droll dpitch dyaw grip>
+    - dx, dy, dz in cm (signed, 2-digit integers)
+    - droll, dpitch, dyaw in degrees (signed, 2-digit integers) if include_rotation
+    - grip as 0 or 1
+    """
+    arr = np.asarray(arr_like, dtype=float)
+    if arr.ndim == 1:
+        arr = arr[None, :]
+
+    # Sum translations over the window and convert to cm
+    dx_cm = int(round(float(arr[..., 0].sum()) * 100.0))
+    dy_cm = int(round(float(arr[..., 1].sum()) * 100.0))
+    dz_cm = int(round(float(arr[..., 2].sum()) * 100.0))
+
+    # Format with sign and 2 digits
+    parts = [
+        f"{dx_cm:+03d}",
+        f"{dy_cm:+03d}",
+        f"{dz_cm:+03d}",
+    ]
+
+    if include_rotation:
+        # Convert rotations to degrees
+        droll_deg = int(round(float(arr[..., 3].sum()) * 180.0 / np.pi))
+        dpitch_deg = int(round(float(arr[..., 4].sum()) * 180.0 / np.pi))
+        dyaw_deg = int(round(float(arr[..., 5].sum()) * 180.0 / np.pi))
+        parts.extend([
+            f"{droll_deg:+03d}",
+            f"{dpitch_deg:+03d}",
+            f"{dyaw_deg:+03d}",
+        ])
+
+    # Gripper: threshold at 0.5 to convert to binary
+    g_last = float(arr[-1, 6])
+    grip_binary = 1 if g_last >= 0.5 else 0
+    parts.append(str(grip_binary))
+
+    return "<" + " ".join(parts) + ">"
+
+
 def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:
     """Convert numeric delta EE actions ([..., 7]) into a language string.
 
@@ -79,6 +122,10 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
         arr = arr[None, :]
     if arr.shape[-1] < 7:
         return None
+
+    # Handle compact format
+    if sum_decimal == "compact":
+        return _summarize_compact_numeric_actions(arr, include_rotation)
 
     # Convert to centimeters
     if sum_decimal == "no_number":

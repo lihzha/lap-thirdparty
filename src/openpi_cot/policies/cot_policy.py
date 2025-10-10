@@ -50,6 +50,18 @@ PRECISION_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
     include_rotation=False,
 )
 
+COMPACT_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
+    name="compact",
+    sum_decimal="compact",  # Compact format: <+03 +05 -08 1>
+    include_rotation=False,
+)
+
+COMPACT_WITH_ROTATION_LANGUAGE_ACTION_CONFIG = LanguageActionConfig(
+    name="compact_with_rotation",
+    sum_decimal="compact",  # Compact format with rotation: <+03 +05 -08 +10 +00 +02 1>
+    include_rotation=True,
+)
+
 
 # TODO: during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
 @dataclasses.dataclass(frozen=True)

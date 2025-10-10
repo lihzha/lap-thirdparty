@@ -1475,29 +1475,26 @@ class OXECoTDatasets:
 
             # Create separate normalization functions for each state type
             # This avoids eager evaluation of state_type during graph execution
-            # Note: "none" state type doesn't need normalization (empty state)
+            # Note: We create normalizers for all state types, but only include state stats if they exist
             normalizers = {}
-            for state_type in ["joint_pos", "eef_pose"]:
+            for state_type in ["joint_pos", "eef_pose", "none"]:
                 state_key_name = f"state_{state_type}"
                 if state_key_name in global_stats:
+                    # State stats exist for this type
                     frame_stats = {
                         "actions": global_stats["actions"],
                         "state": global_stats[state_key_name],
                     }
-                    normalizers[state_type] = NormalizeActionAndProprio(
-                        norm_stats=frame_stats,
-                        normalization_type=action_proprio_normalization_type,
-                        action_key="actions",
-                        state_key="state",
-                    )
+                else:
+                    # No state stats for this type (only normalize actions)
+                    frame_stats = {"actions": global_stats["actions"]}
 
-            # For "none" state type, only normalize actions (no state to normalize)
-            normalizers["none"] = NormalizeActionAndProprio(
-                norm_stats={"actions": global_stats["actions"]},
-                normalization_type=action_proprio_normalization_type,
-                action_key="actions",
-                state_key="state",
-            )
+                normalizers[state_type] = NormalizeActionAndProprio(
+                    norm_stats=frame_stats,
+                    normalization_type=action_proprio_normalization_type,
+                    action_key="actions",
+                    state_key="state",
+                )
 
             # Apply normalization at the frame level using TensorFlow conditionals
             def apply_global_norm(frame):

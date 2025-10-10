@@ -122,12 +122,20 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
 )
 
+SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact",
+    template="Schema: <A dx dy dz droll dpitch dyaw grip>; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}.\nTask: {prompt}\nState ({state_label}): {state}\nActions: ",
+    include_state=True,
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+)
+
 # Registry for easy lookup
 PROMPT_FORMAT_REGISTRY = {
     "pi05": PI05_PROMPT_FORMAT,
     "pi0": PI0_PROMPT_FORMAT,
     "vqa": VQA_PROMPT_FORMAT,
     "coordinate_system": COORDINATE_SYSTEM_PROMPT_FORMAT,
+    "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
 }
 
 
@@ -135,7 +143,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def __init__(
         self,
         max_len: int = 48,
-        prompt_format: Literal["pi05", "pi0", "vqa", "coordinate_system"] | PromptFormat = "pi05",
+        prompt_format: Literal["pi05", "pi0", "vqa", "coordinate_system", "schema_compact"] | PromptFormat = "pi05",
     ):
         super().__init__(max_len)
         self._stop_token_id = self._tokenizer.eos_id()
