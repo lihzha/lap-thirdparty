@@ -1473,55 +1473,49 @@ class OXECoTDatasets:
             )
             logging.info("Applying global normalization with stats: %s", global_stats)
 
-            # Apply normalization at the frame level using TensorFlow conditionals
-            # Note: Each branch must create its own normalizer to avoid cross-branch tensor access
-            def apply_global_norm(frame):
-                state_type = frame.get("state_type")
-
-                # Define normalization functions for each state type
-                # Each function creates its own NormalizeActionAndProprio instance
-                def normalize_joint_pos():
-                    stats = {"actions": global_stats["actions"]}
-                    if "state_joint_pos" in global_stats:
-                        stats["state"] = global_stats["state_joint_pos"]
-                    return NormalizeActionAndProprio(
-                        norm_stats=stats,
-                        normalization_type=action_proprio_normalization_type,
-                        action_key="actions",
-                        state_key="state",
-                    )(frame)
-
-                def normalize_eef_pose():
-                    stats = {"actions": global_stats["actions"]}
-                    if "state_eef_pose" in global_stats:
-                        stats["state"] = global_stats["state_eef_pose"]
-                    return NormalizeActionAndProprio(
-                        norm_stats=stats,
-                        normalization_type=action_proprio_normalization_type,
-                        action_key="actions",
-                        state_key="state",
-                    )(frame)
-
-                def normalize_none():
-                    # For "none" state type, only normalize actions
-                    return NormalizeActionAndProprio(
-                        norm_stats={"actions": global_stats["actions"]},
-                        normalization_type=action_proprio_normalization_type,
-                        action_key="actions",
-                        state_key="state",
-                    )(frame)
-
-                # Use tf.case to branch based on state_type without eager evaluation
-                normalized = tf.case(
-                    [
-                        (tf.equal(state_type, "joint_pos"), normalize_joint_pos),
-                        (tf.equal(state_type, "eef_pose"), normalize_eef_pose),
-                    ],
-                    default=normalize_none,
-                    exclusive=True,
+            # Create normalizers for each state type outside the map function
+            # This allows them to be reused across all frames
+            normalizers = {}
+            for state_type in ["joint_pos", "eef_pose", "none"]:
+                state_key_name = f"state_{state_type}"
+                stats = {"actions": global_stats["actions"]}
+                if state_key_name in global_stats:
+                    stats["state"] = global_stats[state_key_name]
+                normalizers[state_type] = NormalizeActionAndProprio(
+                    norm_stats=stats,
+                    normalization_type=action_proprio_normalization_type,
+                    action_key="actions",
+                    state_key="state",
                 )
 
-                return normalized
+            # Apply normalization using Python function to select normalizer
+            def apply_global_norm(frame):
+                # Use py_function to eagerly select the right normalizer
+                state_type_tensor = frame.get("state_type")
+
+                @tf.function
+                def _normalize_with_type(state_type_val):
+                    # Decode state_type from bytes to string
+                    if state_type_val.dtype == tf.string:
+                        state_type_str = state_type_val
+                    else:
+                        state_type_str = tf.constant("eef_pose")  # fallback
+
+                    # Use tf.cond to select normalizer
+                    # Compare with constants to avoid nested conditionals
+                    is_joint = tf.equal(state_type_str, "joint_pos")
+                    is_eef = tf.equal(state_type_str, "eef_pose")
+
+                    result = tf.cond(
+                        is_joint,
+                        lambda: normalizers["joint_pos"](frame),
+                        lambda: tf.cond(
+                            is_eef, lambda: normalizers["eef_pose"](frame), lambda: normalizers["none"](frame)
+                        ),
+                    )
+                    return result
+
+                return _normalize_with_type(state_type_tensor)
 
             self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
             self.global_statistics = global_stats
