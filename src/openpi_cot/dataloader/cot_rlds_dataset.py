@@ -15,7 +15,6 @@ import tensorflow_datasets as tfds
 
 from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.dataloader.helpers import convert_action_encoding
-from openpi_cot.dataloader.helpers import convert_state_encoding
 from openpi_cot.dataloader.helpers import extract_episode_path_from_file_path
 from openpi_cot.dataloader.helpers import state_encoding_to_type
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
@@ -954,9 +953,9 @@ class DroidCoTDataset(SingleCoTDataset):
             )
 
             state = tf.concat([cartesian, binarize_gripper_actions(1 - gripper, threshold=0.5)], axis=-1)
-            state = convert_state_encoding(
-                state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
-            )
+            # state = convert_state_encoding(
+            #     state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
+            # )
 
             # Determine state type from state encoding
             state_type_str = state_encoding_to_type(self.config.state_encoding)
@@ -1229,11 +1228,11 @@ class SingleOXECoTDataset(SingleCoTDataset):
                     [tf.cast(old_obs[key], tf.float32) for key in self.state_obs_keys if key is not None],
                     axis=1,
                 )
-                new_obs["state"] = convert_state_encoding(
-                    new_obs["state"],
-                    from_encoding=self.state_encoding,
-                    to_encoding=self.config.state_encoding,
-                )
+                # new_obs["state"] = convert_state_encoding(
+                #     new_obs["state"],
+                #     from_encoding=self.state_encoding,
+                #     to_encoding=self.config.state_encoding,
+                # )
 
             # Determine state type from state encoding
             state_type_str = state_encoding_to_type(self.config.state_encoding)
@@ -1621,9 +1620,7 @@ class OXECoTDatasets:
                 state_local_mean = np.pad(
                     stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
                 )
-                state_local_std = np.pad(
-                    stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant"
-                )
+                state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant")
 
                 # var_i + (mean_i - global_mean)^2
                 state_local_var = np.square(state_local_std)
