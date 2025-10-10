@@ -593,20 +593,83 @@ def stanford_hydra_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 
 
 def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    # invert gripper action + clip, +1 = open, 0 = close
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"][:, :6],
-            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
-        ),
+    # # invert gripper action + clip, +1 = open, 0 = close
+    # trajectory["action"] = tf.concat(
+    #     (
+    #         trajectory["action"][:, :6],
+    #         invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+    #     ),
+    #     axis=-1,
+    # )
+
+    # trajectory["observation"]["state"] = trajectory["observation"]["state"][:, :8]
+    # # trajectory["language_instruction"] = tf.fill(
+    # #     tf.shape(trajectory["language_instruction"]), ""
+    # # )  # delete uninformative language instruction
+    # return trajectory
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+
+    # Reshape from column-major flattened format and transpose to row-major
+    state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
+    state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
+    trajectory["observation"]["state"] = tf.concat(
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
         axis=-1,
     )
 
-    trajectory["observation"]["state"] = trajectory["observation"]["state"][:, :8]
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["language_instruction"]), ""
-    # )  # delete uninformative language instruction
-    return trajectory
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    # Randomly pad empty language instructions with fallback text
+    fallback_instructions = tf.constant(
+        [
+            "Do something useful.",
+            "Complete the task.",
+            "Perform the task.",
+            "Carry out the objective.",
+            "Execute the current task.",
+            "Accomplish the goal.",
+            "Proceed with the task.",
+            "Handle the task at hand.",
+            "Continue the operation.",
+            "Fulfill the task.",
+            "Take meaningful steps.",
+            "Demonstrate useful behavior.",
+            "Act in a useful manner.",
+            "Engage in productive actions.",
+            "Make useful moves.",
+            "Undertake useful actions.",
+            "Behave purposefully.",
+            "Start the activity.",
+        ],
+        dtype=tf.string,
+    )
+
+    # Check if language instruction is empty and replace with random fallback
+    traj_len = tf.shape(traj_truncated["language_instruction"])[0]
+    instruction = traj_truncated["language_instruction"][0]
+    is_empty = tf.logical_or(
+        tf.equal(tf.strings.length(tf.strings.strip(instruction)), 0),
+        tf.equal(instruction, tf.constant("", dtype=tf.string)),
+    )
+
+    random_fallback = tf.random.shuffle(fallback_instructions)[0]
+    selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
+    traj_truncated["language_instruction"] = tf.fill([traj_len], selected_instruction)
+
+    return traj_truncated
 
 
 def nyu_franka_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -704,6 +767,23 @@ def ucsd_pick_place_dataset_transform(trajectory: dict[str, Any]) -> dict[str, A
 
 
 def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    # # invert gripper action + clip, +1 = open, 0 = close
+    # trajectory["action"] = tf.concat(
+    #     (
+    #         trajectory["action"][:, :6],
+    #         invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+    #     ),
+    #     axis=-1,
+    # )
+
+    # # trajectory["language_instruction"] = tf.fill(
+    # #     tf.shape(trajectory["language_instruction"]), ""
+    # # )  # delete uninformative language instruction
+    # return trajectory
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+
     # invert gripper action + clip, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
         (
@@ -713,10 +793,62 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         axis=-1,
     )
 
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["language_instruction"]), ""
-    # )  # delete uninformative language instruction
-    return trajectory
+    trajectory["observation"]["state"] = tf.concat(
+        (matrix_to_xyzrpy(trajectory["observation"]["state_ee"]), trajectory["observation"]["state"][:, -1:]),
+        axis=-1,
+    )
+
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    # Randomly pad empty language instructions with fallback text
+    fallback_instructions = tf.constant(
+        [
+            "Do something useful.",
+            "Complete the task.",
+            "Perform the task.",
+            "Carry out the objective.",
+            "Execute the current task.",
+            "Accomplish the goal.",
+            "Proceed with the task.",
+            "Handle the task at hand.",
+            "Continue the operation.",
+            "Fulfill the task.",
+            "Take meaningful steps.",
+            "Demonstrate useful behavior.",
+            "Act in a useful manner.",
+            "Engage in productive actions.",
+            "Make useful moves.",
+            "Undertake useful actions.",
+            "Behave purposefully.",
+            "Start the activity.",
+        ],
+        dtype=tf.string,
+    )
+
+    # Check if language instruction is empty and replace with random fallback
+    traj_len = tf.shape(traj_truncated["language_instruction"])[0]
+    instruction = traj_truncated["language_instruction"][0]
+    is_empty = tf.logical_or(
+        tf.equal(tf.strings.length(tf.strings.strip(instruction)), 0),
+        tf.equal(instruction, tf.constant("", dtype=tf.string)),
+    )
+
+    random_fallback = tf.random.shuffle(fallback_instructions)[0]
+    selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
+    traj_truncated["language_instruction"] = tf.fill([traj_len], selected_instruction)
+
+    return traj_truncated
 
 
 def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -749,6 +881,44 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+
+    # Randomly pad empty language instructions with fallback text
+    fallback_instructions = tf.constant(
+        [
+            "Do something useful.",
+            "Complete the task.",
+            "Perform the task.",
+            "Carry out the objective.",
+            "Execute the current task.",
+            "Accomplish the goal.",
+            "Proceed with the task.",
+            "Handle the task at hand.",
+            "Continue the operation.",
+            "Fulfill the task.",
+            "Take meaningful steps.",
+            "Demonstrate useful behavior.",
+            "Act in a useful manner.",
+            "Engage in productive actions.",
+            "Make useful moves.",
+            "Undertake useful actions.",
+            "Behave purposefully.",
+            "Start the activity.",
+        ],
+        dtype=tf.string,
+    )
+
+    # Check if language instruction is empty and replace with random fallback
+    traj_len = tf.shape(traj_truncated["language_instruction"])[0]
+    instruction = traj_truncated["language_instruction"][0]
+    is_empty = tf.logical_or(
+        tf.equal(tf.strings.length(tf.strings.strip(instruction)), 0),
+        tf.equal(instruction, tf.constant("", dtype=tf.string)),
+    )
+
+    random_fallback = tf.random.shuffle(fallback_instructions)[0]
+    selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
+    traj_truncated["language_instruction"] = tf.fill([traj_len], selected_instruction)
+
     return traj_truncated
 
     # trajectory["language_instruction"] = tf.fill(
