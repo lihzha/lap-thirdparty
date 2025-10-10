@@ -630,7 +630,9 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    traj_truncated["action"] = tf.concat(
+        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
+    )
 
     # Randomly pad empty language instructions with fallback text
     fallback_instructions = tf.constant(

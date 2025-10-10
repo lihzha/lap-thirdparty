@@ -915,13 +915,13 @@ OXE_DATASET_METADATA = {
     },
     "austin_sailor_dataset_converted_externally_to_rlds": {
         "control_frequency": 20,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
     "austin_sirius_dataset_converted_externally_to_rlds": {
         "control_frequency": 20,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
