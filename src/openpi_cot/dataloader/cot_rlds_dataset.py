@@ -1155,6 +1155,14 @@ class DroidCoTDataset(SingleCoTDataset):
             self.ep_table = self.build_lookup_table(metadata_path)
             self.instr_table = self.build_instr_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path)
+            if standalone:
+                self.hash_tables = {
+                    "cam_table": self.cam_table,
+                    "lang_table": self.lang_table,
+                    "ep_table": self.ep_table,
+                    "instr_table": self.instr_table,
+                    "filter_table": self.filter_table,
+                }
 
         super().__init__(
             dataset_name=config.droid_dataset_name,
