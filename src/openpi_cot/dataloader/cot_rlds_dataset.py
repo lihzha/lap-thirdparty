@@ -14,9 +14,10 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.helpers import StateEncoding
 from openpi_cot.dataloader.helpers import convert_action_encoding
-from openpi_cot.dataloader.helpers import convert_state_encoding
 from openpi_cot.dataloader.helpers import extract_episode_path_from_file_path
+from openpi_cot.dataloader.helpers import state_encoding_to_type
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
@@ -321,6 +322,21 @@ class SingleCoTDataset:
             self.split_val(split_seed=seed)
             self.apply_restructure()
             self.dataset_statistics = cached_stats
+
+            # If state encoding is NONE, ensure state stats are properly padded
+            if self.state_encoding == StateEncoding.NONE:
+                from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+
+                # If cached stats have empty state arrays, pad them to action_dim
+                if len(self.dataset_statistics["state"].mean) == 0:
+                    self.dataset_statistics["state"] = ExtendedNormStats(
+                        mean=np.zeros(self.action_dim, dtype=np.float32),
+                        std=np.ones(self.action_dim, dtype=np.float32),
+                        q01=np.zeros(self.action_dim, dtype=np.float32),
+                        q99=np.zeros(self.action_dim, dtype=np.float32),
+                        num_transitions=self.dataset_statistics["state"].num_transitions,
+                        num_trajectories=self.dataset_statistics["state"].num_trajectories,
+                    )
         else:
             # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
             self.apply_restructure()
@@ -332,6 +348,20 @@ class SingleCoTDataset:
             )
             self.apply_traj_filters(action_key="actions")
             self.split_val(split_seed=seed)
+
+            # If state encoding is NONE, pad the empty state stats to action_dim
+            if self.state_encoding == StateEncoding.NONE:
+                from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+
+                # Replace empty state stats with zero-padded stats
+                self.dataset_statistics["state"] = ExtendedNormStats(
+                    mean=np.zeros(self.action_dim, dtype=np.float32),
+                    std=np.ones(self.action_dim, dtype=np.float32),  # Std of 1 to avoid division by zero
+                    q01=np.zeros(self.action_dim, dtype=np.float32),
+                    q99=np.zeros(self.action_dim, dtype=np.float32),
+                    num_transitions=self.dataset_statistics["state"].num_transitions,
+                    num_trajectories=self.dataset_statistics["state"].num_trajectories,
+                )
 
         self.apply_traj_transforms(
             action_horizon=action_horizon,
@@ -547,11 +577,6 @@ class SingleCoTDataset:
                         traj["observation"][self.spec.wrist_image_right_key], axis=1
                     )  # [T, 1, H, W, C]
 
-                # No prediction language action needed - empty padded tensor
-                empty_row = tf.fill([summation_steps], tf.constant("", dtype=tf.string))
-                traj["prediction_language_action"] = tf.tile(
-                    tf.expand_dims(empty_row, 0), [traj_len, 1]
-                )  # [T, summation_steps]
                 return traj
 
             # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
@@ -953,9 +978,12 @@ class DroidCoTDataset(SingleCoTDataset):
             )
 
             state = tf.concat([cartesian, binarize_gripper_actions(1 - gripper, threshold=0.5)], axis=-1)
-            state = convert_state_encoding(
-                state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
-            )
+            # state = convert_state_encoding(
+            #     state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
+            # )
+
+            # Determine state type from state encoding
+            state_type_str = state_encoding_to_type(self.config.state_encoding)
 
             # # Pad state to action_dim to ensure fixed shape for dataset interleaving
             # state_pad_amount = self.action_dim - tf.shape(state)[-1]
@@ -981,6 +1009,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 # Attach control_frequency per step for downstream windowing/summarization
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # DROID is single-arm
+                "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
             }
 
             step_id = (
@@ -1224,11 +1253,16 @@ class SingleOXECoTDataset(SingleCoTDataset):
                     [tf.cast(old_obs[key], tf.float32) for key in self.state_obs_keys if key is not None],
                     axis=1,
                 )
-                new_obs["state"] = convert_state_encoding(
-                    new_obs["state"],
-                    from_encoding=self.state_encoding,
-                    to_encoding=self.config.state_encoding,
-                )
+                # new_obs["state"] = convert_state_encoding(
+                #     new_obs["state"],
+                #     from_encoding=self.state_encoding,
+                #     to_encoding=self.config.state_encoding,
+                # )
+            else:
+                new_obs["state"] = tf.zeros((traj_len, 0), dtype=tf.float32)  # Empty state
+
+            # Determine state type from state encoding
+            state_type_str = state_encoding_to_type(self.state_encoding)
 
             # Build a deterministic per-trajectory identifier using a strong hash
             # of the dataset name and the serialized action tensor. This avoids
@@ -1243,6 +1277,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "raw_action": tf.cast(traj["action"], tf.float32),
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
+                "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
             }
 
             return traj
@@ -1360,6 +1395,7 @@ class OXECoTDatasets:
         logging.info("Reads per Dataset: %s", reads_per_dataset)
 
         datasets, dataset_sizes, all_dataset_statistics = [], [], {}
+        dataset_state_encodings = {}  # Track state encoding for each dataset
         logging.info("Constructing datasets...")
         for dataset_name, threads, reads in zip(  # noqa: B905
             dataset_names,
@@ -1403,6 +1439,7 @@ class OXECoTDatasets:
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_name] = dataset_statistics
+            dataset_state_encodings[dataset_name] = config.state_encoding  # Track state encoding
 
         # Get the indices of the "primary" datasets (i.e., datasets with sample_weight == 1.0)
         # primary_dataset_indices = np.array([idx for idx in range(len(sample_weights)) if sample_weights[idx] == 1.0])
@@ -1425,8 +1462,6 @@ class OXECoTDatasets:
 
         pprint_data_mixture(dataset_names, sample_weights)
 
-        self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
-
         # Apply global normalization if requested
         if use_global_normalization and not config.vis_dataset:
             global_stats_dir = data_dir
@@ -1434,23 +1469,41 @@ class OXECoTDatasets:
                 datasets=datasets,
                 dataset_names=dataset_names,
                 all_dataset_statistics=all_dataset_statistics,
+                dataset_state_encodings=dataset_state_encodings,
                 save_dir=global_stats_dir,
                 action_dim=action_dim,
             )
             logging.info("Applying global normalization with stats: %s", global_stats)
 
-            # Apply normalization at the frame level (after interleaving)
-            def apply_global_norm(frame):
-                return NormalizeActionAndProprio(
-                    norm_stats=global_stats,
+            # Apply state-type-specific normalization to each dataset BEFORE interleaving
+            # This avoids tf.case/tf.cond issues entirely
+            normalized_datasets = []
+            for ds_name, ds in zip(dataset_names, datasets):
+                state_enc = dataset_state_encodings[ds_name]
+                state_type = state_encoding_to_type(state_enc)
+
+                # Create normalizer for this state type
+                stats = {"actions": global_stats["actions"]}
+                state_key_name = f"state_{state_type}"
+                if state_key_name in global_stats:
+                    stats["state"] = global_stats[state_key_name]
+
+                normalizer = NormalizeActionAndProprio(
+                    norm_stats=stats,
                     normalization_type=action_proprio_normalization_type,
                     action_key="actions",
                     state_key="state",
-                )(frame)
+                )
 
-            self.dataset = self.dataset.map(apply_global_norm, num_parallel_calls=tf.data.AUTOTUNE)
+                # Apply normalizer to this dataset
+                normalized_datasets.append(ds.map(normalizer, num_parallel_calls=tf.data.AUTOTUNE))
+
+            # Interleave the normalized datasets
+            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(normalized_datasets, self.sample_weights)
             self.global_statistics = global_stats
         else:
+            # No global normalization - just interleave the datasets
+            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
             self.global_statistics = None
 
         self.dataset = prepare_batched_dataset(
@@ -1472,14 +1525,15 @@ class OXECoTDatasets:
         datasets: list[dl.DLataset],
         dataset_names: list[str],
         all_dataset_statistics: dict,
+        dataset_state_encodings: dict,
         save_dir: str,
         action_dim: int,
     ) -> dict:
         """Compute or load global normalization statistics across all datasets.
 
         When using global normalization, we compute mean/std across all datasets
-        weighted by their sample counts. This provides consistent normalization
-        across the entire data mixture.
+        weighted by their sample counts. Statistics are computed separately for
+        each state type (joint_pos, eef_pose, none).
 
         Note: The statistics are padded to action_dim to match the padded tensors.
         """
@@ -1495,35 +1549,32 @@ class OXECoTDatasets:
         except FileNotFoundError:
             logging.info("Computing global normalization statistics from scratch...")
 
-        # Compute weighted global statistics
-        total_action_n = sum(stats["actions"].num_transitions for stats in all_dataset_statistics.values())
-        total_state_n = sum(stats["state"].num_transitions for stats in all_dataset_statistics.values())
+        # Group datasets by state type
+        datasets_by_state_type = {"joint_pos": [], "eef_pose": [], "none": []}
+        for dataset_name in dataset_names:
+            state_encoding = dataset_state_encodings[dataset_name]
+            state_type = state_encoding_to_type(state_encoding)
+            datasets_by_state_type[state_type].append(dataset_name)
 
-        # Compute weighted mean
+        # Compute weighted global statistics for actions
+        # Note: Action stats are shared across ALL datasets regardless of state type
+        total_action_n = sum(stats["actions"].num_transitions for stats in all_dataset_statistics.values())
         action_weighted_sum = np.zeros_like(list(all_dataset_statistics.values())[0]["actions"].mean)
-        state_weighted_sum = np.zeros_like(list(all_dataset_statistics.values())[0]["state"].mean)
 
         for dataset_name, stats in all_dataset_statistics.items():
             action_n = stats["actions"].num_transitions
-            state_n = stats["state"].num_transitions
             action_weighted_sum += stats["actions"].mean * action_n
-            state_weighted_sum += stats["state"].mean * state_n
 
         action_global_mean = action_weighted_sum / total_action_n
-        state_global_mean = state_weighted_sum / total_state_n
 
         # Pad global mean to action_dim (padding with zeros)
         action_global_mean = np.pad(action_global_mean, (0, action_dim - len(action_global_mean)), mode="constant")
-        state_global_mean = np.pad(state_global_mean, (0, action_dim - len(state_global_mean)), mode="constant")
 
-        # Compute weighted variance using parallel axis theorem:
-        # Var(combined) = sum_i [n_i * (var_i + (mean_i - global_mean)^2)] / sum_i n_i
+        # Compute weighted variance using parallel axis theorem
         action_var_sum = np.zeros_like(action_global_mean)
-        state_var_sum = np.zeros_like(state_global_mean)
 
         for dataset_name, stats in all_dataset_statistics.items():
             action_n = stats["actions"].num_transitions
-            state_n = stats["state"].num_transitions
 
             # Pad local stats to action_dim for comparison with global stats
             action_local_mean = np.pad(
@@ -1532,35 +1583,22 @@ class OXECoTDatasets:
             action_local_std = np.pad(
                 stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode="constant"
             )
-            state_local_mean = np.pad(stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant")
-            state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant")
 
             # var_i + (mean_i - global_mean)^2
             action_local_var = np.square(action_local_std)
             action_mean_diff_sq = np.square(action_local_mean - action_global_mean)
             action_var_sum += action_n * (action_local_var + action_mean_diff_sq)
 
-            state_local_var = np.square(state_local_std)
-            state_mean_diff_sq = np.square(state_local_mean - state_global_mean)
-            state_var_sum += state_n * (state_local_var + state_mean_diff_sq)
-
         action_global_var = action_var_sum / total_action_n
-        state_global_var = state_var_sum / total_state_n
-
         action_global_std = np.sqrt(action_global_var)
-        state_global_std = np.sqrt(state_global_var)
 
         # For quantiles, use conservative bounds (global min/max across all datasets)
         action_q01 = np.min([stats["actions"].q01 for stats in all_dataset_statistics.values()], axis=0)
         action_q99 = np.max([stats["actions"].q99 for stats in all_dataset_statistics.values()], axis=0)
-        state_q01 = np.min([stats["state"].q01 for stats in all_dataset_statistics.values()], axis=0)
-        state_q99 = np.max([stats["state"].q99 for stats in all_dataset_statistics.values()], axis=0)
 
         # Pad quantiles to action_dim
         action_q01 = np.pad(action_q01, (0, action_dim - len(action_q01)), mode="constant", constant_values=0)
         action_q99 = np.pad(action_q99, (0, action_dim - len(action_q99)), mode="constant", constant_values=0)
-        state_q01 = np.pad(state_q01, (0, action_dim - len(state_q01)), mode="constant", constant_values=0)
-        state_q99 = np.pad(state_q99, (0, action_dim - len(state_q99)), mode="constant", constant_values=0)
 
         global_stats = {
             "actions": ExtendedNormStats(
@@ -1571,15 +1609,77 @@ class OXECoTDatasets:
                 num_transitions=total_action_n,
                 num_trajectories=sum(stats["actions"].num_trajectories for stats in all_dataset_statistics.values()),
             ),
-            "state": ExtendedNormStats(
+        }
+
+        # Compute separate state statistics for each state type
+        for state_type, ds_names in datasets_by_state_type.items():
+            if not ds_names:
+                continue  # Skip if no datasets of this type
+
+            # Skip normalization for "none" state type (empty state)
+            if state_type == "none":
+                continue
+
+            # Compute weighted statistics for this state type
+            state_stats_subset = {name: all_dataset_statistics[name] for name in ds_names}
+            total_state_n = sum(stats["state"].num_transitions for stats in state_stats_subset.values())
+
+            if total_state_n == 0:
+                continue  # Skip if no transitions
+
+            # Initialize with action_dim size (all states will be padded to this size)
+            state_weighted_sum = np.zeros(action_dim, dtype=np.float32)
+
+            for dataset_name, stats in state_stats_subset.items():
+                state_n = stats["state"].num_transitions
+                # Pad state mean to action_dim before accumulating
+                state_mean_padded = np.pad(
+                    stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
+                )
+                state_weighted_sum += state_mean_padded * state_n
+
+            state_global_mean = state_weighted_sum / total_state_n
+
+            # Pad global mean to action_dim
+            state_global_mean = np.pad(state_global_mean, (0, action_dim - len(state_global_mean)), mode="constant")
+
+            # Compute weighted variance
+            state_var_sum = np.zeros_like(state_global_mean)
+
+            for dataset_name, stats in state_stats_subset.items():
+                state_n = stats["state"].num_transitions
+
+                # Pad local stats to action_dim
+                state_local_mean = np.pad(
+                    stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
+                )
+                state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant")
+
+                # var_i + (mean_i - global_mean)^2
+                state_local_var = np.square(state_local_std)
+                state_mean_diff_sq = np.square(state_local_mean - state_global_mean)
+                state_var_sum += state_n * (state_local_var + state_mean_diff_sq)
+
+            state_global_var = state_var_sum / total_state_n
+            state_global_std = np.sqrt(state_global_var)
+
+            # For quantiles, use conservative bounds
+            state_q01 = np.min([stats["state"].q01 for stats in state_stats_subset.values()], axis=0)
+            state_q99 = np.max([stats["state"].q99 for stats in state_stats_subset.values()], axis=0)
+
+            # Pad quantiles to action_dim
+            state_q01 = np.pad(state_q01, (0, action_dim - len(state_q01)), mode="constant", constant_values=0)
+            state_q99 = np.pad(state_q99, (0, action_dim - len(state_q99)), mode="constant", constant_values=0)
+
+            # Store with state type-specific key
+            global_stats[f"state_{state_type}"] = ExtendedNormStats(
                 mean=state_global_mean,
                 std=state_global_std,
                 q01=state_q01,
                 q99=state_q99,
                 num_transitions=total_state_n,
-                num_trajectories=sum(stats["state"].num_trajectories for stats in all_dataset_statistics.values()),
-            ),
-        }
+                num_trajectories=sum(stats["state"].num_trajectories for stats in state_stats_subset.values()),
+            )
 
         # Save global stats
         if jax.process_index() == 0:

@@ -117,8 +117,12 @@ def get_dataset_statistics(
     actions, proprios = np.concatenate(actions), np.concatenate(proprios)
     mask = np.isfinite(actions).all(axis=1)
     actions = actions[mask]
-    mask = np.isfinite(proprios).all(axis=1)
-    proprios = proprios[mask]
+
+    # Check if proprios has empty dimensions (state_encoding == NONE)
+    has_state = proprios.shape[-1] > 0
+    if has_state:
+        mask = np.isfinite(proprios).all(axis=1)
+        proprios = proprios[mask]
 
     # ------------------------------------------------------------
     # Multi-host aggregation: compute exact global mean/std and counts
@@ -143,11 +147,12 @@ def get_dataset_statistics(
     a_max = actions.max(axis=0)
     a_n = np.array(actions.shape[0], dtype=np.int64)
 
-    s_sum = proprios.sum(axis=0)
-    s_sumsq = np.square(proprios).sum(axis=0)
-    s_min = proprios.min(axis=0)
-    s_max = proprios.max(axis=0)
-    s_n = np.array(proprios.shape[0], dtype=np.int64)
+    if has_state:
+        s_sum = proprios.sum(axis=0)
+        s_sumsq = np.square(proprios).sum(axis=0)
+        s_min = proprios.min(axis=0)
+        s_max = proprios.max(axis=0)
+        s_n = np.array(proprios.shape[0], dtype=np.int64)
 
     traj_n = np.array(num_trajectories, dtype=np.int64)
 
@@ -158,11 +163,12 @@ def get_dataset_statistics(
     a_max = _gather_and_reduce(a_max, "max")
     a_n = int(_gather_and_reduce(a_n, "sum"))
 
-    s_sum = _gather_and_reduce(s_sum, "sum")
-    s_sumsq = _gather_and_reduce(s_sumsq, "sum")
-    s_min = _gather_and_reduce(s_min, "min")
-    s_max = _gather_and_reduce(s_max, "max")
-    s_n = int(_gather_and_reduce(s_n, "sum"))
+    if has_state:
+        s_sum = _gather_and_reduce(s_sum, "sum")
+        s_sumsq = _gather_and_reduce(s_sumsq, "sum")
+        s_min = _gather_and_reduce(s_min, "min")
+        s_max = _gather_and_reduce(s_max, "max")
+        s_n = int(_gather_and_reduce(s_n, "sum"))
 
     traj_n = int(_gather_and_reduce(traj_n, "sum"))
 
@@ -171,9 +177,10 @@ def get_dataset_statistics(
     a_var = a_sumsq / max(a_n, 1) - np.square(a_mean)
     a_std = np.sqrt(np.maximum(a_var, 0.0))
 
-    s_mean = s_sum / max(s_n, 1)
-    s_var = s_sumsq / max(s_n, 1) - np.square(s_mean)
-    s_std = np.sqrt(np.maximum(s_var, 0.0))
+    if has_state:
+        s_mean = s_sum / max(s_n, 1)
+        s_var = s_sumsq / max(s_n, 1) - np.square(s_mean)
+        s_std = np.sqrt(np.maximum(s_var, 0.0))
 
     # ------------------------------------------------------------
     # Approximate global quantiles via distributed histograms
@@ -183,6 +190,8 @@ def get_dataset_statistics(
     ) -> np.ndarray:
         # Build identical bin edges per-dimension using global min/max
         dims = g_min.shape[0]
+        if dims == 0:
+            return np.array([], dtype=np.float32)
         edges = np.stack(
             [np.linspace(g_min[d] - 1e-12, g_max[d] + 1e-12, num_bins + 1) for d in range(dims)], axis=0
         )  # [D, B+1]
@@ -212,18 +221,31 @@ def get_dataset_statistics(
 
     a_q01 = _distributed_quantiles(actions, a_min, a_max, 0.01)
     a_q99 = _distributed_quantiles(actions, a_min, a_max, 0.99)
-    s_q01 = _distributed_quantiles(proprios, s_min, s_max, 0.01)
-    s_q99 = _distributed_quantiles(proprios, s_min, s_max, 0.99)
 
-    norm_stats = {
-        "state": ExtendedNormStats(
+    if has_state:
+        s_q01 = _distributed_quantiles(proprios, s_min, s_max, 0.01)
+        s_q99 = _distributed_quantiles(proprios, s_min, s_max, 0.99)
+        state_norm_stats = ExtendedNormStats(
             mean=np.asarray(s_mean),
             std=np.asarray(s_std),
             q01=np.asarray(s_q01),
             q99=np.asarray(s_q99),
             num_transitions=int(s_n),
             num_trajectories=int(traj_n),
-        ),
+        )
+    else:
+        # Create dummy state stats for empty state (state_encoding == NONE)
+        state_norm_stats = ExtendedNormStats(
+            mean=np.array([], dtype=np.float32),
+            std=np.array([], dtype=np.float32),
+            q01=np.array([], dtype=np.float32),
+            q99=np.array([], dtype=np.float32),
+            num_transitions=int(a_n),
+            num_trajectories=int(traj_n),
+        )
+
+    norm_stats = {
+        "state": state_norm_stats,
         "actions": ExtendedNormStats(
             mean=np.asarray(a_mean),
             std=np.asarray(a_std),

@@ -144,7 +144,7 @@ OXE_DATASET_CONFIGS = {
     "roboturk": {
         "image_obs_keys": {"primary": "front_rgb", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
-        "state_obs_keys": [None, None, None, None, None, None, None, None],
+        "state_obs_keys": [],
         "state_encoding": StateEncoding.NONE,
         "action_encoding": ActionEncoding.EEF_POS,
     },
@@ -807,12 +807,12 @@ OXE_DATASET_METADATA = {
     },
     "berkeley_cable_routing": {
         "control_frequency": 10,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
     "roboturk": {
-        "control_frequency": 10,
+        "control_frequency": 5,  # 10
         "language_annotations": "Templated",
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
@@ -873,7 +873,7 @@ OXE_DATASET_METADATA = {
     },
     "austin_buds_dataset_converted_externally_to_rlds": {
         "control_frequency": 20,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
@@ -915,13 +915,13 @@ OXE_DATASET_METADATA = {
     },
     "austin_sailor_dataset_converted_externally_to_rlds": {
         "control_frequency": 20,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
     "austin_sirius_dataset_converted_externally_to_rlds": {
         "control_frequency": 20,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
