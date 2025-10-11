@@ -73,18 +73,18 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("taco_play", 1.0),
         ("jaco_play", 1.0),
         # ("berkeley_cable_routing", 1.0),  # no language instructions, only joint pos, 1482 trajs
-        # ("roboturk", 2.0),  # no prio, 2144 trajs
+        ("roboturk", 2.0),  # no prio, 2144 trajs
         # # ("viola", 2.0),  # gripper mostly out of view, 135 trajs
         ("berkeley_autolab_ur5", 1.0),
         # # ("toto", 1.0),   # no language instructions, 901 trajs
         # # ("language_table", 0.1),  442226 trajs
         # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0), 550 trajs
-        # # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),   # no language instructions, 50 trajs
+        ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),  # no language instructions, 456 trajs
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # only joint state
-        # # ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
-        # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
+        ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
+        ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),  # only joint state, 520 trajs
         ("utaustin_mutex", 1.0),
