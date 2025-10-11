@@ -577,11 +577,6 @@ class SingleCoTDataset:
                         traj["observation"][self.spec.wrist_image_right_key], axis=1
                     )  # [T, 1, H, W, C]
 
-                # No prediction language action needed - empty padded tensor
-                empty_row = tf.fill([summation_steps], tf.constant("", dtype=tf.string))
-                traj["prediction_language_action"] = tf.tile(
-                    tf.expand_dims(empty_row, 0), [traj_len, 1]
-                )  # [T, summation_steps]
                 return traj
 
             # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]

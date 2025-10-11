@@ -96,25 +96,25 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("agibot_dataset", 0.2),
     ],
     "oxe_pi_magic_soup_with_other_states_with_bimanual": [
-        # ("bc_z", 0.5),
-        # ("droid", 0.5),
-        # ("fractal20220817_data", 1.0),
-        # ("bridge_v2_oxe", 1.0),
-        # ("taco_play", 1.0),
-        # ("jaco_play", 1.0),
-        # ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
-        # ("utaustin_mutex", 1.0),
-        # ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
-        # ("cmu_stretch", 2.0),  # almost all movements are "move up"
-        # ("fmb", 1.0),
-        # ("dobbe", 0.2),  # question
-        # ("berkeley_autolab_ur5", 1.0),
-        # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
-        # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes.
+        ("bc_z", 0.5),
+        ("droid", 0.5),
+        ("fractal20220817_data", 1.0),
+        ("bridge_v2_oxe", 1.0),
+        ("taco_play", 1.0),
+        ("jaco_play", 1.0),
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        ("utaustin_mutex", 1.0),
+        ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
+        ("cmu_stretch", 2.0),  # almost all movements are "move up"
+        ("fmb", 1.0),
+        ("dobbe", 0.2),  # question
+        ("berkeley_autolab_ur5", 1.0),
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
+        ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes.
         ### To be tested
-        # ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
+        ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
-        # ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
+        ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ### Bimanual
         # ("agibot_dataset", 0.2),
         ### TBD
