@@ -250,6 +250,7 @@ class PiCoT(_pi0.Pi0):
 
         # Optimization: if prediction training is enabled, encode all frames once and reuse
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
+            breakpoint()
             # Encode all frames once
             img_tokens_all, img_mask_all, img_ar_mask_all = self._embed_images(observation, num_frames=None)
 
@@ -340,6 +341,7 @@ class PiCoT(_pi0.Pi0):
                 observation.tokenized_prediction_mask,
                 observation.tokenized_prediction_langact_mask,
             )
+            breakpoint()
             prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
             prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
             prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
@@ -388,7 +390,10 @@ class PiCoT(_pi0.Pi0):
             metrics["pred_token_accuracy"] = pred_token_accuracy
 
             # Compute prediction critical token accuracy if available
-            if hasattr(observation, "crictical_prediction_token_mask") and observation.crictical_prediction_token_mask is not None:
+            if (
+                hasattr(observation, "crictical_prediction_token_mask")
+                and observation.crictical_prediction_token_mask is not None
+            ):
                 critical_pred_mask = observation.crictical_prediction_token_mask[:, 1:] * ex_mask_pred
                 critical_correct_pred = correct_pred * critical_pred_mask
                 num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)
