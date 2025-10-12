@@ -434,8 +434,6 @@ def main(config: _config.TrainConfig):
     #         _ = next(data_iter)
     batch = next(data_iter)
 
-    breakpoint()
-
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     sharding.log_batch_sharding(batch)
@@ -453,13 +451,12 @@ def main(config: _config.TrainConfig):
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
     train_runner = TrainingStepRunner(config)
-    # ptrain_step = jax.jit(
-    #     train_runner,
-    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-    #     out_shardings=(train_state_sharding, replicated_sharding),
-    #     donate_argnums=(1,),
-    # )
-    ptrain_step = train_runner
+    ptrain_step = jax.jit(
+        train_runner,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(train_state_sharding, replicated_sharding),
+        donate_argnums=(1,),
+    )
 
     if config.do_val:
         val_loader = _data_loader.create_data_loader(

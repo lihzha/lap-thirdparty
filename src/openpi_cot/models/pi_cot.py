@@ -415,6 +415,10 @@ class PiCoT(_pi0.Pi0):
 
         # Diffusion (actions) loss
         if self.enable_action_training:
+            # For action training, text tokens should not use autoregressive masking
+            text_ar_mask = jnp.zeros_like(text_mask, dtype=bool)
+            prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
+
             batch_shape = actions.shape[:-2]
             noise = jax.random.normal(noise_rng, actions.shape)
             time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
