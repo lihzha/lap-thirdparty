@@ -250,21 +250,33 @@ class PiCoT(_pi0.Pi0):
 
         # Optimization: if prediction training is enabled, encode all frames once and reuse
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
-            breakpoint()
             # Encode all frames once
             img_tokens_all, img_mask_all, img_ar_mask_all = self._embed_images(observation, num_frames=None)
 
-            # Get number of patches per frame per image
-            # Assuming all images have the same number of frames (should be true)
-            sample_image = next(iter(observation.images.values()))
-            num_frames_total = sample_image.shape[1]  # t dimension
-            num_patches = img_tokens_all.shape[1] // (len(observation.images) * num_frames_total)
-            tokens_per_frame = len(observation.images) * num_patches
+            # Calculate num_patches: total tokens divided by total frames across all images
+            total_frames = sum(img.shape[1] for img in observation.images.values())
+            num_patches = img_tokens_all.shape[1] // total_frames
 
-            # Extract first frame tokens for langact/action losses
-            img_tokens_first = img_tokens_all[:, :tokens_per_frame]
-            img_mask_first = img_mask_all[:, :tokens_per_frame]
-            img_ar_mask_first = img_ar_mask_all[:, :tokens_per_frame]
+            # Extract first frame tokens for each image
+            first_frame_tokens = []
+            first_frame_masks = []
+            first_frame_ar_masks = []
+
+            offset = 0
+            for name in observation.images:
+                num_frames_in_image = observation.images[name].shape[1]
+
+                # Extract first frame for this image
+                first_frame_tokens.append(img_tokens_all[:, offset:offset+num_patches])
+                first_frame_masks.append(img_mask_all[:, offset:offset+num_patches])
+                first_frame_ar_masks.append(img_ar_mask_all[:, offset:offset+num_patches])
+
+                # Move offset by all frames of this image
+                offset += num_frames_in_image * num_patches
+
+            img_tokens_first = jnp.concatenate(first_frame_tokens, axis=1)
+            img_mask_first = jnp.concatenate(first_frame_masks, axis=1)
+            img_ar_mask_first = jnp.concatenate(first_frame_ar_masks, axis=1)
         else:
             # Only encode first frame
             img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
@@ -341,7 +353,6 @@ class PiCoT(_pi0.Pi0):
                 observation.tokenized_prediction_mask,
                 observation.tokenized_prediction_langact_mask,
             )
-            breakpoint()
             prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
             prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
             prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
