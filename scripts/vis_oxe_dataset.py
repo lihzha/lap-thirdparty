@@ -386,7 +386,6 @@ def main(config: _config.TrainConfig):
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     # Sharding details for the first batch
     log_batch_sharding(batch)
-    breakpoint()
 
     for j in range(10):
         # Visualize language-action projection per example
@@ -409,8 +408,8 @@ def main(config: _config.TrainConfig):
                 la_text = langact_texts[i] if i < len(langact_texts) else ""
                 prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
                 # Combine prompt and langact for display
-                combined_text = f"Prompt: {prompt_text}\nLangAct: {la_text}" if prompt_text else f"LangAct: {la_text}"
-                logging.info(f"prompt: {prompt_text} | la_text: {la_text}")
+                combined_text = f"Prompt: {prompt_text} {la_text}" if prompt_text else f"LangAct: {la_text}"
+                logging.info(f"{prompt_text} {la_text}")
                 col1 = np.copy(_ensure_color(start_u8))
                 col2 = np.copy(_ensure_color(end_u8))
                 panels = [col1]
