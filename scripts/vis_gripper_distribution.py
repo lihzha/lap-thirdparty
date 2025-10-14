@@ -338,16 +338,4 @@ def main(config: _config.TrainConfig):
 if __name__ == "__main__":
     # Parse config from command line
     config = _config.cli()
-
-    # Add num_batches argument if not present
-    if not hasattr(config, "num_batches"):
-        import sys
-
-        for i, arg in enumerate(sys.argv):
-            if arg == "--num-batches" and i + 1 < len(sys.argv):
-                config.num_batches = int(sys.argv[i + 1])
-                break
-        else:
-            config.num_batches = 50  # Default
-
     main(config)
