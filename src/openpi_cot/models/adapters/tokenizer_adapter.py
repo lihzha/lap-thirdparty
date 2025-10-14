@@ -64,7 +64,7 @@ class PromptFormat:
         Returns:
             Formatted prompt string ready for tokenization
         """
-        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
+        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ").rstrip(".")
 
         # Prepare state-related variables
         state_str = ""
@@ -314,7 +314,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         """Decode tokens back to a string."""
         if not isinstance(tokens, list):
             tokens = tokens.tolist()
-        return self._tokenizer.decode(tokens)
+        return self._tokenizer.decode(tokens).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
