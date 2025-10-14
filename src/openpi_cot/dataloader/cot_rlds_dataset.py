@@ -1453,7 +1453,7 @@ class SampleR1LiteCoTDataset(SingleCoTDataset):
 
         def _get_traj_identifier(traj):
             # Extract episode ID from metadata
-            episode_id = traj["episode_metadata"]["file_path"]
+            episode_id = traj["traj_metadata"]["episode_metadata"]["file_path"]
             if tf.rank(episode_id) > 0:
                 episode_id = episode_id[0]
             episode_id = tf.strings.as_string(episode_id)
