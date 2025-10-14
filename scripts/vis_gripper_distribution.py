@@ -12,12 +12,12 @@ Usage:
 
 import logging
 import os
-from collections import defaultdict
 
 import etils.epath as epath
 import jax
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+
+matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -65,7 +65,7 @@ def extract_gripper_states(batch, state_padding_mask=None) -> np.ndarray:
     obs = batch[0]
 
     # Get state - typically shape [batch_size, seq_len, state_dim]
-    if hasattr(obs, 'state') and obs.state is not None:
+    if hasattr(obs, "state") and obs.state is not None:
         state = jax.device_get(obs.state)
         # Last dimension is gripper
         gripper_states = state[..., -1]
@@ -81,7 +81,7 @@ def extract_gripper_states(batch, state_padding_mask=None) -> np.ndarray:
         return gripper_states
 
     # Fallback: try to get gripper_state directly
-    if hasattr(obs, 'gripper_state') and obs.gripper_state is not None:
+    if hasattr(obs, "gripper_state") and obs.gripper_state is not None:
         gripper_states = jax.device_get(obs.gripper_state)
         return gripper_states.flatten()
 
@@ -101,54 +101,55 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     """
     # Create figure with multiple subplots
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle(f'Gripper State Distribution: {dataset_name}', fontsize=16, fontweight='bold')
+    fig.suptitle(f"Gripper State Distribution: {dataset_name}", fontsize=16, fontweight="bold")
 
     # 1. Histogram with KDE
     ax1 = axes[0, 0]
-    ax1.hist(gripper_values, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='black')
+    ax1.hist(gripper_values, bins=50, density=True, alpha=0.7, color="steelblue", edgecolor="black")
     if len(gripper_values) > 1:
         try:
             from scipy import stats
+
             kde = stats.gaussian_kde(gripper_values)
             x_range = np.linspace(gripper_values.min(), gripper_values.max(), 200)
-            ax1.plot(x_range, kde(x_range), 'r-', linewidth=2, label='KDE')
+            ax1.plot(x_range, kde(x_range), "r-", linewidth=2, label="KDE")
             ax1.legend()
         except ImportError:
             pass  # Skip KDE if scipy not available
-    ax1.set_xlabel('Gripper State Value', fontsize=12)
-    ax1.set_ylabel('Density', fontsize=12)
-    ax1.set_title('Distribution with KDE', fontsize=13, fontweight='bold')
-    ax1.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+    ax1.set_xlabel("Gripper State Value", fontsize=12)
+    ax1.set_ylabel("Density", fontsize=12)
+    ax1.set_title("Distribution with KDE", fontsize=13, fontweight="bold")
+    ax1.grid(True, alpha=0.3, linestyle="--", linewidth=0.5)
 
     # 2. Box plot
     ax2 = axes[0, 1]
     box_data = ax2.boxplot(gripper_values, vert=True, patch_artist=True, widths=0.5)
-    box_data['boxes'][0].set_facecolor('lightblue')
-    box_data['medians'][0].set_color('red')
-    box_data['medians'][0].set_linewidth(2)
-    ax2.set_ylabel('Gripper State Value', fontsize=12)
-    ax2.set_title('Box Plot', fontsize=13, fontweight='bold')
-    ax2.set_xticklabels(['Gripper State'])
-    ax2.grid(True, alpha=0.3, axis='y', linestyle='--', linewidth=0.5)
+    box_data["boxes"][0].set_facecolor("lightblue")
+    box_data["medians"][0].set_color("red")
+    box_data["medians"][0].set_linewidth(2)
+    ax2.set_ylabel("Gripper State Value", fontsize=12)
+    ax2.set_title("Box Plot", fontsize=13, fontweight="bold")
+    ax2.set_xticklabels(["Gripper State"])
+    ax2.grid(True, alpha=0.3, axis="y", linestyle="--", linewidth=0.5)
 
     # 3. Cumulative distribution
     ax3 = axes[1, 0]
     sorted_values = np.sort(gripper_values)
     cumulative = np.arange(1, len(sorted_values) + 1) / len(sorted_values)
-    ax3.plot(sorted_values, cumulative, linewidth=2, color='green')
-    ax3.set_xlabel('Gripper State Value', fontsize=12)
-    ax3.set_ylabel('Cumulative Probability', fontsize=12)
-    ax3.set_title('Cumulative Distribution Function', fontsize=13, fontweight='bold')
-    ax3.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+    ax3.plot(sorted_values, cumulative, linewidth=2, color="green")
+    ax3.set_xlabel("Gripper State Value", fontsize=12)
+    ax3.set_ylabel("Cumulative Probability", fontsize=12)
+    ax3.set_title("Cumulative Distribution Function", fontsize=13, fontweight="bold")
+    ax3.grid(True, alpha=0.3, linestyle="--", linewidth=0.5)
 
     # 4. Statistics summary
     ax4 = axes[1, 1]
-    ax4.axis('off')
+    ax4.axis("off")
 
     # Compute statistics
     stats_text = f"""
     Dataset Statistics
-    {'=' * 35}
+    {"=" * 35}
 
     Sample Count:    {len(gripper_values):,}
 
@@ -170,9 +171,16 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     % Near 1 (>0.9): {100 * np.mean(gripper_values > 0.9):.2f}%
     """
 
-    ax4.text(0.1, 0.9, stats_text, transform=ax4.transAxes, fontsize=11,
-             verticalalignment='top', fontfamily='monospace',
-             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
+    ax4.text(
+        0.1,
+        0.9,
+        stats_text,
+        transform=ax4.transAxes,
+        fontsize=11,
+        verticalalignment="top",
+        fontfamily="monospace",
+        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.3),
+    )
 
     plt.tight_layout()
 
@@ -183,8 +191,8 @@ def main(config: _config.TrainConfig):
     init_logging()
 
     # Get dataset name from config
-    dataset_name = getattr(config.data, 'data_mix', 'unknown')
-    num_batches = getattr(config, 'num_batches', 50)  # Default to 50 batches
+    dataset_name = getattr(config.data, "data_mix", "unknown")
+    num_batches = 200
 
     logging.info(f"Analyzing gripper distribution for dataset: {dataset_name}")
     logging.info(f"Will process {num_batches} batches")
@@ -299,24 +307,26 @@ def main(config: _config.TrainConfig):
 
     # Log to wandb or save locally
     if wandb_enabled and wandb is not None:
-        wandb.log({
-            "gripper_distribution": wandb.Image(fig),
-            "stats/sample_count": len(all_gripper_states),
-            "stats/mean": np.mean(all_gripper_states),
-            "stats/median": np.median(all_gripper_states),
-            "stats/std": np.std(all_gripper_states),
-            "stats/min": np.min(all_gripper_states),
-            "stats/max": np.max(all_gripper_states),
-            "stats/pct_near_0": 100 * np.mean(all_gripper_states < 0.1),
-            "stats/pct_near_1": 100 * np.mean(all_gripper_states > 0.9),
-        })
+        wandb.log(
+            {
+                "gripper_distribution": wandb.Image(fig),
+                "stats/sample_count": len(all_gripper_states),
+                "stats/mean": np.mean(all_gripper_states),
+                "stats/median": np.median(all_gripper_states),
+                "stats/std": np.std(all_gripper_states),
+                "stats/min": np.min(all_gripper_states),
+                "stats/max": np.max(all_gripper_states),
+                "stats/pct_near_0": 100 * np.mean(all_gripper_states < 0.1),
+                "stats/pct_near_1": 100 * np.mean(all_gripper_states > 0.9),
+            }
+        )
         logging.info("Logged gripper distribution to wandb")
         plt.close(fig)
     else:
         # Fallback: save locally
         output_dir = os.environ.get("OPENPI_OUTPUT_DIR", ".")
         save_path = os.path.join(output_dir, f"gripper_dist_{dataset_name}.png")
-        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
         logging.info(f"Saved plot to: {save_path}")
         plt.close(fig)
 
@@ -330,10 +340,11 @@ if __name__ == "__main__":
     config = _config.cli()
 
     # Add num_batches argument if not present
-    if not hasattr(config, 'num_batches'):
+    if not hasattr(config, "num_batches"):
         import sys
+
         for i, arg in enumerate(sys.argv):
-            if arg == '--num-batches' and i + 1 < len(sys.argv):
+            if arg == "--num-batches" and i + 1 < len(sys.argv):
                 config.num_batches = int(sys.argv[i + 1])
                 break
         else:

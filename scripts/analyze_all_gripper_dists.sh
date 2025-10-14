@@ -3,8 +3,6 @@
 # Script to analyze gripper distribution for all datasets in oxe_pi_magic_soup_with_other_states_with_bimanual mixture
 # Usage: ./scripts/analyze_all_gripper_dists.sh [NUM_BATCHES]
 
-# Number of batches per dataset (default 50, can override with first argument)
-NUM_BATCHES=${1:-50}
 
 # Define all datasets from the mixture (in order as they appear)
 DATASETS=(
@@ -37,7 +35,6 @@ LOG_FILE="gripper_analysis_$(date +%Y%m%d_%H%M%S).log"
 
 echo "Starting gripper distribution analysis at $(date)" | tee -a "$LOG_FILE"
 echo "Total datasets to process: ${#DATASETS[@]}" | tee -a "$LOG_FILE"
-echo "Batches per dataset: $NUM_BATCHES" | tee -a "$LOG_FILE"
 echo "----------------------------------------" | tee -a "$LOG_FILE"
 
 # Counter for progress tracking
@@ -52,7 +49,7 @@ for DATASET in "${DATASETS[@]}"; do
     echo "Started at: $(date)" | tee -a "$LOG_FILE"
 
     # Run the gripper analysis command
-    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout main && git pull origin main && uv run --group tpu scripts/vis_gripper_distribution.py pi_combined_cot_v4 --exp-name=gripper_dist_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=400 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --model.prompt-format=schema_compact --num-batches=${NUM_BATCHES}" 2>&1 | tee -a "$LOG_FILE"
+    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout main && git pull origin main && uv run --group tpu scripts/vis_gripper_distribution.py pi_combined_cot_v4 --exp-name=gripper_dist_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=400 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --model.prompt-format=schema_compact --data.vis-dataset" 2>&1 | tee -a "$LOG_FILE"
 
     EXIT_CODE=${PIPESTATUS[0]}
 
