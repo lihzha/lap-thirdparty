@@ -278,7 +278,7 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["clip_function_input/base_pose_tool_reached"] = tf.reshape(eef_value, (-1, 7))
     gripper_value = tf.io.decode_compressed(trajectory["observation"]["gripper_closed"], compression_type="ZLIB")
     gripper_value = tf.io.decode_raw(gripper_value, tf.float32)
-    trajectory["observation"]["gripper_closed"] = tf.reshape(gripper_value, (-1, 1))
+    trajectory["observation"]["gripper_closed"] = gripper_value
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
     # Create EEF state with xyz + euler angles
@@ -286,7 +286,7 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         (
             trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, 3:7]),
-            rel2abs_gripper_actions(trajectory["observation"]["gripper_closed"]),
+            tf.reshape(rel2abs_gripper_actions(trajectory["observation"]["gripper_closed"]), (-1, 1)),
         ),
         axis=-1,
     )
