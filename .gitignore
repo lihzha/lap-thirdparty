@@ -13,3 +13,4 @@ pt_224.npz
 .claude
 *.png
 videos/
+*.log
