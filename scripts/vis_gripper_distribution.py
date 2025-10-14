@@ -63,27 +63,11 @@ def extract_gripper_states(batch, state_padding_mask=None) -> np.ndarray:
         Array of gripper state values (non-padded)
     """
     obs = batch[0]
-
-    # Get state - typically shape [batch_size, seq_len, state_dim]
-    if hasattr(obs, "state") and obs.state is not None:
-        state = jax.device_get(obs.state)
-        # Last dimension is gripper
-        gripper_states = state[..., -1]
-
-        # Apply padding mask if available
-        if state_padding_mask is not None:
-            mask = jax.device_get(state_padding_mask)
-            gripper_states = gripper_states[~mask.astype(bool)]
-        else:
-            # Flatten all values
-            gripper_states = gripper_states.flatten()
-
-        return gripper_states
-
-    # Fallback: try to get gripper_state directly
-    if hasattr(obs, "gripper_state") and obs.gripper_state is not None:
-        gripper_states = jax.device_get(obs.gripper_state)
-        return gripper_states.flatten()
+    state = jax.device_get(obs.state)
+    # Last dimension is gripper
+    gripper_states = state[..., 6]
+    gripper_states = gripper_states.flatten()
+    return gripper_states
 
     return np.array([])
 
