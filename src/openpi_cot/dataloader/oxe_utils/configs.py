@@ -333,9 +333,8 @@ OXE_DATASET_CONFIGS = {
         "state_obs_keys": [
             # "present/xyz",
             # "present/axis_angle",
-            "eef_state",
-            None,
-            "present/sensed_close",
+            "state",
+            # "present/sensed_close",
         ],
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,

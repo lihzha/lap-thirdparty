@@ -286,7 +286,7 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         (
             trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, 3:7]),
-            trajectory["observation"]["gripper_closed"],
+            rel2abs_gripper_actions(trajectory["observation"]["gripper_closed"]),
         ),
         axis=-1,
     )
@@ -314,14 +314,16 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["state_eef"] = trajectory["observation"]["robot_obs"][:, :6]
-    trajectory["observation"]["state_gripper"] = trajectory["observation"]["robot_obs"][:, 7:8]
+    trajectory["observation"]["state_gripper"] = invert_gripper_actions(
+        (trajectory["observation"]["robot_obs"][:, 6:7] + 1) / 2
+    )
     trajectory["action"] = trajectory["action"]["rel_actions_world"]
 
     # invert gripper action + clip, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
         (
             trajectory["action"][:, :6],
-            tf.clip_by_value(trajectory["action"][:, -1:], 0, 1),
+            tf.clip_by_value(invert_gripper_actions((trajectory["action"][:, -1:] + 1) / 2), 0, 1),
         ),
         axis=-1,
     )
@@ -348,7 +350,9 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
-    trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
+    trajectory["observation"]["state_gripper"] = rel2abs_gripper_actions(
+        trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
+    )
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -988,11 +992,12 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["eef_state"] = coordinate_transform_bcz(
+    trajectory["observation"]["sate"] = coordinate_transform_bcz(
         tf.concat(
             (
                 trajectory["observation"]["present/xyz"][:, :3],
                 trajectory["observation"]["present/axis_angle"][:, :3],
+                invert_gripper_actions(trajectory["observation"]["present/sensed_close"]),
             ),
             axis=-1,
         )

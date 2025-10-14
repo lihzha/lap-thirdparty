@@ -407,7 +407,7 @@ def main(config: _config.TrainConfig):
                 la_text = langact_texts[i] if i < len(langact_texts) else ""
                 prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
                 # Combine prompt and langact for display
-                combined_text = f"Prompt: {prompt_text} {la_text}" if prompt_text else f"LangAct: {la_text}"
+                combined_text = f"{prompt_text} {la_text}" if prompt_text else f"LangAct: {la_text}"
                 logging.info(f"{prompt_text} {la_text}")
                 col1 = np.copy(_ensure_color(start_u8))
                 col2 = np.copy(_ensure_color(end_u8))
