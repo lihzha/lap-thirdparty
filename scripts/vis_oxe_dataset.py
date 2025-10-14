@@ -122,6 +122,23 @@ def _decode_langact_strings(obs, tokenizer) -> list[str]:
     return out
 
 
+def _decode_prompt_strings(obs, tokenizer) -> list[str]:
+    """Extract and decode the prompt tokens per example."""
+    if not hasattr(obs, "tokenized_input") or obs.tokenized_input is None:
+        return []
+    tokens = jax.device_get(obs.tokenized_input)
+    out: list[str] = []
+    for i in range(tokens.shape[0]):
+        # Filter out padding tokens (typically 0)
+        valid_tokens = tokens[i][tokens[i] != 0]
+        try:
+            text = tokenizer.decode(valid_tokens.astype(np.int32))
+        except Exception:
+            text = ""
+        out.append(text)
+    return out
+
+
 def _ensure_color(img: np.ndarray | None) -> np.ndarray | None:
     if img is None:
         return None
@@ -192,7 +209,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     block_h = max(1, y1 - y0)
     base_scale = 2.5
     scale = max(0.4, min(1.5, block_h / 110.0)) * base_scale
-    font_size = int(13 * scale * 0.5)
+    font_size = int(13 * scale * 0.2)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
@@ -219,7 +236,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
                     draw.text((x0 + 8 + dx, y + dy), line, font=font, fill=(0, 0, 0))
         # Draw text (white)
         draw.text((x0 + 8, y), line, font=font, fill=(255, 255, 255))
-        y += line_h + 2
+        y += line_h - 4
 
     return np.array(pil_img)
 
@@ -369,13 +386,12 @@ def main(config: _config.TrainConfig):
     # Sharding details for the first batch
     log_batch_sharding(batch)
 
-    breakpoint()
-
     for j in range(10):
         # Visualize language-action projection per example
         obs = batch[0]
-        # Decode langact strings
+        # Decode langact and prompt strings
         langact_texts = _decode_langact_strings(obs, tok)
+        prompt_texts = _decode_prompt_strings(obs, tok)
 
         # Visualize all camera views
         for cam_key in obs.images.keys():
@@ -389,7 +405,10 @@ def main(config: _config.TrainConfig):
                 start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
                 end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
                 la_text = langact_texts[i] if i < len(langact_texts) else ""
-                logging.info(f"la_text: {la_text}")
+                prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
+                # Combine prompt and langact for display
+                combined_text = f"Prompt: {prompt_text}\nLangAct: {la_text}" if prompt_text else f"LangAct: {la_text}"
+                logging.info(f"prompt: {prompt_text} | la_text: {la_text}")
                 col1 = np.copy(_ensure_color(start_u8))
                 col2 = np.copy(_ensure_color(end_u8))
                 panels = [col1]
@@ -400,7 +419,9 @@ def main(config: _config.TrainConfig):
                 row = np.concatenate(panels, axis=1)
                 # Single bottom overlay spanning the entire row
                 band_h_row = max(100, row.shape[0] // 4)
-                row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
+                row = _draw_text_block(
+                    row, combined_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2)
+                )
                 vis_rows.append(row)
             if vis_rows:
                 pages = _compose_pages(vis_rows, target_max_height=1600)
