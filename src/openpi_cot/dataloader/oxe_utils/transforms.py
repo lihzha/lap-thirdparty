@@ -996,7 +996,9 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         (
             trajectory["action"]["future/xyz_residual"][:, :3],
             trajectory["action"]["future/axis_angle_residual"][:, :3],
-            invert_gripper_actions(tf.cast(trajectory["action"]["future/target_close"][:, :1], tf.float32)),
+            rel2abs_gripper_actions(
+                invert_gripper_actions(tf.cast(trajectory["action"]["future/target_close"][:, :1], tf.float32))
+            ),
         ),
         axis=-1,
     )
@@ -1007,7 +1009,9 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
             (
                 trajectory["observation"]["present/xyz"][:, :3],
                 trajectory["observation"]["present/axis_angle"][:, :3],
-                invert_gripper_actions(trajectory["observation"]["present/sensed_close"]),
+                rel2abs_gripper_actions(
+                    invert_gripper_actions(trajectory["observation"]["present/sensed_close"]),
+                ),
             ),
             axis=-1,
         )
