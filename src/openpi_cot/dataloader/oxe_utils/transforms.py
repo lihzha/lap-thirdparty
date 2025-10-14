@@ -462,7 +462,7 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # state_matrix = tf.transpose(state_matrix, [0, 2, 1])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["gripper_states"]),
+        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["gripper_states"])),
         axis=-1,
     )
 
@@ -613,7 +613,7 @@ def stanford_hydra_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         ),
         axis=-1,
     )
-    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -3:-2]
+    trajectory["observation"]["gripper_state"] = invert_gripper_actions(trajectory["observation"]["state"][:, -3:-2])
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["language_instruction"]), ""
     # )  # delete uninformative language instruction
@@ -643,7 +643,7 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
+        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, 7:8])),
         axis=-1,
     )
 
@@ -740,7 +740,7 @@ def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, A
     trajectory["observation"]["state"] = tf.concat(
         (
             trajectory["observation"]["state"][:, :7],
-            trajectory["observation"]["state"][:, -1:],
+            invert_gripper_actions(trajectory["observation"]["state"][:, -1:]),
         ),
         axis=-1,
     )
@@ -835,7 +835,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     state_matrix = tf.reshape(trajectory["observation"]["state_ee"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, -1:]),
+        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, -1:])),
         axis=-1,
     )
 
@@ -911,7 +911,7 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     state_matrix = tf.reshape(trajectory["observation"]["state_ee"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, -1:]),
+        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, -1:])),
         axis=-1,
     )
 
@@ -927,7 +927,7 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat(
-        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1::, -1:], 0, 1))], axis=1
+        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -1227,7 +1227,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
+        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, 7:8])),
         axis=-1,
     )
 
@@ -1244,11 +1244,6 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
     return traj_truncated
-
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["language_instruction"]), ""
-    # )  # delete uninformative language instruction
-    # return trajectory
 
 
 def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -1427,7 +1422,14 @@ def dobbe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 def roboset_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # every input feature is batched, ie has leading batch dimension
-    trajectory["observation"]["proprio"] = trajectory["observation"]["state"]
+    # Invert gripper state to match inverted gripper action convention
+    trajectory["observation"]["proprio"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :-1],
+            invert_gripper_actions(tf.clip_by_value(trajectory["observation"]["state"][:, -1:], 0, 1)),
+        ),
+        axis=-1,
+    )
 
     # gripper action is in -1...1 --> clip to 0...1, flip
     gripper_action = trajectory["action"][:, -1:]

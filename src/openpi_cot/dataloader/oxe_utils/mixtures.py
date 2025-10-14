@@ -129,6 +129,28 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # # ("toto", 1.0),   # no language instructions, 901 trajs, no wrist camera
         # # # ("language_table", 0.1),  442226 trajs
     ],
+    # === Individual Datasets (for isolated visualization/testing) ===
+    "kuka": [("kuka", 1.0)],
+    "bc_z": [("bc_z", 1.0)],
+    "fractal20220817_data": [("fractal20220817_data", 1.0)],
+    "bridge_v2_oxe": [("bridge_v2_oxe", 1.0)],
+    "taco_play": [("taco_play", 1.0)],
+    "jaco_play": [("jaco_play", 1.0)],
+    "furniture_bench_dataset_converted_externally_to_rlds": [("furniture_bench_dataset_converted_externally_to_rlds", 1.0)],
+    "utaustin_mutex": [("utaustin_mutex", 1.0)],
+    "berkeley_fanuc_manipulation": [("berkeley_fanuc_manipulation", 1.0)],
+    "cmu_stretch": [("cmu_stretch", 1.0)],
+    "fmb": [("fmb", 1.0)],
+    "dobbe": [("dobbe", 1.0)],
+    "berkeley_autolab_ur5": [("berkeley_autolab_ur5", 1.0)],
+    "dlr_edan_shared_control_converted_externally_to_rlds": [("dlr_edan_shared_control_converted_externally_to_rlds", 1.0)],
+    "roboturk": [("roboturk", 1.0)],
+    "austin_buds_dataset_converted_externally_to_rlds": [("austin_buds_dataset_converted_externally_to_rlds", 1.0)],
+    "austin_sailor_dataset_converted_externally_to_rlds": [("austin_sailor_dataset_converted_externally_to_rlds", 1.0)],
+    "austin_sirius_dataset_converted_externally_to_rlds": [("austin_sirius_dataset_converted_externally_to_rlds", 1.0)],
+    "viola": [("viola", 1.0)],
+    "agibot_dataset": [("agibot_dataset", 1.0)],
+    "sample_r1_lite": [("sample_r1_lite", 1.0)],
 }
 
 

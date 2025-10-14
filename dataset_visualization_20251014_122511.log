@@ -1,0 +1,114 @@
+Starting dataset visualization at Tue Oct 14 12:25:11 EDT 2025
+Total datasets to process: 22
+----------------------------------------
+
+[1/22] Processing dataset: kuka
+Started at: Tue Oct 14 12:25:11 EDT 2025
+SSH key found in project metadata; not updating instance.
+Using ssh batch size of 1. Attempting to SSH into 1 nodes with a total of 1 workers.
+SSH: Attempting to connect to worker 0...
+Your branch is up to date with 'origin/main'.
+Already on 'main'
+From github-openpi-cot:lihzha/openpi-cot
+ * branch            main       -> FETCH_HEAD
+   d28b682..d0ca301  main       -> origin/main
+Updating d28b682..d0ca301
+Fast-forward
+ .gitignore                            |   4 +-
+ scripts/real_robot/franka_main.py     |  54 ++++++++-
+ scripts/real_robot/old_franka.py      | 200 ++++++++++------------------------
+ scripts/real_robot/shared.py          | 158 +++++++++------------------
+ src/openpi_cot/policies/cot_policy.py | 192 +++++++++++++++++++++++++++++++-
+ src/openpi_cot/training/config.py     |  46 +++++---
+ third_party/openpi                    |   2 +-
+ 7 files changed, 383 insertions(+), 273 deletions(-)
+warning: The `tool.uv.dev-dependencies` field (used in `third_party/openpi/packages/openpi-client/pyproject.toml`) is deprecated and will be removed in a future release; use `dependency-groups.dev` instead
+/home/lihanzha/openpi-cot/.venv/lib/python3.11/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+/home/lihanzha/openpi-cot/.venv/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'repr' attribute with value False was provided to the `Field()` function, which has no effect in the context it was used. 'repr' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/home/lihanzha/openpi-cot/.venv/lib/python3.11/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+wandb: Currently logged in as: lihanzha to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: WARNING Using a boolean value for 'reinit' is deprecated. Use 'return_previous' or 'finish_previous' instead.
+wandb: Tracking run with wandb version 0.22.2
+wandb: Run data is saved locally in /home/lihanzha/openpi-cot/wandb/run-20251014_162536-ggoiqjxx
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run vis-pi_combined_cot_v4-vis_dataset_kuka
+wandb: ⭐️ View project at https://wandb.ai/lihanzha/openpi-cot
+wandb: 🚀 View run at https://wandb.ai/lihanzha/openpi-cot/runs/ggoiqjxx
+16:25:52.176 [I] Local devices: 4, Global devices: 4, Process count: 1                            (890630:vis_oxe_dataset.py:344)
+16:25:52.177 [I] Running on: t1v-n-56790199-w-0                                                   (890630:vis_oxe_dataset.py:363)
+16:25:52.178 [I] Device mesh: mesh axes [batch=1, fsdp=4] total_devices=4                         (890630:vis_oxe_dataset.py:83)
+16:25:52.178 [I] Data sharding spec: NamedSharding(mesh=[batch=1, fsdp=4], spec=PartitionSpec(('batch', 'fsdp'),)) (890630:vis_oxe_dataset.py:371)
+16:25:52.298 [I] data_config: CoTDataConfig(repo_id='combined', asset_id='combined', norm_stats=None, repack_transforms=Group(inputs=(), outputs=()), data_transforms=Group(inputs=[CoTInputs(action_dim=32, language_action_config=LanguageActionConfig(name='compact', format=LanguageActionFormat(name='compact', style='compact', decimal_places=0, include_rotation=False, translation_unit='cm', rotation_unit='deg', use_schema_format=True), sum_decimal=None, include_rotation=None), wrist_image_dropout_prob=0.0, model_type=<ExtendedModelType.PI_COT: 'pi_cot'>, action_encoding=<ActionEncoding.EEF_POS: 1>, enable_prediction_training=True, prediction_prompt="What is the robot's movement between two frames?")], outputs=[CoTOutputs(decoding_schema=None, in_camera_frame=False)]), model_transforms=Group(inputs=[InjectDefaultPrompt(prompt=None), TokenizePromptAndReasoning(tokenizer=<openpi_cot.models.adapters.tokenizer_adapter.PaligemmaCoTTokenizer object at 0x7f91488ee110>, discrete_state_input=True, prediction_prompt="What is the robot's movement between two frames?"), PadStatesAndActions(model_action_dim=32)], outputs=[DetokenizeReasoning(tokenizer=<openpi_cot.models.adapters.tokenizer_adapter.PaligemmaCoTTokenizer object at 0x7f91481e3f50>)]), use_quantile_norm=False, action_sequence_keys=('actions',), prompt_from_task=False, rlds_data_dir='gs://pi0-cot/OXE', action_space=None, filter_dict_path=None, cot=False, shuffle_buffer_size=400, max_samples=None, val_max_samples=60000, val_fraction=0.02, use_wrist_image=True, wrist_image_dropout_prob=0.0, dataset_type='combined', state_encoding=<StateEncoding.POS_EULER: 1>, action_encoding=<ActionEncoding.EEF_POS: 1>, resize_resolution=(224, 224), language_action_config_name='compact', max_prediction_horizon=30, prediction_prompt="What is the robot's movement between two frames?", vis_dataset=False, language_action_dir='gs://pi0-cot/droid-base-lang-actions', droid_rlds_data_dir=None, droid_dataset_name='droid', use_json_actions=False, data_mix='kuka') (890630:cot_data_loader.py:153)
+Traceback (most recent call last):
+  File "/home/lihanzha/openpi-cot/scripts/vis_oxe_dataset.py", line 445, in <module>
+    main(_config.cli())
+  File "/home/lihanzha/openpi-cot/scripts/vis_oxe_dataset.py", line 373, in main
+    data_loader = _data_loader.create_data_loader(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lihanzha/openpi-cot/src/openpi_cot/dataloader/cot_data_loader.py", line 161, in create_data_loader
+    ds = _create_rlds_dataset(
+         ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lihanzha/openpi-cot/src/openpi_cot/dataloader/cot_data_loader.py", line 72, in _create_rlds_dataset
+    return dataset_cls(**kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lihanzha/openpi-cot/src/openpi_cot/dataloader/cot_rlds_dataset.py", line 1563, in __init__
+    assert config.data_mix in OXE_NAMED_MIXTURES
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+✗ Failed to process: kuka (exit code: 130)
+Finished at: Tue Oct 14 12:26:04 EDT 2025
+----------------------------------------
+
+[2/22] Processing dataset: bc_z
+Started at: Tue Oct 14 12:26:04 EDT 2025
+✗ Failed to process: bc_z (exit code: 130)
+Finished at: Tue Oct 14 12:26:04 EDT 2025
+----------------------------------------
+
+[3/22] Processing dataset: droid
+Started at: Tue Oct 14 12:26:04 EDT 2025
+✗ Failed to process: droid (exit code: 130)
+Finished at: Tue Oct 14 12:26:04 EDT 2025
+----------------------------------------
+
+[4/22] Processing dataset: fractal20220817_data
+Started at: Tue Oct 14 12:26:04 EDT 2025
+✗ Failed to process: fractal20220817_data (exit code: 130)
+Finished at: Tue Oct 14 12:26:05 EDT 2025
+----------------------------------------
+
+[5/22] Processing dataset: bridge_v2_oxe
+Started at: Tue Oct 14 12:26:05 EDT 2025
+✗ Failed to process: bridge_v2_oxe (exit code: 130)
+Finished at: Tue Oct 14 12:26:05 EDT 2025
+----------------------------------------
+
+[6/22] Processing dataset: taco_play
+Started at: Tue Oct 14 12:26:05 EDT 2025
+✗ Failed to process: taco_play (exit code: 130)
+Finished at: Tue Oct 14 12:26:06 EDT 2025
+----------------------------------------
+
+[7/22] Processing dataset: jaco_play
+Started at: Tue Oct 14 12:26:06 EDT 2025
+✗ Failed to process: jaco_play (exit code: 130)
+Finished at: Tue Oct 14 12:26:06 EDT 2025
+----------------------------------------
+
+[8/22] Processing dataset: furniture_bench_dataset_converted_externally_to_rlds
+Started at: Tue Oct 14 12:26:06 EDT 2025
+✗ Failed to process: furniture_bench_dataset_converted_externally_to_rlds (exit code: 130)
+Finished at: Tue Oct 14 12:26:06 EDT 2025
+----------------------------------------
+
+[9/22] Processing dataset: utaustin_mutex
+Started at: Tue Oct 14 12:26:06 EDT 2025
+✗ Failed to process: utaustin_mutex (exit code: 130)
+Finished at: Tue Oct 14 12:26:06 EDT 2025
+----------------------------------------
+
+[10/22] Processing dataset: berkeley_fanuc_manipulation
+Started at: Tue Oct 14 12:26:06 EDT 2025
