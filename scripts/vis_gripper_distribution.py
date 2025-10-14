@@ -20,7 +20,6 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 import openpi_cot.training.config as _config
@@ -100,9 +99,6 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     Returns:
         matplotlib Figure object
     """
-    # Set style
-    sns.set_style("whitegrid")
-
     # Create figure with multiple subplots
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
     fig.suptitle(f'Gripper State Distribution: {dataset_name}', fontsize=16, fontweight='bold')
@@ -111,15 +107,18 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     ax1 = axes[0, 0]
     ax1.hist(gripper_values, bins=50, density=True, alpha=0.7, color='steelblue', edgecolor='black')
     if len(gripper_values) > 1:
-        from scipy import stats
-        kde = stats.gaussian_kde(gripper_values)
-        x_range = np.linspace(gripper_values.min(), gripper_values.max(), 200)
-        ax1.plot(x_range, kde(x_range), 'r-', linewidth=2, label='KDE')
-        ax1.legend()
+        try:
+            from scipy import stats
+            kde = stats.gaussian_kde(gripper_values)
+            x_range = np.linspace(gripper_values.min(), gripper_values.max(), 200)
+            ax1.plot(x_range, kde(x_range), 'r-', linewidth=2, label='KDE')
+            ax1.legend()
+        except ImportError:
+            pass  # Skip KDE if scipy not available
     ax1.set_xlabel('Gripper State Value', fontsize=12)
     ax1.set_ylabel('Density', fontsize=12)
     ax1.set_title('Distribution with KDE', fontsize=13, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
+    ax1.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
 
     # 2. Box plot
     ax2 = axes[0, 1]
@@ -130,7 +129,7 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     ax2.set_ylabel('Gripper State Value', fontsize=12)
     ax2.set_title('Box Plot', fontsize=13, fontweight='bold')
     ax2.set_xticklabels(['Gripper State'])
-    ax2.grid(True, alpha=0.3, axis='y')
+    ax2.grid(True, alpha=0.3, axis='y', linestyle='--', linewidth=0.5)
 
     # 3. Cumulative distribution
     ax3 = axes[1, 0]
@@ -140,7 +139,7 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     ax3.set_xlabel('Gripper State Value', fontsize=12)
     ax3.set_ylabel('Cumulative Probability', fontsize=12)
     ax3.set_title('Cumulative Distribution Function', fontsize=13, fontweight='bold')
-    ax3.grid(True, alpha=0.3)
+    ax3.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
 
     # 4. Statistics summary
     ax4 = axes[1, 1]
