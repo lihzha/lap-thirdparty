@@ -110,8 +110,8 @@ def _summarize_compact_numeric_actions(arr_like, include_rotation: bool = False)
     grip_binary = 1 if g_last >= 0.5 else 0
     parts.append(str(grip_binary))
 
-    # return "<" + " ".join(parts) + ">"
-    return " ".join(parts)
+    return "<" + " ".join(parts) + ">"
+    # return " ".join(parts)
 
 
 def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:

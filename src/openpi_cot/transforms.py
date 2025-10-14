@@ -69,11 +69,14 @@ class TokenizePromptAndReasoning(DataTransformFn):
                     break
             return not any_nonzero
 
-        is_idle = _is_idle_language_action(language_actions)
-        sample_mask = not is_idle
+        # is_idle = _is_idle_language_action(language_actions)
+        # sample_mask = not is_idle
+        sample_mask = True
 
         # Tokenize regular reasoning
-        tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
+        tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(
+            prompt, language_actions.strip(), state
+        )
 
         result = {
             **data,

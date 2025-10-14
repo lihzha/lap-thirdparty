@@ -143,6 +143,9 @@ class CoTDataConfig(upstream_config.DataConfig):
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     resize_resolution: tuple[int, int] = (224, 224)
 
+    # Language action configuration
+    language_action_config_name: str = "compact"
+
     # Prediction training parameters
     max_prediction_horizon: int = 30
     prediction_prompt: str = "What is the robot's movement between two frames?"
@@ -256,6 +259,9 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     model_type=model_config.model_type,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     action_encoding=base_cfg.action_encoding,
+                    language_action_config=cot_policy.get_language_action_config(
+                        base_cfg.language_action_config_name
+                    ),
                     # Add prediction fields
                     enable_prediction_training=model_config.enable_prediction_training,
                     prediction_prompt=base_cfg.prediction_prompt,
