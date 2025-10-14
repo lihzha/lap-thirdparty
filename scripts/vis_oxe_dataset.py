@@ -219,7 +219,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
                     draw.text((x0 + 8 + dx, y + dy), line, font=font, fill=(0, 0, 0))
         # Draw text (white)
         draw.text((x0 + 8, y), line, font=font, fill=(255, 255, 255))
-        y += line_h + 8
+        y += line_h + 2
 
     return np.array(pil_img)
 
