@@ -269,19 +269,7 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["gripper_closed"] = tf.reshape(gripper_value, (-1,))
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    # Process gripper state: threshold relative gripper values and convert to absolute
-    # Assumes gripper_closed is relative: positive = closing, negative = opening
-    gripper_state = trajectory["observation"]["gripper_closed"]
-    # Convert relative to absolute using cumulative sum approach
-    # Threshold: >0.1 = close action, <-0.1 = open action
-    gripper_opening = tf.cast(gripper_state < -0.1, tf.float32)
-    gripper_closing = tf.cast(gripper_state > 0.1, tf.float32)
-    # Compute cumulative state changes: opening adds 1, closing subtracts 1
-    gripper_changes = gripper_opening - gripper_closing
-    # Cumulative sum to get absolute state (assuming starts closed=0)
-    gripper_abs_state = tf.cumsum(gripper_changes, axis=0)
-    # Normalize to [0, 1] where 1 = open, 0 = closed
-    gripper_abs_state = tf.clip_by_value((gripper_abs_state + 1.0) / 2.0, 0.0, 1.0)
+    gripper_abs_state = rel2abs_gripper_actions(gripper_value)
 
     # Create EEF state with xyz + euler angles + gripper
     trajectory["observation"]["state"] = tf.concat(
@@ -305,13 +293,7 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
 
-    # Process gripper actions similarly
-    gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
-    gripper_action_opening = tf.cast(gripper_action < -0.1, tf.float32)
-    gripper_action_closing = tf.cast(gripper_action > 0.1, tf.float32)
-    gripper_action_changes = gripper_action_opening - gripper_action_closing
-    gripper_action_abs = tf.cumsum(gripper_action_changes, axis=0)
-    gripper_action_abs = tf.clip_by_value((gripper_action_abs + 1.0) / 2.0, 0.0, 1.0)
+    gripper_action_abs = rel2abs_gripper_actions(trajectory["action"]["gripper_closedness_action"][:, 0])
 
     # Truncate trajectory and use movement actions
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
@@ -361,7 +343,7 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
     trajectory["observation"]["state_gripper"] = rel2abs_gripper_actions(
-        trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
+        trajectory["observation"]["end_effector_cartesian_pos"][:, -1]
     )
 
     # make gripper action absolute action, +1 = open, 0 = close
@@ -997,8 +979,8 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
             trajectory["action"]["future/xyz_residual"][:, :3],
             trajectory["action"]["future/axis_angle_residual"][:, :3],
             rel2abs_gripper_actions(
-                invert_gripper_actions(tf.cast(trajectory["action"]["future/target_close"][:, :1], tf.float32))
-            ),
+                invert_gripper_actions(tf.cast(trajectory["action"]["future/target_close"][:, 0], tf.float32))
+            )[:, None],
         ),
         axis=-1,
     )
@@ -1010,8 +992,8 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
                 trajectory["observation"]["present/xyz"][:, :3],
                 trajectory["observation"]["present/axis_angle"][:, :3],
                 rel2abs_gripper_actions(
-                    invert_gripper_actions(trajectory["observation"]["present/sensed_close"]),
-                ),
+                    invert_gripper_actions(trajectory["observation"]["present/sensed_close"][:, 0]),
+                )[:, None],
             ),
             axis=-1,
         )

@@ -329,7 +329,7 @@ def main(config: _config.TrainConfig):
     logging.info("Extracting images for min/max gripper states...")
 
     # Try different camera keys
-    camera_keys_to_try = ["primary", "wrist", "image"]
+    camera_keys_to_try = ["base_0_rgb", "left_wrist_0_rgb"]
     min_img, max_img = None, None
     min_gripper_val, max_gripper_val = None, None
 
