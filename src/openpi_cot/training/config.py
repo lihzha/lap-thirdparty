@@ -132,8 +132,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     shuffle_buffer_size: int = 250_000
     # Optional cap on number of unique flattened samples for overfitting tests
     max_samples: int | None = None
-    # Tokenization / formatting controls for CoT numeric aggregation
-    sum_decimal: str = "0f"
     # Validation controls for RLDS-CoT dataset splitting/visualization
     val_max_samples: int | None = 60000
     val_fraction: float | None = 0.02
@@ -144,7 +142,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     state_encoding: StateEncoding = StateEncoding.POS_EULER
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     resize_resolution: tuple[int, int] = (224, 224)
-    include_rotation: bool = False
 
     # Prediction training parameters
     max_prediction_horizon: int = 30
@@ -257,9 +254,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                 cot_policy.CoTInputs(
                     action_dim=model_config.action_dim,
                     model_type=model_config.model_type,
-                    sum_decimal=base_cfg.sum_decimal,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
-                    include_rotation=base_cfg.include_rotation,
                     action_encoding=base_cfg.action_encoding,
                     # Add prediction fields
                     enable_prediction_training=model_config.enable_prediction_training,

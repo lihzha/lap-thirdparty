@@ -180,12 +180,16 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
 SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     name="schema_compact",
     components=[
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        # PromptComponent(
+        #     "schema",
+        #     "Actions schema: dx dy dz droll dpitch dyaw grip; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}.",
+        # ),
         PromptComponent(
             "schema",
-            "Schema: <A dx dy dz droll dpitch dyaw grip>; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}.",
+            "Actions schema: dx dy dz grip; units cm; grip∈{{0=close,1=open}}.",
         ),
-        PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
         PromptComponent("action_prefix", "Actions: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),

@@ -223,9 +223,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     language_action_config: LanguageActionConfig = dataclasses.field(
         default_factory=lambda: COMPACT_LANGUAGE_ACTION_CONFIG
     )
-    # Legacy fields for backward compatibility - will use language_action_config if not None
-    sum_decimal: str | None = None
-    include_rotation: bool | None = None
     # Train-time dropout probs (set to 0.0 for val/inference)
     wrist_image_dropout_prob: float = 0.0
     # Determines which model will be used.
@@ -234,22 +231,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # Prediction training parameters
     enable_prediction_training: bool = False
     prediction_prompt: str = "What is the robot's movement between two frames?"
-
-    def __post_init__(self):
-        # Handle backward compatibility: if sum_decimal or include_rotation are set,
-        # create a custom LanguageActionConfig
-        if self.sum_decimal is not None or self.include_rotation is not None:
-            config = LanguageActionConfig(
-                name="custom",
-                sum_decimal=self.sum_decimal
-                if self.sum_decimal is not None
-                else self.language_action_config.get_sum_decimal(),
-                include_rotation=self.include_rotation
-                if self.include_rotation is not None
-                else self.language_action_config.get_include_rotation(),
-            )
-            # Use object.__setattr__ because this is a frozen dataclass
-            object.__setattr__(self, "language_action_config", config)
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type == ExtendedModelType.PI_COT
