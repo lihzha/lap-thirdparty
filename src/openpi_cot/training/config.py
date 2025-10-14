@@ -167,7 +167,7 @@ class CoTDataConfig(upstream_config.DataConfig):
 class ModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
 
-    prompt_format: Literal["pi05", "pi0", "vqa"] = "pi05"
+    prompt_format: Literal["pi05", "pi0", "vqa", "coordinate_system", "schema_compact"] = "schema_compact"
     prediction_prompt: str = "What is the robot's movement between two frames?"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
