@@ -269,7 +269,7 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["gripper_closed"] = tf.reshape(gripper_value, (-1,))
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    gripper_abs_state = rel2abs_gripper_actions(gripper_value)
+    gripper_abs_state = rel2abs_gripper_actions(trajectory["observation"]["gripper_closed"])
 
     # Create EEF state with xyz + euler angles + gripper
     trajectory["observation"]["state"] = tf.concat(
