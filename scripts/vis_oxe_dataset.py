@@ -210,7 +210,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     block_h = max(1, y1 - y0)
     base_scale = 2.5
     scale = max(0.4, min(1.5, block_h / 110.0)) * base_scale
-    font_size = int(13 * scale * 0.6)
+    font_size = int(13 * scale * 0.8)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
@@ -237,7 +237,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
                     draw.text((x0 + 8 + dx, y + dy), line, font=font, fill=(0, 0, 0))
         # Draw text (white)
         draw.text((x0 + 8, y), line, font=font, fill=(255, 255, 255))
-        y += line_h - 8
+        y += line_h - 4
 
     return np.array(pil_img)
 
