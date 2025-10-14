@@ -257,18 +257,6 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
-    # make gripper action absolute action, +1 = open, 0 = close
-    gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
-    gripper_action = rel2abs_gripper_actions(gripper_action)
-
-    # trajectory["action"] = tf.concat(
-    #     (
-    #         trajectory["action"]["world_vector"],
-    #         trajectory["action"]["rotation_delta"],
-    #         gripper_action[:, None],
-    #     ),
-    #     axis=-1,
-    # )
     # decode compressed state
     eef_value = tf.io.decode_compressed(
         trajectory["observation"]["clip_function_input/base_pose_tool_reached"],
@@ -278,15 +266,29 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["clip_function_input/base_pose_tool_reached"] = tf.reshape(eef_value, (-1, 7))
     gripper_value = tf.io.decode_compressed(trajectory["observation"]["gripper_closed"], compression_type="ZLIB")
     gripper_value = tf.io.decode_raw(gripper_value, tf.float32)
-    trajectory["observation"]["gripper_closed"] = gripper_value
+    trajectory["observation"]["gripper_closed"] = tf.reshape(gripper_value, (-1,))
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    # Create EEF state with xyz + euler angles
+    # Process gripper state: threshold relative gripper values and convert to absolute
+    # Assumes gripper_closed is relative: positive = closing, negative = opening
+    gripper_state = trajectory["observation"]["gripper_closed"]
+    # Convert relative to absolute using cumulative sum approach
+    # Threshold: >0.1 = close action, <-0.1 = open action
+    gripper_opening = tf.cast(gripper_state < -0.1, tf.float32)
+    gripper_closing = tf.cast(gripper_state > 0.1, tf.float32)
+    # Compute cumulative state changes: opening adds 1, closing subtracts 1
+    gripper_changes = gripper_opening - gripper_closing
+    # Cumulative sum to get absolute state (assuming starts closed=0)
+    gripper_abs_state = tf.cumsum(gripper_changes, axis=0)
+    # Normalize to [0, 1] where 1 = open, 0 = closed
+    gripper_abs_state = tf.clip_by_value((gripper_abs_state + 1.0) / 2.0, 0.0, 1.0)
+
+    # Create EEF state with xyz + euler angles + gripper
     trajectory["observation"]["state"] = tf.concat(
         (
             trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, 3:7]),
-            tf.reshape(rel2abs_gripper_actions(trajectory["observation"]["gripper_closed"]), (-1, 1)),
+            tf.reshape(gripper_abs_state, (-1, 1)),
         ),
         axis=-1,
     )
@@ -303,9 +305,17 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
 
+    # Process gripper actions similarly
+    gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
+    gripper_action_opening = tf.cast(gripper_action < -0.1, tf.float32)
+    gripper_action_closing = tf.cast(gripper_action > 0.1, tf.float32)
+    gripper_action_changes = gripper_action_opening - gripper_action_closing
+    gripper_action_abs = tf.cumsum(gripper_action_changes, axis=0)
+    gripper_action_abs = tf.clip_by_value((gripper_action_abs + 1.0) / 2.0, 0.0, 1.0)
+
     # Truncate trajectory and use movement actions
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, gripper_action[:-1][:, None]], axis=1)
+    traj_truncated["action"] = tf.concat([movement_actions, gripper_action_abs[:-1, None]], axis=1)
 
     return traj_truncated
 
@@ -992,7 +1002,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["sate"] = coordinate_transform_bcz(
+    trajectory["observation"]["state"] = coordinate_transform_bcz(
         tf.concat(
             (
                 trajectory["observation"]["present/xyz"][:, :3],
