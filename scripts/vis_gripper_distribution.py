@@ -69,8 +69,6 @@ def extract_gripper_states(batch, state_padding_mask=None) -> np.ndarray:
     gripper_states = gripper_states.flatten()
     return gripper_states
 
-    return np.array([])
-
 
 def get_image_at_index(all_batches, global_idx, camera_key="primary"):
     """
@@ -90,6 +88,7 @@ def get_image_at_index(all_batches, global_idx, camera_key="primary"):
         obs = batch[0]
         state = jax.device_get(obs.state)
         batch_size, seq_len = state.shape[0], state.shape[1]
+        seq_len = 1
         batch_total = batch_size * seq_len
 
         if cumulative + batch_total > global_idx:
@@ -103,7 +102,7 @@ def get_image_at_index(all_batches, global_idx, camera_key="primary"):
                 img = jax.device_get(obs.images[camera_key][batch_idx, seq_idx])
                 # Convert from [-1, 1] to [0, 255]
                 img_u8 = np.asarray(((img + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-                return img_u8, state[batch_idx, seq_idx, 6]  # Return image and gripper value
+                return img_u8, state[batch_idx, 6]  # Return image and gripper value
 
         cumulative += batch_total
 
