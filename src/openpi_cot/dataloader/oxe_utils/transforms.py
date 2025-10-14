@@ -1495,9 +1495,47 @@ def human_dataset_transform(sample: dict[str, Any]) -> dict[str, Any]:
 
 
 def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    trajectory["action"] = trajectory["action"][..., :14]  # exclude torso action
-    # Apply R1 Lite specific transformations
-    return trajectory
+    """Transform for sample_r1_lite dataset with bimanual EEF pose states."""
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    # Extract EEF states for both arms (left and right)
+    # Assuming state contains [left_xyz, left_rpy, left_gripper, right_xyz, right_rpy, right_gripper]
+    # Total: 3 + 3 + 1 + 3 + 3 + 1 = 14 dimensions
+    left_eef_state = trajectory["observation"]["state"][:, :6]  # left xyz + rpy
+    right_eef_state = trajectory["observation"]["state"][:, 7:13]  # right xyz + rpy
+
+    # Calculate movement actions (delta EEF poses) for both arms
+    left_movement = tf.concat(
+        (
+            left_eef_state[1:, :3] - left_eef_state[:-1, :3],  # left position delta
+            euler_diff(left_eef_state[1:, 3:6], left_eef_state[:-1, 3:6]),  # left rotation delta
+        ),
+        axis=-1,
+    )
+
+    right_movement = tf.concat(
+        (
+            right_eef_state[1:, :3] - right_eef_state[:-1, :3],  # right position delta
+            euler_diff(right_eef_state[1:, 3:6], right_eef_state[:-1, 3:6]),  # right rotation delta
+        ),
+        axis=-1,
+    )
+
+    # Truncate trajectory to match action length
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+
+    # Combine left and right movement actions with gripper actions
+    traj_truncated["action"] = tf.concat(
+        [
+            left_movement,
+            trajectory["observation"]["state"][:-1, 6:7],  # left gripper
+            right_movement,
+            trajectory["observation"]["state"][:-1, 13:14],  # right gripper
+        ],
+        axis=1,
+    )
+
+    return traj_truncated
 
 
 def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
