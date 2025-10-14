@@ -10,6 +10,7 @@ from openpi.models import tokenizer as _tokenizer
 @dataclasses.dataclass
 class StateDiscretizationConfig:
     """Configuration for discretizing state vectors into text."""
+
     bins: int = 256
     min_dim: int = 7  # Minimum number of dimensions to include (avoid over-trimming)
     range_min: float = -1.0
@@ -26,6 +27,7 @@ class PromptComponent:
     - schema: Schema/instruction text (e.g., coordinate system description)
     - action_prefix: Prefix before action output (e.g., "Action: ")
     """
+
     type: Literal["task_prefix", "state_prefix", "schema", "action_prefix"]
     template: str
     # Whether to include state type label in state prefix
@@ -39,6 +41,7 @@ class PromptFormat:
     This allows easy extension to support different prompt formats by composing
     components in different ways.
     """
+
     name: str
     components: list[PromptComponent]
     state_config: StateDiscretizationConfig | None = None
@@ -96,9 +99,7 @@ class PromptFormat:
                         parts.append(component.template.format(state=state_str, state_label=state_label))
                     else:
                         parts.append(component.template.format(state=state_str))
-            elif component.type == "schema":
-                parts.append(component.template)
-            elif component.type == "action_prefix":
+            elif component.type == "schema" or component.type == "action_prefix":
                 parts.append(component.template)
 
         return self.separator.join(parts)
@@ -126,11 +127,9 @@ class PromptFormat:
             trimmed = state_arr[..., :last_idx].reshape(-1)
 
         if trimmed.size > 0:
-            bins = np.linspace(
-                self.state_config.range_min,
-                self.state_config.range_max,
-                self.state_config.bins + 1
-            )[:-1]
+            bins = np.linspace(self.state_config.range_min, self.state_config.range_max, self.state_config.bins + 1)[
+                :-1
+            ]
             discretized_state = np.digitize(trimmed, bins=bins) - 1
             return " ".join(map(str, discretized_state))
         return ""
@@ -141,7 +140,7 @@ PI05_PROMPT_FORMAT = PromptFormat(
     name="pi05",
     components=[
         PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=False),
         PromptComponent("action_prefix", "Action: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
@@ -181,13 +180,17 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
 SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     name="schema_compact",
     components=[
-        PromptComponent("schema", "Schema: <A dx dy dz droll dpitch dyaw grip>; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}."),
+        PromptComponent(
+            "schema",
+            "Schema: <A dx dy dz droll dpitch dyaw grip>; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}.",
+        ),
         PromptComponent("task_prefix", "Task: {prompt}"),
         PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
         PromptComponent("action_prefix", "Actions: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
-    separator="\n",
+    # separator="\n",
+    separator=",",
 )
 
 # Registry for easy lookup
@@ -213,8 +216,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         if isinstance(prompt_format, str):
             if prompt_format not in PROMPT_FORMAT_REGISTRY:
                 raise ValueError(
-                    f"Unknown prompt format: {prompt_format}. "
-                    f"Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                    f"Unknown prompt format: {prompt_format}. Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
                 )
             self._prompt_format = PROMPT_FORMAT_REGISTRY[prompt_format]
         else:
@@ -234,8 +236,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         elif isinstance(prompt_format, str):
             if prompt_format not in PROMPT_FORMAT_REGISTRY:
                 raise ValueError(
-                    f"Unknown prompt format: {prompt_format}. "
-                    f"Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                    f"Unknown prompt format: {prompt_format}. Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
                 )
             fmt = PROMPT_FORMAT_REGISTRY[prompt_format]
         else:
@@ -329,8 +330,5 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         # The reasoning is the prediction language action
         # Use VQA format (no state) for prediction tasks
         return self.tokenize_cot(
-            prediction_prompt,
-            reasoning=prediction_language,
-            state=None,
-            prompt_format=VQA_PROMPT_FORMAT
+            prediction_prompt, reasoning=prediction_language, state=None, prompt_format=VQA_PROMPT_FORMAT
         )

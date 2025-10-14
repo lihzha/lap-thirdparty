@@ -221,7 +221,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     action_dim: int
     # Language action configuration (how to format/summarize actions)
     language_action_config: LanguageActionConfig = dataclasses.field(
-        default_factory=lambda: DEFAULT_LANGUAGE_ACTION_CONFIG
+        default_factory=lambda: COMPACT_LANGUAGE_ACTION_CONFIG
     )
     # Legacy fields for backward compatibility - will use language_action_config if not None
     sum_decimal: str | None = None

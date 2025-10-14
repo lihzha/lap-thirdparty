@@ -97,18 +97,21 @@ def _summarize_compact_numeric_actions(arr_like, include_rotation: bool = False)
         droll_deg = int(round(float(arr[..., 3].sum()) * 180.0 / np.pi))
         dpitch_deg = int(round(float(arr[..., 4].sum()) * 180.0 / np.pi))
         dyaw_deg = int(round(float(arr[..., 5].sum()) * 180.0 / np.pi))
-        parts.extend([
-            f"{droll_deg:+03d}",
-            f"{dpitch_deg:+03d}",
-            f"{dyaw_deg:+03d}",
-        ])
+        parts.extend(
+            [
+                f"{droll_deg:+03d}",
+                f"{dpitch_deg:+03d}",
+                f"{dyaw_deg:+03d}",
+            ]
+        )
 
     # Gripper: threshold at 0.5 to convert to binary
     g_last = float(arr[-1, 6])
     grip_binary = 1 if g_last >= 0.5 else 0
     parts.append(str(grip_binary))
 
-    return "<" + " ".join(parts) + ">"
+    # return "<" + " ".join(parts) + ">"
+    return " ".join(parts)
 
 
 def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:
