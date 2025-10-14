@@ -98,7 +98,7 @@ class PromptFormat:
                     if component.include_state_type:
                         parts.append(component.template.format(state=state_str, state_label=state_label))
                     else:
-                        parts.append(component.template.format(state=state_str))
+                        parts.append(component.template.format(state=state_str, state_label=""))
             elif component.type == "schema" or component.type == "action_prefix":
                 parts.append(component.template)
 
