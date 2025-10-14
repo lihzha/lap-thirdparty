@@ -72,6 +72,44 @@ def extract_gripper_states(batch, state_padding_mask=None) -> np.ndarray:
     return np.array([])
 
 
+def get_image_at_index(all_batches, global_idx, camera_key="primary"):
+    """
+    Extract image at a specific global flattened index across all batches.
+
+    Args:
+        all_batches: List of batches
+        global_idx: Global flattened index
+        camera_key: Camera view to extract (default "primary")
+
+    Returns:
+        Image as numpy array (uint8) or None if not found
+    """
+    # Calculate which batch and local index
+    cumulative = 0
+    for batch in all_batches:
+        obs = batch[0]
+        state = jax.device_get(obs.state)
+        batch_size, seq_len = state.shape[0], state.shape[1]
+        batch_total = batch_size * seq_len
+
+        if cumulative + batch_total > global_idx:
+            # This batch contains the index
+            local_idx = global_idx - cumulative
+            batch_idx = local_idx // seq_len
+            seq_idx = local_idx % seq_len
+
+            # Get image from this batch
+            if hasattr(obs, "images") and camera_key in obs.images:
+                img = jax.device_get(obs.images[camera_key][batch_idx, seq_idx])
+                # Convert from [-1, 1] to [0, 255]
+                img_u8 = np.asarray(((img + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+                return img_u8, state[batch_idx, seq_idx, 6]  # Return image and gripper value
+
+        cumulative += batch_total
+
+    return None, None
+
+
 def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     """
     Create visualization of gripper state distribution.
@@ -180,7 +218,7 @@ def main(config: _config.TrainConfig):
 
     # Get dataset name from config
     dataset_name = getattr(config.data, "data_mix", "unknown")
-    num_batches = 200
+    num_batches = 100
 
     logging.info(f"Analyzing gripper distribution for dataset: {dataset_name}")
     logging.info(f"Will process {num_batches} batches")
@@ -244,9 +282,10 @@ def main(config: _config.TrainConfig):
         seed=config.seed,
     )
 
-    # Collect gripper states
+    # Collect gripper states and track batches for min/max visualization
     logging.info("Collecting gripper states from batches...")
     all_gripper_states = []
+    all_batches = []  # Store batches to find min/max later
 
     data_iter = iter(data_loader)
 
@@ -257,6 +296,7 @@ def main(config: _config.TrainConfig):
 
             if len(gripper_states) > 0:
                 all_gripper_states.append(gripper_states)
+                all_batches.append(batch)  # Store the batch
                 logging.info(f"Batch {batch_idx + 1}/{num_batches}: Collected {len(gripper_states)} gripper states")
             else:
                 logging.warning(f"Batch {batch_idx + 1}/{num_batches}: No gripper states found")
@@ -275,6 +315,32 @@ def main(config: _config.TrainConfig):
     # Concatenate all collected states
     all_gripper_states = np.concatenate(all_gripper_states)
     logging.info(f"Total gripper states collected: {len(all_gripper_states):,}")
+
+    # Find min/max gripper states and their locations
+    min_val = np.min(all_gripper_states)
+    max_val = np.max(all_gripper_states)
+    min_idx = np.argmin(all_gripper_states)
+    max_idx = np.argmax(all_gripper_states)
+
+    logging.info(f"Min gripper value: {min_val:.6f} at global index {min_idx}")
+    logging.info(f"Max gripper value: {max_val:.6f} at global index {max_idx}")
+
+    # Extract images for min/max gripper states
+    logging.info("Extracting images for min/max gripper states...")
+
+    # Try different camera keys
+    camera_keys_to_try = ["primary", "wrist", "image"]
+    min_img, max_img = None, None
+    min_gripper_val, max_gripper_val = None, None
+
+    for cam_key in camera_keys_to_try:
+        if min_img is None:
+            min_img, min_gripper_val = get_image_at_index(all_batches, min_idx, cam_key)
+        if max_img is None:
+            max_img, max_gripper_val = get_image_at_index(all_batches, max_idx, cam_key)
+        if min_img is not None and max_img is not None:
+            logging.info(f"Found images using camera key: {cam_key}")
+            break
 
     # Print summary statistics
     logging.info("=" * 60)
@@ -295,20 +361,33 @@ def main(config: _config.TrainConfig):
 
     # Log to wandb or save locally
     if wandb_enabled and wandb is not None:
-        wandb.log(
-            {
-                "gripper_distribution": wandb.Image(fig),
-                "stats/sample_count": len(all_gripper_states),
-                "stats/mean": np.mean(all_gripper_states),
-                "stats/median": np.median(all_gripper_states),
-                "stats/std": np.std(all_gripper_states),
-                "stats/min": np.min(all_gripper_states),
-                "stats/max": np.max(all_gripper_states),
-                "stats/pct_near_0": 100 * np.mean(all_gripper_states < 0.1),
-                "stats/pct_near_1": 100 * np.mean(all_gripper_states > 0.9),
-            }
-        )
-        logging.info("Logged gripper distribution to wandb")
+        log_dict = {
+            "gripper_distribution": wandb.Image(fig),
+            "stats/sample_count": len(all_gripper_states),
+            "stats/mean": np.mean(all_gripper_states),
+            "stats/median": np.median(all_gripper_states),
+            "stats/std": np.std(all_gripper_states),
+            "stats/min": np.min(all_gripper_states),
+            "stats/max": np.max(all_gripper_states),
+            "stats/pct_near_0": 100 * np.mean(all_gripper_states < 0.1),
+            "stats/pct_near_1": 100 * np.mean(all_gripper_states > 0.9),
+        }
+
+        # Add min/max images if available
+        if min_img is not None:
+            log_dict["examples/min_gripper"] = wandb.Image(min_img, caption=f"Min gripper state: {min_gripper_val:.6f}")
+            logging.info(f"Logging min gripper image (value: {min_gripper_val:.6f})")
+        else:
+            logging.warning("Min gripper image not found")
+
+        if max_img is not None:
+            log_dict["examples/max_gripper"] = wandb.Image(max_img, caption=f"Max gripper state: {max_gripper_val:.6f}")
+            logging.info(f"Logging max gripper image (value: {max_gripper_val:.6f})")
+        else:
+            logging.warning("Max gripper image not found")
+
+        wandb.log(log_dict)
+        logging.info("Logged gripper distribution and examples to wandb")
         plt.close(fig)
     else:
         # Fallback: save locally
@@ -317,6 +396,17 @@ def main(config: _config.TrainConfig):
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         logging.info(f"Saved plot to: {save_path}")
         plt.close(fig)
+
+        # Save min/max images locally
+        if min_img is not None:
+            min_img_path = os.path.join(output_dir, f"gripper_min_{dataset_name}.png")
+            plt.imsave(min_img_path, min_img)
+            logging.info(f"Saved min gripper image to: {min_img_path}")
+
+        if max_img is not None:
+            max_img_path = os.path.join(output_dir, f"gripper_max_{dataset_name}.png")
+            plt.imsave(max_img_path, max_img)
+            logging.info(f"Saved max gripper image to: {max_img_path}")
 
     # Finish wandb run
     if wandb_enabled and wandb is not None and getattr(wandb, "run", None) is not None:
