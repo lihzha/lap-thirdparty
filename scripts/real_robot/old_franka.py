@@ -2,25 +2,27 @@
 
 import contextlib
 import dataclasses
+import datetime
 import faulthandler
 import signal
+import sys
 import time
+from pathlib import Path
+
 import numpy as np
-from openpi_client import image_tools
-from openpi_client import websocket_client_policy
-from droid.robot_env import RobotEnv
 import tqdm
 import tyro
-import re
-from scipy.spatial.transform import Rotation as R
 from moviepy.editor import ImageSequenceClip
-import datetime
-import sys
-sys.path.append(".")
-from shared import Args, IMAGE_KEYS
+from openpi_client import image_tools
+from openpi_client import websocket_client_policy
+from scipy.spatial.transform import Rotation as R
+from droid.robot_env import RobotEnv
 
-AXIS_PERM = np.array([0, 2, 1])
-AXIS_SIGN = np.array([1, 1, 1])
+# Add parent directory to path to import from src
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from shared import Args, IMAGE_KEYS
+from openpi_cot.policies.cot_policy import get_decoding_schema
 
 faulthandler.enable()
 
@@ -42,6 +44,8 @@ class Args:
         8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
     in_camera_frame: bool = True  # whether the predicted movements are in camera frame or robot/base frame
+    # Language action decoding parameters
+    decoding_schema: str = "verbose"  # which schema to use for decoding language actions ("verbose", "compact")
 
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
@@ -97,6 +101,10 @@ def main(args: Args):
     cam_to_base_extrinsics_matrix[:3, :3] = rot_mat
     cam_to_base_extrinsics_matrix[:3, 3] = pos
     print("Created the droid env!")
+
+    # Initialize decoding schema for parsing language actions
+    decoding_schema = get_decoding_schema(args.decoding_schema)
+
     while True:
         env.reset()
         print()
@@ -156,19 +164,28 @@ def main(args: Args):
                     # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                     # Ctrl+C will be handled after the server call is complete
                     with prevent_keyboard_interrupt():
-                        # this returns natural language reasoning steps; convert to deltas then to absolute action
+                        # Get response from policy server (may contain actions and/or reasoning)
                         st = time.time()
-                        pred = policy_client.infer_reasoning(request_data)["reasoning"]
-                        poses_cam, grip_actions = _reasoning_to_action(pred, in_camera_frame=args.in_camera_frame)
+                        response = policy_client.infer_reasoning(request_data)
 
-                        # Use the first delta translation in camera frame (meters)
-                        t_cam = poses_cam[1][:3, 3] - poses_cam[0][:3, 3]
-                        # # Map translation delta to robot/base frame using rotation only
+                        # Extract actions from response (either pre-parsed or parse from reasoning)
+                        if "actions" in response and response["actions"] is not None:
+                            actions = np.asarray(response["actions"])
+                            # Extract translation delta (first 3 dims) and gripper (last dim)
+                            delta_base = actions[0, :3]
+                            grip_actions = actions[:, -1]
+                        else:
+                            # Fall back to parsing reasoning text
+                            reasoning = response.get("reasoning", "")
+                            translations, grip_actions = decoding_schema.parse_language_to_deltas(
+                                reasoning, in_camera_frame=args.in_camera_frame
+                            )
+                            delta_base = translations[0]
+
+                        # Map translation delta to robot/base frame if in camera frame
                         if args.in_camera_frame:
                             R_cb = cam_to_base_extrinsics_matrix[:3, :3]
-                            delta_base = R_cb @ t_cam
-                        else:
-                            delta_base = t_cam
+                            delta_base = R_cb @ delta_base
 
                         # Build absolute target from current state
                         curr_pos = np.asarray(curr_obs["observation/cartesian_position"], dtype=float)[:3]
@@ -254,142 +271,6 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
         "observation/gripper_position": np.array([gripper_position]),
         "observation/state": np.concatenate([cartesian_position, [gripper_position]]),
     }
-
-
-def _reasoning_to_action(
-    sentences: list[str],
-    start_pose: np.ndarray = None,
-    in_camera_frame: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Invert `describe_movement`.
-
-    Given a list of reasoning sentences (one per transition), reconstruct the
-    sequence of gripper poses (4x4) and the per-step gripper actions.
-
-    - Each sentence is expected to contain phrases like
-      "move right 1.23 cm and move forward 4.56 cm and move down 7.89 cm and set gripper to 0.50".
-    - Rotation is assumed constant (no rotation changes), matching describe_movement.
-    - The first pose is `start_pose` (defaults to identity), then each sentence
-      adds a translation delta to produce the next pose.
-
-    Returns:
-        (gripper_poses, gripper_actions)
-        - gripper_poses: array of shape (len(sentences)+1, 4, 4)
-        - gripper_actions: array of shape (len(sentences),)
-    """
-    if start_pose is None:
-        start_pose = np.eye(4, dtype=float)
-    else:
-        start_pose = np.array(start_pose, dtype=float)
-
-    if isinstance(sentences, str):
-        sentences = [sentences]
-
-    print(sentences)
-
-    num_steps = len(sentences)
-    poses = np.zeros((num_steps + 1, 4, 4), dtype=float)
-    poses[0] = start_pose
-    actions = np.zeros((num_steps,), dtype=float)
-
-    # Regex patterns
-    move_pat = re.compile(r"move\s+(right|left|forward|backward|up|down)\s+([\-\d\.]+)\s*cm", re.IGNORECASE)
-    grip_pat = re.compile(r"set\s+gripper\s+to\s+([\-\d\.]+)", re.IGNORECASE)
-
-    for i, sentence in enumerate(sentences):
-        # Parse movements; accumulate in centimeters along (dx, dy, dz)
-        dx_cm = dy_cm = dz_cm = 0.0
-        for m in move_pat.finditer(sentence):
-            direction = m.group(1).lower()
-            value_cm = float(m.group(2))
-            if direction == "right":
-                dx_cm += value_cm
-            elif direction == "left":
-                dx_cm -= value_cm
-            elif direction == "forward":
-                dy_cm += value_cm
-            elif direction == "backward":
-                dy_cm -= value_cm
-            elif direction == "down":
-                dz_cm += value_cm
-            elif direction == "up":
-                dz_cm -= value_cm
-            # if direction == "forward":
-            #     dx_cm += value_cm
-            # elif direction == "backward":
-            #     dx_cm -= value_cm
-            # elif direction == "left":
-            #     dy_cm += value_cm
-            # elif direction == "right":
-            #     dy_cm -= value_cm
-            # elif direction == "up":
-            #     dz_cm += value_cm
-            # elif direction == "down":
-            #     dz_cm -= value_cm
-        # Parse gripper action (defaults to previous if missing, else 0.0 for first)
-        grip_match = grip_pat.search(sentence)
-        if grip_match:
-            actions[i] = float(grip_match.group(1))
-        else:
-            actions[i] = actions[i - 1] if i > 0 else 0.0
-
-        # Convert from language (dx,dy,dz) in cm back to camera-frame translation (meters)
-        v_cm = np.array([dx_cm, dy_cm, dz_cm], dtype=float)
-        v_m = v_cm / 100.0
-
-        if in_camera_frame:
-
-            # Recall: v = (AXIS_SIGN * t_cam[AXIS_PERM]) * 100
-            # Therefore: t_cam[AXIS_PERM] = v_m / AXIS_SIGN
-            t_cam = np.zeros(3, dtype=float)
-            # Avoid division-by-zero if AXIS_SIGN contains zeros (shouldn't, but safe)
-            sign_safe = np.where(AXIS_SIGN == 0, 1.0, AXIS_SIGN.astype(float))
-            t_mapped = v_m / sign_safe
-            t_cam[AXIS_PERM] = t_mapped
-        
-        else:
-            t_cam = v_m
-
-        # Integrate translation to form next pose; keep rotation unchanged
-        next_pose = poses[i].copy()
-        next_pose[:3, 3] = poses[i][:3, 3] + t_cam
-        poses[i + 1] = next_pose
-
-    return poses, actions
-
-
-def cam_to_robot(pose_cam: np.ndarray, cam_to_base_extrinsics_matrix: np.ndarray) -> np.ndarray:
-    """
-    Convert pose(s) from camera frame to robot/base frame.
-
-    This is the inverse of the transform used below when computing camera-frame
-    poses from base-frame poses:
-        gripper_pose_in_camera_frame = (np.linalg.inv(cam_to_base_extrinsics_matrix) @ gripper_pose_matrices.T).T
-
-    Args:
-        pose_cam: A single 4x4 homogeneous pose matrix in camera frame, or an array of shape (N, 4, 4).
-        cam_to_base_extrinsics_matrix: The 4x4 homogeneous transform from camera to base frame.
-
-    Returns:
-        Pose(s) in the robot/base frame with the same shape as input (4x4 or (N, 4, 4)).
-    """
-    T = np.array(cam_to_base_extrinsics_matrix, dtype=float)
-    if T.shape != (4, 4):
-        raise ValueError(f"cam_to_base_extrinsics_matrix must be 4x4, got {T.shape}")
-
-    pose_cam = np.array(pose_cam, dtype=float)
-    if pose_cam.ndim == 2:
-        if pose_cam.shape != (4, 4):
-            raise ValueError(f"pose_cam must be 4x4 when 2D, got {pose_cam.shape}")
-        return T @ pose_cam
-    elif pose_cam.ndim == 3:
-        if pose_cam.shape[1:] != (4, 4):
-            raise ValueError(f"pose_cam must be (N,4,4) when 3D, got {pose_cam.shape}")
-        # Batch multiply: for each i, base_pose[i] = T @ pose_cam[i]
-        return np.einsum("ab,nbc->nac", T, pose_cam)
-    else:
-        raise ValueError(f"pose_cam must be 2D (4x4) or 3D (N,4,4), got ndim={pose_cam.ndim}")
 
 
 if __name__ == "__main__":

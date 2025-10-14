@@ -1,15 +1,21 @@
 import contextlib
 import datetime
-import re
 import signal
+import sys
 import time
 import dataclasses
-from openpi_client import image_tools
+from pathlib import Path
 
+# Add parent directory to path to import from src
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from openpi_client import image_tools
 from moviepy.editor import ImageSequenceClip
 import numpy as np
 from openpi_client import websocket_client_policy
 import tqdm
+
+from openpi_cot.policies.cot_policy import ActionDecodingSchema, get_decoding_schema
 
 IMAGE_KEYS = (
     "base_0_rgb",
@@ -17,8 +23,6 @@ IMAGE_KEYS = (
     # "right_wrist_0_rgb",
 )
 
-AXIS_PERM = np.array([0, 2, 1])
-AXIS_SIGN = np.array([1, 1, 1])
 # DROID data collection frequency -- we slow down execution to match this frequency
 DROID_CONTROL_FREQUENCY = 15
 
@@ -45,6 +49,8 @@ class Args:
     )
     use_wrist_camera: bool = False  # whether to use the wrist camera image as input to the policy
     run_upstream: bool = False  # whether to run the upstream policy server
+    # Language action decoding parameters
+    decoding_schema: str = "verbose"  # which schema to use for decoding language actions ("verbose", "compact")
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
 # waiting for a new action chunk, it will raise an exception and the server connection dies.
@@ -68,95 +74,6 @@ def prevent_keyboard_interrupt():
             raise KeyboardInterrupt
 
 
-def _reasoning_to_action(
-    sentences: list[str],
-    start_pose: np.ndarray = None,
-    in_camera_frame: bool = True,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Invert `describe_movement`.
-    Given a list of reasoning sentences (one per transition), reconstruct the
-    sequence of gripper poses (4x4) and the per-step gripper actions.
-    - Each sentence is expected to contain phrases like
-      "move right 1.23 cm and move forward 4.56 cm and move down 7.89 cm and set gripper to 0.50".
-    - Rotation is assumed constant (no rotation changes), matching describe_movement.
-    - The first pose is `start_pose` (defaults to identity), then each sentence
-      adds a translation delta to produce the next pose.
-    Returns:
-        (gripper_poses, gripper_actions)
-        - gripper_poses: array of shape (len(sentences)+1, 4, 4)
-        - gripper_actions: array of shape (len(sentences),)
-    """
-    if start_pose is None:
-        start_pose = np.eye(4, dtype=float)
-    else:
-        start_pose = np.array(start_pose, dtype=float)
-    if isinstance(sentences, str):
-        sentences = [sentences]
-    num_steps = len(sentences)
-    poses = np.zeros((num_steps + 1, 4, 4), dtype=float)
-    poses[0] = start_pose
-    actions = np.zeros((num_steps,), dtype=float)
-    # Regex patterns
-    move_pat = re.compile(r"move\s+(right|left|forward|backward|up|down)\s+([\-\d\.]+)\s*cm", re.IGNORECASE)
-    grip_pat = re.compile(r"set\s+gripper\s+to\s+([\-\d\.]+)", re.IGNORECASE)
-    for i, sentence in enumerate(sentences):
-        # Parse movements; accumulate in centimeters along (dx, dy, dz)
-        dx_cm = dy_cm = dz_cm = 0.0
-        print(sentence)
-        for m in move_pat.finditer(sentence):
-            direction = m.group(1).lower()
-            value_cm = float(m.group(2))
-            if direction == "right":
-                dx_cm += value_cm
-            elif direction == "left":
-                dx_cm -= value_cm
-            elif direction == "forward":
-                dy_cm += value_cm
-            elif direction == "backward":
-                dy_cm -= value_cm
-            elif direction == "down":
-                dz_cm += value_cm
-            elif direction == "up":
-                dz_cm -= value_cm
-            # if direction == "forward":
-            #     dx_cm += value_cm
-            # elif direction == "backward":
-            #     dx_cm -= value_cm
-            # elif direction == "left":
-            #     dy_cm += value_cm
-            # elif direction == "right":
-            #     dy_cm -= value_cm
-            # elif direction == "up":
-            #     dz_cm += value_cm
-            # elif direction == "down":
-            #     dz_cm -= value_cm
-        # Parse gripper action (defaults to previous if missing, else 0.0 for first)
-        grip_match = grip_pat.search(sentence)
-        if grip_match:
-            actions[i] = float(grip_match.group(1))
-        else:
-            actions[i] = actions[i - 1] if i > 0 else 0.0
-        # Convert from language (dx,dy,dz) in cm back to camera-frame translation (meters)
-        v_cm = np.array([dx_cm, dy_cm, dz_cm], dtype=float)
-        v_m = v_cm / 100.0
-        # Recall: v = (AXIS_SIGN * t_cam[AXIS_PERM]) * 100
-        # Therefore: t_cam[AXIS_PERM] = v_m / AXIS_SIGN
-        if in_camera_frame:
-            t_cam = np.zeros(3, dtype=float)
-            # Avoid division-by-zero if AXIS_SIGN contains zeros (shouldn't, but safe)
-            sign_safe = np.where(AXIS_SIGN == 0, 1.0, AXIS_SIGN.astype(float))
-            t_mapped = v_m / sign_safe
-            t_cam[AXIS_PERM] = t_mapped
-        else:
-            t_cam = v_m
-        # Integrate translation to form next pose; keep rotation unchanged
-        next_pose = poses[i].copy()
-        next_pose[:3, 3] = poses[i][:3, 3] + t_cam
-        poses[i + 1] = next_pose
-    return poses, actions
-
-
 class BaseEvalRunner:
     CHUNK_STEPS = 15
 
@@ -168,6 +85,8 @@ class BaseEvalRunner:
         assert self.in_camera_frame == (self.cam_to_base_extrinsics_matrix is not None), (
             "Must have extrinsics if using camera frame"
         )
+        # Initialize decoding schema for parsing language actions
+        self.decoding_schema = get_decoding_schema(args.decoding_schema)
 
     def init_env(self):
         raise NotImplementedError()
@@ -206,17 +125,34 @@ class BaseEvalRunner:
     def set_extrinsics(self):
         return None
 
-    def get_action_from_reasoning(self, pred):
-        poses_cam, grip_actions = _reasoning_to_action(pred, in_camera_frame=self.in_camera_frame)
-        # Use the first delta translation in camera frame (meters)
-        if self.in_camera_frame:
-            t_cam = poses_cam[1][:3, 3] - poses_cam[0][:3, 3]
-            # Map translation delta to robot/base frame using rotation only
-            R_cb = self.cam_to_base_extrinsics_matrix[:3, :3]
-            delta_base = R_cb @ t_cam
-            breakpoint()
+    def get_action_from_response(self, response):
+        """Extract actions from server response, either directly or by parsing reasoning.
+
+        Args:
+            response: Server response dict containing 'actions' and/or 'reasoning'
+
+        Returns:
+            (delta_base, grip_actions) - translation delta and gripper actions
+        """
+        # If server already parsed actions, use them directly
+        if "actions" in response and response["actions"] is not None:
+            actions = np.asarray(response["actions"])
+            # Extract translation delta (first 3 dims) and gripper (last dim)
+            delta_base = actions[0, :3]  # Already in meters
+            grip_actions = actions[:, -1]
         else:
-            delta_base = poses_cam[1][:3, 3] - poses_cam[0][:3, 3]
+            # Fall back to parsing reasoning text if actions not provided
+            reasoning = response.get("reasoning", "")
+            translations, grip_actions = self.decoding_schema.parse_language_to_deltas(
+                reasoning, in_camera_frame=self.in_camera_frame
+            )
+            delta_base = translations[0]
+
+        # If in camera frame, transform to robot/base frame
+        if self.in_camera_frame:
+            R_cb = self.cam_to_base_extrinsics_matrix[:3, :3]
+            delta_base = R_cb @ delta_base
+
         return delta_base, grip_actions
 
     def run(self):
@@ -252,10 +188,10 @@ class BaseEvalRunner:
                         # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                         # Ctrl+C will be handled after the server call is complete
                         with prevent_keyboard_interrupt():
-                            # this returns natural language reasoning steps; convert to deltas then to absolute action
+                            # Get response from policy server (may contain actions and/or reasoning)
                             st = time.time()
-                            pred = policy_client.infer(request_data)["reasoning"]
-                            delta_base, grip_actions = self.get_action_from_reasoning(pred)
+                            response = policy_client.infer(request_data)
+                            delta_base, grip_actions = self.get_action_from_response(response)
                             # Build absolute target from current state
                             curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
                             curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)

@@ -1,4 +1,5 @@
 import dataclasses
+import re
 from typing import Literal
 
 import numpy as np
@@ -366,10 +367,191 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class ActionDecodingSchema:
+    """Defines how to decode language actions into numeric actions.
+
+    This corresponds to the LanguageActionFormat used for encoding,
+    allowing consistent round-trip conversion between actions and language.
+    """
+
+    name: str
+    # Style of language action format
+    style: Literal["verbose", "compact", "directional_only"] = "verbose"
+    # Whether rotation is included
+    include_rotation: bool = False
+    # Translation unit (cm, m, mm)
+    translation_unit: str = "cm"
+    # Rotation unit (deg, rad)
+    rotation_unit: str = "deg"
+    # Schema format (for compact style)
+    use_schema_format: bool = False
+    # Coordinate frame axis permutation and sign (for camera frame)
+    axis_perm: tuple[int, int, int] = (0, 2, 1)
+    axis_sign: tuple[int, int, int] = (1, 1, 1)
+
+    def parse_language_to_deltas(
+        self,
+        reasoning: str | list[str],
+        in_camera_frame: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Parse language action(s) into translation deltas and gripper actions.
+
+        Args:
+            reasoning: Single sentence or list of reasoning sentences
+            in_camera_frame: Whether the output should be in camera frame coordinates
+
+        Returns:
+            (translation_deltas, gripper_actions)
+            - translation_deltas: array of shape (num_steps, 3) in meters
+            - gripper_actions: array of shape (num_steps,)
+        """
+        if isinstance(reasoning, str):
+            sentences = [reasoning]
+        else:
+            sentences = reasoning
+
+        num_steps = len(sentences)
+        translations = np.zeros((num_steps, 3), dtype=float)
+        gripper_actions = np.zeros((num_steps,), dtype=float)
+
+        if self.use_schema_format and self.style == "compact":
+            # Parse compact schema format: <+09 +09 -08 1>
+            pattern = re.compile(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>")
+            for i, sentence in enumerate(sentences):
+                match = pattern.search(sentence)
+                if match:
+                    dx, dy, dz, grip = match.groups()
+                    translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
+                    gripper_actions[i] = float(grip)
+        else:
+            # Parse verbose format: "move right X cm and move forward Y cm..."
+            move_pattern = re.compile(
+                rf"move\s+(right|left|forward|backward|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
+                re.IGNORECASE,
+            )
+            grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-\d\.]+)", re.IGNORECASE)
+
+            for i, sentence in enumerate(sentences):
+                # Parse movements in language frame (right=+x, forward=+y, up=-z)
+                dx_cm = dy_cm = dz_cm = 0.0
+                for match in move_pattern.finditer(sentence):
+                    direction = match.group(1).lower()
+                    value = float(match.group(2))
+                    if direction == "right":
+                        dx_cm += value
+                    elif direction == "left":
+                        dx_cm -= value
+                    elif direction == "forward":
+                        dy_cm += value
+                    elif direction == "backward":
+                        dy_cm -= value
+                    elif direction == "down":
+                        dz_cm += value
+                    elif direction == "up":
+                        dz_cm -= value
+
+                # Convert to meters
+                v_m = np.array([dx_cm, dy_cm, dz_cm], dtype=float) / 100.0
+
+                # Transform to camera or robot frame if needed
+                if in_camera_frame:
+                    # Invert the axis permutation and sign used in encoding
+                    t_cam = np.zeros(3, dtype=float)
+                    axis_perm = np.array(self.axis_perm)
+                    axis_sign = np.array(self.axis_sign, dtype=float)
+                    sign_safe = np.where(axis_sign == 0, 1.0, axis_sign)
+                    t_mapped = v_m / sign_safe
+                    t_cam[axis_perm] = t_mapped
+                    translations[i] = t_cam
+                else:
+                    translations[i] = v_m
+
+                # Parse gripper action
+                grip_match = grip_pattern.search(sentence)
+                if grip_match:
+                    gripper_actions[i] = float(grip_match.group(1))
+                else:
+                    # Maintain previous gripper state
+                    gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
+
+        return translations, gripper_actions
+
+
+# Predefined decoding schemas matching language action formats
+VERBOSE_DECODING_SCHEMA = ActionDecodingSchema(
+    name="verbose",
+    style="verbose",
+    include_rotation=False,
+    translation_unit="cm",
+    use_schema_format=False,
+)
+
+COMPACT_DECODING_SCHEMA = ActionDecodingSchema(
+    name="compact",
+    style="compact",
+    include_rotation=False,
+    translation_unit="cm",
+    use_schema_format=True,
+)
+
+DECODING_SCHEMA_REGISTRY = {
+    "verbose": VERBOSE_DECODING_SCHEMA,
+    "compact": COMPACT_DECODING_SCHEMA,
+}
+
+
+def get_decoding_schema(name: str) -> ActionDecodingSchema:
+    """Get an action decoding schema by name."""
+    if name not in DECODING_SCHEMA_REGISTRY:
+        raise ValueError(f"Unknown decoding schema: {name}. Available schemas: {list(DECODING_SCHEMA_REGISTRY.keys())}")
+    return DECODING_SCHEMA_REGISTRY[name]
+
+
+@dataclasses.dataclass(frozen=True)
 class CoTOutputs(upstream_transforms.DataTransformFn):
+    # Optional decoding schema for parsing language actions to numeric actions
+    decoding_schema: ActionDecodingSchema | str | None = None
+    # Whether decoded actions should be in camera frame
+    in_camera_frame: bool = False
+
+    def __post_init__(self):
+        """Resolve string schema name to ActionDecodingSchema instance."""
+        if isinstance(self.decoding_schema, str):
+            schema = get_decoding_schema(self.decoding_schema)
+            object.__setattr__(self, "decoding_schema", schema)
+
     def __call__(self, data: dict) -> dict:
-        # Only return the first 8 dims.
+        # Get actions and reasoning from data
         actions = data.get("actions")
+        reasoning = data.get("reasoning")
+
+        # If decoding schema is provided and we have reasoning, parse it to get actions
+        if self.decoding_schema is not None and reasoning is not None:
+            # Parse reasoning to translation deltas and gripper actions
+            translations, gripper_actions = self.decoding_schema.parse_language_to_deltas(
+                reasoning, in_camera_frame=self.in_camera_frame
+            )
+
+            # If we don't have actions from the model, use the parsed actions
+            # Shape: (num_steps, 7) -> [dx, dy, dz, droll, dpitch, dyaw, gripper]
+            # For now, assume zero rotation deltas
+            num_steps = translations.shape[0]
+            parsed_actions = np.concatenate(
+                [
+                    translations,  # (num_steps, 3)
+                    np.zeros((num_steps, 3)),  # rotation deltas
+                    gripper_actions[:, None],  # (num_steps, 1)
+                ],
+                axis=1,
+            )
+
+            if actions is None:
+                actions = parsed_actions
+            # Store parsed actions separately for inspection
+            data["parsed_actions"] = parsed_actions
+
+        # Only return the first 7 dims (xyz, rpy, gripper)
         if actions is not None:
             actions = np.asarray(actions[:, :7])
-        return {"actions": actions, "reasoning": data.get("reasoning")}
+
+        return {"actions": actions, "reasoning": reasoning}
