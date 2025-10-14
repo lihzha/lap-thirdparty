@@ -42,10 +42,11 @@ OXE_DATASET_CONFIGS = {
         "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": [
-            "clip_function_input/base_pose_tool_reached",
-            "gripper_closed",
+            # "clip_function_input/base_pose_tool_reached",
+            # "gripper_closed",
+            "state"
         ],
-        "state_encoding": StateEncoding.POS_QUAT,
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     # "bridge_v2_oxe": {  # Version of Bridge V2 in Open X-Embodiment mixture

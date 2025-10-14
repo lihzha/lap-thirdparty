@@ -253,18 +253,22 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    import tensorflow_graphics.geometry.transformation as tft
+
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
     gripper_action = rel2abs_gripper_actions(gripper_action)
 
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"]["world_vector"],
-            trajectory["action"]["rotation_delta"],
-            gripper_action[:, None],
-        ),
-        axis=-1,
-    )
+    # trajectory["action"] = tf.concat(
+    #     (
+    #         trajectory["action"]["world_vector"],
+    #         trajectory["action"]["rotation_delta"],
+    #         gripper_action[:, None],
+    #     ),
+    #     axis=-1,
+    # )
     # decode compressed state
     eef_value = tf.io.decode_compressed(
         trajectory["observation"]["clip_function_input/base_pose_tool_reached"],
@@ -275,11 +279,35 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     gripper_value = tf.io.decode_compressed(trajectory["observation"]["gripper_closed"], compression_type="ZLIB")
     gripper_value = tf.io.decode_raw(gripper_value, tf.float32)
     trajectory["observation"]["gripper_closed"] = tf.reshape(gripper_value, (-1, 1))
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["observation"]["natural_language_instruction"]), ""
-    # )  # delete uninformative language instruction
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
-    return trajectory
+
+    # Create EEF state with xyz + euler angles
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, 3:7]),
+            trajectory["observation"]["gripper_closed"],
+        ),
+        axis=-1,
+    )
+
+    # Calculate movement actions as delta EEF pose
+    movement_actions = tf.concat(
+        (
+            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
+            euler_diff(
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+
+    # Truncate trajectory and use movement actions
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, gripper_action[:-1][:, None]], axis=1)
+
+    return traj_truncated
 
 
 def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
