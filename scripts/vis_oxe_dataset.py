@@ -192,7 +192,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     block_h = max(1, y1 - y0)
     base_scale = 2.5
     scale = max(0.4, min(1.5, block_h / 110.0)) * base_scale
-    font_size = int(13 * scale)
+    font_size = int(13 * scale * 0.5)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
@@ -376,42 +376,43 @@ def main(config: _config.TrainConfig):
         obs = batch[0]
         # Decode langact strings
         langact_texts = _decode_langact_strings(obs, tok)
-        # Prepare start/end images for the first camera view
-        first_cam_key = next(iter(obs.images))
-        imgs = obs.images[first_cam_key]
-        logging.info(f"imgs: {imgs.shape}")
-        start_imgs = np.array(imgs[:, 0])
-        end_imgs = np.array(imgs[:, -1])
-        B = start_imgs.shape[0]
-        vis_rows = []
-        for i in range(B):
-            start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-            end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-            la_text = langact_texts[i] if i < len(langact_texts) else ""
-            logging.info(f"la_text: {la_text}")
-            col1 = np.copy(_ensure_color(start_u8))
-            col2 = np.copy(_ensure_color(end_u8))
-            panels = [col1]
-            panels.append(col2)
-            panels = [p for p in panels if p is not None]
-            if not panels:
-                continue
-            row = np.concatenate(panels, axis=1)
-            # Single bottom overlay spanning the entire row
-            band_h_row = max(50, row.shape[0] // 8)
-            row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
-            vis_rows.append(row)
-        if vis_rows:
-            pages = _compose_pages(vis_rows, target_max_height=1600)
-            assert wandb_enabled and wandb is not None
-            wandb.log(
-                {
-                    "vis_dataset/pages": [
-                        wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
-                    ]
-                },
-                step=j,
-            )
+
+        # Visualize all camera views
+        for cam_key in obs.images.keys():
+            imgs = obs.images[cam_key]
+            logging.info(f"{cam_key} imgs: {imgs.shape}")
+            start_imgs = np.array(imgs[:, 0])
+            end_imgs = np.array(imgs[:, -1])
+            B = start_imgs.shape[0]
+            vis_rows = []
+            for i in range(B):
+                start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+                end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+                la_text = langact_texts[i] if i < len(langact_texts) else ""
+                logging.info(f"la_text: {la_text}")
+                col1 = np.copy(_ensure_color(start_u8))
+                col2 = np.copy(_ensure_color(end_u8))
+                panels = [col1]
+                panels.append(col2)
+                panels = [p for p in panels if p is not None]
+                if not panels:
+                    continue
+                row = np.concatenate(panels, axis=1)
+                # Single bottom overlay spanning the entire row
+                band_h_row = max(100, row.shape[0] // 4)
+                row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
+                vis_rows.append(row)
+            if vis_rows:
+                pages = _compose_pages(vis_rows, target_max_height=1600)
+                assert wandb_enabled and wandb is not None
+                wandb.log(
+                    {
+                        f"vis_dataset/{cam_key}": [
+                            wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
+                        ]
+                    },
+                    step=j,
+                )
 
         batch = next(data_iter)
 
