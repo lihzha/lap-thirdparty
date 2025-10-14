@@ -106,7 +106,9 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
     # 1. Histogram with KDE
     ax1 = axes[0, 0]
     ax1.hist(gripper_values, bins=50, density=True, alpha=0.7, color="steelblue", edgecolor="black")
-    if len(gripper_values) > 1:
+
+    # Only attempt KDE if we have sufficient variance in the data
+    if len(gripper_values) > 1 and np.std(gripper_values) > 1e-10:
         try:
             from scipy import stats
 
@@ -114,8 +116,10 @@ def plot_gripper_distribution(gripper_values: np.ndarray, dataset_name: str):
             x_range = np.linspace(gripper_values.min(), gripper_values.max(), 200)
             ax1.plot(x_range, kde(x_range), "r-", linewidth=2, label="KDE")
             ax1.legend()
-        except ImportError:
-            pass  # Skip KDE if scipy not available
+        except (ImportError, np.linalg.LinAlgError):
+            # Skip KDE if scipy not available or data is degenerate (all same values)
+            pass
+
     ax1.set_xlabel("Gripper State Value", fontsize=12)
     ax1.set_ylabel("Density", fontsize=12)
     ax1.set_title("Distribution with KDE", fontsize=13, fontweight="bold")
