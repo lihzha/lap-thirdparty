@@ -276,18 +276,18 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         inputs["prompt"] = prompt_str
 
         # Extract state_type if available
-        state_type = data.get("state_type")
-        if state_type is not None:
-            if isinstance(state_type, bytes):
-                state_type_str = state_type.decode("utf-8")
-            elif isinstance(state_type, str):
-                state_type_str = state_type
-            else:
-                state_type_str = str(state_type)
-            inputs["state_type"] = state_type_str
-        else:
-            # Default to "eef_pose" if not provided (for backward compatibility)
-            inputs["state_type"] = "eef_pose"
+        # state_type = data.get("state_type")
+        # if state_type is not None:
+        #     if isinstance(state_type, bytes):
+        #         state_type_str = state_type.decode("utf-8")
+        #     elif isinstance(state_type, str):
+        #         state_type_str = state_type
+        #     else:
+        #         state_type_str = str(state_type)
+        #     inputs["state_type"] = state_type_str
+        # else:
+        #     # Default to "eef_pose" if not provided (for backward compatibility)
+        #     inputs["state_type"] = "eef_pose"
 
         if "actions" in data:
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
@@ -437,17 +437,29 @@ class ActionDecodingSchema:
                 for match in move_pattern.finditer(sentence):
                     direction = match.group(1).lower()
                     value = float(match.group(2))
-                    if direction == "right":
+                    # if direction == "right":
+                    #     dx_cm += value
+                    # elif direction == "left":
+                    #     dx_cm -= value
+                    # elif direction == "forward":
+                    #     dy_cm += value
+                    # elif direction == "backward":
+                    #     dy_cm -= value
+                    # elif direction == "down":
+                    #     dz_cm += value
+                    # elif direction == "up":
+                    #     dz_cm -= value
+                    if direction == "forward":
                         dx_cm += value
-                    elif direction == "left":
-                        dx_cm -= value
-                    elif direction == "forward":
-                        dy_cm += value
                     elif direction == "backward":
+                        dx_cm -= value
+                    elif direction == "left":
+                        dy_cm += value
+                    elif direction == "right":
                         dy_cm -= value
-                    elif direction == "down":
-                        dz_cm += value
                     elif direction == "up":
+                        dz_cm += value
+                    elif direction == "down":
                         dz_cm -= value
 
                 # Convert to meters
@@ -513,6 +525,7 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
     decoding_schema: ActionDecodingSchema | str | None = None
     # Whether decoded actions should be in camera frame
     in_camera_frame: bool = False
+    # Interpolatation steps
 
     def __post_init__(self):
         """Resolve string schema name to ActionDecodingSchema instance."""
@@ -524,6 +537,7 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         # Get actions and reasoning from data
         actions = data.get("actions")
         reasoning = data.get("reasoning")
+        breakpoint()
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
         if self.decoding_schema is not None and reasoning is not None:
@@ -554,4 +568,4 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         if actions is not None:
             actions = np.asarray(actions[:, :7])
 
-        return {"actions": actions, "reasoning": reasoning}
+        return {"actions": parsed_actions, "reasoning": reasoning}

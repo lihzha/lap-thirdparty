@@ -6,8 +6,6 @@ import time
 import dataclasses
 from pathlib import Path
 
-# Add parent directory to path to import from src
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from openpi_client import image_tools
 from moviepy.editor import ImageSequenceClip
@@ -15,7 +13,6 @@ import numpy as np
 from openpi_client import websocket_client_policy
 import tqdm
 
-from openpi_cot.policies.cot_policy import ActionDecodingSchema, get_decoding_schema
 
 IMAGE_KEYS = (
     "base_0_rgb",
@@ -49,8 +46,6 @@ class Args:
     )
     use_wrist_camera: bool = False  # whether to use the wrist camera image as input to the policy
     run_upstream: bool = False  # whether to run the upstream policy server
-    # Language action decoding parameters
-    decoding_schema: str = "verbose"  # which schema to use for decoding language actions ("verbose", "compact")
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
 # waiting for a new action chunk, it will raise an exception and the server connection dies.
@@ -85,8 +80,6 @@ class BaseEvalRunner:
         assert self.in_camera_frame == (self.cam_to_base_extrinsics_matrix is not None), (
             "Must have extrinsics if using camera frame"
         )
-        # Initialize decoding schema for parsing language actions
-        self.decoding_schema = get_decoding_schema(args.decoding_schema)
 
     def init_env(self):
         raise NotImplementedError()
@@ -141,12 +134,7 @@ class BaseEvalRunner:
             delta_base = actions[0, :3]  # Already in meters
             grip_actions = actions[:, -1]
         else:
-            # Fall back to parsing reasoning text if actions not provided
-            reasoning = response.get("reasoning", "")
-            translations, grip_actions = self.decoding_schema.parse_language_to_deltas(
-                reasoning, in_camera_frame=self.in_camera_frame
-            )
-            delta_base = translations[0]
+            raise NotImplementedError
 
         # If in camera frame, transform to robot/base frame
         if self.in_camera_frame:

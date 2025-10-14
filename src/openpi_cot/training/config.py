@@ -267,7 +267,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     prediction_prompt=base_cfg.prediction_prompt,
                 )
             ],
-            outputs=[cot_policy.CoTOutputs()],
+            outputs=[cot_policy.CoTOutputs(decoding_schema="verbose")],
         )
 
         # assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION

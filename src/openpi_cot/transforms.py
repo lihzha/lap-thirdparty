@@ -75,7 +75,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(
-            prompt, language_actions.strip(), state
+            prompt, language_actions, state
         )
 
         result = {
