@@ -209,7 +209,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     block_h = max(1, y1 - y0)
     base_scale = 2.5
     scale = max(0.4, min(1.5, block_h / 110.0)) * base_scale
-    font_size = int(13 * scale * 0.2)
+    font_size = int(13 * scale * 0.5)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
@@ -385,6 +385,7 @@ def main(config: _config.TrainConfig):
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     # Sharding details for the first batch
     log_batch_sharding(batch)
+    breakpoint()
 
     for j in range(10):
         # Visualize language-action projection per example
