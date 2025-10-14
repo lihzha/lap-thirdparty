@@ -294,8 +294,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         return inputs
 
-    def _prepare_text(self, data: dict, lang_action_key: str, trimmed_len_key: str) -> dict:
-        assert lang_action_key in data
+    def _prepare_language_actions(self, data: dict, lang_action_key: str, trimmed_len_key: str) -> dict:
         la = data[lang_action_key]
         assert isinstance(la[0], bytes)
         if (
@@ -339,7 +338,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
         # Always prepare regular language actions for reasoning loss
-        inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
+        if "language_actions" in data:
+            inputs["language_actions"] = self._prepare_language_actions(data, "language_actions", "control_frequency")
 
         # Additionally prepare prediction if available (independent of regular reasoning)
         if "prediction_language_action" in data:

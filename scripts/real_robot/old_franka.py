@@ -15,6 +15,9 @@ import re
 from scipy.spatial.transform import Rotation as R
 from moviepy.editor import ImageSequenceClip
 import datetime
+import sys
+sys.path.append(".")
+from shared import Args, IMAGE_KEYS
 
 AXIS_PERM = np.array([0, 2, 1])
 AXIS_SIGN = np.array([1, 1, 1])
@@ -38,6 +41,7 @@ class Args:
     remote_port: int = (
         8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
+    in_camera_frame: bool = True  # whether the predicted movements are in camera frame or robot/base frame
 
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
@@ -71,6 +75,9 @@ def main(args: Args):
         robot_type="panda",
         action_space="cartesian_position",
         gripper_action_space="position",
+        do_reset=True,
+        default_resolution={"web": (640, 480), "rs": (640, 480)},
+        resize_resolution={"web": (0, 0), "rs": (0, 0)},
     )
     extrinsics = [
         0.19344852600560863,
@@ -130,12 +137,10 @@ def main(args: Args):
 
                     request_data = {
                         "observation": {
-                            "exterior_image_1_left": image_tools.resize_with_pad(
+                            IMAGE_KEYS[0]: image_tools.resize_with_pad(
                                 curr_obs["observation/image"], 224, 224
                             ),
-                            "observation/wrist_image_left": image_tools.resize_with_pad(
-                                curr_obs["observation/wrist_image"], 224, 224
-                            ),
+                            
                             "cartesian_position": curr_obs["observation/cartesian_position"],
                             "gripper_position": curr_obs["observation/gripper_position"],
                             "state": curr_obs["observation/state"],
@@ -143,6 +148,10 @@ def main(args: Args):
                         "prompt": instruction,
                         "batch_size": None,
                     }
+                    if args.in_camera_frame:
+                        request_data["observation"][IMAGE_KEYS[1]] = image_tools.resize_with_pad(
+                                curr_obs["observation/wrist_image"], 224, 224
+                            ),
 
                     # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                     # Ctrl+C will be handled after the server call is complete
@@ -150,13 +159,16 @@ def main(args: Args):
                         # this returns natural language reasoning steps; convert to deltas then to absolute action
                         st = time.time()
                         pred = policy_client.infer_reasoning(request_data)["reasoning"]
-                        poses_cam, grip_actions = _reasoning_to_action(pred)
+                        poses_cam, grip_actions = _reasoning_to_action(pred, in_camera_frame=args.in_camera_frame)
 
                         # Use the first delta translation in camera frame (meters)
                         t_cam = poses_cam[1][:3, 3] - poses_cam[0][:3, 3]
-                        # Map translation delta to robot/base frame using rotation only
-                        R_cb = cam_to_base_extrinsics_matrix[:3, :3]
-                        delta_base = R_cb @ t_cam
+                        # # Map translation delta to robot/base frame using rotation only
+                        if args.in_camera_frame:
+                            R_cb = cam_to_base_extrinsics_matrix[:3, :3]
+                            delta_base = R_cb @ t_cam
+                        else:
+                            delta_base = t_cam
 
                         # Build absolute target from current state
                         curr_pos = np.asarray(curr_obs["observation/cartesian_position"], dtype=float)[:3]
@@ -181,7 +193,7 @@ def main(args: Args):
                         et = time.time()
                         print(f"Time taken for inference: {et - st}")
 
-                replay_images.append(curr_obs["observation/image"])
+                replay_images.append(curr_obs["observation/image"][0])
                 # Select current action to execute from chunk
                 action = pred_action_chunk[actions_from_chunk_completed]
                 actions_from_chunk_completed += 1
@@ -232,8 +244,12 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
         gripper_position = 0.0
 
     return {
-        "observation/image": image_observations["0"][..., ::-1],
-        "observation/wrist_image": image_observations["1"],
+        "observation/image": image_observations["0"][..., ::-1][None],
+        "observation/wrist_image": image_observations["1"][None],
+        # "observation/wrist_image": np.rot90(image_observations["1"][..., ::-1], k=1), # rotate 90 degrees
+        # "observation/wrist_image": np.rot90(image_observations["1"][..., ::-1], k=2), # rotate 180 degrees
+        # "observation/wrist_image": image_observations["1"][..., ::-1][::-1],  # flip vertically, up -> dowm
+        #  "observation/wrist_image": image_observations["14846828_left"][..., :3][..., ::-1],  # drop alpha channel and convert BGR to RGB
         "observation/cartesian_position": cartesian_position,
         "observation/gripper_position": np.array([gripper_position]),
         "observation/state": np.concatenate([cartesian_position, [gripper_position]]),
@@ -243,6 +259,7 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
 def _reasoning_to_action(
     sentences: list[str],
     start_pose: np.ndarray = None,
+    in_camera_frame: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Invert `describe_movement`.
@@ -298,7 +315,18 @@ def _reasoning_to_action(
                 dz_cm += value_cm
             elif direction == "up":
                 dz_cm -= value_cm
-
+            # if direction == "forward":
+            #     dx_cm += value_cm
+            # elif direction == "backward":
+            #     dx_cm -= value_cm
+            # elif direction == "left":
+            #     dy_cm += value_cm
+            # elif direction == "right":
+            #     dy_cm -= value_cm
+            # elif direction == "up":
+            #     dz_cm += value_cm
+            # elif direction == "down":
+            #     dz_cm -= value_cm
         # Parse gripper action (defaults to previous if missing, else 0.0 for first)
         grip_match = grip_pat.search(sentence)
         if grip_match:
@@ -310,13 +338,18 @@ def _reasoning_to_action(
         v_cm = np.array([dx_cm, dy_cm, dz_cm], dtype=float)
         v_m = v_cm / 100.0
 
-        # Recall: v = (AXIS_SIGN * t_cam[AXIS_PERM]) * 100
-        # Therefore: t_cam[AXIS_PERM] = v_m / AXIS_SIGN
-        t_cam = np.zeros(3, dtype=float)
-        # Avoid division-by-zero if AXIS_SIGN contains zeros (shouldn't, but safe)
-        sign_safe = np.where(AXIS_SIGN == 0, 1.0, AXIS_SIGN.astype(float))
-        t_mapped = v_m / sign_safe
-        t_cam[AXIS_PERM] = t_mapped
+        if in_camera_frame:
+
+            # Recall: v = (AXIS_SIGN * t_cam[AXIS_PERM]) * 100
+            # Therefore: t_cam[AXIS_PERM] = v_m / AXIS_SIGN
+            t_cam = np.zeros(3, dtype=float)
+            # Avoid division-by-zero if AXIS_SIGN contains zeros (shouldn't, but safe)
+            sign_safe = np.where(AXIS_SIGN == 0, 1.0, AXIS_SIGN.astype(float))
+            t_mapped = v_m / sign_safe
+            t_cam[AXIS_PERM] = t_mapped
+        
+        else:
+            t_cam = v_m
 
         # Integrate translation to form next pose; keep rotation unchanged
         next_pose = poses[i].copy()

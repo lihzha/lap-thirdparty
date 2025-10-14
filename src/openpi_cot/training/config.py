@@ -522,6 +522,36 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
+        name="pi05_droid_cot_eval",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=140,
+            pi05=True,
+            discrete_state_input=True,
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+        ),
+    ),
+    TrainConfig(
+        name="paligemma2_droid_cot_eval",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=150,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m"
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+        ),
+    ),
+    TrainConfig(
         name="pi05_vqa_local",
         model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
         data=VQADataConfig(
@@ -536,7 +566,7 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=1,
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma2", params_path="tbd"),
     ),
     TrainConfig(
         name="pi05_libero_eval",
@@ -547,20 +577,6 @@ _CONFIGS = [
             discrete_state_input=True,
         ),
         data=LiberoDataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-        ),
-    ),
-    TrainConfig(
-        name="pi05_droid_cot_eval",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=140,
-            pi05=True,
-            discrete_state_input=True,
-        ),
-        data=RLDSCoTDataConfig(
             repo_id="droid",
             asset_id="droid",
             dataset_type="droid",

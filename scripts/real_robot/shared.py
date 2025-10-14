@@ -11,6 +11,12 @@ import numpy as np
 from openpi_client import websocket_client_policy
 import tqdm
 
+IMAGE_KEYS = (
+    "base_0_rgb",
+    "left_wrist_0_rgb",
+    # "right_wrist_0_rgb",
+)
+
 AXIS_PERM = np.array([0, 2, 1])
 AXIS_SIGN = np.array([1, 1, 1])
 # DROID data collection frequency -- we slow down execution to match this frequency
@@ -169,6 +175,7 @@ class BaseEvalRunner:
     def binarize_gripper(self, action):
         # Binarize gripper action
         if action[-1].item() > 0.5:
+            print("closing gripper")
             action = np.concatenate([action[:-1], np.ones((1,))])
         else:
             action = np.concatenate([action[:-1], np.zeros((1,))])
@@ -302,6 +309,7 @@ class BaseEvalRunner:
             actions_from_chunk_completed = 0
             pred_action_chunk = None
             video = []
+            wrist_video = []
             for t_step in bar:
                 start_time = time.time()
                 try:
@@ -315,6 +323,7 @@ class BaseEvalRunner:
                         video.append(curr_obs[f"{self.args.external_camera}_image"])
                     else:
                         video.append(curr_obs["image"])
+                    wrist_video.append(curr_obs["wrist_image"].copy())
                     # Predict a new chunk if needed
                     if actions_from_chunk_completed == 0  or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0
@@ -329,7 +338,6 @@ class BaseEvalRunner:
                             et = time.time()
                             print(f"Time taken for inference: {et - st}")
                     # Select current action to execute from chunk
-                    print(actions_from_chunk_completed)
                     action = pred_action_chunk[actions_from_chunk_completed]
                     action = self.binarize_gripper(action)
                     actions_from_chunk_completed += 1
@@ -341,9 +349,11 @@ class BaseEvalRunner:
                 except KeyboardInterrupt:
                     break
             video = np.stack(video)
+            wrist_video = np.stack(wrist_video)
             timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
             save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
             ImageSequenceClip(list(video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
+            ImageSequenceClip(list(wrist_video), fps=10).write_videofile(save_filename + "_wrist.mp4", codec="libx264")
             answer = input("Do one more eval? (enter y or n) ")
             if "n" in answer.lower():
                 break
