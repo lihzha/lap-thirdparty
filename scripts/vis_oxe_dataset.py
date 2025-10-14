@@ -124,13 +124,14 @@ def _decode_langact_strings(obs, tokenizer) -> list[str]:
 
 def _decode_prompt_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the prompt tokens per example."""
-    if not hasattr(obs, "tokenized_input") or obs.tokenized_input is None:
+    if not hasattr(obs, "tokenized_prompt") or obs.tokenized_prompt is None:
         return []
-    tokens = jax.device_get(obs.tokenized_input)
+    tokens = jax.device_get(obs.tokenized_prompt)
+    rmask = jax.device_get(obs.tokenized_langact_mask)
     out: list[str] = []
     for i in range(tokens.shape[0]):
         # Filter out padding tokens (typically 0)
-        valid_tokens = tokens[i][tokens[i] != 0]
+        valid_tokens = tokens[i][~rmask[i].astype(bool)]
         try:
             text = tokenizer.decode(valid_tokens.astype(np.int32))
         except Exception:
