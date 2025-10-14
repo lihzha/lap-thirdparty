@@ -1353,7 +1353,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
 
 
-class SampleR1LiteCoTDataset(SingleCoTDataset):
+class SampleR1LiteCoTDataset(SingleOXECoTDataset):
     """Custom dataset for sample_r1_lite with EEF pose lookup table."""
 
     def __init__(
@@ -1476,30 +1476,26 @@ class SampleR1LiteCoTDataset(SingleCoTDataset):
 
             # Get start and length for this episode
             start = tf.gather(self.eef_pose_table["episode_starts"], ep_idx)
-            length = tf.gather(self.eef_pose_table["episode_lengths"], ep_idx)
+            traj_len = tf.gather(self.eef_pose_table["episode_lengths"], ep_idx)
 
-            # Create indices for gathering poses
-            indices = tf.range(start, start + length, dtype=tf.int32)
+            # Create indices for gathering poses (truncated to actual trajectory length)
+            indices = tf.range(start, start + traj_len, dtype=tf.int32)
 
             # Gather left and right EEF poses using indices
             left_poses = tf.gather(self.eef_pose_table["left_eef_pose"], indices)
             right_poses = tf.gather(self.eef_pose_table["right_eef_pose"], indices)
 
-            traj_len = tf.shape(left_poses)[0]
-
             # Get gripper states from original action (last dimension for each arm)
-            # Assuming original action has format: [left_actions(7), right_actions(7)]
-            left_gripper = traj["action"][:, 6:7]
-            right_gripper = traj["action"][:, 13:14]
+            # Truncate to match EEF pose length
+            left_gripper = traj["observation"]["gripper_state_left"]
+            right_gripper = traj["observation"]["gripper_state_right"]
 
             # Construct full state: [left_eef_pose(6), left_gripper(1), right_eef_pose(6), right_gripper(1)]
-            state = tf.concat([left_poses, left_gripper, right_poses, right_gripper], axis=-1)
+            traj["observation"]["state"] = tf.concat([left_poses, left_gripper, right_poses, right_gripper], axis=-1)
 
             # Apply standardization transform
             if self.standardize_fn is not None:
-                traj_temp = {"observation": {"state": state}, "action": traj["action"]}
-                traj_temp = self.standardize_fn(traj_temp)
-                state = traj_temp["observation"]["state"]
+                traj = self.standardize_fn(traj)
 
             # Get images
             new_obs = {}
@@ -1518,7 +1514,7 @@ class SampleR1LiteCoTDataset(SingleCoTDataset):
                 else:
                     new_obs[img_key] = traj["observation"][old]
 
-            new_obs["state"] = tf.cast(state, tf.float32)
+            new_obs["state"] = traj["observation"]["state"]
 
             # Determine state type
             state_type_str = state_encoding_to_type(self.state_encoding)
@@ -1536,42 +1532,6 @@ class SampleR1LiteCoTDataset(SingleCoTDataset):
             }
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
-
-    def apply_traj_filters(self, action_key):
-        """Apply trajectory-level filters."""
-
-        def is_nonzero_length(traj):
-            return tf.shape(traj[action_key])[0] > 0
-
-        def has_any_instruction(traj):
-            instr = traj["language_instruction"]
-            instr = tf.reshape(instr, [-1])
-            instr = tf.strings.strip(instr)
-            return tf.reduce_any(tf.strings.length(instr) > 0)
-
-        self.dataset = self.dataset.filter(has_any_instruction)
-        self.dataset = self.dataset.filter(is_nonzero_length)
-
-    def apply_frame_filters(self):
-        """Apply frame-level filters."""
-
-        def _non_empty_prompt(frame: dict) -> tf.Tensor:
-            p = tf.strings.strip(frame["prompt"])
-            return tf.strings.length(p) > 0
-
-        self.dataset = self.dataset.filter(_non_empty_prompt)
-
-    def apply_repack_transforms(self):
-        """Repack trajectory keys."""
-
-        def _pop_and_rename_keys(traj):
-            traj.pop("trajectory_id")
-            traj["prompt"] = traj["language_instruction"]
-            traj.pop("language_instruction")
-            traj.pop("raw_action")
-            return traj
-
-        self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
 
 
 class OXECoTDatasets:
