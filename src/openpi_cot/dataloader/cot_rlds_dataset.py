@@ -1415,7 +1415,8 @@ class SampleR1LiteCoTDataset(SingleCoTDataset):
         print_memory_usage("Before loading EEF poses")
 
         # Load EEF poses from NPZ file
-        eef_data = np.load(npz_path, allow_pickle=True)
+        with tf.io.gfile.GFile(npz_path, "rb") as f:
+            eef_data = np.load(f, allow_pickle=True)
         episode_ids = eef_data["episode_ids"]
         episode_starts = eef_data["episode_starts"]
         episode_lengths = eef_data["episode_lengths"]
