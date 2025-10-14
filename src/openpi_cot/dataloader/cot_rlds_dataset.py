@@ -1476,10 +1476,10 @@ class SampleR1LiteCoTDataset(SingleOXECoTDataset):
 
             # Get start and length for this episode
             start = tf.gather(self.eef_pose_table["episode_starts"], ep_idx)
-            traj_len = tf.gather(self.eef_pose_table["episode_lengths"], ep_idx)
+            length = tf.gather(self.eef_pose_table["episode_lengths"], ep_idx)
 
             # Create indices for gathering poses (truncated to actual trajectory length)
-            indices = tf.range(start, start + traj_len, dtype=tf.int32)
+            indices = tf.range(start, start + length, dtype=tf.int32)
 
             # Gather left and right EEF poses using indices
             left_poses = tf.gather(self.eef_pose_table["left_eef_pose"], indices)
@@ -1496,6 +1496,8 @@ class SampleR1LiteCoTDataset(SingleOXECoTDataset):
             # Apply standardization transform
             if self.standardize_fn is not None:
                 traj = self.standardize_fn(traj)
+
+            traj_len = tf.shape(traj["action"])[0]
 
             # Get images
             new_obs = {}
