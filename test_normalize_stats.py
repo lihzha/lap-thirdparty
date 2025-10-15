@@ -4,19 +4,14 @@ import jax
 from jax.experimental import multihost_utils as mh
 import numpy as np
 
-HAS_JAX = True
-
 
 def test_gather_and_reduce():
     """Test the _gather_and_reduce function logic."""
-    if not HAS_JAX:
-        print("Test 1: Scalar gathering - SKIPPED (no JAX)")
-        print()
-        return
 
     def _gather_and_reduce(x: np.ndarray, op: str) -> np.ndarray:
         """Copied from normalize_adapter.py"""
         if getattr(jax, "process_count", lambda: 1)() == 1:
+            breakpoint()
             return x
         xs = mh.process_allgather(np.asarray(x), tiled=False)  # shape: [P, ...]
         xs = np.asarray(xs)
@@ -69,13 +64,23 @@ def test_variance_calculation():
     computed_var1 = sumsq1 / n1 - np.square(computed_mean1)
     computed_std1 = np.sqrt(np.maximum(computed_var1, 0.0))
 
+    # NEW: Compute using stable shifted formula
+    shift1 = (data1.min(axis=0) + data1.max(axis=0)) / 2.0
+    shifted1 = data1 - shift1
+    shifted_sum1 = shifted1.sum(axis=0)
+    shifted_sumsq1 = np.square(shifted1).sum(axis=0)
+    shifted_mean1 = shifted_sum1 / n1
+    stable_mean1 = shift1 + shifted_mean1
+    stable_var1 = shifted_sumsq1 / n1 - np.square(shifted_mean1)
+    stable_std1 = np.sqrt(np.maximum(stable_var1, 0.0))
+
     print("  Case 1: Normal distribution (mean=5, std=2)")
     print(f"    True mean: {true_mean1}")
-    print(f"    Computed mean: {computed_mean1}")
-    print(f"    Mean error: {np.abs(true_mean1 - computed_mean1).max()}")
+    print(f"    Old computed mean: {computed_mean1}, error: {np.abs(true_mean1 - computed_mean1).max():.2e}")
+    print(f"    New stable mean: {stable_mean1}, error: {np.abs(true_mean1 - stable_mean1).max():.2e}")
     print(f"    True std: {true_std1}")
-    print(f"    Computed std: {computed_std1}")
-    print(f"    Std error: {np.abs(true_std1 - computed_std1).max()}")
+    print(f"    Old computed std: {computed_std1}, error: {np.abs(true_std1 - computed_std1).max():.2e}")
+    print(f"    New stable std: {stable_std1}, error: {np.abs(true_std1 - stable_std1).max():.2e}")
     print()
 
     # Case 2: Constant dimension (should have std=0)
@@ -112,11 +117,26 @@ def test_variance_calculation():
     computed_var3 = sumsq3 / n3 - np.square(computed_mean3)
     computed_std3 = np.sqrt(np.maximum(computed_var3, 0.0))
 
-    print("  Case 3: Numerical precision (mean=1e6, std=1e-10)")
+    # NEW: Stable shifted version
+    shift3 = (data3.min(axis=0) + data3.max(axis=0)) / 2.0
+    shifted3 = data3 - shift3
+    shifted_sum3 = shifted3.sum(axis=0)
+    shifted_sumsq3 = np.square(shifted3).sum(axis=0)
+    shifted_mean3 = shifted_sum3 / n3
+    stable_mean3 = shift3 + shifted_mean3
+    stable_var3 = shifted_sumsq3 / n3 - np.square(shifted_mean3)
+    stable_std3 = np.sqrt(np.maximum(stable_var3, 0.0))
+
+    print("  Case 3: Numerical precision (mean=1e6, std=1e-10) *** CRITICAL TEST ***")
     print(f"    True std: {true_std3}")
-    print(f"    Computed std: {computed_std3}")
-    print(f"    Relative error: {np.abs(true_std3 - computed_std3) / (true_std3 + 1e-15)}")
-    print("    WARNING: Large relative error indicates catastrophic cancellation!")
+    print(f"    OLD method std: {computed_std3}")
+    print(f"    NEW method std: {stable_std3}")
+    print(f"    Old relative error: {np.abs(true_std3 - computed_std3) / (true_std3 + 1e-15)}")
+    print(f"    New relative error: {np.abs(true_std3 - stable_std3) / (true_std3 + 1e-15)}")
+    if computed_std3.max() == 0:
+        print("    ❌ OLD METHOD: FAILED - returns std=0 due to catastrophic cancellation!")
+    if stable_std3.max() > 0 and (np.abs(true_std3 - stable_std3) / true_std3).max() < 0.1:
+        print("    ✅ NEW METHOD: PASSED - accurate result with shifted statistics!")
     print()
 
 

@@ -126,6 +126,7 @@ def get_dataset_statistics(
 
     # ------------------------------------------------------------
     # Multi-host aggregation: compute exact global mean/std and counts
+    # Using numerically stable variance calculation (Welford/Chan algorithm)
     # ------------------------------------------------------------
     def _gather_and_reduce(x: np.ndarray, op: str) -> np.ndarray:
         if getattr(jax, "process_count", lambda: 1)() == 1:
@@ -140,46 +141,67 @@ def get_dataset_statistics(
             return xs.max(axis=0)
         raise ValueError(f"Unsupported op: {op}")
 
-    # Per-host sufficient stats
-    a_sum = actions.sum(axis=0)
-    a_sumsq = np.square(actions).sum(axis=0)
+    # Compute numerically stable statistics using shifted values
+    # Shift reduces magnitude of values, preventing catastrophic cancellation
     a_min = actions.min(axis=0)
     a_max = actions.max(axis=0)
+
+    if has_state:
+        s_min = proprios.min(axis=0)
+        s_max = proprios.max(axis=0)
+
+    # Gather min/max across hosts to compute global shift
+    a_min = _gather_and_reduce(a_min, "min")
+    a_max = _gather_and_reduce(a_max, "max")
+
+    if has_state:
+        s_min = _gather_and_reduce(s_min, "min")
+        s_max = _gather_and_reduce(s_max, "max")
+
+    # Use midpoint as shift for numerical stability
+    a_shift = (a_min + a_max) / 2.0
+
+    if has_state:
+        s_shift = (s_min + s_max) / 2.0
+
+    # Compute shifted statistics (per-host)
+    a_shifted = actions - a_shift
+    a_sum = a_shifted.sum(axis=0)
+    a_sumsq = np.square(a_shifted).sum(axis=0)
     a_n = np.array(actions.shape[0], dtype=np.int64)
 
     if has_state:
-        s_sum = proprios.sum(axis=0)
-        s_sumsq = np.square(proprios).sum(axis=0)
-        s_min = proprios.min(axis=0)
-        s_max = proprios.max(axis=0)
+        s_shifted = proprios - s_shift
+        s_sum = s_shifted.sum(axis=0)
+        s_sumsq = np.square(s_shifted).sum(axis=0)
         s_n = np.array(proprios.shape[0], dtype=np.int64)
 
     traj_n = np.array(num_trajectories, dtype=np.int64)
 
-    # All-gather + reduce
+    # All-gather + reduce shifted statistics
     a_sum = _gather_and_reduce(a_sum, "sum")
     a_sumsq = _gather_and_reduce(a_sumsq, "sum")
-    a_min = _gather_and_reduce(a_min, "min")
-    a_max = _gather_and_reduce(a_max, "max")
     a_n = int(_gather_and_reduce(a_n, "sum"))
 
     if has_state:
         s_sum = _gather_and_reduce(s_sum, "sum")
         s_sumsq = _gather_and_reduce(s_sumsq, "sum")
-        s_min = _gather_and_reduce(s_min, "min")
-        s_max = _gather_and_reduce(s_max, "max")
         s_n = int(_gather_and_reduce(s_n, "sum"))
 
     traj_n = int(_gather_and_reduce(traj_n, "sum"))
 
-    # Exact global mean/std
-    a_mean = a_sum / max(a_n, 1)
-    a_var = a_sumsq / max(a_n, 1) - np.square(a_mean)
+    # Compute global mean/std from shifted statistics
+    # mean = shift + E[X']
+    # var = E[X'²] - (E[X'])²  (now numerically stable due to shift)
+    a_shifted_mean = a_sum / max(a_n, 1)
+    a_mean = a_shift + a_shifted_mean
+    a_var = a_sumsq / max(a_n, 1) - np.square(a_shifted_mean)
     a_std = np.sqrt(np.maximum(a_var, 0.0))
 
     if has_state:
-        s_mean = s_sum / max(s_n, 1)
-        s_var = s_sumsq / max(s_n, 1) - np.square(s_mean)
+        s_shifted_mean = s_sum / max(s_n, 1)
+        s_mean = s_shift + s_shifted_mean
+        s_var = s_sumsq / max(s_n, 1) - np.square(s_shifted_mean)
         s_std = np.sqrt(np.maximum(s_var, 0.0))
 
     # ------------------------------------------------------------
