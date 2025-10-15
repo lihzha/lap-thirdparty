@@ -6,22 +6,20 @@
 
 # Define all datasets from the mixture (in order as they appear)
 DATASETS=(
-    "kuka"
+    # "kuka"
     # "droid"
     "cmu_stretch"
     # "fmb"
-    "dobbe"
+    # "dobbe"
     "berkeley_autolab_ur5"
     # "bridge_v2_oxe"
     "taco_play"
     "jaco_play"
-    "fractal20220817_data"
+    # "fractal20220817_data"
     # "furniture_bench_dataset_converted_externally_to_rlds"
     # "utaustin_mutex"
     # "berkeley_fanuc_manipulation"
-
     "bc_z"
-
     # "dlr_edan_shared_control_converted_externally_to_rlds"
     # "roboturk"
     # "austin_buds_dataset_converted_externally_to_rlds"
