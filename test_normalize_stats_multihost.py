@@ -374,12 +374,206 @@ def test_float32_precision_limit():
         print()
 
 
+def test_constant_dimensions():
+    """Test with some dimensions being truly constant (common in real datasets)."""
+    if process_id == 0:
+        print("Test 6: Constant dimensions (gripper always closed, joint stuck, etc.)")
+
+    np.random.seed(400 + process_id)
+
+    # Generate data where some dimensions are constant
+    local_n = 1000
+    local_data = np.random.randn(local_n, 7).astype(np.float32) * 0.1 + 5.0
+
+    # Make dimensions 2, 4, 6 EXACTLY constant across all processes
+    local_data[:, 2] = 100.0  # Constant at 100.0
+    local_data[:, 4] = 0.0    # Constant at 0.0
+    local_data[:, 6] = -50.5  # Constant at -50.5
+
+    # Compute statistics
+    local_min = local_data.min(axis=0)
+    local_max = local_data.max(axis=0)
+
+    global_min = _gather_and_reduce(local_min, "min")
+    global_max = _gather_and_reduce(local_max, "max")
+    shift = (global_min + global_max) / 2.0
+
+    shifted_data = local_data - shift
+    local_sum = shifted_data.sum(axis=0)
+    local_sumsq = np.square(shifted_data).sum(axis=0)
+    local_n_arr = np.array(local_n, dtype=np.int64)
+
+    global_sum = _gather_and_reduce(local_sum, "sum")
+    global_sumsq = _gather_and_reduce(local_sumsq, "sum")
+    global_n = int(_gather_and_reduce(local_n_arr, "sum"))
+
+    shifted_mean = global_sum / global_n
+    final_mean = shift + shifted_mean
+    final_var = global_sumsq / global_n - np.square(shifted_mean)
+    final_std = np.sqrt(np.maximum(final_var, 0.0))
+
+    if process_id == 0:
+        print(f"  Total samples: {global_n}")
+        print(f"  Dimensions 2, 4, 6 are constant (should have std=0)")
+        print()
+        print(f"  Mean: {final_mean}")
+        print(f"  Std:  {final_std}")
+        print()
+
+        # Check which dimensions have std=0
+        zero_dims = np.where(final_std == 0)[0]
+        expected_zero_dims = {2, 4, 6}
+
+        if set(zero_dims) == expected_zero_dims:
+            print(f"  ✅ CORRECT: Dims {zero_dims} have std=0 (as expected for constant data)")
+        elif len(zero_dims) > len(expected_zero_dims):
+            unexpected = set(zero_dims) - expected_zero_dims
+            print(f"  ❌ FAILED: Dims {list(unexpected)} have std=0 but should vary!")
+            print(f"      This would be the BUG!")
+        else:
+            missing = expected_zero_dims - set(zero_dims)
+            print(f"  ⚠️  Dims {list(missing)} should be constant but have std > 0")
+
+        # Show varying dimensions
+        varying_dims = [i for i in range(7) if i not in expected_zero_dims]
+        print(f"  Varying dims {varying_dims} std: {final_std[varying_dims]}")
+        print()
+
+
+def test_quantized_values():
+    """Test with quantized/integer-like values (e.g., sensor readings 0-255)."""
+    if process_id == 0:
+        print("Test 7: Quantized values (integer sensor readings cast to float32)")
+        print("  Simulating values that look like: 123.0, 124.0, 125.0 (no decimals)")
+
+    np.random.seed(500 + process_id)
+
+    # Generate quantized data: integers cast to float32
+    local_n = 1000
+    # Integers between 100-200, then cast to float32
+    local_data = np.random.randint(100, 200, size=(local_n, 7)).astype(np.float32)
+
+    # Add one dimension that's almost constant (varies by only 1-2 integers)
+    local_data[:, 3] = np.random.choice([150.0, 151.0], size=local_n).astype(np.float32)
+
+    # Compute statistics
+    local_min = local_data.min(axis=0)
+    local_max = local_data.max(axis=0)
+
+    global_min = _gather_and_reduce(local_min, "min")
+    global_max = _gather_and_reduce(local_max, "max")
+    shift = (global_min + global_max) / 2.0
+
+    shifted_data = local_data - shift
+    local_sum = shifted_data.sum(axis=0)
+    local_sumsq = np.square(shifted_data).sum(axis=0)
+    local_n_arr = np.array(local_n, dtype=np.int64)
+
+    global_sum = _gather_and_reduce(local_sum, "sum")
+    global_sumsq = _gather_and_reduce(local_sumsq, "sum")
+    global_n = int(_gather_and_reduce(local_n_arr, "sum"))
+
+    shifted_mean = global_sum / global_n
+    final_mean = shift + shifted_mean
+    final_var = global_sumsq / global_n - np.square(shifted_mean)
+    final_std = np.sqrt(np.maximum(final_var, 0.0))
+
+    if process_id == 0:
+        print(f"  Total samples: {global_n}")
+        print(f"  Data dtype: {local_data.dtype}")
+        print(f"  Value range: [{global_min.min():.1f}, {global_max.max():.1f}]")
+        print()
+        print(f"  Mean: {final_mean}")
+        print(f"  Std:  {final_std}")
+        print()
+
+        has_zero = (final_std == 0).any()
+        if has_zero:
+            zero_dims = np.where(final_std == 0)[0]
+            print(f"  ⚠️  Dims {zero_dims} have std=0")
+            print(f"      Check if these dimensions are truly constant in your dataset!")
+        else:
+            print(f"  ✅ All dims have std > 0")
+            print(f"      Std range: [{final_std.min():.2e}, {final_std.max():.2e}]")
+        print()
+
+
+def test_nearly_constant_float32():
+    """Test the edge case: values that vary slightly but round to same float32."""
+    if process_id == 0:
+        print("Test 8: Nearly-constant values with float32 rounding")
+        print("  Values that differ by less than float32 epsilon")
+
+    np.random.seed(600 + process_id)
+
+    # Generate values that are "constant + tiny noise"
+    # Float32 has ~7 decimal digits of precision
+    # So at magnitude 1000, smallest representable difference is ~1e-4
+    base_value = 1000.0
+    local_n = 1000
+
+    # Generate in float64, then cast to float32
+    local_data_f64 = np.ones((local_n, 7)) * base_value
+    # Add noise that's below float32 resolution
+    local_data_f64 += np.random.randn(local_n, 7) * 1e-5  # 10x smaller than float32 epsilon at this magnitude
+
+    local_data = local_data_f64.astype(np.float32)
+
+    # Check how many unique values we have after float32 conversion
+    unique_counts = [len(np.unique(local_data[:, i])) for i in range(7)]
+
+    # Compute statistics
+    local_min = local_data.min(axis=0)
+    local_max = local_data.max(axis=0)
+
+    global_min = _gather_and_reduce(local_min, "min")
+    global_max = _gather_and_reduce(local_max, "max")
+    shift = (global_min + global_max) / 2.0
+
+    shifted_data = local_data - shift
+    local_sum = shifted_data.sum(axis=0)
+    local_sumsq = np.square(shifted_data).sum(axis=0)
+    local_n_arr = np.array(local_n, dtype=np.int64)
+
+    global_sum = _gather_and_reduce(local_sum, "sum")
+    global_sumsq = _gather_and_reduce(local_sumsq, "sum")
+    global_n = int(_gather_and_reduce(local_n_arr, "sum"))
+
+    shifted_mean = global_sum / global_n
+    final_mean = shift + shifted_mean
+    final_var = global_sumsq / global_n - np.square(shifted_mean)
+    final_std = np.sqrt(np.maximum(final_var, 0.0))
+
+    if process_id == 0:
+        print(f"  Total samples: {global_n}")
+        print(f"  Base value: {base_value}, noise: ±1e-5")
+        print(f"  Unique values per dim after float32: {unique_counts}")
+        print()
+        print(f"  Mean: {final_mean}")
+        print(f"  Std:  {final_std}")
+        print()
+
+        has_zero = (final_std == 0).any()
+        if has_zero:
+            zero_dims = np.where(final_std == 0)[0]
+            print(f"  ❌ FAILURE: Dims {zero_dims} have std=0 due to float32 rounding!")
+            print(f"      These dimensions collapsed to constant after float32 conversion")
+            print(f"      This is the ACTUAL BUG you're seeing!")
+        else:
+            print(f"  ✅ All dims have std > 0")
+            print(f"      Std range: [{final_std.min():.2e}, {final_std.max():.2e}]")
+        print()
+
+
 if __name__ == "__main__":
     test_basic_gathering()
     test_statistics_old_vs_new()
     test_extreme_case()
     test_realistic_dataset_pattern()
     test_float32_precision_limit()
+    test_constant_dimensions()
+    test_quantized_values()
+    test_nearly_constant_float32()
 
     if process_id == 0:
         print("=" * 80)
