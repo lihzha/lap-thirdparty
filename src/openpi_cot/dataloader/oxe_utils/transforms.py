@@ -500,7 +500,7 @@ def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[s
         (
             trajectory["observation"]["state"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
-            invert_gripper_actions((trajectory["observation"]["state"][:, -1:] + 0.388716) / 0.6),
+            invert_gripper_actions(trajectory["observation"]["state"][:, -1:]),
         ),
         axis=-1,
     )

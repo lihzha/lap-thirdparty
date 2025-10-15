@@ -49,7 +49,7 @@ for DATASET in "${DATASETS[@]}"; do
     echo "Started at: $(date)" | tee -a "$LOG_FILE"
 
     # Run the gripper analysis command
-    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout main && git pull origin main && uv run --group tpu scripts/vis_gripper_distribution.py pi_combined_cot_v4 --exp-name=gripper_dist_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=400 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --model.prompt-format=schema_compact --data.vis-dataset" 2>&1 | tee -a "$LOG_FILE"
+    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout main && git pull origin main && uv run --group tpu scripts/vis_gripper_distribution.py pi_combined_cot_v4 --exp-name=gripper_dist_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=40000 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --model.prompt-format=schema_compact --data.vis-dataset" 2>&1 | tee -a "$LOG_FILE"
 
     EXIT_CODE=${PIPESTATUS[0]}
 
