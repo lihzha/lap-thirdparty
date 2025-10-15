@@ -825,34 +825,29 @@ def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, A
 
     trajectory["observation"]["state"] = tf.concat(
         (
-            trajectory["observation"]["state"][:, :7],
+            trajectory["observation"]["state"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
             invert_gripper_actions(trajectory["observation"]["state"][:, -1:]),
         ),
         axis=-1,
     )
 
     # invert gripper action + clip, +1 = open, 0 = close
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"][:, :3],
-            tft.euler.from_quaternion(trajectory["action"][:, 3:7]),
-            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
-        ),
-        axis=-1,
-    )
-
     movement_actions = tf.concat(
         (
             trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
             euler_diff(
-                tft.euler.from_quaternion(trajectory["observation"]["state"][1:, 3:7]),
-                tft.euler.from_quaternion(trajectory["observation"]["state"][:-1, 3:7]),
+                trajectory["observation"]["state"][1:, 3:6],
+                trajectory["observation"]["state"][:-1, 3:6],
             ),
         ),
         axis=-1,
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    traj_truncated["action"] = tf.concat(
+        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:-1, -1:], 0, 1))],
+        axis=1,
+    )
 
     return traj_truncated
 
