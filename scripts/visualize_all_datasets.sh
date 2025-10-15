@@ -25,8 +25,8 @@ DATASETS=(
     "austin_sailor_dataset_converted_externally_to_rlds"
     "austin_sirius_dataset_converted_externally_to_rlds"
     "viola"
-    "agibot_dataset"
-    "sample_r1_lite"
+    # "agibot_dataset"
+    # "sample_r1_lite"
 )
 
 # Log file for tracking progress
