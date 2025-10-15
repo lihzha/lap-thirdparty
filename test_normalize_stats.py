@@ -1,10 +1,11 @@
 """Test script to validate normalize_adapter statistics computation."""
 
 import jax
-from jax.experimental import multihost_utils as mh
-import numpy as np
 
 jax.distributed.initialize()
+
+from jax.experimental import multihost_utils as mh
+import numpy as np
 
 
 def test_gather_and_reduce():
