@@ -1126,10 +1126,9 @@ class DroidCoTDataset(SingleCoTDataset):
         self.use_json_actions = config.use_json_actions
 
         if num_parallel_calls == -1 or num_parallel_reads == -1:
-            want_val = split == "val"
             total_threads = len(os.sched_getaffinity(0))
-            num_parallel_reads = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
-            num_parallel_calls = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
+            num_parallel_reads = int(total_threads * 0.3)
+            num_parallel_calls = int(total_threads * 0.3)
 
         if hash_tables is not None:
             self.cam_table = hash_tables.get("cam_table")
@@ -1575,8 +1574,8 @@ class OXECoTDatasets:
             )
 
         total_threads = len(os.sched_getaffinity(0))
-        total_read_threads = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
-        total_transform_threads = int(total_threads * 0.3) if not want_val else int(total_threads * 0.1)
+        total_read_threads = int(total_threads * 0.3)
+        total_transform_threads = int(total_threads * 0.3)
 
         # Allocate Threads based on Weights
         threads_per_dataset = allocate_threads(total_transform_threads, np.array(sample_weights))
