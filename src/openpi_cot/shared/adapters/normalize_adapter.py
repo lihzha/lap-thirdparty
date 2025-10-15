@@ -6,6 +6,7 @@ import dlimp as dl
 import jax
 from jax.experimental import multihost_utils as mh
 import numpy as np
+import numpydantic
 from openpi.shared import normalize as _normalize
 import pydantic
 import tensorflow as tf
@@ -16,8 +17,8 @@ from tqdm_loggable.auto import tqdm
 class ExtendedNormStats(_normalize.NormStats):
     num_transitions: int | None = None
     num_trajectories: int | None = None
-    min: np.ndarray | None = None  # Global minimum across all samples
-    max: np.ndarray | None = None  # Global maximum across all samples
+    min: numpydantic.NDArray | None = None  # Global minimum across all samples
+    max: numpydantic.NDArray | None = None  # Global maximum across all samples
 
 
 class _NormStatsDict(pydantic.BaseModel):
