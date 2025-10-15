@@ -4,6 +4,8 @@ import jax
 from jax.experimental import multihost_utils as mh
 import numpy as np
 
+jax.distributed.initialize()
+
 
 def test_gather_and_reduce():
     """Test the _gather_and_reduce function logic."""
