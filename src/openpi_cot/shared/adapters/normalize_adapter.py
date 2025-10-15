@@ -124,6 +124,13 @@ def get_dataset_statistics(
         mask = np.isfinite(proprios).all(axis=1)
         proprios = proprios[mask]
 
+    # Promote to float64 for numerical stability in variance calculation
+    # Float32 precision can cause std=0 for dimensions with tiny relative variation
+    # even when using shifted statistics (e.g., joint at 1000.0 varying by 0.001)
+    actions = actions.astype(np.float64)
+    if has_state:
+        proprios = proprios.astype(np.float64)
+
     # ------------------------------------------------------------
     # Multi-host aggregation: compute exact global mean/std and counts
     # Using numerically stable variance calculation (Welford/Chan algorithm)
@@ -248,10 +255,10 @@ def get_dataset_statistics(
         s_q01 = _distributed_quantiles(proprios, s_min, s_max, 0.01)
         s_q99 = _distributed_quantiles(proprios, s_min, s_max, 0.99)
         state_norm_stats = ExtendedNormStats(
-            mean=np.asarray(s_mean),
-            std=np.asarray(s_std),
-            q01=np.asarray(s_q01),
-            q99=np.asarray(s_q99),
+            mean=np.asarray(s_mean, dtype=np.float32),
+            std=np.asarray(s_std, dtype=np.float32),
+            q01=np.asarray(s_q01, dtype=np.float32),
+            q99=np.asarray(s_q99, dtype=np.float32),
             num_transitions=int(s_n),
             num_trajectories=int(traj_n),
         )
@@ -266,13 +273,14 @@ def get_dataset_statistics(
             num_trajectories=int(traj_n),
         )
 
+    # Cast back to float32 for storage efficiency (computed in float64 for precision)
     norm_stats = {
         "state": state_norm_stats,
         "actions": ExtendedNormStats(
-            mean=np.asarray(a_mean),
-            std=np.asarray(a_std),
-            q01=np.asarray(a_q01),
-            q99=np.asarray(a_q99),
+            mean=np.asarray(a_mean, dtype=np.float32),
+            std=np.asarray(a_std, dtype=np.float32),
+            q01=np.asarray(a_q01, dtype=np.float32),
+            q99=np.asarray(a_q99, dtype=np.float32),
             num_transitions=int(a_n),
             num_trajectories=int(traj_n),
         ),
