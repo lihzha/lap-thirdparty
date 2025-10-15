@@ -119,7 +119,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
         ### Bimanual
         # ("agibot_dataset", 0.2),
-        ("sample_r1_lite", 1.0),
+        # ("sample_r1_lite", 1.0),
         ### TBD
         # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),  # only joint state, 520 trajs. action scale is 300.
         # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # only joint state. action scale is 100000.
