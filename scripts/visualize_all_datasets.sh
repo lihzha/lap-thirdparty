@@ -48,7 +48,7 @@ for DATASET in "${DATASETS[@]}"; do
     echo "Started at: $(date)" | tee -a "$LOG_FILE"
 
     # Run the visualization command
-    tpu v6 "source ~/.zshrc && cd openpi-cot && git checkout main && git pull origin main && uv run --group tpu scripts/vis_oxe_dataset.py pi_combined_cot_v6 --exp-name=vis_dataset_${DATASET} --fsdp-devices=64 --batch-size=128 --data.shuffle-buffer-size=4000 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --model.prompt-format=schema_compact" 2>&1 | tee -a "$LOG_FILE"
+    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout main && git pull origin main && uv run --group tpu scripts/vis_oxe_dataset.py pi_combined_cot_v4 --exp-name=vis_dataset_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=4000 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --model.prompt-format=schema_compact" 2>&1 | tee -a "$LOG_FILE"
 
     EXIT_CODE=${PIPESTATUS[0]}
 
