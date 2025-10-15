@@ -312,9 +312,7 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # trajectory["observation"]["state_gripper"] = (
     #     (trajectory["observation"]["robot_obs"][:, 6:7] + 1) / 2 - 0.459656
     # ) / (0.5 - 0.459656)
-    trajectory["observation"]["state_gripper"] = (
-        12.3903 * (trajectory["observation"]["robot_obs"][:, 6:7] + 1) - 11.3924
-    )
+    trajectory["observation"]["state_gripper"] = 12.3903 * trajectory["observation"]["robot_obs"][:, 6:7]
     # trajectory["observation"]["state_gripper"] = trajectory["observation"]["robot_obs"][:, 7:8]
     trajectory["action"] = trajectory["action"]["rel_actions_world"]
 
@@ -353,8 +351,8 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     gripper_action = rel2abs_gripper_actions(gripper_action)
 
     trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
-    # trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
-    trajectory["observation"]["state_gripper"] = gripper_action[:, None]
+    trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:] * 4.33
+    # trajectory["observation"]["state_gripper"] = gripper_action[:, None]
 
     trajectory["action"] = tf.concat(
         (
