@@ -125,8 +125,10 @@ def get_dataset_statistics(
         proprios = proprios[mask]
 
     # Promote to float64 for numerical stability in variance calculation
-    # Float32 precision can cause std=0 for dimensions with tiny relative variation
-    # even when using shifted statistics (e.g., joint at 1000.0 varying by 0.001)
+    # Float32 accumulation errors over millions of samples can cause variance to become
+    # slightly negative (violating E[X^2] >= E[X]^2), which gets clamped to 0.
+    # This produces std=0 even for dimensions with significant variation.
+    # Example: 27M samples with range [0.27, 0.78] had std=0 in float32 but std=0.15 in float64
     actions = actions.astype(np.float64)
     if has_state:
         proprios = proprios.astype(np.float64)
@@ -203,12 +205,30 @@ def get_dataset_statistics(
     a_shifted_mean = a_sum / max(a_n, 1)
     a_mean = a_shift + a_shifted_mean
     a_var = a_sumsq / max(a_n, 1) - np.square(a_shifted_mean)
+
+    # Check for negative variance (indicates numerical instability)
+    if (a_var < 0).any():
+        neg_dims = np.where(a_var < 0)[0]
+        logging.warning(
+            f"Action dims {neg_dims.tolist()} have negative variance {a_var[neg_dims].tolist()}, "
+            f"clamping to 0. This indicates numerical instability - consider float64 promotion."
+        )
+
     a_std = np.sqrt(np.maximum(a_var, 0.0))
 
     if has_state:
         s_shifted_mean = s_sum / max(s_n, 1)
         s_mean = s_shift + s_shifted_mean
         s_var = s_sumsq / max(s_n, 1) - np.square(s_shifted_mean)
+
+        # Check for negative variance (indicates numerical instability)
+        if (s_var < 0).any():
+            neg_dims = np.where(s_var < 0)[0]
+            logging.warning(
+                f"State dims {neg_dims.tolist()} have negative variance {s_var[neg_dims].tolist()}, "
+                f"clamping to 0. This indicates numerical instability - consider float64 promotion."
+            )
+
         s_std = np.sqrt(np.maximum(s_var, 0.0))
 
     # ------------------------------------------------------------
