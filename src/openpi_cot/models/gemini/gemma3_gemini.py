@@ -68,11 +68,16 @@ class AdaRMSNorm(nn.Module):
         return output.astype(dtype), gate
 
 
+# --- THIS IS THE FIX ---
 def _gated_residual(x, y, gate):
-    """Applies a residual connection, gated if a gate is provided."""
+    """Applies a residual connection, gracefully handling None for inactive experts."""
+    if x is None:
+        # If the input is None, the output must also be None.
+        return None
     if gate is None:
         return x + y  # Standard residual connection
     return x + y * gate # Gated residual for the action expert
+# --- End of Fix ---
 
 
 # --- Step 2: MoE-Aware Attention (Largely Unchanged) ---
@@ -98,6 +103,7 @@ class Gemma3MoEAttention(nn.Module):
             return [None] * len(xs), kv_cache
 
         lengths = [x.shape[1] for x in active_tensors]
+        #print(f"Active tensors lengths: {lengths}")
         x_concat = jnp.concatenate(active_tensors, axis=1)
         
         cfg = self.config
@@ -111,9 +117,13 @@ class Gemma3MoEAttention(nn.Module):
         
         q, k, v = jnp.split(qkv, [cfg.num_heads * cfg.head_dim, (cfg.num_heads + cfg.num_kv_heads) * cfg.head_dim], axis=-1)
 
+        #print(f"Before einops rearrange: q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
+
         q = einops.rearrange(q, "b t (n h) -> b t n h", n=cfg.num_heads, h=cfg.head_dim)
         k = einops.rearrange(k, "b s (k h) -> b s k h", k=cfg.num_kv_heads, h=cfg.head_dim)
         v = einops.rearrange(v, "b s (k h) -> b s k h", k=cfg.num_kv_heads, h=cfg.head_dim)
+
+        #print(f"After einops rearrange: q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
         
         # --- THIS IS THE FIX ---
         # Call the function from the correct module: `gemma_layers`
@@ -129,6 +139,8 @@ class Gemma3MoEAttention(nn.Module):
             positions,
             base_frequency=cfg.local_base_frequency, # Use a real value from config
         )
+
+        #print(f"After applying RoPE: q shape: {q.shape}, k shape: {k.shape}")
         
         if kv_cache is not None:
             cache_k, cache_v = kv_cache
@@ -137,6 +149,8 @@ class Gemma3MoEAttention(nn.Module):
         
         num_q_per_kv = cfg.num_heads // cfg.num_kv_heads
         q_grouped = einops.rearrange(q, "b t (k g) h -> b t k g h", k=cfg.num_kv_heads, g=num_q_per_kv)
+
+        #print(f"After grouping: q_grouped shape: {q_grouped.shape}, k shape: {k.shape}, v shape: {v.shape}")
 
         logits = jnp.einsum("btkgh,bskh->bkgts", q_grouped, k, preferred_element_type=jnp.float32)
         
@@ -148,14 +162,23 @@ class Gemma3MoEAttention(nn.Module):
         # --- THIS IS THE BROADCASTING FIX ---
         # The mask [B, 1, Q, K] needs to be broadcastable to logits [B, K_heads, G, Q, K]
         # We add the missing G dimension.
+        #print(f"attn_mask shape: {attn_mask.shape}, logits shape: {logits.shape}")
         final_mask = attn_mask[:, :, None, :, :] # Shape [B, 1, 1, Q, K]
+        #print(f"Final mask shape after adding G dim: {final_mask.shape}")
         masked_logits = jnp.where(final_mask, logits, gemma_modules.K_MASK)
+
+        #print(f"Masked logits shape: {masked_logits.shape}")
         
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(x_concat.dtype)
         encoded_grouped = jnp.einsum("bkgts,bskh->btkgh", probs, v)
+
+        #print(f"Encoded grouped shape: {encoded_grouped.shape}")
+
         encoded = einops.rearrange(encoded_grouped, "b t k g h -> b t (k g h)")
+        #print(f"Encoded shape: {encoded.shape}")
         out_proj = nn.Dense(features=cfg.embed_dim, use_bias=False, name="out_proj")
         final_output = out_proj(encoded)
+        #print(f"Final output shape before split: {final_output.shape}")
         split_outputs = lax.split(final_output, lengths, axis=1) if lengths else []
         outputs = []
         output_idx = 0
@@ -166,94 +189,7 @@ class Gemma3MoEAttention(nn.Module):
             else: outputs.append(None)
         return outputs, (k, v)
         
-        # masked_logits = jnp.where(attn_mask, logits, gemma_modules.K_MASK)
         
-        # probs = jax.nn.softmax(masked_logits, axis=-1).astype(x_concat.dtype)
-        
-        # encoded_grouped = jnp.einsum("bkgts,bskh->btkgh", probs, v)
-        # # --- THIS IS THE FIX ---
-        # # 1. Rearrange the output to combine the head dimensions back into one.
-        # # Shape goes from [B, T, K, G, H] -> [B, T, (K*G*H)] which is [B, T, D_model]
-        # encoded = einops.rearrange(encoded_grouped, "b t k g h -> b t (k g h)")
-        
-        # # 2. Apply the final dense projection to the correctly shaped 3D tensor.
-        # out_proj = nn.Dense(features=cfg.embed_dim, use_bias=False, name="out_proj")
-        # final_output = out_proj(encoded)
-        # # --- End of Fix ---
-        
-        # split_outputs = lax.split(final_output, lengths, axis=1) if lengths else []
-        # outputs = []
-        # output_idx = 0
-        # for x in xs:
-        #     if x is not None:
-        #         outputs.append(split_outputs[output_idx])
-        #         output_idx += 1
-        #     else:
-        #         outputs.append(None)
-                
-        # return outputs, (k, v)
-    
-
-
-
-
-
-
-
-
-
-        # active_tensors = [x for x in xs if x is not None]
-        # if not active_tensors:
-        #     return [None] * len(xs), kv_cache
-
-        # lengths = [x.shape[1] for x in active_tensors]
-        # concatenated_x = jnp.concatenate(active_tensors, axis=1)
-
-        # # We assume the shared attention layer uses the config of the first expert.
-        # attn_type = self.config.attention_types[0]
-        # rope_base_frequency = (
-        #     self.config.local_base_frequency
-        #     if attn_type == gemma_modules.AttentionType.LOCAL_SLIDING
-        #     else self.config.global_base_frequency
-        # )
-        
-        # # Instantiate the shared Gemma 3 Attention module.
-        # shared_attention_layer = gemma_modules.Attention(
-        #     num_heads=self.config.num_heads,
-        #     num_kv_heads=self.config.num_kv_heads,
-        #     features=self.config.embed_dim,
-        #     head_dim=self.config.head_dim,
-        #     attn_type=attn_type,
-        #     query_pre_attn_scalar=self.config.query_pre_attn_scalar(),
-        #     sliding_window_size=self.config.sliding_window_size,
-        #     attn_logits_soft_cap=self.config.attn_logits_soft_cap,
-        #     use_qk_norm=self.config.use_qk_norm,
-        #     rope_base_frequency=rope_base_frequency,
-        #     name="shared_gemma3_attention"
-        # )
-
-        # print(f"DEBUG: concatenated_x shape: {concatenated_x.shape}")
-        # print(f"DEBUG: positions shape: {positions.shape}")
-        # print(f"DEBUG: attn_mask shape: {attn_mask.shape}")
-        # new_kv_cache, encoded = shared_attention_layer(
-        #     x=concatenated_x,
-        #     segment_pos=positions,
-        #     cache=kv_cache,
-        #     attn_mask=attn_mask,
-        # )
-
-        # # Split the outputs back to match the input sequence.
-        # split_outputs = lax.split(encoded, lengths, axis=1) if lengths else []
-        # outputs = []
-        # output_idx = 0
-        # for x in xs:
-        #     if x is not None:
-        #         outputs.append(split_outputs[output_idx])
-        #         output_idx += 1
-        #     else:
-        #         outputs.append(None)
-                
-        # return outputs, new_kv_cache
 
 
 # --- Step 3: MoE-Aware Transformer Block with AdaRMSNorm ---
@@ -361,20 +297,30 @@ class Gemma3MoEModel(nn.Module):
             AdaRMSNorm(name=f"final_norm_{i}") for i in range(self.num_experts)
         ]
     
-    # --- ADD THIS NEW METHOD ---
+    # --- THIS IS THE FINAL INITIALIZATION FIX ---
     def init_all(self, dummy_images, dummy_tokens, dummy_embedded_inputs, dummy_positions, dummy_mask, dummy_adarms_cond):
         """
-        A special method that calls all components of the model to ensure
-        they are all included in a single, unified initialization state.
+        A special method that calls all components of the model, including all
+        conditional paths, to ensure complete state initialization.
         """
+        # --- Trace Path 1: With AdaRMS conditioning (for pi05=True) ---
+        # This initializes the `modulation_dense` layers.
         _ = self.embed_prefix(images=dummy_images, tokens=dummy_tokens)
-        
-        # Pass the dummy adarms_cond to trace the conditional layers
         _ = self.__call__(
             embedded_inputs=dummy_embedded_inputs,
             positions=dummy_positions,
             mask=dummy_mask,
-            adarms_cond=dummy_adarms_cond,
+            adarms_cond=dummy_adarms_cond, # [None, dummy_tensor]
+        )
+
+        # --- Trace Path 2: Without AdaRMS conditioning (for pi05=False) ---
+        # This initializes the `scale` parameters in the RMSNorm layers.
+        # We don't need to re-trace the embedder.
+        _ = self.__call__(
+            embedded_inputs=dummy_embedded_inputs,
+            positions=dummy_positions,
+            mask=dummy_mask,
+            adarms_cond=[None, None], # Use None for all experts
         )
 
     def embed_prefix(

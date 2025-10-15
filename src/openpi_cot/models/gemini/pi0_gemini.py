@@ -246,17 +246,19 @@ class Pi0Gemma3(_model.BaseModel):
             method="embed_prefix"  # Tell the wrapper which method to run
         )
         # Check shape of prefix_embedded
-        print(f"DEBUG: prefix_embedded shape: {prefix_embedded.shape}")
+        #print(f"DEBUG: prefix_embedded shape: {prefix_embedded.shape}")
         
         prefix_mask = jnp.ones(prefix_embedded.shape[:2], dtype=bool)
         prefix_ar_mask = jnp.zeros(prefix_mask.shape[1], dtype=bool)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
+        prefix_attn_mask = prefix_attn_mask[:, None, :, :] # Add the head dimension
         prefix_positions = jnp.arange(prefix_embedded.shape[1])
         _, kv_cache = self.Gemma3(
             embedded_inputs=[prefix_embedded, None],
             positions=prefix_positions,
             mask=prefix_attn_mask,
         )
+        
         def step_fn(carry):
             x_t, time = carry
             # (embedding creation is correct)
@@ -268,46 +270,37 @@ class Pi0Gemma3(_model.BaseModel):
             # Create correctly shaped mask for the suffix attending to the prefix + suffix.
             suffix_mask = jnp.ones(suffix_embedded.shape[:2], dtype=bool)
             full_input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
-            # (ar_mask logic is correct)
+            
+            # The AR mask should cover the full sequence.
             ar_mask_suffix = [True] * suffix_mask.shape[1]
-            ar_mask = jnp.array(list(prefix_ar_mask) + ar_mask_suffix)
+            if not self.config.pi05:
+                ar_mask_suffix[0] = False
+            full_ar_mask = jnp.array(list(prefix_ar_mask) + ar_mask_suffix)
             
-            full_attn_mask_3d = make_attn_mask(full_input_mask, ar_mask)
+            # Create a full square mask first.
+            full_attn_mask_3d_square = make_attn_mask(full_input_mask, full_ar_mask)
+
+            # Now, slice out only the rows corresponding to the suffix queries.
+            # This creates the correct [B, Suffix_Len, Full_Len] shape.
+            asymmetric_attn_mask_3d = full_attn_mask_3d_square[:, prefix_mask.shape[1]:, :]
             
-            # Add the necessary dimensions.
-            final_full_attn_mask = full_attn_mask_3d[:, None, :, :] # Shape [B, 1, Suffix_L, Full_L]
+            # Add the head dimension.
+            final_attn_mask = asymmetric_attn_mask_3d[:, None, :, :]
+            # --- End of Fix ---
             
-            # For sampling, we only care about the positions of the new tokens (the suffix).
-            final_suffix_positions = prefix_embedded.shape[1] + jnp.arange(suffix_embedded.shape[1])
-            final_suffix_positions = einops.repeat(final_suffix_positions, "l -> b l", b=batch_size)
+            suffix_positions_1d = prefix_embedded.shape[1] + jnp.arange(suffix_embedded.shape[1])
+            suffix_positions = einops.repeat(suffix_positions_1d, "l -> b l", b=batch_size)
             
             # --- End of Fix ---
 
             _, suffix_out = self.Gemma3(
                 embedded_inputs=[None, suffix_embedded],
-                positions=final_suffix_positions, # Pass correctly shaped positions
-                mask=final_full_attn_mask,      # Pass correctly shaped mask
+                positions=suffix_positions,
+                mask=final_attn_mask,
                 adarms_cond=[None, adarms_cond],
                 kv_cache=kv_cache,
             )[0]
-            # x_t, time = carry
-            # suffix_embedded, adarms_cond = self._prepare_suffix_embeddings(x_t, jnp.full(batch_size, time))
-            # if not self.config.pi05:
-            #     state_token = self.state_proj(observation.state)[:, None, :]
-            #     suffix_embedded = jnp.concatenate([state_token, suffix_embedded], axis=1)
-            # suffix_mask = jnp.ones(suffix_embedded.shape[:2], dtype=bool)
-            # full_input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
-            # ar_mask_suffix = [True] * suffix_mask.shape[1]
-            # ar_mask = jnp.array(list(prefix_ar_mask) + ar_mask_suffix)
-            # full_attn_mask = make_attn_mask(full_input_mask, ar_mask)
-            # suffix_positions = prefix_embedded.shape[1] + jnp.arange(suffix_embedded.shape[1])
-            # _, suffix_out = self.Gemma3(
-            #     embedded_inputs=[None, suffix_embedded],
-            #     positions=suffix_positions,
-            #     mask=full_attn_mask,
-            #     adarms_cond=[None, adarms_cond],
-            #     kv_cache=kv_cache,
-            # )[0]
+            
             v_t = self.action_out_proj(suffix_out)
             if not self.config.pi05:
                 v_t = v_t[:, 1:, :]
