@@ -222,25 +222,21 @@ class TestLanguageActionDecoding:
         assert grippers[0] == 1.0
 
     def test_compact_decoding_with_rotation(self):
-        """Test that compact decoding with rotation is not yet supported."""
-        # Create a custom schema that includes rotation flag
-        schema = ActionDecodingSchema(
-            name="compact_with_rotation",
-            style="compact",
-            include_rotation=True,
-            use_schema_format=True,
-        )
+        """Test parsing compact format with rotation."""
+        # Use the compact_with_rotation schema from the registry
+        from src.openpi_cot.policies.cot_policy import COMPACT_WITH_ROTATION_DECODING_SCHEMA
+
+        schema = COMPACT_WITH_ROTATION_DECODING_SCHEMA
 
         # Format with rotation values: <+09 +05 -08 +10 -05 +15 1>
         reasoning = "Action: <+09 +05 -08 +10 -05 +15 1>"
 
         translations, grippers = schema.parse_language_to_deltas(reasoning)
 
-        # Current limitation: The regex pattern only matches 4-value format (dx dy dz grip)
-        # When 7 values are present (with rotation), the pattern doesn't match and returns zeros
-        # This test documents the current limitation
-        np.testing.assert_allclose(translations[0], [0.0, 0.0, 0.0], atol=1e-6)
-        assert grippers[0] == 0.0
+        # Now it should correctly parse the translation values
+        # Note: Rotation values are parsed but not currently returned (translation only)
+        np.testing.assert_allclose(translations[0], [0.09, 0.05, -0.08], atol=1e-6)
+        assert grippers[0] == 1.0
 
     def test_multi_sentence_decoding(self):
         """Test parsing multiple action sentences."""
@@ -313,6 +309,33 @@ class TestRoundTripConsistency:
         translations, grippers = schema.parse_language_to_deltas(language)
 
         # Check exact match (compact format has integer cm precision)
+        np.testing.assert_array_equal(translations[0], original_action[:3])
+        assert grippers[0] == original_action[6]
+
+    def test_compact_roundtrip_with_rotation(self):
+        """Test compact format roundtrip with rotation."""
+        from src.openpi_cot.policies.cot_policy import COMPACT_WITH_ROTATION_DECODING_SCHEMA
+
+        # Action with rotation: dx=9cm, dy=5cm, dz=-8cm, roll=10°, pitch=-5°, yaw=15°, gripper=1
+        original_action = np.array([
+            0.09,
+            0.05,
+            -0.08,
+            10 * np.pi / 180,  # roll: +10°
+            -5 * np.pi / 180,  # pitch: -5°
+            15 * np.pi / 180,  # yaw: +15°
+            1.0,
+        ])
+
+        # Encode
+        language = summarize_numeric_actions(original_action, sum_decimal="compact", include_rotation=True)
+        assert language == "<+09 +05 -08 +10 -05 +15 1>"
+
+        # Decode
+        schema = COMPACT_WITH_ROTATION_DECODING_SCHEMA
+        translations, grippers = schema.parse_language_to_deltas(language)
+
+        # Check translation and gripper match
         np.testing.assert_array_equal(translations[0], original_action[:3])
         assert grippers[0] == original_action[6]
 

@@ -415,14 +415,29 @@ class ActionDecodingSchema:
         gripper_actions = np.zeros((num_steps,), dtype=float)
 
         if self.use_schema_format and self.style == "compact":
-            # Parse compact schema format: <+09 +09 -08 1>
-            pattern = re.compile(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>")
-            for i, sentence in enumerate(sentences):
-                match = pattern.search(sentence)
-                if match:
-                    dx, dy, dz, grip = match.groups()
-                    translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
-                    gripper_actions[i] = float(grip)
+            # Parse compact schema format
+            if self.include_rotation:
+                # Format with rotation: <+09 +09 -08 +10 -05 +15 1>
+                pattern = re.compile(
+                    r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>"
+                )
+                for i, sentence in enumerate(sentences):
+                    match = pattern.search(sentence)
+                    if match:
+                        dx, dy, dz, droll, dpitch, dyaw, grip = match.groups()
+                        translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
+                        gripper_actions[i] = float(grip)
+                        # Note: Rotation values are parsed but not currently returned
+                        # Could extend return type to include rotations if needed
+            else:
+                # Format without rotation: <+09 +09 -08 1>
+                pattern = re.compile(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>")
+                for i, sentence in enumerate(sentences):
+                    match = pattern.search(sentence)
+                    if match:
+                        dx, dy, dz, grip = match.groups()
+                        translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
+                        gripper_actions[i] = float(grip)
         else:
             # Parse verbose format: "move right X cm and move forward Y cm..."
             move_pattern = re.compile(
@@ -506,9 +521,18 @@ COMPACT_DECODING_SCHEMA = ActionDecodingSchema(
     use_schema_format=True,
 )
 
+COMPACT_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
+    name="compact_with_rotation",
+    style="compact",
+    include_rotation=True,
+    translation_unit="cm",
+    use_schema_format=True,
+)
+
 DECODING_SCHEMA_REGISTRY = {
     "verbose": VERBOSE_DECODING_SCHEMA,
     "compact": COMPACT_DECODING_SCHEMA,
+    "compact_with_rotation": COMPACT_WITH_ROTATION_DECODING_SCHEMA,
 }
 
 

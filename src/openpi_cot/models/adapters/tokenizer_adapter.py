@@ -197,6 +197,21 @@ SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     separator=". ",
 )
 
+SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact_with_rotation",
+    components=[
+        PromptComponent(
+            "schema",
+            "Schema: <dx dy dz dr dp dy g>; units cm/deg; +x fwd, +y left, +z up; dr=roll, dp=pitch, dy=yaw; g∈{0=close,1=open}",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=". ",
+)
+
 # Registry for easy lookup
 PROMPT_FORMAT_REGISTRY = {
     "pi05": PI05_PROMPT_FORMAT,
@@ -204,6 +219,7 @@ PROMPT_FORMAT_REGISTRY = {
     "vqa": VQA_PROMPT_FORMAT,
     "coordinate_system": COORDINATE_SYSTEM_PROMPT_FORMAT,
     "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
+    "schema_compact_with_rotation": SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT,
 }
 
 
@@ -211,7 +227,10 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def __init__(
         self,
         max_len: int = 48,
-        prompt_format: Literal["pi05", "pi0", "vqa", "coordinate_system", "schema_compact"] | PromptFormat = "pi05",
+        prompt_format: Literal[
+            "pi05", "pi0", "vqa", "coordinate_system", "schema_compact", "schema_compact_with_rotation"
+        ]
+        | PromptFormat = "pi05",
     ):
         super().__init__(max_len)
         self._stop_token_id = self._tokenizer.eos_id()
