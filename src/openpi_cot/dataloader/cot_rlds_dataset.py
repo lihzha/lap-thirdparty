@@ -1736,16 +1736,15 @@ class OXECoTDatasets:
         Note: The statistics are padded to action_dim to match the padded tensors.
         """
         from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
-        from openpi_cot.shared.adapters.normalize_adapter import load
         from openpi_cot.shared.adapters.normalize_adapter import save
 
-        # Try to load cached global stats
-        try:
-            global_stats = load(save_dir)
-            logging.info(f"Loaded cached global normalization stats from {save_dir}")
-            return global_stats
-        except FileNotFoundError:
-            logging.info("Computing global normalization statistics from scratch...")
+        # # Try to load cached global stats
+        # try:
+        #     global_stats = load(save_dir)
+        #     logging.info(f"Loaded cached global normalization stats from {save_dir}")
+        #     return global_stats
+        # except FileNotFoundError:
+        #     logging.info("Computing global normalization statistics from scratch...")
 
         # Group datasets by state type
         datasets_by_state_type = {"joint_pos": [], "eef_pose": [], "none": []}

@@ -307,6 +307,30 @@ def get_dataset_statistics(
     }
 
     if jax.process_index() == 0:
+        logging.info(f"Dataset statistics computed:")
+        logging.info(f"  Total transitions: {a_n}, trajectories: {traj_n}")
+        logging.info(f"  Actions ({len(a_mean)} dims):")
+        logging.info(f"    min: {a_min}")
+        logging.info(f"    max: {a_max}")
+        logging.info(f"    mean: {a_mean}")
+        logging.info(f"    std: {a_std}")
+
+        # Check for std=0 dimensions
+        zero_action_dims = np.where(a_std == 0)[0]
+        if len(zero_action_dims) > 0:
+            logging.warning(f"    ⚠️  {len(zero_action_dims)} action dims have std=0: {zero_action_dims.tolist()}")
+
+        if has_state and len(s_mean) > 0:
+            logging.info(f"  State ({len(s_mean)} dims):")
+            logging.info(f"    min: {s_min}")
+            logging.info(f"    max: {s_max}")
+            logging.info(f"    mean: {s_mean}")
+            logging.info(f"    std: {s_std}")
+
+            zero_state_dims = np.where(s_std == 0)[0]
+            if len(zero_state_dims) > 0:
+                logging.warning(f"    ⚠️  {len(zero_state_dims)} state dims have std=0: {zero_state_dims.tolist()}")
+
         print(f"Writing stats to: {output_dir}")
         save(output_dir, norm_stats)
 
