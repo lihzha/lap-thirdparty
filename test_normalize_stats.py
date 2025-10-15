@@ -1,11 +1,20 @@
 """Test script to validate normalize_adapter statistics computation."""
 
 import jax
+from jax.experimental import multihost_utils as mh
+import numpy as np
 
 jax.distributed.initialize()
 
-from jax.experimental import multihost_utils as mh
-import numpy as np
+# Print distributed setup info
+num_processes = jax.process_count()
+process_id = jax.process_index()
+print("JAX Distributed Setup:")
+print(f"  Total processes: {num_processes}")
+print(f"  Current process ID: {process_id}")
+print(f"  Local device count: {jax.local_device_count()}")
+print(f"  Global device count: {len(jax.devices())}")
+print()
 
 
 def test_gather_and_reduce():
@@ -14,7 +23,6 @@ def test_gather_and_reduce():
     def _gather_and_reduce(x: np.ndarray, op: str) -> np.ndarray:
         """Copied from normalize_adapter.py"""
         if getattr(jax, "process_count", lambda: 1)() == 1:
-            breakpoint()
             return x
         xs = mh.process_allgather(np.asarray(x), tiled=False)  # shape: [P, ...]
         xs = np.asarray(xs)
@@ -26,22 +34,40 @@ def test_gather_and_reduce():
             return xs.max(axis=0)
         raise ValueError(f"Unsupported op: {op}")
 
-    # Test 1: Scalar gathering
+    # Test 1: Scalar gathering across hosts
     print("Test 1: Scalar gathering")
-    scalar = np.array(5, dtype=np.int64)
-    result = _gather_and_reduce(scalar, "sum")
-    print(f"  Input scalar: {scalar}, shape: {scalar.shape}")
-    print(f"  Result: {result}, shape: {result.shape}")
-    print(f"  Expected: {scalar} (single process)")
+    # Each process contributes its process_id + 5
+    local_scalar = np.array(process_id + 5, dtype=np.int64)
+    result = _gather_and_reduce(local_scalar, "sum")
+    expected_sum = sum(range(5, 5 + num_processes))  # 5 + 6 + ... for each process
+
+    if process_id == 0:  # Only print from main process
+        print(f"  Input scalar (process {process_id}): {local_scalar}, shape: {local_scalar.shape}")
+        print(f"  Result after gather+sum: {result}, shape: {result.shape}")
+        if num_processes == 1:
+            print(f"  Expected: {local_scalar} (single process)")
+        else:
+            print(f"  Expected sum across {num_processes} hosts: {expected_sum}")
+            print(f"  Match: {result == expected_sum}")
     print()
 
-    # Test 2: 1D array gathering
+    # Test 2: 1D array gathering across hosts
     print("Test 2: 1D array gathering")
-    arr = np.array([1.0, 2.0, 3.0])
-    result = _gather_and_reduce(arr, "sum")
-    print(f"  Input array: {arr}, shape: {arr.shape}")
-    print(f"  Result: {result}, shape: {result.shape}")
-    print(f"  Expected: {arr} (single process)")
+    # Each process contributes different values
+    local_arr = np.array([1.0 + process_id, 2.0 + process_id, 3.0 + process_id])
+    result_sum = _gather_and_reduce(local_arr, "sum")
+    result_min = _gather_and_reduce(local_arr, "min")
+    result_max = _gather_and_reduce(local_arr, "max")
+
+    if process_id == 0:
+        print(f"  Input array (process {process_id}): {local_arr}, shape: {local_arr.shape}")
+        print(f"  Result (sum): {result_sum}")
+        print(f"  Result (min): {result_min}")
+        print(f"  Result (max): {result_max}")
+        if num_processes == 1:
+            print("  Running in single-process mode")
+        else:
+            print(f"  Gathered and reduced across {num_processes} hosts")
     print()
 
 
