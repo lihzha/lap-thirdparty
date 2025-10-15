@@ -3,8 +3,9 @@
 set -e
 
 # Define special case datasets
-LOCAL_DATASETS=("kuka" "berkeley_autolab_ur5" "stanford_hydra_dataset_converted_externally_to_rlds" "utaustin_mutex" "berkeley_fanuc_manipulation")
+LOCAL_DATASETS=("kuka" "berkeley_autolab_ur5" "utaustin_mutex" "berkeley_fanuc_manipulation")
 FMB_DATASET="fmb"
+IGNORE_DATASETS=("stanford_hydra_dataset_converted_externally_to_rlds" "agibot_dataset" "sample_r1_lite")
 
 # Identify all datasets in gs://pi0-cot/OXE/
 echo "Identifying datasets in gs://pi0-cot/OXE/..."
@@ -12,6 +13,12 @@ datasets=$(gsutil ls gs://pi0-cot/OXE/ | sed 's|gs://pi0-cot/OXE/||' | sed 's|/$
 
 for dataset_path in $datasets; do
     dataset_name=$(basename "$dataset_path")
+
+    # Skip ignored datasets
+    if [[ " ${IGNORE_DATASETS[@]} " =~ " ${dataset_name} " ]]; then
+        echo "Skipping ignored dataset: $dataset_name"
+        continue
+    fi
 
     echo "Processing dataset: $dataset_name"
 
@@ -22,6 +29,12 @@ for dataset_path in $datasets; do
         echo "  Version: $version"
 
         target="gs://v6_east1d/OXE/$dataset_name/$version"
+
+        # Check if target already exists
+        if gsutil -q stat "$target/" 2>/dev/null; then
+            echo "  Skipping (already exists): $target"
+            continue
+        fi
 
         # Check if this is the fmb dataset
         if [ "$dataset_name" == "$FMB_DATASET" ]; then

@@ -349,7 +349,7 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
-    trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1]
+    trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -500,7 +500,7 @@ def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[s
         (
             trajectory["observation"]["state"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
-            invert_gripper_actions((trajectory["observation"]["robot_state"][:, -1:] + 0.388716) / 0.6),
+            invert_gripper_actions((trajectory["observation"]["state"][:, -1:] + 0.388716) / 0.6),
         ),
         axis=-1,
     )
@@ -1009,7 +1009,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
                     axis=-1,
                 ),
             ),
-            invert_gripper_actions(trajectory["observation"]["present/sensed_close"])[:, :1],
+            invert_gripper_actions(trajectory["observation"]["present/sensed_close"])[:, :1],  # max seems to be 0.8
         ),
         axis=-1,
     )

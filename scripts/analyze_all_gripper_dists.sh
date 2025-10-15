@@ -19,7 +19,7 @@ DATASETS=(
     # "furniture_bench_dataset_converted_externally_to_rlds"
     # "utaustin_mutex"
     # "berkeley_fanuc_manipulation"
-    "bc_z"
+    # "bc_z"
     # "dlr_edan_shared_control_converted_externally_to_rlds"
     # "roboturk"
     # "austin_buds_dataset_converted_externally_to_rlds"
