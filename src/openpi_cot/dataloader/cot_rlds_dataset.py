@@ -1574,8 +1574,8 @@ class OXECoTDatasets:
             )
 
         total_threads = len(os.sched_getaffinity(0))
-        total_read_threads = int(total_threads * 0.3)
-        total_transform_threads = int(total_threads * 0.3)
+        total_read_threads = int(total_threads * 0.4)
+        total_transform_threads = int(total_threads * 0.4)
 
         # Allocate Threads based on Weights
         threads_per_dataset = allocate_threads(total_transform_threads, np.array(sample_weights))
