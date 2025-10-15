@@ -15,6 +15,7 @@ import os
 
 import etils.epath as epath
 import jax
+import jax.experimental.multihost_utils as multihost_utils
 import matplotlib
 
 matplotlib.use("Agg")  # Use non-interactive backend
@@ -29,6 +30,25 @@ try:
     import wandb
 except ImportError:
     wandb = None
+
+
+def _safe_device_get(arr):
+    """Safely get array to host, handling multi-host sharded arrays."""
+    if arr is None:
+        return None
+    try:
+        # Try direct device_get first (works for single-host or local shards)
+        return jax.device_get(arr)
+    except RuntimeError as e:
+        if "non-addressable" in str(e):
+            # Array spans multiple hosts, need to gather
+            try:
+                gathered = multihost_utils.process_allgather(arr, tiled=True)
+                return jax.device_get(gathered)
+            except Exception as gather_error:
+                logging.warning(f"Failed to gather array: {gather_error}")
+                return None
+        raise
 
 
 def init_logging():
@@ -63,7 +83,9 @@ def extract_gripper_states(batch, state_padding_mask=None) -> np.ndarray:
         Array of gripper state values (non-padded)
     """
     obs = batch[0]
-    state = jax.device_get(obs.state)
+    state = _safe_device_get(obs.state)
+    if state is None:
+        return np.array([])
     # Last dimension is gripper
     gripper_states = state[..., 6]
     gripper_states = gripper_states.flatten()
@@ -86,7 +108,9 @@ def get_image_at_index(all_batches, global_idx, camera_key="primary"):
     cumulative = 0
     for batch in all_batches:
         obs = batch[0]
-        state = jax.device_get(obs.state)
+        state = _safe_device_get(obs.state)
+        if state is None:
+            continue
         batch_size, seq_len = state.shape[0], state.shape[1]
         seq_len = 1
         batch_total = batch_size * seq_len
@@ -99,7 +123,9 @@ def get_image_at_index(all_batches, global_idx, camera_key="primary"):
 
             # Get image from this batch
             if hasattr(obs, "images") and camera_key in obs.images:
-                img = jax.device_get(obs.images[camera_key][batch_idx, seq_idx])
+                img = _safe_device_get(obs.images[camera_key][batch_idx, seq_idx])
+                if img is None:
+                    return None, None
                 # Convert from [-1, 1] to [0, 255]
                 img_u8 = np.asarray(((img + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
                 return img_u8, state[batch_idx, 6]  # Return image and gripper value

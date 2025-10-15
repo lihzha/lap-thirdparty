@@ -4,6 +4,7 @@ import platform
 
 import etils.epath as epath
 import jax
+import jax.experimental.multihost_utils as multihost_utils
 import numpy as np
 from rail_tpu_utils import prevent_cross_region
 
@@ -16,6 +17,25 @@ try:
     import wandb
 except ImportError:  # pragma: no cover - wandb is an optional dependency when running offline
     wandb = None  # type: ignore[assignment]
+
+
+def _safe_device_get(arr):
+    """Safely get array to host, handling multi-host sharded arrays."""
+    if arr is None:
+        return None
+    try:
+        # Try direct device_get first (works for single-host or local shards)
+        return jax.device_get(arr)
+    except RuntimeError as e:
+        if "non-addressable" in str(e):
+            # Array spans multiple hosts, need to gather
+            try:
+                gathered = multihost_utils.process_allgather(arr, tiled=True)
+                return jax.device_get(gathered)
+            except Exception as gather_error:
+                logging.warning(f"Failed to gather array: {gather_error}")
+                return None
+        raise
 
 
 def init_logging():
@@ -109,8 +129,10 @@ def _decode_langact_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the langact (language action) tokens per example."""
     if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
         return []
-    tokens = jax.device_get(obs.tokenized_prediction)
-    rmask = jax.device_get(obs.tokenized_prediction_langact_mask)
+    tokens = _safe_device_get(obs.tokenized_prediction)
+    rmask = _safe_device_get(obs.tokenized_prediction_langact_mask)
+    if tokens is None or rmask is None:
+        return []
     out: list[str] = []
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
@@ -126,8 +148,10 @@ def _decode_prompt_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the prompt tokens per example."""
     if not hasattr(obs, "tokenized_prompt") or obs.tokenized_prompt is None:
         return []
-    tokens = jax.device_get(obs.tokenized_prompt)
-    rmask = jax.device_get(obs.tokenized_langact_mask)
+    tokens = _safe_device_get(obs.tokenized_prompt)
+    rmask = _safe_device_get(obs.tokenized_langact_mask)
+    if tokens is None or rmask is None:
+        return []
     out: list[str] = []
     for i in range(tokens.shape[0]):
         # Filter out padding tokens (typically 0)
@@ -397,8 +421,11 @@ def main(config: _config.TrainConfig):
         for cam_key in obs.images.keys():
             imgs = obs.images[cam_key]
             logging.info(f"{cam_key} imgs: {imgs.shape}")
-            start_imgs = np.array(imgs[:, 0])
-            end_imgs = np.array(imgs[:, -1])
+            start_imgs = _safe_device_get(imgs[:, 0])
+            end_imgs = _safe_device_get(imgs[:, -1])
+            if start_imgs is None or end_imgs is None:
+                logging.warning(f"Failed to get images for {cam_key}, skipping")
+                continue
             B = start_imgs.shape[0]
             vis_rows = []
             for i in range(B):

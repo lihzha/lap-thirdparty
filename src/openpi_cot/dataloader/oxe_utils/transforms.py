@@ -81,7 +81,57 @@ def rel2abs_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
     return new_actions
 
 
+def rescale_action_with_bound(
+    actions: tf.Tensor,
+    low: float,
+    high: float,
+    safety_margin: float = 0,
+    post_scaling_max: float = 1.0,
+    post_scaling_min: float = -1.0,
+) -> tf.Tensor:
+    """Formula taken from https://stats.stackexchange.com/questions/281162/scale-a-number-between-a-range."""
+    resc_actions = (actions - low) / (high - low) * (post_scaling_max - post_scaling_min) + post_scaling_min
+    return tf.clip_by_value(
+        resc_actions,
+        post_scaling_min + safety_margin,
+        post_scaling_max - safety_margin,
+    )
+
+
+def normalize_action(value: tf.Tensor, mean: tf.Tensor, std: tf.Tensor) -> tf.Tensor:
+    """Normalize values using mean and standard deviation."""
+    return (value - mean) / std
+
+
 # === Bridge-V2 =>> Dataset-Specific Transform ===
+def rescale_bridge_action(action: tf.Tensor) -> tf.Tensor:
+    """
+    Rescales Bridge action to span RT-1 action space.
+
+    Values taken from
+    https://github.com/Asap7772/rt1_eval/blob/2fad77e9bf4def2ef82604d445270f83475e9726/kitchen_eval/rt1_wrapper.py#L39
+    """
+    # Rescale world_vector (xyz position delta)
+    world_vector = rescale_action_with_bound(
+        action[:, :3],
+        low=-0.05,
+        high=0.05,
+        safety_margin=0.01,
+        post_scaling_max=1.75,
+        post_scaling_min=-1.75,
+    )
+    # Rescale rotation_delta
+    rotation_delta = rescale_action_with_bound(
+        action[:, 3:6],
+        low=-0.25,
+        high=0.25,
+        safety_margin=0.01,
+        post_scaling_max=1.4,
+        post_scaling_min=-1.4,
+    )
+    return tf.concat([world_vector, rotation_delta, action[:, 6:]], axis=-1)
+
+
 def relabel_bridge_actions(traj: dict[str, Any]) -> dict[str, Any]:
     """Relabels actions to use reached proprioceptive state; discards last timestep (no-action)."""
     movement_actions = traj["observation"]["state"][1:, :6] - traj["observation"]["state"][:-1, :6]
@@ -145,6 +195,7 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         ],
         axis=1,
     )
+
     # trajectory = relabel_bridge_actions(trajectory)
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
@@ -187,6 +238,7 @@ def bridge_orig_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ],
         axis=1,
     )
+
     # print(trajectory.keys(), trajectory['observation'].keys())
     trajectory = relabel_bridge_actions(trajectory)
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
@@ -305,6 +357,28 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     return traj_truncated
 
 
+def rescale_taco_play_action(action: tf.Tensor) -> tf.Tensor:
+    """
+    Rescales Taco Play actions based on measured per dimension ranges.
+
+    Args:
+        action: Action tensor with shape (..., 7) containing [xyz, rpy, gripper]
+    """
+    # Rotation Delta (indices 3:6)
+    rd_lows = tf.constant([-3.2, -0.8, -1.8])
+    rd_highs = tf.constant([3.2, 0.2, 2.5])
+    rotation_delta = (action[:, 3:6] - rd_lows) / (rd_highs - rd_lows) * 2 - 1
+    rotation_delta = tf.clip_by_value(rotation_delta, -1 + 0.01, 1 - 0.01)
+
+    # World Vector (indices 0:3)
+    wv_lows = tf.constant([0.0, -0.5, 0.0])
+    wv_highs = tf.constant([0.8, 0.7, 0.6])
+    world_vector = (action[:, :3] - wv_lows) / (wv_highs - wv_lows) * 2 - 1
+    world_vector = tf.clip_by_value(world_vector, -1 + 0.01, 1 - 0.01)
+
+    return tf.concat([world_vector, rotation_delta, action[:, 6:]], axis=-1)
+
+
 def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
@@ -324,6 +398,9 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
+
+    # # Apply action rescaling from RT-1 preprocessing
+    # trajectory["action"] = rescale_taco_play_action(trajectory["action"])
 
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 

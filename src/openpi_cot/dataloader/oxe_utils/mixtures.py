@@ -136,14 +136,18 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "bridge_v2_oxe": [("bridge_v2_oxe", 1.0)],
     "taco_play": [("taco_play", 1.0)],
     "jaco_play": [("jaco_play", 1.0)],
-    "furniture_bench_dataset_converted_externally_to_rlds": [("furniture_bench_dataset_converted_externally_to_rlds", 1.0)],
+    "furniture_bench_dataset_converted_externally_to_rlds": [
+        ("furniture_bench_dataset_converted_externally_to_rlds", 1.0)
+    ],
     "utaustin_mutex": [("utaustin_mutex", 1.0)],
     "berkeley_fanuc_manipulation": [("berkeley_fanuc_manipulation", 1.0)],
     "cmu_stretch": [("cmu_stretch", 1.0)],
     "fmb": [("fmb", 1.0)],
     "dobbe": [("dobbe", 1.0)],
     "berkeley_autolab_ur5": [("berkeley_autolab_ur5", 1.0)],
-    "dlr_edan_shared_control_converted_externally_to_rlds": [("dlr_edan_shared_control_converted_externally_to_rlds", 1.0)],
+    "dlr_edan_shared_control_converted_externally_to_rlds": [
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0)
+    ],
     "roboturk": [("roboturk", 1.0)],
     "austin_buds_dataset_converted_externally_to_rlds": [("austin_buds_dataset_converted_externally_to_rlds", 1.0)],
     "austin_sailor_dataset_converted_externally_to_rlds": [("austin_sailor_dataset_converted_externally_to_rlds", 1.0)],
