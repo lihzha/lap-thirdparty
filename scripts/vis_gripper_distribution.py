@@ -315,31 +315,52 @@ def main(config: _config.TrainConfig):
     all_gripper_states = np.concatenate(all_gripper_states)
     logging.info(f"Total gripper states collected: {len(all_gripper_states):,}")
 
-    # Find min/max gripper states and their locations
-    min_val = np.min(all_gripper_states)
-    max_val = np.max(all_gripper_states)
-    min_idx = np.argmin(all_gripper_states)
-    max_idx = np.argmax(all_gripper_states)
+    # Find top-k min/max gripper states and their locations
+    num_examples = 10  # Number of min/max examples to visualize
 
-    logging.info(f"Min gripper value: {min_val:.6f} at global index {min_idx}")
-    logging.info(f"Max gripper value: {max_val:.6f} at global index {max_idx}")
+    # Get indices of top-k smallest and largest values
+    min_indices = np.argpartition(all_gripper_states, num_examples)[:num_examples]
+    max_indices = np.argpartition(all_gripper_states, -num_examples)[-num_examples:]
+
+    # Sort them by value for nicer display
+    min_indices = min_indices[np.argsort(all_gripper_states[min_indices])]
+    max_indices = max_indices[np.argsort(all_gripper_states[max_indices])[::-1]]
+
+    logging.info(f"Finding {num_examples} min and {num_examples} max gripper examples...")
+    logging.info(f"Min gripper values: {all_gripper_states[min_indices]}")
+    logging.info(f"Max gripper values: {all_gripper_states[max_indices]}")
 
     # Extract images for min/max gripper states
     logging.info("Extracting images for min/max gripper states...")
 
     # Try different camera keys
     camera_keys_to_try = ["base_0_rgb", "left_wrist_0_rgb"]
-    min_img, max_img = None, None
-    min_gripper_val, max_gripper_val = None, None
+
+    min_images = []
+    max_images = []
 
     for cam_key in camera_keys_to_try:
-        if min_img is None:
-            min_img, min_gripper_val = get_image_at_index(all_batches, min_idx, cam_key)
-        if max_img is None:
-            max_img, max_gripper_val = get_image_at_index(all_batches, max_idx, cam_key)
-        if min_img is not None and max_img is not None:
-            logging.info(f"Found images using camera key: {cam_key}")
+        # Extract min examples
+        for idx in min_indices:
+            img, gripper_val = get_image_at_index(all_batches, idx, cam_key)
+            if img is not None:
+                min_images.append((img, gripper_val, idx))
+
+        # Extract max examples
+        for idx in max_indices:
+            img, gripper_val = get_image_at_index(all_batches, idx, cam_key)
+            if img is not None:
+                max_images.append((img, gripper_val, idx))
+
+        if len(min_images) >= num_examples and len(max_images) >= num_examples:
+            logging.info(f"Found {len(min_images)} min and {len(max_images)} max images using camera key: {cam_key}")
             break
+
+    # Limit to num_examples
+    min_images = min_images[:num_examples]
+    max_images = max_images[:num_examples]
+
+    logging.info(f"Extracted {len(min_images)} min examples and {len(max_images)} max examples")
 
     # Print summary statistics
     logging.info("=" * 60)
@@ -373,17 +394,23 @@ def main(config: _config.TrainConfig):
         }
 
         # Add min/max images if available
-        if min_img is not None:
-            log_dict["examples/min_gripper"] = wandb.Image(min_img, caption=f"Min gripper state: {min_gripper_val:.6f}")
-            logging.info(f"Logging min gripper image (value: {min_gripper_val:.6f})")
+        if len(min_images) > 0:
+            log_dict["examples/min_gripper"] = [
+                wandb.Image(img, caption=f"Min #{i+1}: {val:.6f} (idx={idx})")
+                for i, (img, val, idx) in enumerate(min_images)
+            ]
+            logging.info(f"Logging {len(min_images)} min gripper images")
         else:
-            logging.warning("Min gripper image not found")
+            logging.warning("Min gripper images not found")
 
-        if max_img is not None:
-            log_dict["examples/max_gripper"] = wandb.Image(max_img, caption=f"Max gripper state: {max_gripper_val:.6f}")
-            logging.info(f"Logging max gripper image (value: {max_gripper_val:.6f})")
+        if len(max_images) > 0:
+            log_dict["examples/max_gripper"] = [
+                wandb.Image(img, caption=f"Max #{i+1}: {val:.6f} (idx={idx})")
+                for i, (img, val, idx) in enumerate(max_images)
+            ]
+            logging.info(f"Logging {len(max_images)} max gripper images")
         else:
-            logging.warning("Max gripper image not found")
+            logging.warning("Max gripper images not found")
 
         wandb.log(log_dict)
         logging.info("Logged gripper distribution and examples to wandb")
@@ -397,15 +424,15 @@ def main(config: _config.TrainConfig):
         plt.close(fig)
 
         # Save min/max images locally
-        if min_img is not None:
-            min_img_path = os.path.join(output_dir, f"gripper_min_{dataset_name}.png")
-            plt.imsave(min_img_path, min_img)
-            logging.info(f"Saved min gripper image to: {min_img_path}")
+        for i, (img, val, idx) in enumerate(min_images):
+            min_img_path = os.path.join(output_dir, f"gripper_min_{i:02d}_{dataset_name}.png")
+            plt.imsave(min_img_path, img)
+            logging.info(f"Saved min gripper image #{i+1} (val={val:.6f}) to: {min_img_path}")
 
-        if max_img is not None:
-            max_img_path = os.path.join(output_dir, f"gripper_max_{dataset_name}.png")
-            plt.imsave(max_img_path, max_img)
-            logging.info(f"Saved max gripper image to: {max_img_path}")
+        for i, (img, val, idx) in enumerate(max_images):
+            max_img_path = os.path.join(output_dir, f"gripper_max_{i:02d}_{dataset_name}.png")
+            plt.imsave(max_img_path, img)
+            logging.info(f"Saved max gripper image #{i+1} (val={val:.6f}) to: {max_img_path}")
 
     # Finish wandb run
     if wandb_enabled and wandb is not None and getattr(wandb, "run", None) is not None:
