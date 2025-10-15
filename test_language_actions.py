@@ -1,0 +1,385 @@
+"""Tests for language action encoding and decoding with rotation support."""
+
+import numpy as np
+import pytest
+
+from src.openpi_cot.policies.cot_policy import COMPACT_DECODING_SCHEMA
+from src.openpi_cot.policies.cot_policy import VERBOSE_DECODING_SCHEMA
+from src.openpi_cot.policies.cot_policy import ActionDecodingSchema
+from src.openpi_cot.policies.utils import summarize_bimanual_numeric_actions
+from src.openpi_cot.policies.utils import summarize_numeric_actions
+
+
+class TestLanguageActionEncoding:
+    """Test numeric actions to language string conversion."""
+
+    def test_verbose_format_translation_only(self):
+        """Test verbose format without rotation."""
+        # Create action: move forward 5cm, right 3cm, down 2cm, gripper open (1.0)
+        action = np.array([0.05, -0.03, -0.02, 0.0, 0.0, 0.0, 1.0])
+
+        result = summarize_numeric_actions(action, sum_decimal="0f", include_rotation=False)
+
+        # Expected: forward=+dy, right=-dy, down=-dz
+        assert "move forward 5 cm" in result
+        assert "move right 3 cm" in result
+        assert "move down 2 cm" in result
+        assert "set gripper to 1.0" in result
+        assert "tilt" not in result
+        assert "rotate" not in result
+
+    def test_verbose_format_with_rotation(self):
+        """Test verbose format with rotation included."""
+        # Create action with rotation: roll=+π/2 rad (90°), pitch=-π/4 rad (-45°), yaw=π/6 rad (30°)
+        action = np.array(
+            [
+                0.05,  # dx: forward 5cm
+                -0.03,  # dy: right 3cm
+                0.0,  # dz: no vertical
+                np.pi / 2,  # roll: +90° (tilt left)
+                -np.pi / 4,  # pitch: -45° (tilt down)
+                np.pi / 6,  # yaw: +30° (rotate counterclockwise)
+                0.5,  # gripper
+            ]
+        )
+
+        result = summarize_numeric_actions(action, sum_decimal="0f", include_rotation=True)
+
+        # Check translations
+        assert "move forward 5 cm" in result
+        assert "move right 3 cm" in result
+
+        # Check rotations
+        assert "tilt left 90 degrees" in result
+        assert "tilt down 45 degrees" in result
+        assert "rotate counterclockwise 30 degrees" in result
+        assert "set gripper to 0.5" in result
+
+    def test_verbose_format_negative_rotations(self):
+        """Test negative rotation values."""
+        action = np.array(
+            [
+                0.0,  # no translation
+                0.0,
+                0.0,
+                -np.pi / 3,  # roll: -60° (tilt right)
+                np.pi / 3,  # pitch: +60° (tilt up)
+                -np.pi / 4,  # yaw: -45° (rotate clockwise)
+                0.0,
+            ]
+        )
+
+        result = summarize_numeric_actions(action, sum_decimal="0f", include_rotation=True)
+
+        assert "tilt right 60 degrees" in result
+        assert "tilt up 60 degrees" in result
+        assert "rotate clockwise 45 degrees" in result
+
+    def test_compact_format_without_rotation(self):
+        """Test compact schema format."""
+        # Action: forward 9cm, left 5cm, down 8cm, gripper closed
+        action = np.array([0.09, 0.05, -0.08, 0.0, 0.0, 0.0, 0.0])
+
+        result = summarize_numeric_actions(action, sum_decimal="compact", include_rotation=False)
+
+        # Format: <dx dy dz grip>
+        assert result == "<+09 +05 -08 0>"
+
+    def test_compact_format_with_rotation(self):
+        """Test compact schema format with rotation."""
+        # Action: forward 9cm, left 5cm, down 8cm, roll +10°, pitch -5°, yaw +15°, gripper open
+        action = np.array(
+            [
+                0.09,  # dx: +9cm
+                0.05,  # dy: +5cm
+                -0.08,  # dz: -8cm
+                10 * np.pi / 180,  # roll: +10°
+                -5 * np.pi / 180,  # pitch: -5°
+                15 * np.pi / 180,  # yaw: +15°
+                1.0,  # gripper
+            ]
+        )
+
+        result = summarize_numeric_actions(action, sum_decimal="compact", include_rotation=True)
+
+        # Format: <dx dy dz droll dpitch dyaw grip>
+        assert result == "<+09 +05 -08 +010 -005 +015 1>"
+
+    def test_multi_step_actions(self):
+        """Test summing multiple action steps."""
+        # Three steps: each moves forward 2cm
+        actions = np.array(
+            [
+                [0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                [0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5],
+                [0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            ]
+        )
+
+        result = summarize_numeric_actions(actions, sum_decimal="0f", include_rotation=False)
+
+        # Should sum to 6cm forward
+        assert "move forward 6 cm" in result
+        assert "set gripper to 1.0" in result  # Last gripper value
+
+    def test_bimanual_actions(self):
+        """Test bimanual action formatting."""
+        # Left arm: forward 5cm, gripper open
+        # Right arm: backward 3cm, gripper closed
+        action = np.array(
+            [
+                0.05,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,  # Left arm
+                -0.03,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,  # Right arm
+            ]
+        )
+
+        result = summarize_bimanual_numeric_actions(action, sum_decimal="0f", include_rotation=False)
+
+        assert "Left arm:" in result
+        assert "Right arm:" in result
+        assert "move forward 5 cm" in result
+        assert "move back 3 cm" in result
+
+    def test_bimanual_with_rotation(self):
+        """Test bimanual action with rotation."""
+        action = np.array(
+            [
+                0.05,
+                0.0,
+                0.0,
+                np.pi / 4,
+                0.0,
+                0.0,
+                1.0,  # Left: forward + tilt left 45°
+                0.0,
+                -0.03,
+                0.0,
+                0.0,
+                np.pi / 6,
+                0.0,
+                0.0,  # Right: right + tilt up 30°
+            ]
+        )
+
+        result = summarize_bimanual_numeric_actions(action, sum_decimal="0f", include_rotation=True)
+
+        assert "tilt left 45 degrees" in result
+        assert "tilt up 30 degrees" in result
+
+
+class TestLanguageActionDecoding:
+    """Test language string to numeric action conversion."""
+
+    def test_verbose_decoding_translation(self):
+        """Test parsing verbose language actions to deltas."""
+        schema = VERBOSE_DECODING_SCHEMA
+        reasoning = "move forward 10 cm and move right 5 cm and set gripper to 1"
+
+        translations, grippers = schema.parse_language_to_deltas(reasoning)
+
+        # Expected: forward=+dx, right=-dy
+        np.testing.assert_allclose(translations[0], [0.10, -0.05, 0.0], atol=1e-6)
+        assert grippers[0] == 1.0
+
+    def test_verbose_decoding_all_directions(self):
+        """Test all directional movements."""
+        schema = VERBOSE_DECODING_SCHEMA
+
+        test_cases = [
+            ("move forward 10 cm", [0.10, 0.0, 0.0]),
+            ("move backward 10 cm", [-0.10, 0.0, 0.0]),
+            ("move left 10 cm", [0.0, 0.10, 0.0]),
+            ("move right 10 cm", [0.0, -0.10, 0.0]),
+            ("move up 10 cm", [0.0, 0.0, 0.10]),
+            ("move down 10 cm", [0.0, 0.0, -0.10]),
+        ]
+
+        for reasoning, expected_delta in test_cases:
+            translations, _ = schema.parse_language_to_deltas(reasoning)
+            np.testing.assert_allclose(translations[0], expected_delta, atol=1e-6, err_msg=f"Failed for: {reasoning}")
+
+    def test_compact_decoding(self):
+        """Test parsing compact schema format."""
+        schema = COMPACT_DECODING_SCHEMA
+        reasoning = "Action: <+09 +05 -08 1>"
+
+        translations, grippers = schema.parse_language_to_deltas(reasoning)
+
+        np.testing.assert_allclose(translations[0], [0.09, 0.05, -0.08], atol=1e-6)
+        assert grippers[0] == 1.0
+
+    def test_compact_decoding_with_rotation(self):
+        """Test parsing compact format with rotation (currently not in default schema)."""
+        # Create a custom schema that supports rotation in compact format
+        schema = ActionDecodingSchema(
+            name="compact_with_rotation",
+            style="compact",
+            include_rotation=True,
+            use_schema_format=True,
+        )
+
+        reasoning = "Action: <+09 +05 -08 +010 -005 +015 1>"
+
+        translations, grippers = schema.parse_language_to_deltas(reasoning)
+
+        # Note: Current implementation only parses translation, not rotation
+        # This test documents current behavior
+        np.testing.assert_allclose(translations[0], [0.09, 0.05, -0.08], atol=1e-6)
+        assert grippers[0] == 1.0
+
+    def test_multi_sentence_decoding(self):
+        """Test parsing multiple action sentences."""
+        schema = VERBOSE_DECODING_SCHEMA
+        reasoning = [
+            "move forward 5 cm and set gripper to 0",
+            "move right 3 cm and set gripper to 1",
+            "move up 2 cm and set gripper to 1",
+        ]
+
+        translations, grippers = schema.parse_language_to_deltas(reasoning)
+
+        assert translations.shape == (3, 3)
+        np.testing.assert_allclose(translations[0], [0.05, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(translations[1], [0.0, -0.03, 0.0], atol=1e-6)
+        np.testing.assert_allclose(translations[2], [0.0, 0.0, 0.02], atol=1e-6)
+        np.testing.assert_array_equal(grippers, [0.0, 1.0, 1.0])
+
+    def test_gripper_state_persistence(self):
+        """Test that gripper state persists when not explicitly set."""
+        schema = VERBOSE_DECODING_SCHEMA
+        reasoning = [
+            "move forward 5 cm and set gripper to 1",
+            "move right 3 cm",  # No gripper command
+            "move up 2 cm",  # No gripper command
+        ]
+
+        translations, grippers = schema.parse_language_to_deltas(reasoning)
+
+        # Gripper should maintain value from previous step
+        np.testing.assert_array_equal(grippers, [1.0, 1.0, 1.0])
+
+
+class TestRoundTripConsistency:
+    """Test that encoding and decoding are consistent."""
+
+    def test_verbose_roundtrip_translation(self):
+        """Test encoding then decoding gives consistent results."""
+        original_action = np.array([0.05, -0.03, 0.02, 0.0, 0.0, 0.0, 1.0])
+
+        # Encode to language
+        language = summarize_numeric_actions(original_action, sum_decimal="0f", include_rotation=False)
+
+        # Decode back to numeric
+        schema = VERBOSE_DECODING_SCHEMA
+        translations, grippers = schema.parse_language_to_deltas(language)
+
+        # Reconstruct action (without rotation)
+        decoded_action = np.concatenate(
+            [
+                translations[0],
+                np.zeros(3),  # rotation
+                [grippers[0]],
+            ]
+        )
+
+        # Check translation components match (within rounding to cm)
+        np.testing.assert_allclose(decoded_action[:3], original_action[:3], atol=0.005)
+        assert decoded_action[6] == original_action[6]
+
+    def test_compact_roundtrip(self):
+        """Test compact format roundtrip."""
+        original_action = np.array([0.09, 0.05, -0.08, 0.0, 0.0, 0.0, 1.0])
+
+        # Encode
+        language = summarize_numeric_actions(original_action, sum_decimal="compact", include_rotation=False)
+
+        # Decode
+        schema = COMPACT_DECODING_SCHEMA
+        translations, grippers = schema.parse_language_to_deltas(language)
+
+        # Check exact match (compact format has integer cm precision)
+        np.testing.assert_array_equal(translations[0], original_action[:3])
+        assert grippers[0] == original_action[6]
+
+
+class TestEdgeCases:
+    """Test edge cases and error conditions."""
+
+    def test_zero_action(self):
+        """Test action with all zeros."""
+        action = np.zeros(7)
+        result = summarize_numeric_actions(action, sum_decimal="0f", include_rotation=False)
+
+        # Should only have gripper command
+        assert "set gripper to 0.0" in result
+        assert "move" not in result
+
+    def test_tiny_movements(self):
+        """Test very small movements that round to zero."""
+        action = np.array([0.001, -0.002, 0.003, 0.0, 0.0, 0.0, 0.5])
+        result = summarize_numeric_actions(action, sum_decimal="0f", include_rotation=False)
+
+        # With 0 decimal places, these should round to 0 and not appear
+        assert "move" not in result or all(x in result for x in ["0 cm"] if "move" in result)
+
+    def test_large_action_values(self):
+        """Test large action values."""
+        action = np.array([1.5, -2.3, 0.8, 0.0, 0.0, 0.0, 1.0])
+        result = summarize_numeric_actions(action, sum_decimal="0f", include_rotation=False)
+
+        assert "move forward 150 cm" in result
+        assert "move right 230 cm" in result
+        assert "move up 80 cm" in result
+
+    def test_precision_format(self):
+        """Test different decimal precision."""
+        action = np.array([0.055, -0.033, 0.0, 0.0, 0.0, 0.0, 0.5])
+
+        # 2 decimal places
+        result = summarize_numeric_actions(action, sum_decimal="2f", include_rotation=False)
+        assert "5.50 cm" in result or "5.5 cm" in result
+        assert "3.30 cm" in result or "3.3 cm" in result
+
+    def test_invalid_decoding_input(self):
+        """Test decoding with malformed input."""
+        schema = VERBOSE_DECODING_SCHEMA
+
+        # No movement commands
+        translations, grippers = schema.parse_language_to_deltas("random text with no commands")
+        np.testing.assert_array_equal(translations[0], [0.0, 0.0, 0.0])
+
+        # Empty string
+        translations, grippers = schema.parse_language_to_deltas("")
+        np.testing.assert_array_equal(translations[0], [0.0, 0.0, 0.0])
+
+
+if __name__ == "__main__":
+    # Run tests with pytest if available, otherwise run basic tests
+    try:
+        pytest.main([__file__, "-v"])
+    except ImportError:
+        print("pytest not available, running basic tests...")
+
+        # Run a few basic tests manually
+        test_encoding = TestLanguageActionEncoding()
+        test_encoding.test_verbose_format_translation_only()
+        test_encoding.test_verbose_format_with_rotation()
+        test_encoding.test_compact_format_with_rotation()
+
+        test_decoding = TestLanguageActionDecoding()
+        test_decoding.test_verbose_decoding_translation()
+        test_decoding.test_compact_decoding()
+
+        print("Basic tests passed!")

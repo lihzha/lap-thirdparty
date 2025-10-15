@@ -16,6 +16,8 @@ from tqdm_loggable.auto import tqdm
 class ExtendedNormStats(_normalize.NormStats):
     num_transitions: int | None = None
     num_trajectories: int | None = None
+    min: np.ndarray | None = None  # Global minimum across all samples
+    max: np.ndarray | None = None  # Global maximum across all samples
 
 
 class _NormStatsDict(pydantic.BaseModel):
@@ -279,6 +281,8 @@ def get_dataset_statistics(
             std=np.asarray(s_std, dtype=np.float32),
             q01=np.asarray(s_q01, dtype=np.float32),
             q99=np.asarray(s_q99, dtype=np.float32),
+            min=np.asarray(s_min, dtype=np.float32),
+            max=np.asarray(s_max, dtype=np.float32),
             num_transitions=int(s_n),
             num_trajectories=int(traj_n),
         )
@@ -289,6 +293,8 @@ def get_dataset_statistics(
             std=np.array([], dtype=np.float32),
             q01=np.array([], dtype=np.float32),
             q99=np.array([], dtype=np.float32),
+            min=np.array([], dtype=np.float32),
+            max=np.array([], dtype=np.float32),
             num_transitions=int(a_n),
             num_trajectories=int(traj_n),
         )
@@ -301,6 +307,8 @@ def get_dataset_statistics(
             std=np.asarray(a_std, dtype=np.float32),
             q01=np.asarray(a_q01, dtype=np.float32),
             q99=np.asarray(a_q99, dtype=np.float32),
+            min=np.asarray(a_min, dtype=np.float32),
+            max=np.asarray(a_max, dtype=np.float32),
             num_transitions=int(a_n),
             num_trajectories=int(traj_n),
         ),
