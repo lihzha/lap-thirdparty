@@ -348,12 +348,13 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
-    trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
-    trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
-
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
     gripper_action = rel2abs_gripper_actions(gripper_action)
+
+    trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
+    # trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
+    trajectory["observation"]["state_gripper"] = gripper_action[:, None]
 
     trajectory["action"] = tf.concat(
         (
