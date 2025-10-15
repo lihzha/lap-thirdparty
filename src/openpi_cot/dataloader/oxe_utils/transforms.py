@@ -501,7 +501,8 @@ def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[s
             trajectory["observation"]["state"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
             invert_gripper_actions((trajectory["observation"]["robot_state"][:, -1:] + 0.388716) / 0.6),
-        )
+        ),
+        axis=-1,
     )
     trajectory["observation"]["depth"] = trajectory["observation"].pop("image_with_depth")
 
