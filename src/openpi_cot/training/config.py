@@ -259,9 +259,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     model_type=model_config.model_type,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     action_encoding=base_cfg.action_encoding,
-                    language_action_config=cot_policy.get_language_action_config(
-                        base_cfg.language_action_config_name
-                    ),
+                    language_action_config=cot_policy.get_language_action_config(base_cfg.language_action_config_name),
                     # Add prediction fields
                     enable_prediction_training=model_config.enable_prediction_training,
                     prediction_prompt=base_cfg.prediction_prompt,
@@ -492,6 +490,28 @@ _CONFIGS = [
         resume=True,
     ),
     TrainConfig(
+        name="pi_combined_cot_v6",
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            droid_dataset_name="droid",
+            rlds_data_dir="gs://v6_east1d/OXE",
+            language_action_dir="gs://v6_east1d/droid-base-lang-actions",
+            data_mix="oxe_pi_magic_soup_with_other_states_with_bimanual",
+            shuffle_buffer_size=400_000,
+        ),
+        fsdp_devices=4,
+        batch_size=256,
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        checkpoint_base_dir="gs://v6_east1d/checkpoints",
+        save_interval=500,
+        keep_period=5000,
+        resume=True,
+    ),
+    TrainConfig(
         name="pi_combined_cot_local",
         data=RLDSCoTDataConfig(
             repo_id="combined",
@@ -543,7 +563,7 @@ _CONFIGS = [
             pi05=True,
             discrete_state_input=True,
             paligemma_variant="gemma2_2b",
-            action_expert_variant="gemma2_300m"
+            action_expert_variant="gemma2_300m",
         ),
         data=RLDSCoTDataConfig(
             repo_id="droid",
