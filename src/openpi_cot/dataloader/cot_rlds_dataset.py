@@ -1790,12 +1790,17 @@ class OXECoTDatasets:
         action_global_std = np.sqrt(action_global_var)
 
         # For quantiles, use conservative bounds (global min/max across all datasets)
-        action_q01 = np.min([stats["actions"].q01 for stats in all_dataset_statistics.values()], axis=0)
-        action_q99 = np.max([stats["actions"].q99 for stats in all_dataset_statistics.values()], axis=0)
-
-        # Pad quantiles to action_dim
-        action_q01 = np.pad(action_q01, (0, action_dim - len(action_q01)), mode="constant", constant_values=0)
-        action_q99 = np.pad(action_q99, (0, action_dim - len(action_q99)), mode="constant", constant_values=0)
+        # Pad each dataset's quantiles to action_dim first, then compute min/max
+        action_q01_padded = [
+            np.pad(stats["actions"].q01, (0, action_dim - len(stats["actions"].q01)), mode="constant", constant_values=0)
+            for stats in all_dataset_statistics.values()
+        ]
+        action_q99_padded = [
+            np.pad(stats["actions"].q99, (0, action_dim - len(stats["actions"].q99)), mode="constant", constant_values=1)
+            for stats in all_dataset_statistics.values()
+        ]
+        action_q01 = np.min(action_q01_padded, axis=0)
+        action_q99 = np.max(action_q99_padded, axis=0)
 
         global_stats = {
             "actions": ExtendedNormStats(
@@ -1861,12 +1866,17 @@ class OXECoTDatasets:
             state_global_std = np.sqrt(state_global_var)
 
             # For quantiles, use conservative bounds
-            state_q01 = np.min([stats["state"].q01 for stats in state_stats_subset.values()], axis=0)
-            state_q99 = np.max([stats["state"].q99 for stats in state_stats_subset.values()], axis=0)
-
-            # Pad quantiles to action_dim
-            state_q01 = np.pad(state_q01, (0, action_dim - len(state_q01)), mode="constant", constant_values=0)
-            state_q99 = np.pad(state_q99, (0, action_dim - len(state_q99)), mode="constant", constant_values=0)
+            # Pad each dataset's quantiles to action_dim first, then compute min/max
+            state_q01_padded = [
+                np.pad(stats["state"].q01, (0, action_dim - len(stats["state"].q01)), mode="constant", constant_values=0)
+                for stats in state_stats_subset.values()
+            ]
+            state_q99_padded = [
+                np.pad(stats["state"].q99, (0, action_dim - len(stats["state"].q99)), mode="constant", constant_values=1)
+                for stats in state_stats_subset.values()
+            ]
+            state_q01 = np.min(state_q01_padded, axis=0)
+            state_q99 = np.max(state_q99_padded, axis=0)
 
             # Store with state type-specific key
             global_stats[f"state_{state_type}"] = ExtendedNormStats(
