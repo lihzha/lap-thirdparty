@@ -192,12 +192,12 @@ def test_euler_diff_usage_in_transforms():
     print(f"Movement actions:\n{movement_actions.numpy()}")
 
     # Verify: reconstructing the trajectory from movement actions
-    reconstructed_positions = [positions[0]]
-    reconstructed_orientations_R = [_R_from_euler_xyz(orientations[0:1])]
+    reconstructed_positions = [tf.constant(positions[0:1], dtype=tf.float32)]
+    reconstructed_orientations_R = [_R_from_euler_xyz(tf.constant(orientations[0:1], dtype=tf.float32))]
 
     for i in range(len(movement_actions)):
         # Position: simple addition
-        next_pos = reconstructed_positions[-1] + position_deltas[i:i+1].numpy()
+        next_pos = reconstructed_positions[-1] + position_deltas[i:i+1]
         reconstructed_positions.append(next_pos)
 
         # Orientation: matrix multiplication
@@ -210,13 +210,13 @@ def test_euler_diff_usage_in_transforms():
     reconstructed_orientations = []
     for R in reconstructed_orientations_R:
         euler = _euler_xyz_from_R(R)
-        reconstructed_orientations.append(euler.numpy())
+        reconstructed_orientations.append(euler)
 
-    reconstructed_orientations = np.concatenate(reconstructed_orientations, axis=0)
+    reconstructed_orientations_tf = tf.concat(reconstructed_orientations, axis=0)
 
     # Compare with original
     R_original = _R_from_euler_xyz(tf.constant(orientations, dtype=tf.float32))
-    R_reconstructed = _R_from_euler_xyz(tf.constant(reconstructed_orientations, dtype=tf.float32))
+    R_reconstructed = _R_from_euler_xyz(reconstructed_orientations_tf)
 
     orientation_error = tf.reduce_max(tf.abs(R_original - R_reconstructed))
 
