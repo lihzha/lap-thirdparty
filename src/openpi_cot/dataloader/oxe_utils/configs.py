@@ -771,6 +771,19 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
+    "molmoact_dataset": {
+        "image_obs_keys": {
+            "primary": "first_view_image",
+            "secondary": "second_view_image",
+            "wrist": "wrist_image",
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            "state",
+        ],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
 }
 
 
@@ -1199,6 +1212,12 @@ OXE_DATASET_METADATA = {
         "control_frequency": 30,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Bi-Manual",
+        "has_suboptimal": "No",
+    },
+    "molmoact_dataset": {
+        "control_frequency": 15,
+        "language_annotations": "Natual detailed instructions",
+        "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
 }

@@ -1372,6 +1372,10 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     return traj_truncated
 
 
+def molmoact_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    return trajectory
+
+
 def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
@@ -1815,4 +1819,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "ego4d_split_4": human_dataset_transform,
     "sample_r1_lite": sample_r1_lite_dataset_transform,
     "agibot_dataset": agibot_dataset_transform,
+    "molmoact_dataset": molmoact_dataset_transform,
 }
