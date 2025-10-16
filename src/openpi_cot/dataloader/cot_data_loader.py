@@ -132,8 +132,15 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
 
     def save_iterator_checkpoint(self, directory: str):
         """Save TF iterator state to checkpoint directory."""
-        if not self.persistent_iterator or self._tf_checkpoint is None:
-            logging.warning("Cannot save iterator checkpoint: persistent_iterator not enabled")
+        if not self.persistent_iterator:
+            logging.debug("Skipping iterator checkpoint save: persistent_iterator=False")
+            return
+
+        if self._tf_checkpoint is None:
+            logging.error(
+                "Cannot save iterator checkpoint: _tf_checkpoint is None despite persistent_iterator=True. "
+                "This indicates an initialization error."
+            )
             return
 
         import tensorflow as tf
@@ -147,8 +154,15 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
 
     def restore_iterator_checkpoint(self, directory: str):
         """Restore TF iterator state from checkpoint directory."""
-        if not self.persistent_iterator or self._tf_checkpoint is None:
-            logging.warning("Cannot restore iterator checkpoint: persistent_iterator not enabled")
+        if not self.persistent_iterator:
+            logging.debug("Skipping iterator checkpoint restore: persistent_iterator=False")
+            return
+
+        if self._tf_checkpoint is None:
+            logging.error(
+                "Cannot restore iterator checkpoint: _tf_checkpoint is None despite persistent_iterator=True. "
+                "This indicates an initialization error."
+            )
             return
 
         import tensorflow as tf

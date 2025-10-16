@@ -250,6 +250,90 @@ class TestIteratorCheckpointing:
         assert hasattr(loader_non_persistent, "save_iterator_checkpoint")
         assert hasattr(loader_non_persistent, "restore_iterator_checkpoint")
 
+    def test_end_to_end_training_scenario(self, temp_checkpoint_dir):
+        """Test the full training checkpoint/resume scenario."""
+        checkpoint_dir = str(temp_checkpoint_dir / "e2e_test")
+
+        # Create a dataset that mimics training data (infinite with shuffle)
+        base_dataset = tf.data.Dataset.range(10000)
+        dataset = base_dataset.repeat().shuffle(buffer_size=100, seed=42, reshuffle_each_iteration=False).batch(10)
+
+        # Step 1: Initial training run
+        iterable1 = _data_loader.IterableTransformedDataset(
+            batch_size=10,
+            dataset=dataset,
+            transforms=[],
+            is_batched=True,
+            persistent_iterator=True,
+        )
+
+        # Verify checkpoint objects were created
+        assert iterable1._tf_iterator is not None, "TF iterator should be created"
+        assert iterable1._tf_checkpoint is not None, "TF checkpoint should be created"
+
+        # Simulate training: consume some batches
+        iter1 = iter(iterable1)
+        batches_before_checkpoint = []
+        for _ in range(10):
+            batch = next(iter1)
+            batches_before_checkpoint.append(batch)
+
+        # Save checkpoint (like we do at step 5000)
+        iterable1.save_iterator_checkpoint(checkpoint_dir)
+
+        # Verify checkpoint files were created
+        import tensorflow as tf
+
+        checkpoint_files = tf.io.gfile.listdir(checkpoint_dir)
+        assert len(checkpoint_files) > 0, "Checkpoint files should exist"
+
+        # Get next batch (this is what we should see after restoration)
+        expected_next_batch = next(iter1)
+
+        # Step 2: Resume training from checkpoint (simulates restart)
+        # Create a NEW dataset and iterator (like happens on restart)
+        base_dataset2 = tf.data.Dataset.range(10000)
+        dataset2 = base_dataset2.repeat().shuffle(buffer_size=100, seed=42, reshuffle_each_iteration=False).batch(10)
+
+        iterable2 = _data_loader.IterableTransformedDataset(
+            batch_size=10,
+            dataset=dataset2,
+            transforms=[],
+            is_batched=True,
+            persistent_iterator=True,
+        )
+
+        # Verify checkpoint objects exist before restoration
+        assert iterable2._tf_iterator is not None, "TF iterator should be created on resume"
+        assert iterable2._tf_checkpoint is not None, "TF checkpoint should be created on resume"
+
+        # Restore checkpoint (like happens in restore_state())
+        iterable2.restore_iterator_checkpoint(checkpoint_dir)
+
+        # Create iterator AFTER restoration (like in train.py)
+        iter2 = iter(iterable2)
+
+        # First batch after restoration should match expected
+        restored_batch = next(iter2)
+
+        np.testing.assert_array_equal(
+            restored_batch,
+            expected_next_batch,
+            err_msg="Batch after restoration should match expected continuation",
+        )
+
+        # Verify that subsequent batches also match
+        for i in range(5):
+            expected_batch = next(iter1)
+            restored_batch = next(iter2)
+            np.testing.assert_array_equal(
+                restored_batch,
+                expected_batch,
+                err_msg=f"Batch {i+1} after restoration should match expected continuation",
+            )
+
+        print("✓ End-to-end training checkpoint/resume scenario works correctly")
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
