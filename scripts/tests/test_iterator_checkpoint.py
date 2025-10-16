@@ -1,7 +1,7 @@
 """Tests for TensorFlow iterator checkpointing functionality."""
 
-import tempfile
 from pathlib import Path
+import tempfile
 
 import numpy as np
 import pytest
@@ -251,6 +251,8 @@ class TestIteratorCheckpointing:
         assert hasattr(loader_non_persistent, "restore_iterator_checkpoint")
 
     def test_end_to_end_training_scenario(self, temp_checkpoint_dir):
+        import tensorflow as tf
+
         """Test the full training checkpoint/resume scenario."""
         checkpoint_dir = str(temp_checkpoint_dir / "e2e_test")
 
@@ -329,7 +331,7 @@ class TestIteratorCheckpointing:
             np.testing.assert_array_equal(
                 restored_batch,
                 expected_batch,
-                err_msg=f"Batch {i+1} after restoration should match expected continuation",
+                err_msg=f"Batch {i + 1} after restoration should match expected continuation",
             )
 
         print("✓ End-to-end training checkpoint/resume scenario works correctly")
