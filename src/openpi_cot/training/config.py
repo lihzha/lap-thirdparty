@@ -160,7 +160,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     use_json_actions: bool = False
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
-    data_mix: str | None = "oxe_pi_magic_soup"
+    data_mix: str | None = "oxe_pi_magic_soup_with_other_states_with_bimanual"
 
 
 @dataclasses.dataclass(frozen=True)
