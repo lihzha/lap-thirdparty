@@ -414,7 +414,7 @@ def is_idle_language_action(
     else:
         # Verbose format: "move forward X cm and move right Y cm..."
         # Parse all movement commands
-        move_pattern = re.compile(r"move\s+(right|left|forward|backward|up|down)\s+([\d.]+)\s*cm", re.IGNORECASE)
+        move_pattern = re.compile(r"move\s+(right|left|forward|backward|back|up|down)\s+([\d.]+)\s*cm", re.IGNORECASE)
 
         dx_cm = dy_cm = dz_cm = 0.0
         for match in move_pattern.finditer(language_action):
@@ -423,7 +423,7 @@ def is_idle_language_action(
 
             if direction == "forward":
                 dx_cm += value
-            elif direction == "backward":
+            elif direction in ("backward", "back"):
                 dx_cm -= value
             elif direction == "left":
                 dy_cm += value

@@ -453,7 +453,7 @@ class ActionDecodingSchema:
         else:
             # Parse verbose format: "move right X cm and move forward Y cm..."
             move_pattern = re.compile(
-                rf"move\s+(right|left|forward|backward|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
+                rf"move\s+(right|left|forward|backward|back|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
                 re.IGNORECASE,
             )
             grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
@@ -478,7 +478,7 @@ class ActionDecodingSchema:
                     #     dz_cm -= value
                     if direction == "forward":
                         dx_cm += value
-                    elif direction == "backward":
+                    elif direction in ("backward", "back"):
                         dx_cm -= value
                     elif direction == "left":
                         dy_cm += value
