@@ -83,7 +83,7 @@ class TestTokenizerCriticalMask:
     @pytest.fixture
     def tokenizer(self):
         """Create a tokenizer instance."""
-        return PaligemmaCoTTokenizer(max_len=48, prompt_format="pi05")
+        return PaligemmaCoTTokenizer(max_len=128, prompt_format="pi05")
 
     def test_pi05_format_critical_mask(self, tokenizer):
         """Test critical mask for pi05 format (directional checker)."""
@@ -98,7 +98,7 @@ class TestTokenizerCriticalMask:
         )
 
         # Decode tokens to verify critical tokens
-        pieces = [tokenizer._tokenizer.id_to_piece(t) for t in tokens if attn_mask[tokens.tolist().index(t)]]
+        pieces = [tokenizer._tokenizer.id_to_piece(int(t)) for i, t in enumerate(tokens) if attn_mask[i]]
 
         # Check that numeric_mask is only True for tokens with digits or directional words
         # and only within the reasoning span
@@ -216,10 +216,10 @@ class TestTokenizerCriticalMask:
         )
 
         # All outputs should have same length as max_len
-        assert len(tokens) == tokenizer._max_len
-        assert len(attn_mask) == tokenizer._max_len
-        assert len(reasoning_mask) == tokenizer._max_len
-        assert len(numeric_mask) == tokenizer._max_len
+        assert len(tokens) == tokenizer._max_len == 128
+        assert len(attn_mask) == tokenizer._max_len == 128
+        assert len(reasoning_mask) == tokenizer._max_len == 128
+        assert len(numeric_mask) == tokenizer._max_len == 128
 
         # Masks should be boolean arrays
         assert attn_mask.dtype == bool
