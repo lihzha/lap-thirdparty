@@ -124,8 +124,34 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         """Initialize persistent TF iterator with checkpoint support."""
         import tensorflow as tf
 
-        # Create iterator from the underlying TF dataset
-        self._tf_iterator = iter(self._dataset)
+        # Get the underlying TensorFlow dataset if available
+        # For RLDS datasets (DroidCoTDataset, OXECoTDatasets), they have a .dataset attribute
+        # that contains the actual tf.data.Dataset
+        if hasattr(self._dataset, 'dataset'):
+            tf_dataset = self._dataset.dataset
+        elif isinstance(self._dataset, tf.data.Dataset):
+            tf_dataset = self._dataset
+        else:
+            logging.warning(
+                f"Cannot create persistent iterator: dataset type {type(self._dataset)} "
+                "does not expose a TensorFlow dataset. Iterator checkpointing disabled."
+            )
+            self.persistent_iterator = False
+            return
+
+        # Create a TF iterator that can be checkpointed
+        # We need to use iter() to create the iterator, which will be checkpointed
+        self._tf_iterator = iter(tf_dataset)
+
+        # Verify the iterator is trackable
+        if not isinstance(self._tf_iterator, tf.python.trackable.base.Trackable):
+            logging.warning(
+                f"Iterator type {type(self._tf_iterator)} is not trackable. "
+                "This may happen with certain dataset operations. Iterator checkpointing disabled."
+            )
+            self.persistent_iterator = False
+            self._tf_iterator = None
+            return
 
         # Create TF checkpoint for the iterator
         self._tf_checkpoint = tf.train.Checkpoint(iterator=self._tf_iterator)
@@ -181,10 +207,24 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         # If using persistent iterator, use the stored TF iterator
         if self.persistent_iterator and self._tf_iterator is not None:
             dataset_iter = self._tf_iterator
+            # TF iterators yield EagerTensors, need to convert to numpy
+            import tensorflow as tf
+
+            def to_numpy(x):
+                """Convert TF tensor to numpy if needed."""
+                if isinstance(x, tf.Tensor):
+                    return x.numpy()
+                return x
+
         else:
             dataset_iter = iter(self._dataset)
+            # Regular dataset iterator already yields numpy arrays
+            to_numpy = lambda x: x
 
         for sample in dataset_iter:
+            # Convert sample from TF tensors to numpy if needed
+            sample = jax.tree.map(to_numpy, sample)
+
             if self._is_batched:
                 # Transforms are designed to be applied to individual samples. So we need to split the batch into
                 # individual samples and apply the transform to each sample individually.

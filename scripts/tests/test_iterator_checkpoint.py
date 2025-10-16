@@ -336,6 +336,78 @@ class TestIteratorCheckpointing:
 
         print("✓ End-to-end training checkpoint/resume scenario works correctly")
 
+    def test_rlds_style_dataset_with_wrapper(self, temp_checkpoint_dir):
+        """Test checkpointing with a dataset wrapper (like RLDS datasets)."""
+        checkpoint_dir = str(temp_checkpoint_dir / "rlds_wrapper_test")
+
+        # Create a mock dataset wrapper that mimics RLDS dataset structure
+        class MockRLDSDataset:
+            """Mimics structure of DroidCoTDataset/OXECoTDatasets."""
+
+            def __init__(self, tf_dataset):
+                # Store the underlying TF dataset (like RLDS datasets do)
+                self.dataset = tf_dataset
+
+            def __iter__(self):
+                # Return numpy iterator (like RLDS datasets do)
+                return self.dataset.as_numpy_iterator()
+
+        # Create underlying TF dataset
+        tf_dataset = tf.data.Dataset.range(1000).batch(10)
+
+        # Wrap it like RLDS does
+        wrapped_dataset = MockRLDSDataset(tf_dataset)
+
+        # Create persistent iterable
+        iterable1 = _data_loader.IterableTransformedDataset(
+            batch_size=10,
+            dataset=wrapped_dataset,
+            transforms=[],
+            is_batched=True,
+            persistent_iterator=True,
+        )
+
+        # Verify it found the underlying TF dataset
+        assert iterable1._tf_iterator is not None, "Should find underlying TF dataset"
+        assert iterable1._tf_checkpoint is not None, "Should create checkpoint"
+
+        # Consume some batches
+        iter1 = iter(iterable1)
+        for _ in range(5):
+            _ = next(iter1)
+
+        # Save checkpoint
+        iterable1.save_iterator_checkpoint(checkpoint_dir)
+
+        # Get expected next batch
+        expected_batch = next(iter1)
+
+        # Create new wrapped dataset
+        tf_dataset2 = tf.data.Dataset.range(1000).batch(10)
+        wrapped_dataset2 = MockRLDSDataset(tf_dataset2)
+
+        # Create new iterable and restore
+        iterable2 = _data_loader.IterableTransformedDataset(
+            batch_size=10,
+            dataset=wrapped_dataset2,
+            transforms=[],
+            is_batched=True,
+            persistent_iterator=True,
+        )
+
+        iterable2.restore_iterator_checkpoint(checkpoint_dir)
+        iter2 = iter(iterable2)
+
+        # First batch should match
+        restored_batch = next(iter2)
+        np.testing.assert_array_equal(
+            restored_batch,
+            expected_batch,
+            err_msg="Restored batch from wrapped dataset should match expected",
+        )
+
+        print("✓ RLDS-style dataset wrapper checkpointing works correctly")
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])
