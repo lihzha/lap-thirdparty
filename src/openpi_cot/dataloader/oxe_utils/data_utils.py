@@ -484,18 +484,8 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
 
     Rrel = tf.linalg.matmul(R2, R1, transpose_a=True)  # Rrel = R2^T * R1
 
-    # Extract back Euler from Rrel, here only for "xyz" (extendable)
-    r20 = Rrel[..., 2, 0]
-    r21 = Rrel[..., 2, 1]
-    r22 = Rrel[..., 2, 2]
-    r10 = Rrel[..., 1, 0]
-    r00 = Rrel[..., 0, 0]
-
-    theta = tf.asin(-r20)
-    phi = tf.atan2(r21, r22)
-    psi = tf.atan2(r10, r00)
-
-    out = tf.stack([phi, theta, psi], axis=-1)
+    # Extract Euler angles from Rrel using robust method with gimbal lock handling
+    out = _euler_xyz_from_R(Rrel)
     if degrees:
         out = tf.math.multiply(out, 180.0 / _tf_pi(tf.float32))
     return out
