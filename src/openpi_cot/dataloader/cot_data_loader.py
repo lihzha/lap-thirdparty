@@ -143,18 +143,18 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         # We need to use iter() to create the iterator, which will be checkpointed
         self._tf_iterator = iter(tf_dataset)
 
-        # Verify the iterator is trackable
-        if not isinstance(self._tf_iterator, tf.python.trackable.base.Trackable):
+        # Try to create TF checkpoint for the iterator
+        # If the iterator is not trackable, this will fail
+        try:
+            self._tf_checkpoint = tf.train.Checkpoint(iterator=self._tf_iterator)
+        except (ValueError, TypeError) as e:
             logging.warning(
-                f"Iterator type {type(self._tf_iterator)} is not trackable. "
-                "This may happen with certain dataset operations. Iterator checkpointing disabled."
+                f"Cannot create checkpoint for iterator type {type(self._tf_iterator)}: {e}. "
+                "Iterator checkpointing disabled."
             )
             self.persistent_iterator = False
             self._tf_iterator = None
             return
-
-        # Create TF checkpoint for the iterator
-        self._tf_checkpoint = tf.train.Checkpoint(iterator=self._tf_iterator)
 
     def save_iterator_checkpoint(self, directory: str):
         """Save TF iterator state to checkpoint directory."""
