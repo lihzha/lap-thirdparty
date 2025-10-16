@@ -816,6 +816,42 @@ def nyu_franka_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, A
     return trajectory
 
 
+def droid_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    cartesian = tf.cast(trajectory["observation"]["cartesian_position"], tf.float32)
+    gripper = trajectory["observation"]["gripper_position"]
+
+    gripper = tf.cond(
+        tf.equal(tf.rank(cartesian), tf.rank(gripper)),
+        lambda: gripper,  # same rank → no change
+        lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
+    )
+
+    trajectory["state"] = tf.concat(
+        [cartesian, binarize_gripper_actions(invert_gripper_actions(gripper), threshold=0.5)], axis=-1
+    )
+
+    gripper_actions = binarize_gripper_actions(
+        invert_gripper_actions(trajectory["action_dict"]["gripper_position"]), threshold=0.5
+    )
+
+    movement_actions = tf.concat(
+        (
+            cartesian[1:, :3] - cartesian[:-1, :3],
+            euler_diff(
+                cartesian[1:, 3:6],
+                cartesian[:-1, 3:6],
+            ),
+        ),
+        axis=-1,
+    )
+    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    traj_truncated["action"] = tf.concat([movement_actions, tf.clip_by_value(gripper_actions[1:, -1:], 0, 1)], axis=1)
+
+    return traj_truncated
+
+
 def maniskill_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][..., 7:8]
     return trajectory
@@ -1746,7 +1782,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "berkeley_gnm_cory_hall": gnm_dataset_transform,
     "berkeley_gnm_sac_son": gnm_dataset_transform,
     # "droid": droid_baseact_transform,
-    "droid": lambda x: x,
+    "droid": droid_dataset_transform,
     "fmb": fmb_dataset_transform,
     "dobbe": dobbe_dataset_transform,
     "roboset": roboset_dataset_transform,

@@ -22,7 +22,6 @@ from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
-from openpi_cot.dataloader.oxe_utils.transforms import binarize_gripper_actions
 from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 from openpi_cot.transforms import NormalizeActionAndProprio
@@ -896,18 +895,13 @@ class DroidCoTDataset(SingleCoTDataset):
     def apply_restructure(self):
         def restructure(traj):
             """Reformat observation and action keys, sample language instruction."""
-            actions = tf.concat(
-                (
-                    tf.cast(traj["observation"]["cartesian_position"], tf.float32),
-                    binarize_gripper_actions(1 - traj["action_dict"]["gripper_position"], threshold=0.5),
-                ),
-                axis=-1,
-            )
+            if self.standardize_fn is not None:
+                traj = self.standardize_fn(traj)
             actions = convert_action_encoding(
-                action=actions,
+                action=traj["action"],
                 from_encoding=self.action_encoding,
                 to_encoding=self.config.action_encoding,
-                to_delta_cartesian_pose=True,
+                to_delta_cartesian_pose=False,
             )
             # # Pad actions to action_dim to ensure fixed shape for dataset interleaving
             # action_pad_amount = self.action_dim - tf.shape(actions)[-1]
@@ -968,16 +962,6 @@ class DroidCoTDataset(SingleCoTDataset):
                     lambda: traj["observation"][self.spec.images_list[1]],
                 )
 
-            cartesian = tf.cast(traj["observation"]["cartesian_position"], tf.float32)
-            gripper = traj["observation"]["gripper_position"]
-
-            gripper = tf.cond(
-                tf.equal(tf.rank(cartesian), tf.rank(gripper)),
-                lambda: gripper,  # same rank → no change
-                lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
-            )
-
-            state = tf.concat([cartesian, binarize_gripper_actions(1 - gripper, threshold=0.5)], axis=-1)
             # state = convert_state_encoding(
             #     state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
             # )
@@ -985,20 +969,11 @@ class DroidCoTDataset(SingleCoTDataset):
             # Determine state type from state encoding
             state_type_str = state_encoding_to_type(self.config.state_encoding)
 
-            # # Pad state to action_dim to ensure fixed shape for dataset interleaving
-            # state_pad_amount = self.action_dim - tf.shape(state)[-1]
-            # state = tf.pad(
-            #     state,
-            #     [[0, 0], [0, state_pad_amount]],
-            # )
-            # # Set static shape for TensorFlow's shape inference
-            # state.set_shape([None, self.action_dim])
-
             _return_dict = {
                 "actions": tf.cast(actions, tf.float32),
                 "observation": {
                     self.spec.primary_image_key: exterior_img,
-                    "state": tf.cast(state, tf.float32),
+                    "state": tf.cast(traj["state"], tf.float32),
                 },
                 "prompt": instruction_vec,
                 "language_actions": lang_tensor,
@@ -1792,11 +1767,15 @@ class OXECoTDatasets:
         # For quantiles, use conservative bounds (global min/max across all datasets)
         # Pad each dataset's quantiles to action_dim first, then compute min/max
         action_q01_padded = [
-            np.pad(stats["actions"].q01, (0, action_dim - len(stats["actions"].q01)), mode="constant", constant_values=0)
+            np.pad(
+                stats["actions"].q01, (0, action_dim - len(stats["actions"].q01)), mode="constant", constant_values=0
+            )
             for stats in all_dataset_statistics.values()
         ]
         action_q99_padded = [
-            np.pad(stats["actions"].q99, (0, action_dim - len(stats["actions"].q99)), mode="constant", constant_values=1)
+            np.pad(
+                stats["actions"].q99, (0, action_dim - len(stats["actions"].q99)), mode="constant", constant_values=1
+            )
             for stats in all_dataset_statistics.values()
         ]
         action_q01 = np.min(action_q01_padded, axis=0)
@@ -1868,11 +1847,15 @@ class OXECoTDatasets:
             # For quantiles, use conservative bounds
             # Pad each dataset's quantiles to action_dim first, then compute min/max
             state_q01_padded = [
-                np.pad(stats["state"].q01, (0, action_dim - len(stats["state"].q01)), mode="constant", constant_values=0)
+                np.pad(
+                    stats["state"].q01, (0, action_dim - len(stats["state"].q01)), mode="constant", constant_values=0
+                )
                 for stats in state_stats_subset.values()
             ]
             state_q99_padded = [
-                np.pad(stats["state"].q99, (0, action_dim - len(stats["state"].q99)), mode="constant", constant_values=1)
+                np.pad(
+                    stats["state"].q99, (0, action_dim - len(stats["state"].q99)), mode="constant", constant_values=1
+                )
                 for stats in state_stats_subset.values()
             ]
             state_q01 = np.min(state_q01_padded, axis=0)
