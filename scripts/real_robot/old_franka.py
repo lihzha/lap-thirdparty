@@ -145,10 +145,7 @@ def main(args: Args):
 
                     request_data = {
                         "observation": {
-                            IMAGE_KEYS[0]: image_tools.resize_with_pad(
-                                curr_obs["observation/image"], 224, 224
-                            ),
-                            
+                            IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
                             "cartesian_position": curr_obs["observation/cartesian_position"],
                             "gripper_position": curr_obs["observation/gripper_position"],
                             "state": curr_obs["observation/state"],
@@ -157,9 +154,9 @@ def main(args: Args):
                         "batch_size": None,
                     }
                     if args.in_camera_frame:
-                        request_data["observation"][IMAGE_KEYS[1]] = image_tools.resize_with_pad(
-                                curr_obs["observation/wrist_image"], 224, 224
-                            ),
+                        request_data["observation"][IMAGE_KEYS[1]] = (
+                            image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
+                        )
 
                     # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                     # Ctrl+C will be handled after the server call is complete
@@ -198,7 +195,7 @@ def main(args: Args):
 
                         # Linearly interpolate to CHUNK_STEPS actions
                         positions = np.linspace(curr_pos, next_pos, CHUNK_STEPS, endpoint=True)
-                        curr_quat = R.from_euler("xyz", curr_rpy, degrees=False).as_quat()  # (x,y,z,w)
+                        curr_quat = R.from_euler("XYZ", curr_rpy, degrees=False).as_quat()  # (x,y,z,w)
                         # grip_vals = np.linspace(curr_grip, next_grip, CHUNK_STEPS, endpoint=True).reshape(-1, 1)
                         grip_vals = np.ones((CHUNK_STEPS, 1)) * curr_grip
                         grip_vals[-1] = next_grip  # ensure last gripper value is the target

@@ -17,6 +17,7 @@ from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 from scipy.spatial.transform import Rotation as R
 import zmq
+
 # Add parent directory to path to import from src
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -31,8 +32,10 @@ DROID_CONTROL_FREQUENCY = 15
 def _to_radians(a, degrees: bool):
     return np.deg2rad(a) if degrees else a
 
+
 def _to_degrees(a, degrees: bool):
     return np.rad2deg(a) if degrees else a
+
 
 def normalize_quat_xyzw(q, eps=1e-12):
     """
@@ -42,6 +45,7 @@ def normalize_quat_xyzw(q, eps=1e-12):
     q = np.asarray(q, dtype=np.float64)
     norm = np.linalg.norm(q, axis=-1, keepdims=True)
     return q / np.clip(norm, eps, None)
+
 
 def euler_to_quat(angles, degrees: bool = False):
     """
@@ -56,9 +60,9 @@ def euler_to_quat(angles, degrees: bool = False):
     angles = np.asarray(angles, dtype=np.float64)
     roll, pitch, yaw = np.moveaxis(angles, -1, 0)  # each (...,)
 
-    roll  = _to_radians(roll, degrees)
+    roll = _to_radians(roll, degrees)
     pitch = _to_radians(pitch, degrees)
-    yaw   = _to_radians(yaw, degrees)
+    yaw = _to_radians(yaw, degrees)
 
     cr = np.cos(roll * 0.5)
     sr = np.sin(roll * 0.5)
@@ -68,13 +72,14 @@ def euler_to_quat(angles, degrees: bool = False):
     sy = np.sin(yaw * 0.5)
 
     # ZYX (yaw, pitch, roll) → quaternion (xyzw)
-    w = cr*cp*cy + sr*sp*sy
-    x = sr*cp*cy - cr*sp*sy
-    y = cr*sp*cy + sr*cp*sy
-    z = cr*cp*sy - sr*sp*cy
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
 
     q = np.stack([x, y, z, w], axis=-1)
     return normalize_quat_xyzw(q)
+
 
 def quat_to_euler(q, degrees: bool = False):
     """
@@ -90,23 +95,24 @@ def quat_to_euler(q, degrees: bool = False):
     x, y, z, w = np.moveaxis(q, -1, 0)  # each (...,)
 
     # roll (x-axis rotation)
-    sinr_cosp = 2.0*(w*x + y*z)
-    cosr_cosp = 1.0 - 2.0*(x*x + y*y)
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
     roll = np.arctan2(sinr_cosp, cosr_cosp)
 
     # pitch (y-axis rotation)
-    sinp = 2.0*(w*y - z*x)
+    sinp = 2.0 * (w * y - z * x)
     # clamp to handle numerical edge cases
     sinp_clamped = np.clip(sinp, -1.0, 1.0)
     pitch = np.arcsin(sinp_clamped)
 
     # yaw (z-axis rotation)
-    siny_cosp = 2.0*(w*z + x*y)
-    cosy_cosp = 1.0 - 2.0*(y*y + z*z)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     yaw = np.arctan2(siny_cosp, cosy_cosp)
 
     angles = np.stack([roll, pitch, yaw], axis=-1)
     return _to_degrees(angles, degrees)
+
 
 @dataclasses.dataclass
 class Args:
@@ -151,14 +157,13 @@ def main(args: Args):
 
     # Initialize the Panda environment. Using joint velocity action space and gripper position action space is very important.
     # env = RobotEnv(action_space="joint_velocity", gripper_action_space="position")
-    
+
     context = zmq.Context()
     socket = context.socket(zmq.REP)
     port = 5555
-    socket.bind(f'tcp://*:{port}')
-    print(f'Server started on port {port}')
+    socket.bind(f"tcp://*:{port}")
+    print(f"Server started on port {port}")
 
-   
     extrinsics = [
         0.19344852600560863,
         -0.4704189157280809,
@@ -176,7 +181,6 @@ def main(args: Args):
     cam_to_base_extrinsics_matrix = np.eye(4, dtype=float)
     cam_to_base_extrinsics_matrix[:3, :3] = rot_mat
     cam_to_base_extrinsics_matrix[:3, 3] = pos
-
 
     # while True:
     #     env.reset()
@@ -206,13 +210,13 @@ def main(args: Args):
             try:
                 # Get the current observation
                 req = socket.recv_pyobj()
-                print('req', req)
-                if 'reset' in req:
+                print("req", req)
+                if "reset" in req:
                     time.sleep(1 / DROID_CONTROL_FREQUENCY)
                     socket.send_pyobj({})
                     continue
-                
-                obs = req['obs']
+
+                obs = req["obs"]
                 curr_obs = _extract_observation(
                     args,
                     obs,
@@ -226,10 +230,7 @@ def main(args: Args):
 
                     request_data = {
                         "observation": {
-                            IMAGE_KEYS[0]: image_tools.resize_with_pad(
-                                curr_obs["observation/image"], 224, 224
-                            ),
-                            
+                            IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
                             "cartesian_position": curr_obs["observation/cartesian_position"],
                             "gripper_position": curr_obs["observation/gripper_position"],
                             "state": curr_obs["observation/state"],
@@ -238,9 +239,9 @@ def main(args: Args):
                         "batch_size": None,
                     }
                     if args.in_camera_frame:
-                        request_data["observation"][IMAGE_KEYS[1]] = image_tools.resize_with_pad(
-                                curr_obs["observation/wrist_image"], 224, 224
-                            ),
+                        request_data["observation"][IMAGE_KEYS[1]] = (
+                            image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
+                        )
 
                     # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                     # Ctrl+C will be handled after the server call is complete
@@ -276,7 +277,7 @@ def main(args: Args):
 
                         # Linearly interpolate to CHUNK_STEPS actions
                         positions = np.linspace(curr_pos, next_pos, CHUNK_STEPS, endpoint=True)
-                        curr_quat = R.from_euler("xyz", curr_rpy, degrees=False).as_quat()  # (x,y,z,w)
+                        curr_quat = R.from_euler("XYZ", curr_rpy, degrees=False).as_quat()  # (x,y,z,w)
                         # grip_vals = np.linspace(curr_grip, next_grip, CHUNK_STEPS, endpoint=True).reshape(-1, 1)
                         grip_vals = np.ones((CHUNK_STEPS, 1)) * curr_grip
                         grip_vals[-1] = next_grip  # ensure last gripper value is the target
@@ -301,14 +302,14 @@ def main(args: Args):
                 else:
                     action = np.concatenate([action[:-1], np.zeros((1,))])
 
-                rep = {"action": 
-                            {
-                                "base_pose": obs["base_pose"],
-                                "arm_pos": action[:3],
-                                "arm_quat": euler_to_quat(action[3:6]),
-                                "gripper_pos": action[-1:],
-                            }
-                        }
+                rep = {
+                    "action": {
+                        "base_pose": obs["base_pose"],
+                        "arm_pos": action[:3],
+                        "arm_quat": euler_to_quat(action[3:6]),
+                        "gripper_pos": action[-1:],
+                    }
+                }
                 socket.send_pyobj(rep)
 
                 # Sleep to match DROID data collection frequency
@@ -329,13 +330,11 @@ def main(args: Args):
 
 
 def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
-
     base_image = cv2.imdecode(obs_dict["base_image"], cv2.IMREAD_COLOR)
     wrist_image = cv2.imdecode(obs_dict["wrist_image"], cv2.IMREAD_COLOR)
     # In addition to image observations, also capture the proprioceptive state
     cartesian_position = np.concatenate([obs_dict["arm_pos"], quat_to_euler(obs_dict["arm_quat"])])
     gripper_position = np.array(obs_dict["gripper_pos"]).item()
-
 
     if gripper_position > 0.5:
         gripper_position = 1.0
@@ -346,7 +345,7 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
         "observation/image": base_image[None],
         "observation/wrist_image": wrist_image[None],
         "observation/cartesian_position": cartesian_position,
-        "observation/gripper_position": np.array(gripper_position).reshape((-1,1)),
+        "observation/gripper_position": np.array(gripper_position).reshape((-1, 1)),
         "observation/state": np.concatenate([cartesian_position, np.array(gripper_position)[None]]),
     }
 
