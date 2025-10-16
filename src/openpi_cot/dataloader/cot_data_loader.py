@@ -109,12 +109,68 @@ def _make_iterable_transforms(
 
 
 class IterableTransformedDataset(up.IterableTransformedDataset):
-    def __init__(self, batch_size, *args, **kwargs):
+    def __init__(self, batch_size, *args, persistent_iterator=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.batch_size = batch_size
+        self.persistent_iterator = persistent_iterator
+        self._tf_iterator = None
+        self._tf_checkpoint = None
+
+        # If persistent, set up TF iterator and checkpoint
+        if persistent_iterator:
+            self._setup_persistent_iterator()
+
+    def _setup_persistent_iterator(self):
+        """Initialize persistent TF iterator with checkpoint support."""
+        import tensorflow as tf
+
+        # Create iterator from the underlying TF dataset
+        self._tf_iterator = iter(self._dataset)
+
+        # Create TF checkpoint for the iterator
+        self._tf_checkpoint = tf.train.Checkpoint(iterator=self._tf_iterator)
+
+    def save_iterator_checkpoint(self, directory: str):
+        """Save TF iterator state to checkpoint directory."""
+        if not self.persistent_iterator or self._tf_checkpoint is None:
+            logging.warning("Cannot save iterator checkpoint: persistent_iterator not enabled")
+            return
+
+        import tensorflow as tf
+
+        # Ensure directory exists
+        tf.io.gfile.makedirs(directory)
+
+        # Save checkpoint
+        save_path = self._tf_checkpoint.save(file_prefix=f"{directory}/iterator")
+        logging.info(f"Saved TF iterator checkpoint to {save_path}")
+
+    def restore_iterator_checkpoint(self, directory: str):
+        """Restore TF iterator state from checkpoint directory."""
+        if not self.persistent_iterator or self._tf_checkpoint is None:
+            logging.warning("Cannot restore iterator checkpoint: persistent_iterator not enabled")
+            return
+
+        import tensorflow as tf
+
+        # Find latest checkpoint
+        latest_checkpoint = tf.train.latest_checkpoint(directory)
+        if latest_checkpoint is None:
+            logging.warning(f"No iterator checkpoint found in {directory}")
+            return
+
+        # Restore checkpoint
+        self._tf_checkpoint.restore(latest_checkpoint)
+        logging.info(f"Restored TF iterator checkpoint from {latest_checkpoint}")
 
     def __iter__(self):
-        for sample in self._dataset:
+        # If using persistent iterator, use the stored TF iterator
+        if self.persistent_iterator and self._tf_iterator is not None:
+            dataset_iter = self._tf_iterator
+        else:
+            dataset_iter = iter(self._dataset)
+
+        for sample in dataset_iter:
             if self._is_batched:
                 # Transforms are designed to be applied to individual samples. So we need to split the batch into
                 # individual samples and apply the transform to each sample individually.
@@ -143,6 +199,7 @@ def create_data_loader(
     split: str = "train",
     framework: Literal["jax", "pytorch"] = "jax",
     hash_tables: dict | None = None,
+    persistent_iterator: bool = False,
 ) -> up.DataLoader[tuple[CoTObservation, _model.Actions]]:
     # Avoid import-time side effects:
     # Only clear LEROBOT_HOME if we are about to construct a LeRobot dataset.
@@ -173,9 +230,13 @@ def create_data_loader(
 
         # 2) transforms (split-aware)
         tx = _make_iterable_transforms(data_cfg, skip_norm_stats=data_cfg.norm_stats is None, split=split)
-        iterable = IterableTransformedDataset(max(1, config.batch_size // jax.process_count()), ds, tx, is_batched=True)
+        iterable = IterableTransformedDataset(
+            max(1, config.batch_size // jax.process_count()), ds, tx, is_batched=True, persistent_iterator=persistent_iterator
+        )
 
-        return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg)
+        return CoTRLDSDataLoader(
+            iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg, persistent_iterator=persistent_iterator
+        )
 
     # Non-RLDS: delegate entirely to upstream (this will require torch if used)
     return up.create_torch_data_loader(
@@ -207,12 +268,14 @@ class CoTRLDSDataLoader:
         sharding: jax.sharding.Sharding | None = None,
         num_batches: int | None = None,
         data_cfg: _config.CoTDataConfig,
+        persistent_iterator: bool = False,
     ):
         self._dataset = dataset
         self._num_batches = num_batches
         self._data_cfg = data_cfg
         self._n_proc = jax.process_count()
         self._proc_idx = jax.process_index()
+        self._persistent_iterator = persistent_iterator
 
         if sharding is None:
             sharding = jax.sharding.PositionalSharding(jax.local_devices())
@@ -298,3 +361,21 @@ class CoTRLDSDataLoader:
     @property
     def tokenizer(self) -> PaligemmaCoTTokenizer:
         return self._dataset._transform.transforms[-2].tokenizer
+
+    def save_iterator_checkpoint(self, directory: str):
+        """Save TF iterator state if persistent iterator is enabled."""
+        if not self._persistent_iterator:
+            return
+
+        # Delegate to the underlying dataset if it supports checkpointing
+        if hasattr(self._dataset, "save_iterator_checkpoint"):
+            self._dataset.save_iterator_checkpoint(directory)
+
+    def restore_iterator_checkpoint(self, directory: str):
+        """Restore TF iterator state if persistent iterator is enabled."""
+        if not self._persistent_iterator:
+            return
+
+        # Delegate to the underlying dataset if it supports checkpointing
+        if hasattr(self._dataset, "restore_iterator_checkpoint"):
+            self._dataset.restore_iterator_checkpoint(directory)

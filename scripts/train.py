@@ -424,19 +424,8 @@ def main(config: _config.TrainConfig):
         sharding=data_sharding,
         shuffle=True,
         seed=config.seed,
+        persistent_iterator=True,
     )
-    data_iter = iter(data_loader)
-
-    log_mem("Before getting batch")
-    # if resuming and start_step > 0:
-    #     # Fast-forward the iterator so that step `start_step` uses batch index `start_step`.
-    #     for _ in range(start_step):
-    #         _ = next(data_iter)
-    batch = next(data_iter)
-
-    log_mem("After getting batch")
-    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
-    sharding.log_batch_sharding(batch)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
@@ -449,6 +438,15 @@ def main(config: _config.TrainConfig):
 
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+
+    # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
+    data_iter = iter(data_loader)
+    log_mem("Before getting batch")
+    batch = next(data_iter)
+
+    log_mem("After getting batch")
+    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
+    sharding.log_batch_sharding(batch)
 
     train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
@@ -466,6 +464,7 @@ def main(config: _config.TrainConfig):
             split="val",
             max_samples=getattr(config.data, "val_max_samples", None),
             hash_tables=data_loader.dataset.hash_tables,
+            persistent_iterator=False,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
