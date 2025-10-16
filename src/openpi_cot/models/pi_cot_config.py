@@ -34,7 +34,16 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     pi05: bool = False
     discrete_state_input: bool = None
-    prompt_format: Literal["pi05", "pi0", "vqa", "coordinate_system", "schema_compact"] = "pi05"
+    prompt_format: Literal[
+        "pi05",
+        "pi0",
+        "vqa",
+        "coordinate_system",
+        "schema_compact",
+        "schema_compact_with_rotation",
+        "schema_compact_bimanual",
+        "schema_compact_bimanual_with_rotation",
+    ] = "pi05"
 
     aug_wrist_image: bool = True
 
