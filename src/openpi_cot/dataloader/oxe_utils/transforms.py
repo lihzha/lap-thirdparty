@@ -1373,6 +1373,20 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 
 
 def molmoact_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    trajectory["action"] = tf.concat(
+        (
+            trajectory["action"][:, :-1],
+            invert_gripper_actions(trajectory["action"][:, -1:]),
+        ),
+        axis=-1,
+    )
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :-1],
+            invert_gripper_actions(trajectory["observation"]["state"][:, -1:]),
+        ),
+        axis=-1,
+    )
     return trajectory
 
 
