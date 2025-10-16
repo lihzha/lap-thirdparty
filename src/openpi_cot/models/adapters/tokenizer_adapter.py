@@ -121,7 +121,7 @@ class PromptFormat:
                     if component.include_state_type:
                         parts.append(component.template.format(state="", state_label="None"))
                     else:
-                        parts.append(component.template.format(state=""))
+                        parts.append(component.template.format(state="", state_label=""))
                 else:
                     if self.state_config is None:
                         raise ValueError(f"State config required for prompt format '{self.name}'")
@@ -170,7 +170,7 @@ PI05_PROMPT_FORMAT = PromptFormat(
     name="pi05",
     components=[
         PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=False),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
         PromptComponent("action_prefix", "Action: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
@@ -200,7 +200,7 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     name="coordinate_system",
     components=[
         PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=True),
         PromptComponent("schema", "Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up."),
         PromptComponent("action_prefix", "Actions: "),
     ],

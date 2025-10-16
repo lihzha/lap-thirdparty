@@ -267,9 +267,9 @@ class PiCoT(_pi0.Pi0):
                 num_frames_in_image = observation.images[name].shape[1]
 
                 # Extract first frame for this image
-                first_frame_tokens.append(img_tokens_all[:, offset:offset+num_patches])
-                first_frame_masks.append(img_mask_all[:, offset:offset+num_patches])
-                first_frame_ar_masks.append(img_ar_mask_all[:, offset:offset+num_patches])
+                first_frame_tokens.append(img_tokens_all[:, offset : offset + num_patches])
+                first_frame_masks.append(img_mask_all[:, offset : offset + num_patches])
+                first_frame_ar_masks.append(img_ar_mask_all[:, offset : offset + num_patches])
 
                 # Move offset by all frames of this image
                 offset += num_frames_in_image * num_patches
@@ -413,7 +413,7 @@ class PiCoT(_pi0.Pi0):
 
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
 
-        # Diffusion (actions) loss
+        # Diffusion (actions) loss. TODO: no sample mask for actions! Sample mask may only make sense for langact because it is obtained from cot_policy.is_idle_language_action
         if self.enable_action_training:
             # For action training, text tokens should not use autoregressive masking
             text_ar_mask = jnp.zeros_like(text_mask, dtype=bool)
