@@ -11,8 +11,9 @@ This test verifies that:
 import numpy as np
 import tensorflow as tf
 
+from openpi_cot.dataloader.oxe_utils.data_utils import _euler_xyz_from_R
+from openpi_cot.dataloader.oxe_utils.data_utils import _R_from_euler_xyz
 from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-from openpi_cot.dataloader.oxe_utils.data_utils import _R_from_euler_xyz, _euler_xyz_from_R
 
 
 def test_euler_diff_basic():
@@ -183,7 +184,7 @@ def test_euler_diff_usage_in_transforms():
     position_deltas = eef_states_tf[1:, :3] - eef_states_tf[:-1, :3]
     rotation_deltas = euler_diff(
         eef_states_tf[1:, 3:6],  # next orientation
-        eef_states_tf[:-1, 3:6]  # current orientation
+        eef_states_tf[:-1, 3:6],  # current orientation
     )
 
     movement_actions = tf.concat([position_deltas, rotation_deltas], axis=-1)
@@ -197,12 +198,12 @@ def test_euler_diff_usage_in_transforms():
 
     for i in range(len(movement_actions)):
         # Position: simple addition
-        next_pos = reconstructed_positions[-1] + position_deltas[i:i+1]
+        next_pos = reconstructed_positions[-1] + position_deltas[i : i + 1]
         reconstructed_positions.append(next_pos)
 
         # Orientation: matrix multiplication
         R_current = reconstructed_orientations_R[-1]
-        R_delta = _R_from_euler_xyz(rotation_deltas[i:i+1])
+        R_delta = _R_from_euler_xyz(rotation_deltas[i : i + 1])
         R_next = tf.linalg.matmul(R_current, R_delta)
         reconstructed_orientations_R.append(R_next)
 

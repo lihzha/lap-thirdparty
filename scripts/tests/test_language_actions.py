@@ -3,12 +3,11 @@
 import numpy as np
 import pytest
 
-from src.openpi_cot.policies.cot_policy import COMPACT_DECODING_SCHEMA
-from src.openpi_cot.policies.cot_policy import VERBOSE_DECODING_SCHEMA
-from src.openpi_cot.policies.cot_policy import ActionDecodingSchema
-from src.openpi_cot.policies.utils import is_idle_language_action
-from src.openpi_cot.policies.utils import summarize_bimanual_numeric_actions
-from src.openpi_cot.policies.utils import summarize_numeric_actions
+from openpi_cot.policies.cot_policy import COMPACT_DECODING_SCHEMA
+from openpi_cot.policies.cot_policy import VERBOSE_DECODING_SCHEMA
+from openpi_cot.policies.utils import is_idle_language_action
+from openpi_cot.policies.utils import summarize_bimanual_numeric_actions
+from openpi_cot.policies.utils import summarize_numeric_actions
 
 
 class TestLanguageActionEncoding:
@@ -281,7 +280,7 @@ class TestLanguageActionDecoding:
     def test_compact_decoding_with_rotation(self):
         """Test parsing compact format with rotation."""
         # Use the compact_with_rotation schema from the registry
-        from src.openpi_cot.policies.cot_policy import COMPACT_WITH_ROTATION_DECODING_SCHEMA
+        from openpi_cot.policies.cot_policy import COMPACT_WITH_ROTATION_DECODING_SCHEMA
 
         schema = COMPACT_WITH_ROTATION_DECODING_SCHEMA
 
@@ -328,7 +327,7 @@ class TestLanguageActionDecoding:
 
     def test_bimanual_compact_decoding(self):
         """Test parsing bimanual compact format."""
-        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_DECODING_SCHEMA
+        from openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_DECODING_SCHEMA
 
         schema = COMPACT_BIMANUAL_DECODING_SCHEMA
         reasoning = "Action: <L +09 +05 -08 1 R +03 -02 +01 0>"
@@ -345,7 +344,7 @@ class TestLanguageActionDecoding:
 
     def test_bimanual_compact_decoding_with_rotation(self):
         """Test parsing bimanual compact format with rotation."""
-        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
+        from openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
 
         schema = COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
         reasoning = "Action: <L +09 +05 -08 +10 -05 +15 1 R +03 -02 +01 +20 +10 -05 0>"
@@ -363,7 +362,9 @@ class TestLanguageActionDecoding:
     def test_bimanual_verbose_decoding(self):
         """Test parsing verbose bimanual format."""
         schema = VERBOSE_DECODING_SCHEMA
-        reasoning = "Left arm: move forward 5 cm and set gripper to 1.0. Right arm: move back 3 cm and set gripper to 0.0"
+        reasoning = (
+            "Left arm: move forward 5 cm and set gripper to 1.0. Right arm: move back 3 cm and set gripper to 0.0"
+        )
 
         left_trans, left_grip, right_trans, right_grip = schema.parse_bimanual_language_to_deltas(reasoning)
 
@@ -420,18 +421,20 @@ class TestRoundTripConsistency:
 
     def test_compact_roundtrip_with_rotation(self):
         """Test compact format roundtrip with rotation."""
-        from src.openpi_cot.policies.cot_policy import COMPACT_WITH_ROTATION_DECODING_SCHEMA
+        from openpi_cot.policies.cot_policy import COMPACT_WITH_ROTATION_DECODING_SCHEMA
 
         # Action with rotation: dx=9cm, dy=5cm, dz=-8cm, roll=10°, pitch=-5°, yaw=15°, gripper=1
-        original_action = np.array([
-            0.09,
-            0.05,
-            -0.08,
-            10 * np.pi / 180,  # roll: +10°
-            -5 * np.pi / 180,  # pitch: -5°
-            15 * np.pi / 180,  # yaw: +15°
-            1.0,
-        ])
+        original_action = np.array(
+            [
+                0.09,
+                0.05,
+                -0.08,
+                10 * np.pi / 180,  # roll: +10°
+                -5 * np.pi / 180,  # pitch: -5°
+                15 * np.pi / 180,  # yaw: +15°
+                1.0,
+            ]
+        )
 
         # Encode
         language = summarize_numeric_actions(original_action, sum_decimal="compact", include_rotation=True)
@@ -447,14 +450,28 @@ class TestRoundTripConsistency:
 
     def test_bimanual_compact_roundtrip(self):
         """Test bimanual compact format roundtrip."""
-        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_DECODING_SCHEMA
+        from openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_DECODING_SCHEMA
 
         # Left arm: forward 9cm, left 5cm, down 8cm, gripper open
         # Right arm: forward 3cm, right 2cm, up 1cm, gripper closed
-        original_action = np.array([
-            0.09, 0.05, -0.08, 0.0, 0.0, 0.0, 1.0,  # Left arm
-            0.03, -0.02, 0.01, 0.0, 0.0, 0.0, 0.0,  # Right arm
-        ])
+        original_action = np.array(
+            [
+                0.09,
+                0.05,
+                -0.08,
+                0.0,
+                0.0,
+                0.0,
+                1.0,  # Left arm
+                0.03,
+                -0.02,
+                0.01,
+                0.0,
+                0.0,
+                0.0,
+                0.0,  # Right arm
+            ]
+        )
 
         # Encode
         language = summarize_bimanual_numeric_actions(original_action, sum_decimal="compact", include_rotation=False)
@@ -472,17 +489,27 @@ class TestRoundTripConsistency:
 
     def test_bimanual_compact_roundtrip_with_rotation(self):
         """Test bimanual compact format roundtrip with rotation."""
-        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
+        from openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
 
         # Left arm with rotation, right arm with rotation
-        original_action = np.array([
-            0.09, 0.05, -0.08,
-            10 * np.pi / 180, -5 * np.pi / 180, 15 * np.pi / 180,
-            1.0,  # Left arm
-            0.03, -0.02, 0.01,
-            20 * np.pi / 180, 10 * np.pi / 180, -5 * np.pi / 180,
-            0.0,  # Right arm
-        ])
+        original_action = np.array(
+            [
+                0.09,
+                0.05,
+                -0.08,
+                10 * np.pi / 180,
+                -5 * np.pi / 180,
+                15 * np.pi / 180,
+                1.0,  # Left arm
+                0.03,
+                -0.02,
+                0.01,
+                20 * np.pi / 180,
+                10 * np.pi / 180,
+                -5 * np.pi / 180,
+                0.0,  # Right arm
+            ]
+        )
 
         # Encode
         language = summarize_bimanual_numeric_actions(original_action, sum_decimal="compact", include_rotation=True)
@@ -576,10 +603,7 @@ class TestIdleChecker:
         # Custom threshold: movement of 5cm should be idle with threshold=10cm
         language_action = "<+03 +04 +00 1>"  # sqrt(9+16) = 5cm < 10cm
         assert is_idle_language_action(
-            language_action,
-            sum_decimal="compact",
-            include_rotation=False,
-            translation_threshold=10.0
+            language_action, sum_decimal="compact", include_rotation=False, translation_threshold=10.0
         )
 
     def test_compact_format_with_rotation_both_below_threshold(self):
@@ -645,10 +669,7 @@ class TestIdleChecker:
 
         # With custom threshold of 10.0cm, this IS idle
         assert is_idle_language_action(
-            language_action,
-            sum_decimal="compact",
-            include_rotation=False,
-            translation_threshold=10.0
+            language_action, sum_decimal="compact", include_rotation=False, translation_threshold=10.0
         )
 
     def test_rotation_threshold_custom(self):
@@ -661,10 +682,7 @@ class TestIdleChecker:
 
         # With custom rotation threshold (5.0deg), this is NOT idle
         assert not is_idle_language_action(
-            language_action,
-            sum_decimal="compact",
-            include_rotation=True,
-            rotation_threshold_deg=5.0
+            language_action, sum_decimal="compact", include_rotation=True, rotation_threshold_deg=5.0
         )
 
 
