@@ -233,7 +233,18 @@ def summarize_bimanual_numeric_actions(arr_like, sum_decimal: str, include_rotat
     left_actions = arr[..., :7]  # [x, y, z, r, p, y, gripper]
     right_actions = arr[..., 7:14]  # [x, y, z, r, p, y, gripper]
 
-    # Summarize each arm separately
+    # Handle compact format with bimanual structure: <L ... R ...>
+    if sum_decimal == "compact":
+        left_compact = _summarize_compact_numeric_actions(left_actions, include_rotation)
+        right_compact = _summarize_compact_numeric_actions(right_actions, include_rotation)
+
+        # Remove the angle brackets from individual summaries and combine
+        left_values = left_compact[1:-1]  # Remove < and >
+        right_values = right_compact[1:-1]  # Remove < and >
+
+        return f"<L {left_values} R {right_values}>"
+
+    # Summarize each arm separately for verbose formats
     left_summary = summarize_numeric_actions(left_actions, sum_decimal, include_rotation)
     right_summary = summarize_numeric_actions(right_actions, sum_decimal, include_rotation)
 

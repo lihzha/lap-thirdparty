@@ -212,6 +212,36 @@ SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
     separator=". ",
 )
 
+SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact_bimanual",
+    components=[
+        PromptComponent(
+            "schema",
+            "Schema: <L dx dy dz g R dx dy dz g>; units cm; +x fwd, +y left, +z up; L=left arm, R=right arm; g∈{0=close,1=open}",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=". ",
+)
+
+SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact_bimanual_with_rotation",
+    components=[
+        PromptComponent(
+            "schema",
+            "Schema: <L dx dy dz dr dp dy g R dx dy dz dr dp dy g>; units cm/deg; +x fwd, +y left, +z up; dr=roll, dp=pitch, dy=yaw; L=left, R=right; g∈{0=close,1=open}",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=". ",
+)
+
 # Registry for easy lookup
 PROMPT_FORMAT_REGISTRY = {
     "pi05": PI05_PROMPT_FORMAT,
@@ -220,6 +250,8 @@ PROMPT_FORMAT_REGISTRY = {
     "coordinate_system": COORDINATE_SYSTEM_PROMPT_FORMAT,
     "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
     "schema_compact_with_rotation": SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT,
+    "schema_compact_bimanual": SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT,
+    "schema_compact_bimanual_with_rotation": SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT,
 }
 
 
@@ -228,7 +260,14 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         self,
         max_len: int = 48,
         prompt_format: Literal[
-            "pi05", "pi0", "vqa", "coordinate_system", "schema_compact", "schema_compact_with_rotation"
+            "pi05",
+            "pi0",
+            "vqa",
+            "coordinate_system",
+            "schema_compact",
+            "schema_compact_with_rotation",
+            "schema_compact_bimanual",
+            "schema_compact_bimanual_with_rotation",
         ]
         | PromptFormat = "pi05",
     ):

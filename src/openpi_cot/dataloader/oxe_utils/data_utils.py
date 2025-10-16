@@ -585,3 +585,32 @@ def coordinate_transform_dobbe(movement_actions):
     e_prime = _euler_xyz_from_R(R_prime)
 
     return tf.concat([t_prime, e_prime], axis=-1)
+
+
+@tf.function
+def coordinate_transform_jaco(movement_actions):
+    """
+    movement_actions: (..., 6) where [:3] = translation deltas (xyz),
+                      [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
+    Returns transformed actions under x'=-y, y'=x, z'=z.
+
+    """
+    movement_actions = tf.convert_to_tensor(movement_actions)
+    dtype = movement_actions.dtype
+
+    # Ensure _C matches input dtype
+    C = tf.constant([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=dtype)
+
+    # translations: t' = C t
+    t = movement_actions[..., :3]
+    t_prime = tf.linalg.matvec(C, t)
+
+    # rotations: R' = C R C^T, then back to Euler XYZ
+    e = movement_actions[..., 3:6]
+    R = _R_from_euler_xyz(e)
+    # _C is symmetric here, but keep transpose for clarity / generality
+    CT = tf.linalg.matrix_transpose(C)
+    R_prime = tf.linalg.matmul(tf.linalg.matmul(C, R), CT)
+    e_prime = _euler_xyz_from_R(R_prime)
+
+    return tf.concat([t_prime, e_prime], axis=-1)

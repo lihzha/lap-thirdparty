@@ -179,6 +179,62 @@ class TestLanguageActionEncoding:
         assert "tilt left 45 degrees" in result
         assert "tilt up 30 degrees" in result
 
+    def test_bimanual_compact_format(self):
+        """Test bimanual compact format without rotation."""
+        # Left arm: forward 9cm, left 5cm, down 8cm, gripper open
+        # Right arm: forward 3cm, right 2cm, up 1cm, gripper closed
+        action = np.array(
+            [
+                0.09,
+                0.05,
+                -0.08,
+                0.0,
+                0.0,
+                0.0,
+                1.0,  # Left arm
+                0.03,
+                -0.02,
+                0.01,
+                0.0,
+                0.0,
+                0.0,
+                0.0,  # Right arm
+            ]
+        )
+
+        result = summarize_bimanual_numeric_actions(action, sum_decimal="compact", include_rotation=False)
+
+        # Format: <L dx dy dz g R dx dy dz g>
+        assert result == "<L +09 +05 -08 1 R +03 -02 +01 0>"
+
+    def test_bimanual_compact_format_with_rotation(self):
+        """Test bimanual compact format with rotation."""
+        # Left arm: forward 9cm, left 5cm, down 8cm, roll +10°, pitch -5°, yaw +15°, gripper open
+        # Right arm: forward 3cm, right 2cm, up 1cm, roll +20°, pitch +10°, yaw -5°, gripper closed
+        action = np.array(
+            [
+                0.09,
+                0.05,
+                -0.08,
+                10 * np.pi / 180,  # roll: +10°
+                -5 * np.pi / 180,  # pitch: -5°
+                15 * np.pi / 180,  # yaw: +15°
+                1.0,  # Left arm
+                0.03,
+                -0.02,
+                0.01,
+                20 * np.pi / 180,  # roll: +20°
+                10 * np.pi / 180,  # pitch: +10°
+                -5 * np.pi / 180,  # yaw: -5°
+                0.0,  # Right arm
+            ]
+        )
+
+        result = summarize_bimanual_numeric_actions(action, sum_decimal="compact", include_rotation=True)
+
+        # Format: <L dx dy dz dr dp dy g R dx dy dz dr dp dy g>
+        assert result == "<L +09 +05 -08 +10 -05 +15 1 R +03 -02 +01 +20 +10 -05 0>"
+
 
 class TestLanguageActionDecoding:
     """Test language string to numeric action conversion."""
@@ -269,6 +325,55 @@ class TestLanguageActionDecoding:
         # Gripper should maintain value from previous step
         np.testing.assert_array_equal(grippers, [1.0, 1.0, 1.0])
 
+    def test_bimanual_compact_decoding(self):
+        """Test parsing bimanual compact format."""
+        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_DECODING_SCHEMA
+
+        schema = COMPACT_BIMANUAL_DECODING_SCHEMA
+        reasoning = "Action: <L +09 +05 -08 1 R +03 -02 +01 0>"
+
+        left_trans, left_grip, right_trans, right_grip = schema.parse_bimanual_language_to_deltas(reasoning)
+
+        # Check left arm
+        np.testing.assert_allclose(left_trans[0], [0.09, 0.05, -0.08], atol=1e-6)
+        assert left_grip[0] == 1.0
+
+        # Check right arm
+        np.testing.assert_allclose(right_trans[0], [0.03, -0.02, 0.01], atol=1e-6)
+        assert right_grip[0] == 0.0
+
+    def test_bimanual_compact_decoding_with_rotation(self):
+        """Test parsing bimanual compact format with rotation."""
+        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
+
+        schema = COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
+        reasoning = "Action: <L +09 +05 -08 +10 -05 +15 1 R +03 -02 +01 +20 +10 -05 0>"
+
+        left_trans, left_grip, right_trans, right_grip = schema.parse_bimanual_language_to_deltas(reasoning)
+
+        # Check left arm (translation only, rotation parsed but not returned)
+        np.testing.assert_allclose(left_trans[0], [0.09, 0.05, -0.08], atol=1e-6)
+        assert left_grip[0] == 1.0
+
+        # Check right arm
+        np.testing.assert_allclose(right_trans[0], [0.03, -0.02, 0.01], atol=1e-6)
+        assert right_grip[0] == 0.0
+
+    def test_bimanual_verbose_decoding(self):
+        """Test parsing verbose bimanual format."""
+        schema = VERBOSE_DECODING_SCHEMA
+        reasoning = "Left arm: move forward 5 cm and set gripper to 1.0. Right arm: move back 3 cm and set gripper to 0.0"
+
+        left_trans, left_grip, right_trans, right_grip = schema.parse_bimanual_language_to_deltas(reasoning)
+
+        # Check left arm
+        np.testing.assert_allclose(left_trans[0], [0.05, 0.0, 0.0], atol=1e-6)
+        assert left_grip[0] == 1.0
+
+        # Check right arm
+        np.testing.assert_allclose(right_trans[0], [-0.03, 0.0, 0.0], atol=1e-6)
+        assert right_grip[0] == 0.0
+
 
 class TestRoundTripConsistency:
     """Test that encoding and decoding are consistent."""
@@ -338,6 +443,59 @@ class TestRoundTripConsistency:
         # Check translation and gripper match
         np.testing.assert_array_equal(translations[0], original_action[:3])
         assert grippers[0] == original_action[6]
+
+    def test_bimanual_compact_roundtrip(self):
+        """Test bimanual compact format roundtrip."""
+        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_DECODING_SCHEMA
+
+        # Left arm: forward 9cm, left 5cm, down 8cm, gripper open
+        # Right arm: forward 3cm, right 2cm, up 1cm, gripper closed
+        original_action = np.array([
+            0.09, 0.05, -0.08, 0.0, 0.0, 0.0, 1.0,  # Left arm
+            0.03, -0.02, 0.01, 0.0, 0.0, 0.0, 0.0,  # Right arm
+        ])
+
+        # Encode
+        language = summarize_bimanual_numeric_actions(original_action, sum_decimal="compact", include_rotation=False)
+        assert language == "<L +09 +05 -08 1 R +03 -02 +01 0>"
+
+        # Decode
+        schema = COMPACT_BIMANUAL_DECODING_SCHEMA
+        left_trans, left_grip, right_trans, right_grip = schema.parse_bimanual_language_to_deltas(language)
+
+        # Check exact match
+        np.testing.assert_array_equal(left_trans[0], original_action[:3])
+        assert left_grip[0] == original_action[6]
+        np.testing.assert_array_equal(right_trans[0], original_action[7:10])
+        assert right_grip[0] == original_action[13]
+
+    def test_bimanual_compact_roundtrip_with_rotation(self):
+        """Test bimanual compact format roundtrip with rotation."""
+        from src.openpi_cot.policies.cot_policy import COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
+
+        # Left arm with rotation, right arm with rotation
+        original_action = np.array([
+            0.09, 0.05, -0.08,
+            10 * np.pi / 180, -5 * np.pi / 180, 15 * np.pi / 180,
+            1.0,  # Left arm
+            0.03, -0.02, 0.01,
+            20 * np.pi / 180, 10 * np.pi / 180, -5 * np.pi / 180,
+            0.0,  # Right arm
+        ])
+
+        # Encode
+        language = summarize_bimanual_numeric_actions(original_action, sum_decimal="compact", include_rotation=True)
+        assert language == "<L +09 +05 -08 +10 -05 +15 1 R +03 -02 +01 +20 +10 -05 0>"
+
+        # Decode
+        schema = COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA
+        left_trans, left_grip, right_trans, right_grip = schema.parse_bimanual_language_to_deltas(language)
+
+        # Check translation and gripper match
+        np.testing.assert_array_equal(left_trans[0], original_action[:3])
+        assert left_grip[0] == original_action[6]
+        np.testing.assert_array_equal(right_trans[0], original_action[7:10])
+        assert right_grip[0] == original_action[13]
 
 
 class TestEdgeCases:

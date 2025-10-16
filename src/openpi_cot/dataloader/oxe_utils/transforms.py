@@ -421,13 +421,16 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_jaco
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
     gripper_action = rel2abs_gripper_actions(gripper_action)
 
-    trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
+    trajectory["observation"]["state_eef"] = coordinate_transform_jaco(
+        trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
+    )
     trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:] * 4.33
     # trajectory["observation"]["state_gripper"] = gripper_action[:, None]
 
@@ -540,7 +543,7 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # state_matrix = tf.transpose(state_matrix, [0, 2, 1])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["gripper_states"])),
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["gripper_states"]),
         axis=-1,
     )
 
@@ -729,7 +732,7 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, 7:8])),
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
         axis=-1,
     )
 
@@ -916,7 +919,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     state_matrix = tf.reshape(trajectory["observation"]["state_ee"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, -1:])),
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, -1:]),
         axis=-1,
     )
 
@@ -992,7 +995,7 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     state_matrix = tf.reshape(trajectory["observation"]["state_ee"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, -1:])),
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, -1:]),
         axis=-1,
     )
 
@@ -1314,7 +1317,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), invert_gripper_actions(trajectory["observation"]["state"][:, 7:8])),
+        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
         axis=-1,
     )
 

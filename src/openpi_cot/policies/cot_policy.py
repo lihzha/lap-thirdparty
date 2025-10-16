@@ -503,6 +503,101 @@ class ActionDecodingSchema:
 
         return translations, gripper_actions
 
+    def parse_bimanual_language_to_deltas(
+        self,
+        reasoning: str | list[str],
+        in_camera_frame: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Parse bimanual language action(s) into translation deltas and gripper actions.
+
+        Args:
+            reasoning: Single sentence or list of reasoning sentences in format <L ... R ...>
+            in_camera_frame: Whether the output should be in camera frame coordinates
+
+        Returns:
+            (left_translations, left_grippers, right_translations, right_grippers)
+            - left_translations: array of shape (num_steps, 3) in meters
+            - left_grippers: array of shape (num_steps,)
+            - right_translations: array of shape (num_steps, 3) in meters
+            - right_grippers: array of shape (num_steps,)
+        """
+        if isinstance(reasoning, str):
+            sentences = [reasoning]
+        else:
+            sentences = reasoning
+
+        num_steps = len(sentences)
+        left_translations = np.zeros((num_steps, 3), dtype=float)
+        left_grippers = np.zeros((num_steps,), dtype=float)
+        right_translations = np.zeros((num_steps, 3), dtype=float)
+        right_grippers = np.zeros((num_steps,), dtype=float)
+
+        if self.use_schema_format and self.style == "compact":
+            # Parse bimanual compact schema format: <L +09 +09 -08 1 R +03 -02 +01 0>
+            if self.include_rotation:
+                # Format with rotation: <L +09 +09 -08 +10 -05 +15 1 R +03 -02 +01 +20 +10 -05 0>
+                pattern = re.compile(
+                    r"<L\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)\s+"
+                    r"R\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>"
+                )
+                for i, sentence in enumerate(sentences):
+                    match = pattern.search(sentence)
+                    if match:
+                        (
+                            l_dx,
+                            l_dy,
+                            l_dz,
+                            l_droll,
+                            l_dpitch,
+                            l_dyaw,
+                            l_grip,
+                            r_dx,
+                            r_dy,
+                            r_dz,
+                            r_droll,
+                            r_dpitch,
+                            r_dyaw,
+                            r_grip,
+                        ) = match.groups()
+                        left_translations[i] = [int(l_dx) / 100.0, int(l_dy) / 100.0, int(l_dz) / 100.0]
+                        left_grippers[i] = float(l_grip)
+                        right_translations[i] = [int(r_dx) / 100.0, int(r_dy) / 100.0, int(r_dz) / 100.0]
+                        right_grippers[i] = float(r_grip)
+            else:
+                # Format without rotation: <L +09 +09 -08 1 R +03 -02 +01 0>
+                pattern = re.compile(
+                    r"<L\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)\s+"
+                    r"R\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>"
+                )
+                for i, sentence in enumerate(sentences):
+                    match = pattern.search(sentence)
+                    if match:
+                        l_dx, l_dy, l_dz, l_grip, r_dx, r_dy, r_dz, r_grip = match.groups()
+                        left_translations[i] = [int(l_dx) / 100.0, int(l_dy) / 100.0, int(l_dz) / 100.0]
+                        left_grippers[i] = float(l_grip)
+                        right_translations[i] = [int(r_dx) / 100.0, int(r_dy) / 100.0, int(r_dz) / 100.0]
+                        right_grippers[i] = float(r_grip)
+        else:
+            # Parse verbose format: "Left arm: ... Right arm: ..."
+            for i, sentence in enumerate(sentences):
+                # Split by "Right arm:"
+                parts = sentence.split("Right arm:")
+                if len(parts) == 2:
+                    left_part = parts[0].replace("Left arm:", "").strip()
+                    right_part = parts[1].strip()
+
+                    # Parse left arm
+                    left_trans, left_grip = self.parse_language_to_deltas(left_part, in_camera_frame)
+                    left_translations[i] = left_trans[0]
+                    left_grippers[i] = left_grip[0]
+
+                    # Parse right arm
+                    right_trans, right_grip = self.parse_language_to_deltas(right_part, in_camera_frame)
+                    right_translations[i] = right_trans[0]
+                    right_grippers[i] = right_grip[0]
+
+        return left_translations, left_grippers, right_translations, right_grippers
+
 
 # Predefined decoding schemas matching language action formats
 VERBOSE_DECODING_SCHEMA = ActionDecodingSchema(
@@ -529,10 +624,28 @@ COMPACT_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
     use_schema_format=True,
 )
 
+COMPACT_BIMANUAL_DECODING_SCHEMA = ActionDecodingSchema(
+    name="compact_bimanual",
+    style="compact",
+    include_rotation=False,
+    translation_unit="cm",
+    use_schema_format=True,
+)
+
+COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
+    name="compact_bimanual_with_rotation",
+    style="compact",
+    include_rotation=True,
+    translation_unit="cm",
+    use_schema_format=True,
+)
+
 DECODING_SCHEMA_REGISTRY = {
     "verbose": VERBOSE_DECODING_SCHEMA,
     "compact": COMPACT_DECODING_SCHEMA,
     "compact_with_rotation": COMPACT_WITH_ROTATION_DECODING_SCHEMA,
+    "compact_bimanual": COMPACT_BIMANUAL_DECODING_SCHEMA,
+    "compact_bimanual_with_rotation": COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA,
 }
 
 
