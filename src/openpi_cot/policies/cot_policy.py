@@ -8,6 +8,7 @@ from openpi import transforms as upstream_transforms
 from openpi_cot.dataloader.helpers import ActionEncoding
 from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
+from openpi_cot.policies.utils import is_idle_language_action
 from openpi_cot.policies.utils import maybe_parse_serialized_tensor_to_ndarray
 from openpi_cot.policies.utils import parse_image
 from openpi_cot.policies.utils import sum_language_actions
@@ -341,6 +342,17 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # Always prepare regular language actions for reasoning loss
         if "language_actions" in data:
             inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
+
+            # Check if the language action represents idle movement
+            is_idle = is_idle_language_action(
+                inputs["language_actions"],
+                self.language_action_config.get_sum_decimal(),
+                self.language_action_config.get_include_rotation(),
+            )
+            inputs["sample_mask"] = not is_idle
+        else:
+            # If no language actions, default to active sample
+            inputs["sample_mask"] = True
 
         # Additionally prepare prediction if available (independent of regular reasoning)
         if "prediction_language_action" in data:

@@ -1,5 +1,4 @@
 import dataclasses
-import re
 from typing import TypeAlias
 
 import numpy as np
@@ -47,36 +46,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
         if language_actions is not None and not isinstance(language_actions, str):
             language_actions = language_actions.item()
 
-        # Idle check: mark examples whose summed language action is effectively zero on all axes
-        def _is_idle_language_action(s: str | None) -> bool:
-            if s is None:
-                return False
-            s = s.strip()
-            if s == "":
-                return True
-            # Robust parse: accept patterns like "move forward 0.00 cm" joined by " and "
-            parts = [p.strip() for p in s.split(" and ") if p.strip()]
-            if not parts:
-                return True
-            any_nonzero = False
-            for p in parts:
-                m = re.match(r"move\s+(\w+)\s+([-+]?\d*\.?\d+)\s*(\w+)", p)
-                if not m:
-                    continue
-                val = float(m.group(2))
-                if abs(val) > 1e-6:
-                    any_nonzero = True
-                    break
-            return not any_nonzero
-
-        # is_idle = _is_idle_language_action(language_actions)
-        # sample_mask = not is_idle
-        sample_mask = True
-
         # Tokenize regular reasoning
-        tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(
-            prompt, language_actions, state
-        )
+        tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
 
         result = {
             **data,
@@ -85,7 +56,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_langact_mask": reasoning_mask,
             # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
             "crictical_token_mask": numeric_mask,
-            "sample_mask": np.asarray(sample_mask, dtype=bool),
         }
 
         # Additionally tokenize prediction if prediction_language_action is present

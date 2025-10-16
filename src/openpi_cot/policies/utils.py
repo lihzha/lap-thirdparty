@@ -7,6 +7,11 @@ AXIS_PERM = np.array([0, 2, 1])  # X -> dx (right/left), Z -> dy (forward/backwa
 AXIS_SIGN = np.array([1, 1, 1])  # start with no flips
 
 
+def _round_to_nearest_n(value: float, n: int = 5) -> int:
+    """Round a value to the nearest multiple of n."""
+    return int(round(value / n) * n)
+
+
 def maybe_parse_serialized_tensor_to_ndarray(b) -> np.ndarray | None:
     try:
         if not isinstance(b, (bytes, np.bytes_)):
@@ -93,10 +98,10 @@ def _summarize_compact_numeric_actions(arr_like, include_rotation: bool = False)
     ]
 
     if include_rotation:
-        # Convert rotations to degrees
-        droll_deg = int(round(float(arr[..., 3].sum()) * 180.0 / np.pi))
-        dpitch_deg = int(round(float(arr[..., 4].sum()) * 180.0 / np.pi))
-        dyaw_deg = int(round(float(arr[..., 5].sum()) * 180.0 / np.pi))
+        # Convert rotations to degrees and round to nearest 5
+        droll_deg = _round_to_nearest_n(float(arr[..., 3].sum()) * 180.0 / np.pi, 5)
+        dpitch_deg = _round_to_nearest_n(float(arr[..., 4].sum()) * 180.0 / np.pi, 5)
+        dyaw_deg = _round_to_nearest_n(float(arr[..., 5].sum()) * 180.0 / np.pi, 5)
         parts.extend(
             [
                 f"{droll_deg:+03d}",
@@ -148,9 +153,9 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
         droll_rad = float(arr[..., 3].sum())
         dpitch_rad = float(arr[..., 4].sum())
         dyaw_rad = float(arr[..., 5].sum())
-        droll = round(abs(droll_rad * 180.0 / np.pi))
-        dpitch = round(abs(dpitch_rad * 180.0 / np.pi))
-        dyaw = round(abs(dyaw_rad * 180.0 / np.pi))
+        droll = _round_to_nearest_n(abs(droll_rad * 180.0 / np.pi), 5)
+        dpitch = _round_to_nearest_n(abs(dpitch_rad * 180.0 / np.pi), 5)
+        dyaw = _round_to_nearest_n(abs(dyaw_rad * 180.0 / np.pi), 5)
 
     parts: list[str] = []
 
@@ -358,3 +363,105 @@ def sum_language_actions(actions_list, sum_decimal, include_rotation=False):
             result.append(f"set gripper to {last_gripper_value_str}")
 
     return " and ".join(result)
+
+
+def is_idle_language_action(
+    language_action: str,
+    sum_decimal: str,
+    include_rotation: bool = False,
+    translation_threshold: float = 1.0,
+    rotation_threshold_deg: float = 10.0,
+) -> bool:
+    """Check if a language action represents idle (minimal movement).
+
+    Args:
+        language_action: Language action string in compact or verbose format
+        sum_decimal: Format specifier ("compact", "no_number", or "Xf")
+        include_rotation: Whether to consider rotation in idle detection
+        translation_threshold: L2 norm threshold for translation (in cm)
+        rotation_threshold_deg: L2 norm threshold for rotation (in degrees)
+
+    Returns:
+        True if the action is considered idle, False otherwise
+    """
+    if not language_action or not isinstance(language_action, str):
+        return True  # Empty or invalid action is considered idle
+
+    # Parse based on format
+    if sum_decimal == "compact":
+        # Compact format: <+dx +dy +dz [+droll +dpitch +dyaw] grip>
+        if include_rotation:
+            # Format: <+09 +09 -08 +10 -05 +15 1>
+            match = re.search(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+\d>", language_action)
+            if match:
+                dx_cm, dy_cm, dz_cm = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                droll_deg, dpitch_deg, dyaw_deg = int(match.group(4)), int(match.group(5)), int(match.group(6))
+
+                translation_l2 = np.sqrt(dx_cm**2 + dy_cm**2 + dz_cm**2)
+                rotation_l2 = np.sqrt(droll_deg**2 + dpitch_deg**2 + dyaw_deg**2)
+                return translation_l2 < translation_threshold and rotation_l2 < rotation_threshold_deg
+            else:
+                return True  # Failed to parse, treat as idle
+        else:
+            # Format: <+09 +09 -08 1>
+            match = re.search(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+\d>", language_action)
+            if match:
+                dx_cm, dy_cm, dz_cm = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                translation_l2 = np.sqrt(dx_cm**2 + dy_cm**2 + dz_cm**2)
+                return translation_l2 < translation_threshold
+            else:
+                return True  # Failed to parse, treat as idle
+    else:
+        # Verbose format: "move forward X cm and move right Y cm..."
+        # Parse all movement commands
+        move_pattern = re.compile(r"move\s+(right|left|forward|backward|up|down)\s+([\d.]+)\s*cm", re.IGNORECASE)
+
+        dx_cm = dy_cm = dz_cm = 0.0
+        for match in move_pattern.finditer(language_action):
+            direction = match.group(1).lower()
+            value = float(match.group(2))
+
+            if direction == "forward":
+                dx_cm += value
+            elif direction == "backward":
+                dx_cm -= value
+            elif direction == "left":
+                dy_cm += value
+            elif direction == "right":
+                dy_cm -= value
+            elif direction == "up":
+                dz_cm += value
+            elif direction == "down":
+                dz_cm -= value
+
+        translation_l2 = np.sqrt(dx_cm**2 + dy_cm**2 + dz_cm**2)
+
+        if not include_rotation:
+            return translation_l2 < translation_threshold
+        else:
+            # Parse rotation commands
+            rotation_pattern = re.compile(
+                r"(tilt left|tilt right|tilt up|tilt down|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
+                re.IGNORECASE
+            )
+
+            droll_deg = dpitch_deg = dyaw_deg = 0.0
+            for match in rotation_pattern.finditer(language_action):
+                rotation_type = match.group(1).lower()
+                value = float(match.group(2))
+
+                if rotation_type == "tilt left":
+                    droll_deg += value
+                elif rotation_type == "tilt right":
+                    droll_deg -= value
+                elif rotation_type == "tilt up":
+                    dpitch_deg += value
+                elif rotation_type == "tilt down":
+                    dpitch_deg -= value
+                elif rotation_type == "rotate counterclockwise":
+                    dyaw_deg += value
+                elif rotation_type == "rotate clockwise":
+                    dyaw_deg -= value
+
+            rotation_l2 = np.sqrt(droll_deg**2 + dpitch_deg**2 + dyaw_deg**2)
+            return translation_l2 < translation_threshold and rotation_l2 < rotation_threshold_deg
