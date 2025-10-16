@@ -456,7 +456,7 @@ class ActionDecodingSchema:
                 rf"move\s+(right|left|forward|backward|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
                 re.IGNORECASE,
             )
-            grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-\d\.]+)", re.IGNORECASE)
+            grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
 
             for i, sentence in enumerate(sentences):
                 # Parse movements in language frame (right=+x, forward=+y, up=-z)

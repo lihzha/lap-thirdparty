@@ -557,7 +557,7 @@ class TestEdgeCases:
 
     def test_precision_format(self):
         """Test different decimal precision."""
-        action = np.array([0.055, -0.033, 0.0, 0.0, 0.0, 0.5])
+        action = np.array([0.055, -0.033, 0.0, 0.0, 0.0, 0.0, 0.5])
 
         # 2 decimal places
         result = summarize_numeric_actions(action, sum_decimal="2f", include_rotation=False)
