@@ -458,31 +458,23 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
         R(angles2) * R(angles_rel) = R(angles1)
 
     Args:
-        angles1: (..., 3) tensor of Euler angles [a1, a2, a3]
-        angles2: (..., 3) tensor of Euler angles [a1, a2, a3]
-        order:   rotation order string, e.g. "xyz" (intrinsic)
+        angles1: (..., 3) tensor of Euler angles [roll, pitch, yaw] (intrinsic XYZ)
+        angles2: (..., 3) tensor of Euler angles [roll, pitch, yaw] (intrinsic XYZ)
+        order:   rotation order string (currently only "xyz" intrinsic is supported)
         degrees: whether input/output are in degrees
     Returns:
-        (..., 3) tensor of relative Euler angles (same order)
+        (..., 3) tensor of relative Euler angles [roll, pitch, yaw] (intrinsic XYZ)
     """
     if degrees:
         angles1 = tf.math.multiply(angles1, _tf_pi(tf.float32) / 180.0)
         angles2 = tf.math.multiply(angles2, _tf_pi(tf.float32) / 180.0)
 
-    # map axis char -> rotation fn
-    rot_map = {"x": _rot_x, "y": _rot_y, "z": _rot_z}
+    # Build rotation matrices using intrinsic XYZ convention
+    R1 = _R_from_euler_xyz(angles1)
+    R2 = _R_from_euler_xyz(angles2)
 
-    def build_R(angles):
-        R = None
-        for i, ax in enumerate(order):
-            Ri = rot_map[ax](angles[..., i])
-            R = Ri if R is None else tf.linalg.matmul(R, Ri)
-        return R
-
-    R1 = build_R(angles1)
-    R2 = build_R(angles2)
-
-    Rrel = tf.linalg.matmul(R2, R1, transpose_a=True)  # Rrel = R2^T * R1
+    # Compute relative rotation: Rrel = R2^T * R1
+    Rrel = tf.linalg.matmul(R2, R1, transpose_a=True)
 
     # Extract Euler angles from Rrel using robust method with gimbal lock handling
     out = _euler_xyz_from_R(Rrel)
