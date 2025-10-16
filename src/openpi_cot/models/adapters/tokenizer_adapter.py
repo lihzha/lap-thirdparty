@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import dataclasses
 import logging
 import re
@@ -15,6 +16,33 @@ class StateDiscretizationConfig:
     min_dim: int = 7  # Minimum number of dimensions to include (avoid over-trimming)
     range_min: float = -1.0
     range_max: float = 1.0
+
+
+def _is_critical_directional(piece: str) -> bool:
+    """Check if token contains digits or directional words (for natural language formats)."""
+    # Check for digits
+    if re.search(r"[0-9]", piece):
+        return True
+    # Check for directional words (case-insensitive)
+    piece_lower = piece.lower()
+    directional_words = ["right", "left", "forward", "up", "down", "back"]
+    return any(word in piece_lower for word in directional_words)
+
+
+def _is_critical_schema(piece: str) -> bool:
+    """Check if token contains digits or +/- symbols (for schema-based formats)."""
+    # Check for digits
+    if re.search(r"[0-9]", piece):
+        return True
+    # Check for +/- symbols
+    if "+" in piece or "-" in piece:
+        return True
+    return False
+
+
+def _is_critical_default(piece: str) -> bool:
+    """Default critical token checker - only digits."""
+    return bool(re.search(r"[0-9]", piece))
 
 
 @dataclasses.dataclass
@@ -47,6 +75,8 @@ class PromptFormat:
     state_config: StateDiscretizationConfig | None = None
     # Separator between components (e.g., ", " or "\n")
     separator: str = ""
+    # Function to determine if a token piece is critical for this format
+    critical_token_checker: Callable[[str], bool] = _is_critical_default
 
     @property
     def include_state(self) -> bool:
@@ -145,6 +175,7 @@ PI05_PROMPT_FORMAT = PromptFormat(
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=", ",
+    critical_token_checker=_is_critical_directional,
 )
 
 PI0_PROMPT_FORMAT = PromptFormat(
@@ -175,6 +206,7 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=", ",
+    critical_token_checker=_is_critical_schema,
 )
 
 SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
@@ -195,6 +227,7 @@ SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     # separator="\n",
     separator=". ",
+    critical_token_checker=_is_critical_schema,
 )
 
 SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
@@ -210,6 +243,7 @@ SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=". ",
+    critical_token_checker=_is_critical_schema,
 )
 
 SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT = PromptFormat(
@@ -225,6 +259,7 @@ SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT = PromptFormat(
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=". ",
+    critical_token_checker=_is_critical_schema,
 )
 
 SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
@@ -240,6 +275,7 @@ SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=". ",
+    critical_token_checker=_is_critical_schema,
 )
 
 # Registry for easy lookup
@@ -343,22 +379,14 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
         if end_idx > start_idx:
             reasoning_mask[start_idx:end_idx] = True
-        # Build critical token mask: mark tokens that contain digits or directional words within reasoning span only
+
+        # Build critical token mask using format-specific checker
+        # Only mark tokens within reasoning span (not in the prompt)
         pieces = [self._tokenizer.id_to_piece(t) for t in tokens]
-
-        def _is_critical(p: str) -> bool:
-            # Check for digits
-            if re.search(r"[0-9]", p):
-                return True
-            # Check for directional words (case-insensitive)
-            p_lower = p.lower()
-            directional_words = ["right", "left", "forward", "up", "down", "back"]
-            return any(word in p_lower for word in directional_words)
-
         for i in range(start_idx, end_idx):
             if i < 0 or i >= len(pieces):
                 continue
-            if _is_critical(pieces[i]):
+            if fmt.critical_token_checker(pieces[i]):
                 numeric_mask[i] = True
 
         return (

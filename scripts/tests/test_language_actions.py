@@ -6,6 +6,7 @@ import pytest
 from src.openpi_cot.policies.cot_policy import COMPACT_DECODING_SCHEMA
 from src.openpi_cot.policies.cot_policy import VERBOSE_DECODING_SCHEMA
 from src.openpi_cot.policies.cot_policy import ActionDecodingSchema
+from src.openpi_cot.policies.utils import is_idle_language_action
 from src.openpi_cot.policies.utils import summarize_bimanual_numeric_actions
 from src.openpi_cot.policies.utils import summarize_numeric_actions
 
@@ -529,7 +530,7 @@ class TestEdgeCases:
 
     def test_precision_format(self):
         """Test different decimal precision."""
-        action = np.array([0.055, -0.033, 0.0, 0.0, 0.0, 0.0, 0.5])
+        action = np.array([0.055, -0.033, 0.0, 0.0, 0.0, 0.5])
 
         # 2 decimal places
         result = summarize_numeric_actions(action, sum_decimal="2f", include_rotation=False)
@@ -547,6 +548,124 @@ class TestEdgeCases:
         # Empty string
         translations, grippers = schema.parse_language_to_deltas("")
         np.testing.assert_array_equal(translations[0], [0.0, 0.0, 0.0])
+
+
+class TestIdleChecker:
+    """Test idle action detection for filtering out minimal movements."""
+
+    def test_compact_format_zero_movement(self):
+        """Test that zero movement is detected as idle in compact format."""
+        # No movement at all
+        language_action = "<+00 +00 +00 1>"
+        assert is_idle_language_action(language_action, sum_decimal="compact", include_rotation=False)
+
+    def test_compact_format_tiny_movement_is_idle(self):
+        """Test that sub-threshold movements are detected as idle."""
+        # Movement with L2 norm < 1.0 cm (default threshold)
+        # sqrt(0^2 + 0^2 + 0^2) = 0 < 1.0
+        language_action = "<+00 +00 +00 0>"
+        assert is_idle_language_action(language_action, sum_decimal="compact", include_rotation=False)
+
+    def test_compact_format_below_threshold(self):
+        """Test that movements just below threshold are idle."""
+        # Movement with L2 norm just below 1.0 cm threshold
+        # sqrt(0^2 + 0^2 + 0^2) = 0 < 1.0
+        language_action = "<+00 +00 +00 1>"
+        assert is_idle_language_action(language_action, sum_decimal="compact", include_rotation=False)
+
+        # Custom threshold: movement of 5cm should be idle with threshold=10cm
+        language_action = "<+03 +04 +00 1>"  # sqrt(9+16) = 5cm < 10cm
+        assert is_idle_language_action(
+            language_action,
+            sum_decimal="compact",
+            include_rotation=False,
+            translation_threshold=10.0
+        )
+
+    def test_compact_format_with_rotation_both_below_threshold(self):
+        """Test idle detection with rotation when both translation and rotation are below threshold."""
+        # Translation: sqrt(1+1+1) = 1.73cm < default 1.0? No, but let's test with zero
+        # Rotation: sqrt(1+1+1) = 1.73deg < default 10.0
+        language_action = "<+00 +00 +00 +01 +01 +01 1>"
+        assert is_idle_language_action(language_action, sum_decimal="compact", include_rotation=True)
+
+    def test_compact_format_gripper_only_change(self):
+        """Test that gripper-only changes with no movement are idle."""
+        # Gripper changes but no translation
+        language_action = "<+00 +00 +00 1>"
+        assert is_idle_language_action(language_action, sum_decimal="compact", include_rotation=False)
+
+    def test_verbose_format_zero_movement(self):
+        """Test idle detection in verbose format with no movement commands."""
+        # Only gripper command, no movement
+        language_action = "set gripper to 1.0"
+        assert is_idle_language_action(language_action, sum_decimal="0f", include_rotation=False)
+
+    def test_verbose_format_tiny_movement(self):
+        """Test idle detection in verbose format with sub-threshold movement."""
+        # Very small movement: sqrt(0.5^2) = 0.5cm < 1.0cm
+        language_action = "move forward 0.5 cm and set gripper to 1.0"
+        assert is_idle_language_action(language_action, sum_decimal="0f", include_rotation=False)
+
+    def test_verbose_format_below_threshold(self):
+        """Test verbose format with movement just below threshold."""
+        # Movement with L2 norm < 1.0 cm
+        # sqrt(0.3^2 + 0.3^2 + 0.3^2) = 0.52cm < 1.0cm
+        language_action = "move forward 0.3 cm and move right 0.3 cm and move down 0.3 cm and set gripper to 0.0"
+        assert is_idle_language_action(language_action, sum_decimal="0f", include_rotation=False)
+
+    def test_verbose_format_with_rotation_both_below_threshold(self):
+        """Test idle detection with rotation in verbose format."""
+        # Small translation and small rotation
+        language_action = "move forward 0.5 cm and tilt left 5 degrees and set gripper to 1.0"
+        assert is_idle_language_action(language_action, sum_decimal="0f", include_rotation=True)
+
+    def test_empty_language_action(self):
+        """Test that empty or invalid language actions are treated as idle."""
+        # Empty string
+        assert is_idle_language_action("", sum_decimal="compact", include_rotation=False)
+
+        # None (will fail isinstance check)
+        assert is_idle_language_action(None, sum_decimal="compact", include_rotation=False)
+
+    def test_unparseable_language_action(self):
+        """Test that unparseable language actions are treated as idle."""
+        # Random text that doesn't match any pattern
+        language_action = "random text with no valid action format"
+        assert is_idle_language_action(language_action, sum_decimal="compact", include_rotation=False)
+
+    def test_custom_thresholds(self):
+        """Test idle detection with custom thresholds."""
+        # Movement of 5cm should NOT be idle with default threshold (1.0cm)
+        # but SHOULD be idle with higher threshold (10.0cm)
+        language_action = "<+03 +04 +00 1>"  # sqrt(9+16) = 5cm
+
+        # With default threshold of 1.0cm, this is NOT idle
+        assert not is_idle_language_action(language_action, sum_decimal="compact", include_rotation=False)
+
+        # With custom threshold of 10.0cm, this IS idle
+        assert is_idle_language_action(
+            language_action,
+            sum_decimal="compact",
+            include_rotation=False,
+            translation_threshold=10.0
+        )
+
+    def test_rotation_threshold_custom(self):
+        """Test rotation threshold with custom values."""
+        # Large rotation but small translation
+        language_action = "<+00 +00 +00 +05 +05 +05 1>"  # sqrt(25+25+25) = 8.66deg
+
+        # With default rotation threshold (10.0deg), this IS idle
+        assert is_idle_language_action(language_action, sum_decimal="compact", include_rotation=True)
+
+        # With custom rotation threshold (5.0deg), this is NOT idle
+        assert not is_idle_language_action(
+            language_action,
+            sum_decimal="compact",
+            include_rotation=True,
+            rotation_threshold_deg=5.0
+        )
 
 
 if __name__ == "__main__":

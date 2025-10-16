@@ -507,10 +507,6 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    # hard_example_tracker = vis_tools.HardExampleTracker(
-    #     tokenizer=data_loader.tokenizer,
-    #     hard_quantile=0.99,
-    # )
     host_batch_cache = HostBatchCache()
 
     for step in pbar:
@@ -520,21 +516,6 @@ def main(config: _config.TrainConfig):
         per_sample_loss = info.get("per_sample_loss")
         if per_sample_loss is None:
             raise ValueError("Training step info missing per_sample_loss")
-        # per_sample_np_local = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
-        # global_per_sample_np = training_utils.global_concat(per_sample_np_local)
-        # if global_per_sample_np.size > 0:
-        # hard_example_tracker.update(global_per_sample_np)
-        # host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-        # if local_size > 0 and per_sample_np_local.size >= local_size:
-        #     process_idx = getattr(jax, "process_index", lambda: 0)()
-        #     start = process_idx * local_size
-        #     hard_example_tracker.add_local_examples(
-        #         step,
-        #         host_batch_local,
-        #         per_sample_np_local[:local_size],
-        #         global_idx_base=start,
-        #         process_idx=process_idx,
-        #     )
         if step % config.log_interval == 0:
             # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
@@ -552,16 +533,8 @@ def main(config: _config.TrainConfig):
                 else:
                     reduced_info[key] = reduce_overrides.get(key, jnp.mean)(value)
             reduced_info = jax.device_get(reduced_info)
-            # if per_sample_losses_chunk:
-            #     concatenated = np.concatenate(per_sample_losses_chunk)
-            #     global_per_sample_np = training_utils.global_concat(concatenated)
-            #     if global_per_sample_np.size > 0:
-            #         hard_example_tracker.update(global_per_sample_np)
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
-            # hard_payload = hard_example_tracker.log_if_ready(step)
-            # if hard_payload:
-            #     vis_tools.log_hard_examples_payload(hard_payload)
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
                 host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
@@ -586,8 +559,6 @@ def main(config: _config.TrainConfig):
             # num_images_to_log = 64
             with sharding.set_mesh(mesh):
                 val_infos = []
-                # Collect L2 distances (in cm) between parsed vectors from GT and predicted texts
-                l2_cm_values: list[float] = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
                 for _ in val_pbar:
@@ -597,12 +568,6 @@ def main(config: _config.TrainConfig):
 
                 stacked_val = common_utils.stack_forest(val_infos)
                 reduced_val = jax.device_get(jax.tree.map(jnp.mean, stacked_val))
-                # Add movement L2 metric if any collected
-                if l2_cm_values:
-                    reduced_val = {
-                        **reduced_val,
-                        "val_movement_l2_cm": float(np.mean(l2_cm_values)),
-                    }
                 val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val.items())
                 val_pbar.write(f"Step {step} (val): {val_info_str}")
                 if jax.process_index() == 0:
