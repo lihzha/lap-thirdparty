@@ -179,9 +179,10 @@ def test_dataloader_checkpoint(config: _config.TrainConfig):
             else:
                 logging.info(f"  Batch {i}: image_mean={sig['image_mean']:.4f}, action_mean={sig['action_mean']:.4f}")
 
-        # Save checkpoint
-        logging.info("Saving iterator checkpoint...")
-        data_loader1.save_iterator_checkpoint(str(checkpoint_dir))
+        # Save checkpoint (at step 10, for example)
+        save_step = num_batches_before_checkpoint
+        logging.info(f"Saving iterator checkpoint at step {save_step}...")
+        data_loader1.save_iterator_checkpoint(str(checkpoint_dir), step=save_step)
 
         # Verify checkpoint files were created
         if checkpoint_dir.exists():

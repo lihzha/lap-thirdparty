@@ -210,7 +210,7 @@ def save_state(
             # Save TF iterator state if data loader supports it
             if hasattr(data_loader, "save_iterator_checkpoint"):
                 tf_iter_dir = f"{_extract_directory(manager_to_use)}/{step}/tf_iterator"
-                data_loader.save_iterator_checkpoint(tf_iter_dir)
+                data_loader.save_iterator_checkpoint(tf_iter_dir, step=step)
 
             duration = time.perf_counter() - start_time
             logging.info(

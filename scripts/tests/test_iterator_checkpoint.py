@@ -78,7 +78,7 @@ class TestIteratorCheckpointing:
             batches_before.append(batch)
 
         # Save checkpoint
-        iterable.save_iterator_checkpoint(checkpoint_dir)
+        iterable.save_iterator_checkpoint(checkpoint_dir, step=5)
 
         # Continue iterating and collect expected batches
         expected_batches = []
@@ -145,7 +145,7 @@ class TestIteratorCheckpointing:
         )
 
         # Save should be a no-op (will log a warning)
-        iterable.save_iterator_checkpoint(checkpoint_dir)
+        iterable.save_iterator_checkpoint(checkpoint_dir, step=0)
 
         # Directory should not be created
         assert not Path(checkpoint_dir).exists(), "Non-persistent iterator should not create checkpoint dir"
@@ -173,7 +173,7 @@ class TestIteratorCheckpointing:
             _ = next(iter1)
 
         # Save checkpoint
-        iterable1.save_iterator_checkpoint(checkpoint_dir)
+        iterable1.save_iterator_checkpoint(checkpoint_dir, step=5)
 
         # Get the next batch from original iterator (should be batch 5: [50-59])
         batch_5 = next(iter1)
@@ -281,7 +281,7 @@ class TestIteratorCheckpointing:
             batches_before_checkpoint.append(batch)
 
         # Save checkpoint (like we do at step 5000)
-        iterable1.save_iterator_checkpoint(checkpoint_dir)
+        iterable1.save_iterator_checkpoint(checkpoint_dir, step=10)
 
         # Verify checkpoint files were created
         import tensorflow as tf
@@ -377,7 +377,7 @@ class TestIteratorCheckpointing:
             _ = next(iter1)
 
         # Save checkpoint
-        iterable1.save_iterator_checkpoint(checkpoint_dir)
+        iterable1.save_iterator_checkpoint(checkpoint_dir, step=5)
 
         # Get expected next batch
         expected_batch = next(iter1)

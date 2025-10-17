@@ -143,10 +143,18 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         # We need to use iter() to create the iterator, which will be checkpointed
         self._tf_iterator = iter(tf_dataset)
 
-        # Try to create TF checkpoint for the iterator
+        # Create a variable to track the step (useful for checkpoint management)
+        self._tf_step = tf.Variable(0, dtype=tf.int64, name='iterator_step')
+
+        # Try to create TF checkpoint for the iterator with CheckpointManager
         # If the iterator is not trackable, this will fail
         try:
-            self._tf_checkpoint = tf.train.Checkpoint(iterator=self._tf_iterator)
+            self._tf_checkpoint = tf.train.Checkpoint(
+                step=self._tf_step,
+                iterator=self._tf_iterator
+            )
+            # CheckpointManager will be created when we know the directory
+            self._checkpoint_manager = None
         except (ValueError, TypeError) as e:
             logging.warning(
                 f"Cannot create checkpoint for iterator type {type(self._tf_iterator)}: {e}. "
@@ -154,10 +162,16 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
             )
             self.persistent_iterator = False
             self._tf_iterator = None
+            self._tf_step = None
             return
 
-    def save_iterator_checkpoint(self, directory: str):
-        """Save TF iterator state to checkpoint directory."""
+    def save_iterator_checkpoint(self, directory: str, step: int = 0):
+        """Save TF iterator state to checkpoint directory using CheckpointManager.
+
+        Args:
+            directory: Directory to save checkpoint
+            step: Training step number (useful for tracking)
+        """
         if not self.persistent_iterator:
             logging.debug("Skipping iterator checkpoint save: persistent_iterator=False")
             return
@@ -174,12 +188,27 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         # Ensure directory exists
         tf.io.gfile.makedirs(directory)
 
+        # Create or reuse CheckpointManager
+        if self._checkpoint_manager is None or self._checkpoint_manager.directory != directory:
+            self._checkpoint_manager = tf.train.CheckpointManager(
+                self._tf_checkpoint,
+                directory,
+                max_to_keep=3,  # Keep last 3 checkpoints for safety
+            )
+
+        # Update step variable
+        self._tf_step.assign(step)
+
         # Save checkpoint
-        save_path = self._tf_checkpoint.save(file_prefix=f"{directory}/iterator")
-        logging.info(f"Saved TF iterator checkpoint to {save_path}")
+        save_path = self._checkpoint_manager.save()
+        logging.info(f"Saved TF iterator checkpoint to {save_path} (step={step})")
 
     def restore_iterator_checkpoint(self, directory: str):
-        """Restore TF iterator state from checkpoint directory."""
+        """Restore TF iterator state from checkpoint directory using CheckpointManager.
+
+        Args:
+            directory: Directory containing checkpoint
+        """
         if not self.persistent_iterator:
             logging.debug("Skipping iterator checkpoint restore: persistent_iterator=False")
             return
@@ -193,15 +222,26 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
 
         import tensorflow as tf
 
-        # Find latest checkpoint
-        latest_checkpoint = tf.train.latest_checkpoint(directory)
+        # Create CheckpointManager for restoration
+        checkpoint_manager = tf.train.CheckpointManager(
+            self._tf_checkpoint,
+            directory,
+            max_to_keep=3,
+        )
+
+        # Get latest checkpoint
+        latest_checkpoint = checkpoint_manager.latest_checkpoint
         if latest_checkpoint is None:
             logging.warning(f"No iterator checkpoint found in {directory}")
             return
 
         # Restore checkpoint
-        self._tf_checkpoint.restore(latest_checkpoint)
-        logging.info(f"Restored TF iterator checkpoint from {latest_checkpoint}")
+        status = self._tf_checkpoint.restore(latest_checkpoint)
+
+        # Optionally assert all variables were restored (can catch mismatches)
+        # status.assert_consumed()  # Uncomment to catch issues during development
+
+        logging.info(f"Restored TF iterator checkpoint from {latest_checkpoint} (step={int(self._tf_step.numpy())})")
 
     def __iter__(self):
         # If using persistent iterator, use the stored TF iterator
@@ -416,17 +456,26 @@ class CoTRLDSDataLoader:
     def tokenizer(self) -> PaligemmaCoTTokenizer:
         return self._dataset._transform.transforms[-2].tokenizer
 
-    def save_iterator_checkpoint(self, directory: str):
-        """Save TF iterator state if persistent iterator is enabled."""
+    def save_iterator_checkpoint(self, directory: str, step: int = 0):
+        """Save TF iterator state if persistent iterator is enabled.
+
+        Args:
+            directory: Directory to save checkpoint
+            step: Training step number
+        """
         if not self._persistent_iterator:
             return
 
         # Delegate to the underlying dataset if it supports checkpointing
         if hasattr(self._dataset, "save_iterator_checkpoint"):
-            self._dataset.save_iterator_checkpoint(directory)
+            self._dataset.save_iterator_checkpoint(directory, step=step)
 
     def restore_iterator_checkpoint(self, directory: str):
-        """Restore TF iterator state if persistent iterator is enabled."""
+        """Restore TF iterator state if persistent iterator is enabled.
+
+        Args:
+            directory: Directory containing checkpoint
+        """
         if not self._persistent_iterator:
             return
 
