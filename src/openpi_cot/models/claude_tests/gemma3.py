@@ -17,6 +17,7 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from kauldron import kd
+import einops
 
 import openpi.models.lora as lora
 import openpi.shared.array_typing as at
@@ -29,29 +30,37 @@ import openpi.training.sharding as sharding
 K_MASK = -2.3819763e38 
 DEFAULT_ROPE_BASE_FREQUENCY = 10_000
 DEFAULT_ROPE_SCALE_FACTOR = 1.0
+GEMMA3_VOCAB_SIZE = 262_144
 
 LayerCache = dict[str, jax.Array]
+
+class AttentionType(enum.Enum):
+    GLOBAL = 1
+    LOCAL_SLIDING = 2
 
 # ============================================================================
 # Configuration & Factory
 # ============================================================================
 
-Variant = Literal["gemma3_1b", "gemma3_4b", "gemma3_12b"]
+Variant = Literal["gemma3_300m", "gemma3_1b", "gemma3_4b", "gemma3_12b"]
 
 @dataclasses.dataclass
 class Config:
-    embed_dim: int # width
-    hidden_dim: int # mlp_dim
+    embed_dim: int
+    hidden_dim: int
     num_heads: int
     num_kv_heads: int
     head_dim: int
-    vocab_size: int
-    num_layers: int # depth
+    num_layers: int
     sliding_window_size: int
     use_qk_norm: bool
     use_post_attn_norm: bool
     use_post_ffw_norm: bool
     transpose_gating_einsum: bool
+    vocab_size: int = GEMMA3_VOCAB_SIZE
+    lora_configs: dict = dataclasses.field(default_factory=dict)
+    attn_logits_soft_cap: float | None = None
+    attn_type: AttentionType = AttentionType.GLOBAL
 
 def get_config(variant: Variant) -> Config:
     """Returns config dict for specified Gemma3 variant."""
@@ -62,13 +71,15 @@ def get_config(variant: Variant) -> Config:
             num_heads=4,
             num_kv_heads=1,
             head_dim=256,
-            vocab_size=262_144,
+            vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=26,
             sliding_window_size=512,
             use_qk_norm=True,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             transpose_gating_einsum=True,
+            attn_logits_soft_cap=None,
+            attn_type=AttentionType.GLOBAL,
         )
     elif variant == "gemma3_4b":
         return Config(
@@ -77,13 +88,15 @@ def get_config(variant: Variant) -> Config:
             num_heads=8,
             num_kv_heads=4,
             head_dim=256,
-            vocab_size=262_144,
+            vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=34,
             sliding_window_size=1024,
             use_qk_norm=True,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             transpose_gating_einsum=True,
+            attn_logits_soft_cap=None,
+            attn_type=AttentionType.GLOBAL,
         )
     elif variant == "gemma3_12b":
         return Config(
@@ -92,13 +105,32 @@ def get_config(variant: Variant) -> Config:
             num_heads=16,
             num_kv_heads=8,
             head_dim=256,
-            vocab_size=262_144,
+            vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=48,
             sliding_window_size=1024,
             use_qk_norm=True,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
             transpose_gating_einsum=True,
+            attn_logits_soft_cap=None,
+            attn_type=AttentionType.GLOBAL,
+        )
+    elif variant == "gemma3_300m":
+        return Config(
+            embed_dim=768,
+            hidden_dim=768 * 4,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
+            vocab_size=GEMMA3_VOCAB_SIZE,
+            num_layers=34,
+            sliding_window_size=1024,
+            use_qk_norm=True,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            transpose_gating_einsum=True,
+            attn_logits_soft_cap=None,
+            attn_type=AttentionType.GLOBAL,
         )
     else:
         raise ValueError(f"Unknown variant: {variant}")
@@ -156,47 +188,66 @@ def apply_rope(
 # ============================================================================
 
 class Einsum(nn.Module):
-    """Einsum is a convenience module for parameterized tensor multiplication."""
+    """Einsum layer for parameterized tensor multiplication."""
     shape: tuple[int, ...]
     weight_name: str = 'w'
     initializer: nn.initializers.Initializer = nn.initializers.normal()
     dtype: jnp.dtype | None = None
+    lora_config: 'lora.LoRAConfig' = None
 
     @nn.compact
     def __call__(self, eqn: str, x: jax.Array) -> jax.Array:
-        w = self.param(
-            self.weight_name,
-            self.initializer,
-            self.shape,
-            self.dtype if self.dtype is not None else None,
-        )
-        return jnp.einsum(eqn, x, w)
+        if self.lora_config is not None:
+            # Use LoRA if configured
+            w = lora.Einsum(
+                shape=self.shape,
+                weight_name=self.weight_name,
+                init_fn=self.initializer,
+                lora_config=self.lora_config,
+            )(eqn, x)
+            return w
+        else:
+            w = self.param(
+                self.weight_name,
+                self.initializer,
+                self.shape,
+                self.dtype if self.dtype is not None else None,
+            )
+            return jnp.einsum(eqn, x, w)
 
 @at.typecheck
 class RMSNorm(nn.Module):
-    """RMSNorm layer."""
+    """
+    RMSNorm layer with optional adaptive conditioning for timestep injection
+    Args:
+        x: Input tensor
+        cond: Optional conditioning vector (e.g., timestep embedding for Pi0.5)
+    
+    Returns:
+        Tuple of (normalized_output, gate) where gate is used for gated residuals
+    """
     @nn.compact
     def __call__(self, x, cond):
-        scale = self.param('scale', nn.initializers.zeros_init(), (x.shape[-1]))
-        var = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
-
-        # Jax.lax.rsqrt is used because it returns different floats than
-        # jnp.reciprocal(jnp.sqrt(var + 1e-06))
-        normed_inputs = x * jax.lax.rsqrt(var + 1e-06)
-
+        dtype = x.dtype
+        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))
+        
         if cond is None:
-
-            # normed_inputs is a rank-K tensor, K > 1 (K is typically 2 or 3). scale is
-            # a rank-1 tensor. To avoid implicit rank-promotion, reshape scale to
-            # a (1, ..., 1, D) tensor, so the rank of scale matches normed_inputs.
-            scale = jnp.expand_dims(scale, axis=range(len(x.shape) - 1))
+            # Standard RMSNorm
+            scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
             normed_inputs = normed_inputs * (1 + scale)
-            return normed_inputs, None
-    
-        modulation = nn.Dense(x.shape[-1]*3, kernel_init=nn.initializers.zeros, dtype=x.dtype)(cond)
+            return normed_inputs.astype(dtype), None
+        
+        # Adaptive RMSNorm (AdaRMS) for timestep conditioning
+        modulation = nn.Dense(
+            x.shape[-1] * 3,
+            kernel_init=nn.initializers.zeros,
+            dtype=dtype,
+            name="ada_modulation"
+        )(cond)
         scale, shift, gate = jnp.split(modulation[:, None, :], 3, axis=-1)
         normed_inputs = normed_inputs * (1 + scale) + shift
-        return normed_inputs.astype(x.dtype), gate
+        return normed_inputs.astype(dtype), gate
 
 # ============================================================================
 # Attention & FeedForward (from _modules.py)
@@ -231,10 +282,6 @@ def _create_sliding_mask(
     sliding_mask = cache_positions > segment_pos - sliding_window_size
     sliding_mask *= cache_positions < segment_pos + sliding_window_size
     return sliding_mask
-
-class AttentionType(enum.Enum):
-    GLOBAL = 1
-    LOCAL_SLIDING = 2
 
 @at.typecheck
 class Embedder(nn.Module):
@@ -284,21 +331,11 @@ class Embedder(nn.Module):
     def encode_vision(self, x: jax.Array) -> jax.Array:
         pass  # Vision encoder not implemented here.
 
-class Attention_VLM(nn.Module):
-    """Attention module.
-    Original implementation for Gemma3. Needs wrapped to handle MoE architecture
-    """
-    num_heads: int
-    num_kv_heads: int
-    features: int
-    head_dim: int
-    attn_type: AttentionType
-    query_pre_attn_scalar: float
-    rope_base_frequency: int = DEFAULT_ROPE_BASE_FREQUENCY
-    rope_scale_factor: float = DEFAULT_ROPE_SCALE_FACTOR
-    attn_logits_soft_cap: float | None = None
-    sliding_window_size: int | None = None
-    use_qk_norm: bool = False
+
+
+@at.typecheck
+class Attention(nn.Module):
+    configs: Sequence[Config]
 
     @property
     def use_qkv_einsum(self):
@@ -307,347 +344,6 @@ class Attention_VLM(nn.Module):
     @property
     def use_gqa(self):
         return self.num_kv_heads != self.num_heads and self.num_kv_heads > 1
-    
-    def setup(self):
-        self.attn_vec_einsum = Einsum(
-            shape=(self.num_heads, self.head_dim, self.features),
-        )
-        if self.use_qkv_einsum:
-            self.qkv_einsum = Einsum(
-                shape=(3, self.num_heads, self.features, self.head_dim),
-            )
-        else:
-            self.q_einsum = Einsum(
-                shape=(self.num_heads, self.features, self.head_dim),
-            )
-            self.kv_einsum = Einsum(
-                shape=(2, self.num_kv_heads, self.features, self.head_dim),
-            )
-        if self.use_qk_norm:
-            self._query_norm = RMSNorm()
-            self._key_norm = RMSNorm()
-        self.attention_weights = kd.nn.Identity()
-
-    def __call__(
-            self,
-            x: jax.Array,
-            segment_pos: jax.Array,
-            cache: LayerCache | None,
-            attn_mask: jax.Array,
-    ) -> tuple[LayerCache | None, jax.Array]:
-        """Applies multi-head attention to the inputs.
-
-        Args:
-            x: Input sequence of shape [batch_size, seq_len, embed_dim].
-            segment_pos: Input absolute positions of shape [batch_size, seq_len].
-            cache: KV cache or None.
-            attn_mask: Attention mask of shape [batch_size, seq_len, cache_size].
-
-        Returns:
-            cache: Updated attention KV cache.
-            outputs: Output sequence of shape [batch_size, seq_len, embed_dim].
-        """
-        if self.use_qkv_einsum:
-            # [batch_size, seq_len, num_heads, head_dim]
-            query_proj, key_proj, value_proj = self.qkv_einsum('BTD,SNDH->SBTNH', x)
-        else:
-            query_proj = self.q_einsum('BTD,NDH->BTNH', x)
-            key_proj, value_proj = self.kv_einsum('BSD,CKDH->CBSKH', x)
-
-        if self.use_qk_norm:
-            query_proj = self._query_norm(query_proj)
-            key_proj = self._key_norm(key_proj)
-
-        query_proj = apply_rope(
-            query_proj,
-            segment_pos,
-            base_frequency=self.rope_base_frequency,
-            scale_factor=self.rope_scale_factor,
-        )
-        query_scaled = query_proj * self.query_pre_attn_scalar
-
-        key_proj = apply_rope(
-            key_proj,
-            segment_pos,
-            base_frequency=self.rope_base_frequency,
-            scale_factor=self.rope_scale_factor,
-        )
-
-        # Cache is left aligned.
-        # Save the KV values to the cache.
-        if cache is not None:
-            end_index = cache['end_index'][0]
-            cache_size = cache['v'].shape[1]
-            slice_indices = (0, end_index % cache_size, 0, 0)
-
-            # [batch_size, cache_size, num_heads, head_dim]
-            value_proj = jax.lax.dynamic_update_slice(
-                cache['v'],
-                value_proj,
-                slice_indices,
-            )
-
-            # [batch_size, cache_size, num_heads, head_dim]
-            key_proj = jax.lax.dynamic_update_slice(
-                cache['k'], key_proj, slice_indices
-            )
-
-        if self.use_gqa:
-            b, t, kg, h = query_scaled.shape
-            query_scaled = query_scaled.reshape(
-                (b, t, self.num_kv_heads, int(kg / self.num_kv_heads), h)
-            )
-            logits = jnp.einsum('BTKGH,BSKH->BTKGS', query_scaled, key_proj)
-            b, t, k, g, s = logits.shape
-            logits = logits.reshape((b, t, k * g, s))
-        else:
-            # [batch_size, seq_len, num_heads, cache_size]
-            # If cache is None, then cache_size = seq_len.
-            logits = jnp.einsum('BTNH,BSNH->BTNS', query_scaled, key_proj)
-
-        if self.attn_logits_soft_cap is not None:
-            logits = jnp.tanh(logits / self.attn_logits_soft_cap)
-            logits = logits * self.attn_logits_soft_cap
-
-        if self.attn_type == AttentionType.LOCAL_SLIDING:
-            if self.sliding_window_size is None:
-                raise ValueError('Sliding_window_size must be set if Local Sliding attention')
-            sliding_mask = _create_sliding_mask(
-                segment_pos,
-                end_index=cache['end_index'][0] if cache is not None else 0,
-                # Derive cache length from attn_mask shape in case cache is None
-                cache_len=attn_mask.shape[-1],
-                sliding_window_size=self.sliding_window_size,
-            )
-            # [batch_size, seq_len, cache_size]
-            attn_mask *= sliding_mask
-        # [batch_size, seq_len, num_heads, cache_size]
-        padded_logits = jnp.where((jnp.expand_dims(attn_mask, -2)), logits, K_MASK)
-
-        # Multi-head attention matrices.
-        # [batch_size, seq_len, num_heads, cache_size]
-        probs = jax.nn.softmax(padded_logits, axis=-1).astype(key_proj.dtype)
-        probs = self.attention_weights(probs)
-
-        if self.use_gqa:
-            # Reshape matrices to enable einsums over groups.
-            b, t, kg, h = probs.shape
-            probs = probs.reshape(
-                (b, t, self.num_kv_heads, int(kg / self.num_kv_heads), h)
-            )
-            encoded = jnp.einsum('BTKGS,BSKH->BTKGH', probs, value_proj)
-            b, t, k, g, h = encoded.shape
-            encoded = encoded.reshape((b, t, k * g, h))
-        else:
-            # [batch_size, seq_len, num_heads, head_dim]
-            encoded = jnp.einsum('BTNS,BSNH->BTNH', probs, value_proj)
-
-        # [batch_size, seq_len, features]
-        attn_output = self.attn_vec_einsum('BTNH,NHD->BTD', encoded)
-
-        if cache is not None:
-            seq_len = x.shape[1]
-            new_cache = {
-                # [batch_size, cache_size, num_heads, head_dim]
-                'v': value_proj,
-                # [batch_size, cache_size, num_heads, head_dim]
-                'k': key_proj,
-                # [batch_size]
-                'end_index': cache['end_index'] + seq_len,
-            }
-        else:
-            new_cache = None
-
-        return new_cache, attn_output
-    
-    @classmethod
-    def init_cache(
-        cls,
-        cache_size: int,
-        num_heads: int,
-        head_dim: int,
-        batch_size: int,
-        dtype: jnp.dtype = jnp.bfloat16,
-    ) -> LayerCache:
-        del cls  # not used
-        return {
-            'v': jnp.zeros(
-                (batch_size, cache_size, num_heads, head_dim), dtype=dtype
-            ),
-            'k': jnp.zeros(
-                (batch_size, cache_size, num_heads, head_dim), dtype=dtype
-            ),
-            'end_index': jnp.zeros((batch_size,), dtype=jnp.int32),
-        }
-    
-@at.typecheck
-class FeedForward(nn.Module):
-    """Feed forward module."""
-
-    features: int  # features = embed_dim
-    hidden_dim: int
-    transpose_gating_einsum: bool
-
-    @nn.compact
-    def __call__(self, x):
-        """Applies the feed forward module.
-
-        Args:
-            x: Input sequence of shape [batch_size, seq_len, features].
-
-        Returns:
-            Output sequence of shape [batch_size, seq_len, features].
-        """
-        # Some versions use an alternate parameter ordering that
-        # transposes hidden_dim and features.
-        if self.transpose_gating_einsum:
-            eq = '...F,NHF->...NH'
-            gating = Einsum(
-                shape=(2, self.hidden_dim, self.features),
-                weight_name='gating_einsum',
-            )
-        else:
-            eq = '...F,NFH->...NH'
-            gating = Einsum(
-                shape=(2, self.features, self.hidden_dim),
-                weight_name='gating_einsum',
-            )
-
-        # Use the same scope for backwards compatibility with existing checkpoints
-        # created before using `_layers.Einsum` here.
-        nn.share_scope(self, gating)
-
-        # [batch_size, seq_len, 2, hidden_dim]
-        gate = gating(eq, x)
-        # [batch_size, seq_len, hidden_dim]
-        activations = nn.gelu(gate[..., 0, :]) * gate[..., 1, :]
-
-        # Project back from hidden_dim to features.
-        linear = Einsum(
-            shape=(self.hidden_dim, self.features),
-            weight_name='linear',
-        )
-        nn.share_scope(self, linear)
-
-        # [batch_size, seq_len, features]
-        outputs = linear('...H,HF->...F', activations)
-
-        return outputs
-
-class Block_VLM(nn.Module):
-    """Transformer block.
-    Original implementation for Gemma3. Needs wrapped to handle MoE architecture
-    """
-
-    num_heads: int
-    num_kv_heads: int
-    embed_dim: int
-    head_dim: int
-    hidden_dim: int
-    use_post_attn_norm: bool
-    use_post_ffw_norm: bool
-    attn_type: AttentionType
-    query_pre_attn_scalar: float
-    transpose_gating_einsum: bool
-    rope_base_frequency: int = DEFAULT_ROPE_BASE_FREQUENCY
-    rope_scale_factor: float = DEFAULT_ROPE_SCALE_FACTOR
-    attn_logits_soft_cap: float | None = None
-    sliding_window_size: int | None = None
-    use_qk_norm: bool = False
-
-    def setup(self):
-        self.pre_attention_norm = RMSNorm()
-
-        self.attn = Attention(
-            num_heads=self.num_heads,
-            features=self.embed_dim,
-            head_dim=self.head_dim,
-            num_kv_heads=self.num_kv_heads,
-            attn_type=self.attn_type,
-            query_pre_attn_scalar=self.query_pre_attn_scalar,
-            rope_base_frequency=self.rope_base_frequency,
-            rope_scale_factor=self.rope_scale_factor,
-            attn_logits_soft_cap=self.attn_logits_soft_cap,
-            sliding_window_size=self.sliding_window_size,
-            use_qk_norm=self.use_qk_norm,
-        )
-
-        self.post_attention_norm = None
-        if self.use_post_attn_norm:
-            self.post_attention_norm = RMSNorm()
-
-        self.pre_ffw_norm = RMSNorm()
-
-        self.mlp = FeedForward(
-            features=self.embed_dim,
-            hidden_dim=self.hidden_dim,
-            transpose_gating_einsum=self.transpose_gating_einsum,
-        )
-
-        self.post_ffw_norm = None
-        if self.use_post_ffw_norm:
-            self.post_ffw_norm = RMSNorm()
-
-    def __call__(
-      self,
-      x: jax.Array,
-      segment_pos: jax.Array,
-      cache: LayerCache | None,
-      attn_mask: jax.Array,
-  ) -> tuple[LayerCache | None, jax.Array]:
-        """Applies the block to the inputs.
-
-        Args:
-            x: Input sequence of shape [batch_size, seq_len, embed_dim].
-            segment_pos: Input absolute positions of shape [batch_size, seq_len].
-            cache: KV cache or None.
-            attn_mask: Attention mask of shape [batch_size, seq_len, cache_size].
-
-        Returns:
-            cache: Updated attention KV cache.
-            outputs: Output sequence of shape [batch_size, seq_len, embed_dim].
-        """
-        inputs_normalized = self.pre_attention_norm(x)
-
-        # attn_output.shape = [batch_size, seq_len, embed_dim]
-        # cache["k"].shape = [batch_size, cache_size, num_heads, head_dim]
-        # cache["v"].shape = [batch_size, cache_size, num_heads, head_dim]
-        # cache["end_index"].shape = [batch_size]
-        cache, attn_output = self.attn(
-            inputs_normalized,
-            segment_pos,
-            cache,
-            attn_mask,
-        )
-
-        if self.post_attention_norm is not None:
-            attn_output = self.post_attention_norm(attn_output)
-
-        attn_output += x
-
-        outputs = self.pre_ffw_norm(attn_output)
-
-        outputs = self.mlp(outputs)
-
-        if self.post_ffw_norm is not None:
-            outputs = self.post_ffw_norm(outputs)
-
-        outputs += attn_output
-
-        return cache, outputs
-
-
-# ============================================================================
-# MoE Wrappers for Pi0 Model
-# ============================================================================
-
-class Attention(nn.Module):
-    """Shared attention for MoE pattern.
-
-    Takes multiple token sequences, concatenates them, runs attention,
-    then splits the output back.
-    """
-    config: dict  # From gemma3.get_config()
 
     @nn.compact
     def __call__(
@@ -657,149 +353,284 @@ class Attention(nn.Module):
         attn_mask: jnp.ndarray,
         kv_cache: LayerCache | None,
     ) -> tuple[Sequence[Union[jnp.ndarray, None]], LayerCache | None]:
-        """Apply shared attention to multiple sequences.
-
-        Args:
-        xs: List of token sequences, one per expert (None for unused experts)
-        positions: Absolute position indices
-        attn_mask: Attention mask
-        kv_cache: KV cache from previous step (or None for prefill)
-
-        Returns:
-        (outputs, new_cache) where outputs is list of same shape as xs
-        """
         
-        # Filter active sequences
-        active_indices = [i for i, x in enumerate(xs) if x is not None]
-        active_xs = [xs[i] for i in active_indices]
+        assert all(config.head_dim == self.configs[0].head_dim for config in self.configs)
+        assert all(config.num_heads == self.configs[0].num_heads for config in self.configs)
+        assert all(config.num_kv_heads == self.configs[0].num_kv_heads for config in self.configs)
 
-        if not active_xs:
-            return [None] * len(xs), kv_cache
+        dtype = next(x.dtype for x in xs if x is not None)  # original dtype, could be half-precision
+
+        qkvs = []
+        #1) Compute Projections for all experts
+        for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
+            if x is None: 
+                continue
+            if config.num_kv_heads == config.num_heads: # Non GQA
+                qkv_einsum = Einsum(name=_name("qkv_einsum", i), 
+                                    shape=(3, config.num_heads, config.embed_dim, config.head_dim), 
+                                    lora_config=config.lora_configs.get("attn"),
+                                    dtype=dtype)
+                qkvs.append(qkv_einsum('BSD,3KDH->3BSKH',x))
+            else: # GQA
+                q_einsum = Einsum(name=_name("q_einsum", i), 
+                                  shape=(config.num_heads, config.embed_dim, config.head_dim), 
+                                  lora_config=config.lora_configs.get("attn"),
+                                  dtype=dtype)
+                
+                q = q_einsum('BTD,NDH->BTNH', x)
+                kv_einsum = Einsum(name=_name("kv_einsum", i), 
+                                   shape=(2, config.num_kv_heads, config.embed_dim, config.head_dim), 
+                                   lora_config=config.lora_configs.get("attn"),
+                                   dtype=dtype)
+                k, v = kv_einsum('BSD,2KDH->2BSKH', x)
+                qkvs.append((q, k, v))
+
+        # concatenate all experts along the sequence dimension
+        q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
+
+        # Apply Norms if configured
+
+
+        # 2) Apply RoPE and scale queries
+        q = apply_rope(q, positions=positions, base_frequency=DEFAULT_ROPE_BASE_FREQUENCY, scale_factor=DEFAULT_ROPE_SCALE_FACTOR)
+        q *= self.configs[0].head_dim ** -0.5
+
+        k = apply_rope(k, positions=positions, base_frequency=DEFAULT_ROPE_BASE_FREQUENCY, scale_factor=DEFAULT_ROPE_SCALE_FACTOR)
+
+
         
-        # Concatenate active sequences
-        lengths = [x.shape[1] for x in active_xs]
-        concat_x = jnp.concatenate(active_xs, axis=1)
+        assert q.dtype == k.dtype == v.dtype == dtype, "Mismatched dtypes in attention inputs"
 
-        # Run shared attention
-        attn = Attention_VLM(
-            num_heads = self.config["num_heads"],
-            num_kv_heads = self.config["num_kv_heads"],
-            features = self.config["embed_dim"],
-            head_dim = self.config["head_dim"],
-            attn_type = AttentionType.GLOBAL, # or LOCAL_SLIDING based on config
-            query_pre_attn_scalar = self.config["heads_dim"] ** -0.5,
-            rope_base_frequency = DEFAULT_ROPE_BASE_FREQUENCY,
-            sliding_window_size = self.config["sliding_window_size"],
-            use_qk_norm = self.config["use_qk_norm"],
+        # 3) Save KV Values to the Cache
+        if kv_cache is not None:
+            cache_k, cache_v = kv_cache
+            k = jnp.concatenate([cache_k, k], axis=1)
+            v = jnp.concatenate([cache_v, v], axis=1)
+
+
+        # 4) Compute Attention Scores
+        if config.num_kv_heads == config.num_heads: # Non GQA
+            B, T, N, H = q.shape 
+            logits = jnp.einsum("BTNH,BSNH->BTNS", q, k, preferred_element_type=jnp.float32) # B T N S
+        else: # GQA
+            B, T, N, H = q.shape
+            K = self.configs[0].num_kv_heads
+            G = int(N // K)
+            q = q.reshape(B, T, K, G, H)
+            #logits = jnp.einsum('BTKGH,BSKH->BKGTS', q, k, preferred_element_type=jnp.float32) # B T K G S
+            logits = jnp.einsum('BTKGH,BSKH->BTKGS', q, k)
+            _B, _T, _K, _G, _S = logits.shape
+            #logits = logits.reshape((B, T, K*G, S))
+            logits = logits.reshape((_B, _T, _K * _G, _S))
+
+        if attn_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
+            raise ValueError(
+                f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
+            )
+        # Assuming Global Attention Pattern since MoE experts share attn_type
+        # Thus, no need for sliding window mask here
+        
+       
+        #masked_logits = jnp.where(attn_mask[:, :, None, :, :], logits, K_MASK)
+        #masked_logits = jnp.where((jnp.expand_dims(attn_mask, -2)), logits, K_MASK)
+        # Goal of attn_mask is to produce a mask of shape (B, T, S) and apply the same mask across all N heads
+            # Hence we can expand dims to form (B, 1, T, S) and broadcast across N heads
+        broadcastable_mask = jnp.expand_dims(attn_mask.squeeze(axis=1), axis=2)
+        masked_logits = jnp.where(broadcastable_mask, logits, K_MASK)
+        probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
+
+        attention_weights_layer = kd.nn.Identity()
+        probs = attention_weights_layer(probs)
+
+        # 5) Compute Attention Output
+        if config.num_kv_heads == config.num_heads: # Non GQA
+            encoded = jnp.einsum('BTNS,BSNH->BTNH', probs, v)
+        else: # GQA
+            
+            B, T, N, S = probs.shape 
+            K = self.configs[0].num_kv_heads
+            G = int(N // K)
+            probs_reshaped = probs.reshape(B, T, K, G, S)
+
+            encoded = jnp.einsum('BTKGS,BSKH->BTKGH', probs_reshaped, v)
+            #encoded = jnp.einsum('BTKGH,BSKH->BTKGS', probs, v)
+            _B, _T, _K, _G, _H = encoded.shape
+            encoded = encoded.reshape((_B, _T, _K * _G, _H))
+
+        # Expert-specific output projections
+        
+        out = []
+        start = 0
+        for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
+            if x is not None:
+                end = start + x.shape[1]
+                out_einsum = Einsum(name=_name("attn_vec_einsum", i), 
+                                    shape=(config.num_heads, config.head_dim, config.embed_dim), 
+                                    lora_config=config.lora_configs.get("attn"),
+                                    dtype=dtype)
+                
+                out.append(out_einsum('BTNH,NHD->BTD', encoded[:, start:end, :, :]))
+                
+                start = end
+            else:
+                out.append(None)
+
+    
+        return out, (k, v)
+
+
+
+    
+
+@at.typecheck
+class FeedForward(nn.Module):
+    """Feed forward module."""
+    features: int
+    hidden_dim: int
+    transpose_gating_einsum: bool = False
+    lora_config: 'lora.LoRAConfig' = None
+
+    @nn.compact
+    def __call__(self, x):
+        dtype = x.dtype
+        if self.transpose_gating_einsum:
+            eq = '...F,NHF->...NH'
+            gating = Einsum(
+                shape=(2, self.hidden_dim, self.features),
+                weight_name='gating_einsum',
+                lora_config=self.lora_config,
+            )
+        else:
+            eq = '...F,NFH->...NH'
+            gating = Einsum(
+                shape=(2, self.features, self.hidden_dim),
+                weight_name='gating_einsum',
+                lora_config=self.lora_config,
+            )
+
+        gate = gating(eq, x)
+        activations = nn.gelu(gate[..., 0, :]) * gate[..., 1, :]
+
+        linear = Einsum(
+            shape=(self.hidden_dim, self.features),
+            weight_name='linear',
+            lora_config=self.lora_config,
         )
-        new_cache, output = attn(concat_x, positions, kv_cache, attn_mask)
-        
-        # Split output back
-        split_outputs = jnp.split(output, jnp.cumsum(jnp.array(lengths[:-1])), axis=1)
+        outputs = linear('...H,HF->...F', activations)
+        return outputs
 
-        # Reconstruct with Nones in original positions
-        result = [None] * len(xs)
-        for idx, active_idx in enumerate(active_indices):
-            result[active_idx] = split_outputs[idx]
-        return result, new_cache
 
+
+
+# ============================================================================
+# MoE Wrappers for Pi0 Model
+# ============================================================================
+
+@at.typecheck
 class Block(nn.Module):
     """MoE transformer block: shared attention + expert FFNs."""
-    config: dict
-    expert_configs: Sequence[dict]  # One config per expert (can be same as config)
+    configs: Sequence[Config]
+    dropout: float = 0.0
+    dropout_bdims: tuple[int, ...] = ()
 
     @nn.compact
     def __call__(
         self,
-        xs: Sequence[Union[jnp.ndarray, None]],
-        positions: jnp.ndarray,
-        attn_mask: jnp.ndarray,
+        xs: Sequence[Union[jax.Array, None]],
         kv_cache: LayerCache | None,
-    ) -> tuple[Sequence[Union[jnp.ndarray, None]], LayerCache | None]:
-        """Apply MoE block.
+        positions: jax.Array,
+        attn_mask: jax.Array,
+        adarms_cond: Sequence[Union[jax.Array, None]],
+        deterministic: bool = True,
+    ) -> tuple[Sequence[Union[jax.Array, None]], LayerCache | None]:
+        """Apply MoE block with adaptive conditioning."""
+        xs = sharding.activation_sharding_constraint(xs)
+        drop = nn.Dropout(self.dropout, self.dropout_bdims) if self.dropout else lambda x, _: x
 
-        Args:
-            xs: List of expert token sequences
-            positions: Position indices
-            attn_mask: Attention mask
-            kv_cache: KV cache
+        # Pre-attention normalization with optional AdaRMS
+        pre_attn = []
+        gates = []
+        for i, x in enumerate(xs):
+            if x is not None:
+                x, gate = RMSNorm(name=_name("pre_attention_norm", i))(x, adarms_cond[i])
+            pre_attn.append(x)
+            gates.append(gate if x is not None else None)
 
-        Returns:
-        (outputs, new_cache)
-        """
-        normed_xs = [
-            RMSNorm(name=f"pre_attn_norm_{i}")(x) if x is not None else None
-            for i, x in enumerate(xs)
-        ]
-
+        pre_attn = sharding.activation_sharding_constraint(pre_attn)
+        
         # Shared attention
-        attn_outs, new_cache = Attention(config = self.config, name="shared_attn")(
-            normed_xs, positions, attn_mask, kv_cache
-        )
+        post_attn, kv_cache = Attention(
+            configs=self.configs,
+            name="attn"
+        )(pre_attn, positions, attn_mask, kv_cache)
+        
+        post_attn = jax.tree.map(lambda x: drop(x, deterministic), post_attn)
+        post_attn = sharding.activation_sharding_constraint(post_attn)
+        
+        # First residual with gating
+        xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, post_attn, gates, strict=True)]
+        xs = sharding.activation_sharding_constraint(xs)
 
-        # Residual connection
-        xs = [
-            x + attn_out if x is not None else attn_out
-            for x, attn_out in zip(xs, attn_outs)
-        ]
+        # Pre-FFN normalization with optional AdaRMS
+        pre_ffw = []
+        gates = []
+        for i, x in enumerate(xs):
+            if x is not None:
+                x, gate = RMSNorm(name=_name("pre_ffw_norm", i))(x, adarms_cond[i])
+            pre_ffw.append(x)
+            gates.append(gate if x is not None else None)
 
-        # Pre-FFN norm
-        normed_xs = [
-            RMSNorm(name=f"pre_ffn_norm_{i}")(x) if x is not None else None
-            for i, x in enumerate(xs)
-        ]
+        pre_ffw = sharding.activation_sharding_constraint(pre_ffw)
 
-        # Expert FFNs (different network per expert)
+        # Expert FFNs (separate for each expert)
         ffn_outs = []
-        for i, (x, cfg) in enumerate(zip(normed_xs, self.expert_configs)):
+        for i, (x, config) in enumerate(zip(pre_ffw, self.configs, strict=True)):
             if x is not None:
                 ffn = FeedForward(
-                    features = cfg["embed_dim"],
-                    hidden_dim = cfg["hidden_dim"],
-                    transpose_gating_einsum = cfg["transpose_gating_einsum"],
-                    name = f"expert_ffn_{i}",
+                    features=config.embed_dim,
+                    hidden_dim=config.hidden_dim,
+                    transpose_gating_einsum=config.transpose_gating_einsum,
+                    lora_config=config.lora_configs.get("ffn"),
+                    name=_name("mlp", i),
                 )
                 ffn_outs.append(ffn(x))
             else:
                 ffn_outs.append(None)
 
-        # Residual connection after FFN
-        xs = [
-            x + ffn_out if x is not None else ffn_out
-            for x, ffn_out in zip(xs, ffn_outs)
-        ]
+        ffn_outs = sharding.activation_sharding_constraint(ffn_outs)
+        ffn_outs = jax.tree.map(lambda x: drop(x, deterministic), ffn_outs)
+        
+        # Second residual with gating
+        xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, ffn_outs, gates, strict=True)]
+        xs = sharding.activation_sharding_constraint(xs)
 
-        return xs, new_cache
+        return xs, kv_cache
 
 
 KVCache: TypeAlias = tuple[at.Float[at.Array, "l b _t _k _h"], at.Float[at.Array, "l b _t _v _h"]]
 
+@at.typecheck
 class Module(nn.Module):
-    """Transformer model, supporting a mixture of different weights for different tokens.
-    Assumes first config is VLM, second config is action expert
-    """
-
-    configs: Sequence[Config]  # list of configs, one for each expert
+    """Transformer model supporting mixture of experts for Pi0."""
+    configs: Sequence[Config]
     embed_dtype: str
-
     dropout: float = 0.0
-    dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
+    dropout_bdims: tuple[int, ...] = ()
     adarms: bool = False
 
     def setup(self):
-        # assert all experts have the same number of layers / depth
         assert all(config.num_layers == self.configs[0].num_layers for config in self.configs)
+
         self.embedder = Embedder(
-            vocab_size = self.configs[0].vocab_size,
-            embed_dim = self.configs[0].embed_dim,
-            vision_proj_dim = None,  # No vision encoder here,
+            vocab_size=self.configs[0].vocab_size,
+            embed_dim=self.configs[0].embed_dim,
             name="embedder",
         )
 
         block_cls = nn.remat(
             Block,
             prevent_cse=False,
-            static_argnums=(5,),  # 0=self, 6=deterministic
+            static_argnums=(5,),  # deterministic is static
             policy=jax.checkpoint_policies.nothing_saveable,
         )
 
@@ -808,30 +639,27 @@ class Module(nn.Module):
             variable_axes={"params": 0},
             split_rngs={"params": True, "dropout": True},
             in_axes=(
-                0,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-                nn.broadcast,
-            ),  # 0=kv_cache, 1=positions, 2=mask, 3=adarms_cond, 4=deterministic
+                0,  # kv_cache
+                nn.broadcast,  # positions
+                nn.broadcast,  # attn_mask
+                nn.broadcast,  # adarms_cond
+            ),
             length=self.configs[0].num_layers,
         )(
-            configs = self.configs,
-            dropout = self.dropout,
-            dropout_bdims = self.dropout_bdims,
-            post_norms = self.configs[0].post_norms
+            configs=self.configs,
+            dropout=self.dropout,
+            dropout_bdims=self.dropout_bdims,
         )
-        self.final_norms = [RMSNorm(name=_name("final_norm", i), param_dtype=self.configs[i].param_dtype) for i in range(len(self.configs))]
 
+        self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
+
+    @at.typecheck
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
-        """Embed input tokens."""
-        x = self.embedder.encode(tokens)
-        return x.astype(self.embed_dtype)
-    
+        return self.embedder.encode(tokens).astype(self.embed_dtype)
+
     @at.typecheck
     def __call__(
         self,
-        # list of token arrays, one for each expert, or None if that expert should not be run
         embedded: Sequence[at.Float[at.Array, "b _t _d"] | None],
         positions: at.Int[at.Array, "b t"],
         mask: at.Bool[at.Array, "b t s"],
@@ -845,16 +673,17 @@ class Module(nn.Module):
         if adarms_cond is None:
             adarms_cond = [None] * len(self.configs)
 
-        embedded, kv_cache = self.layers(embedded, kv_cache, positions, mask, adarms_cond, deterministic)
+        embedded, kv_cache = self.layers(embedded, kv_cache, positions, mask, adarms_cond, deterministic=deterministic)
 
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
         return [
-            f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
+            f(e, a)[0] if e is not None else e 
+            for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
         ], kv_cache
-    
+
     def init(self, use_adarms: Sequence[bool]):
-        """Convenience method for initializing all parameters, necessary due to the quirks of linen."""
+        """Initialize all parameters."""
         self.embed(jnp.zeros((1, 1), dtype=jnp.int32))
         self(
             [jnp.zeros((1, 1, c.embed_dim)) for c in self.configs],
@@ -864,11 +693,25 @@ class Module(nn.Module):
         )
 
     
-def _name(name, i):
+def _name(base_name: str, expert_idx: int):
     # we name layers like this because we want the first expert's weights to have no suffix (e.g., "attn"), so that they
     # can be loaded seamlessly from the existing PaliGemma checkpoint. subsequent experts will have a suffix (e.g.,
     # "attn_1") and their weights will be initialized from scratch. in practice, we only use two experts -- PaliGemma,
     # and the action expert.
-    if i == 0:
-        return name
-    return f"{name}_{i}"
+    if expert_idx == 0:
+        return base_name
+    return f"{base_name}_{expert_idx}"
+
+
+
+
+def _gated_residual(x, y, gate):
+    assert (x is None) == (y is None)
+    if x is None:
+        return None
+    dtype = x.dtype
+    if gate is None:
+        result = x + y
+    else:
+        result = x + y * gate
+    return result.astype(dtype)

@@ -7,12 +7,12 @@ import jax.numpy as jnp
 from typing_extensions import override
 
 from openpi.models import model as _model
-import openpi_cot.models.gemma3 as _gemma3  # Changed from gemma to gemma3
+import openpi_cot.models.claude_tests.gemma3 as _gemma3  # Changed from gemma to gemma3
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 
 if TYPE_CHECKING:
-    from openpi.models.pi0 import Pi0
+    from openpi_cot.models.claude_tests.pi0_gemma3 import Pi0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -20,14 +20,14 @@ class Pi0Config(_model.BaseModelConfig):
     dtype: str = "bfloat16"
     # Updated to use Gemma3 variants
     paligemma_variant: _gemma3.Variant = "gemma3_4b"
-    action_expert_variant: _gemma3.Variant = "gemma3_4b"
+    action_expert_variant: _gemma3.Variant = "gemma3_300m"
 
     # Set the model specific defaults
     action_dim: int = 32
     action_horizon: int = 50
     max_token_len: int = None  # type: ignore
     # Pi05 has two differences from Pi0:
-    # - the state input is part of the discrete language tokens rather than a continuous input that is part of the suffix
+    # - the state input is part of the discrete language tokens rather than a continuous input
     # - the action expert uses adaRMSNorm to inject the flow matching timestep
     pi05: bool = False
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory
@@ -48,9 +48,9 @@ class Pi0Config(_model.BaseModelConfig):
 
     @override
     def create(self, rng: at.KeyArrayLike) -> "Pi0":
-        from openpi.models.pi0 import Pi0
+        from openpi_cot.models.claude_tests.pi0_gemma3 import Pi0
 
-        return Pi0(self, rngs=nnx.Rngs(rng))
+        return Pi0(self, nnx.Rngs(rng))
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
@@ -83,21 +83,27 @@ class Pi0Config(_model.BaseModelConfig):
         has_lora = False
         gemma_params_filter = nnx_utils.PathRegex(".*llm.*")
         action_expert_params_filter = nnx_utils.PathRegex(".*llm.*_1.*")
-        
         if "lora" in self.paligemma_variant:
-            filters.append(gemma_params_filter)
+            filters.append(
+                gemma_params_filter,
+            )
             if "lora" not in self.action_expert_variant:
-                # If only freeze gemma params, exclude action expert params
-                filters.append(nnx.Not(action_expert_params_filter))
+                # If only freeze gemma params, exclude action expert params.
+                filters.append(
+                    nnx.Not(action_expert_params_filter),
+                )
             has_lora = True
         elif "lora" in self.action_expert_variant:
-            filters.append(action_expert_params_filter)
+            filters.append(
+                action_expert_params_filter,
+            )
             has_lora = True
 
         if has_lora:
-            # If any lora is used, exclude all lora params
-            filters.append(nnx.Not(nnx_utils.PathRegex(".*lora.*")))
-        
+            # If any lora is used, exclude all lora params.
+            filters.append(
+                nnx.Not(nnx_utils.PathRegex(".*lora.*")),
+            )
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)

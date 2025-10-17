@@ -1,6 +1,8 @@
 import logging
+from typing import Sequence, Union
 
 import einops
+import flax.linen as nn
 import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
@@ -9,7 +11,7 @@ from typing_extensions import override
 
 from openpi.models import model as _model
 from openpi.models import pi0_config
-import openpi_cot.models.gemma3 as _gemma3  # Changed from gemma to gemma3
+import openpi_cot.models.claude_tests.gemma3 as _gemma3
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 
@@ -141,7 +143,7 @@ class Pi0(_model.BaseModel):
 
         # This attribute gets automatically set by model.train() and model.eval()
         self.deterministic = True
-    
+
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation
@@ -149,10 +151,10 @@ class Pi0(_model.BaseModel):
         input_mask = []
         ar_mask = []
         tokens = []
-        # embed images
+        
+        # Embed images
         for name in obs.images:
             image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
-
             tokens.append(image_tokens)
             input_mask.append(
                 einops.repeat(
@@ -161,21 +163,71 @@ class Pi0(_model.BaseModel):
                     s=image_tokens.shape[1],
                 )
             )
-            # image tokens attend to each other
+            # Image tokens attend to each other
             ar_mask += [False] * image_tokens.shape[1]
 
-        # add language (aka tokenized inputs)
+        # Add language (tokenized inputs)
         if obs.tokenized_prompt is not None:
             tokenized_inputs = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
             tokens.append(tokenized_inputs)
             input_mask.append(obs.tokenized_prompt_mask)
-            # full attention between image and language inputs
+            # Full attention between image and language inputs
             ar_mask += [False] * tokenized_inputs.shape[1]
+        
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
         return tokens, input_mask, ar_mask
 
+    @at.typecheck
+    def embed_suffix(
+        self, obs: _model.Observation, noisy_actions: _model.Actions, timestep: at.Float[at.Array, " b"]
+    ) -> tuple[
+        at.Float[at.Array, "b s emb"],
+        at.Bool[at.Array, "b s"],
+        at.Bool[at.Array, " s"],
+        at.Float[at.Array, "b emb"] | None,
+    ]:
+        input_mask = []
+        ar_mask = []
+        tokens = []
+        if not self.pi05:
+            # add a single state token
+            state_token = self.state_proj(obs.state)[:, None, :]
+            tokens.append(state_token)
+            input_mask.append(jnp.ones((obs.state.shape[0], 1), dtype=jnp.bool_))
+            # image/language inputs do not attend to state or actions
+            ar_mask += [True]
+
+        action_tokens = self.action_in_proj(noisy_actions)
+        # embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
+        time_emb = posemb_sincos(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0)
+        if self.pi05:
+            # time MLP (for adaRMS)
+            time_emb = self.time_mlp_in(time_emb)
+            time_emb = nnx.swish(time_emb)
+            time_emb = self.time_mlp_out(time_emb)
+            time_emb = nnx.swish(time_emb)
+            action_expert_tokens = action_tokens
+            adarms_cond = time_emb
+        else:
+            # mix timestep + action information using an MLP (no adaRMS)
+            time_tokens = einops.repeat(time_emb, "b emb -> b s emb", s=self.action_horizon)
+            action_time_tokens = jnp.concatenate([action_tokens, time_tokens], axis=-1)
+            action_time_tokens = self.action_time_mlp_in(action_time_tokens)
+            action_time_tokens = nnx.swish(action_time_tokens)
+            action_time_tokens = self.action_time_mlp_out(action_time_tokens)
+            action_expert_tokens = action_time_tokens
+            adarms_cond = None
+        tokens.append(action_expert_tokens)
+        input_mask.append(jnp.ones(action_expert_tokens.shape[:2], dtype=jnp.bool_))
+        # image/language/state inputs do not attend to action tokens
+        ar_mask += [True] + ([False] * (self.action_horizon - 1))
+        tokens = jnp.concatenate(tokens, axis=1)
+        input_mask = jnp.concatenate(input_mask, axis=1)
+        ar_mask = jnp.array(ar_mask)
+        return tokens, input_mask, ar_mask, adarms_cond
+    
     @override
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
@@ -190,26 +242,21 @@ class Pi0(_model.BaseModel):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
-        # One big forward pass of prefix + suffix at once
+        # one big forward pass of prefix + suffix at once
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
         attn_mask = make_attn_mask(input_mask, ar_mask)
         positions = jnp.cumsum(input_mask, axis=1) - 1
-        
-        # Call Gemma3 MoE module
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
-            [prefix_tokens, suffix_tokens], 
-            mask=attn_mask, 
-            positions=positions, 
-            adarms_cond=[None, adarms_cond]
+            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
         )
-        
-        # Project action expert output to action space
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+
+    
 
     @override
     def sample_actions(
@@ -275,52 +322,3 @@ class Pi0(_model.BaseModel):
 
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
-
-    @at.typecheck
-    def embed_suffix(
-        self, obs: _model.Observation, noisy_actions: _model.Actions, timestep: at.Float[at.Array, " b"]
-    ) -> tuple[
-        at.Float[at.Array, "b s emb"],
-        at.Bool[at.Array, "b s"],
-        at.Bool[at.Array, " s"],
-        at.Float[at.Array, "b emb"] | None,
-    ]:
-        input_mask = []
-        ar_mask = []
-        tokens = []
-        if not self.pi05:
-            # add a single state token
-            state_token = self.state_proj(obs.state)[:, None, :]
-            tokens.append(state_token)
-            input_mask.append(jnp.ones((obs.state.shape[0], 1), dtype=jnp.bool_))
-            # image/language inputs do not attend to state or actions
-            ar_mask += [True]
-
-        action_tokens = self.action_in_proj(noisy_actions)
-        # embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
-        time_emb = posemb_sincos(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0)
-        if self.pi05:
-            # time MLP (for adaRMS)
-            time_emb = self.time_mlp_in(time_emb)
-            time_emb = nnx.swish(time_emb)
-            time_emb = self.time_mlp_out(time_emb)
-            time_emb = nnx.swish(time_emb)
-            action_expert_tokens = action_tokens
-            adarms_cond = time_emb
-        else:
-            # mix timestep + action information using an MLP (no adaRMS)
-            time_tokens = einops.repeat(time_emb, "b emb -> b s emb", s=self.action_horizon)
-            action_time_tokens = jnp.concatenate([action_tokens, time_tokens], axis=-1)
-            action_time_tokens = self.action_time_mlp_in(action_time_tokens)
-            action_time_tokens = nnx.swish(action_time_tokens)
-            action_time_tokens = self.action_time_mlp_out(action_time_tokens)
-            action_expert_tokens = action_time_tokens
-            adarms_cond = None
-        tokens.append(action_expert_tokens)
-        input_mask.append(jnp.ones(action_expert_tokens.shape[:2], dtype=jnp.bool_))
-        # image/language/state inputs do not attend to action tokens
-        ar_mask += [True] + ([False] * (self.action_horizon - 1))
-        tokens = jnp.concatenate(tokens, axis=1)
-        input_mask = jnp.concatenate(input_mask, axis=1)
-        ar_mask = jnp.array(ar_mask)
-        return tokens, input_mask, ar_mask, adarms_cond
