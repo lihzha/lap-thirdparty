@@ -684,37 +684,30 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
     def __call__(self, data: dict) -> dict:
         # Get actions and reasoning from data
-        actions = data.get("actions")
         reasoning = data.get("reasoning")
-        breakpoint()
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
-        if self.decoding_schema is not None and reasoning is not None:
-            # Parse reasoning to translation deltas and gripper actions
-            translations, gripper_actions = self.decoding_schema.parse_language_to_deltas(
-                reasoning, in_camera_frame=self.in_camera_frame
-            )
+        assert self.decoding_schema is not None and reasoning is not None
+        # Parse reasoning to translation deltas and gripper actions
+        translations, gripper_actions = self.decoding_schema.parse_language_to_deltas(
+            reasoning, in_camera_frame=self.in_camera_frame
+        )
 
-            # If we don't have actions from the model, use the parsed actions
-            # Shape: (num_steps, 7) -> [dx, dy, dz, droll, dpitch, dyaw, gripper]
-            # For now, assume zero rotation deltas
-            num_steps = translations.shape[0]
-            parsed_actions = np.concatenate(
-                [
-                    translations,  # (num_steps, 3)
-                    np.zeros((num_steps, 3)),  # rotation deltas
-                    gripper_actions[:, None],  # (num_steps, 1)
-                ],
-                axis=1,
-            )
+        # If we don't have actions from the model, use the parsed actions
+        # Shape: (num_steps, 7) -> [dx, dy, dz, droll, dpitch, dyaw, gripper]
+        # For now, assume zero rotation deltas
+        num_steps = translations.shape[0]
+        parsed_actions = np.concatenate(
+            [
+                translations,  # (num_steps, 3)
+                np.zeros((num_steps, 3)),  # rotation deltas
+                gripper_actions[:, None],  # (num_steps, 1)
+            ],
+            axis=1,
+        )
 
-            if actions is None:
-                actions = parsed_actions
-            # Store parsed actions separately for inspection
-            data["parsed_actions"] = parsed_actions
+        # Store parsed actions separately for inspection
+        data["parsed_actions"] = parsed_actions
 
-        # Only return the first 7 dims (xyz, rpy, gripper)
-        if actions is not None:
-            actions = np.asarray(actions[:, :7])
 
         return {"actions": parsed_actions, "reasoning": reasoning}

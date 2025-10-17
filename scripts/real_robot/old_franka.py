@@ -19,10 +19,8 @@ from scipy.spatial.transform import Rotation as R
 from droid.robot_env import RobotEnv
 
 # Add parent directory to path to import from src
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from shared import Args, IMAGE_KEYS
-from openpi_cot.policies.cot_policy import get_decoding_schema
 
 faulthandler.enable()
 
@@ -44,8 +42,6 @@ class Args:
         8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
     in_camera_frame: bool = True  # whether the predicted movements are in camera frame or robot/base frame
-    # Language action decoding parameters
-    decoding_schema: str = "verbose"  # which schema to use for decoding language actions ("verbose", "compact")
 
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
@@ -101,9 +97,6 @@ def main(args: Args):
     cam_to_base_extrinsics_matrix[:3, :3] = rot_mat
     cam_to_base_extrinsics_matrix[:3, 3] = pos
     print("Created the droid env!")
-
-    # Initialize decoding schema for parsing language actions
-    decoding_schema = get_decoding_schema(args.decoding_schema)
 
     while True:
         env.reset()
@@ -168,16 +161,12 @@ def main(args: Args):
                         # Extract actions from response (either pre-parsed or parse from reasoning)
                         if "actions" in response and response["actions"] is not None:
                             actions = np.asarray(response["actions"])
+                            print(response["reasoning"])
                             # Extract translation delta (first 3 dims) and gripper (last dim)
                             delta_base = actions[0, :3]
-                            grip_actions = actions[:, -1]
+                            grip_actions = 1 - actions[:, -1]
                         else:
-                            # Fall back to parsing reasoning text
-                            reasoning = response.get("reasoning", "")
-                            translations, grip_actions = decoding_schema.parse_language_to_deltas(
-                                reasoning, in_camera_frame=args.in_camera_frame
-                            )
-                            delta_base = translations[0]
+                            raise NotImplementedError
 
                         # Map translation delta to robot/base frame if in camera frame
                         if args.in_camera_frame:
@@ -195,7 +184,7 @@ def main(args: Args):
 
                         # Linearly interpolate to CHUNK_STEPS actions
                         positions = np.linspace(curr_pos, next_pos, CHUNK_STEPS, endpoint=True)
-                        curr_quat = R.from_euler("XYZ", curr_rpy, degrees=False).as_quat()  # (x,y,z,w)
+                        curr_quat = R.from_euler("xyz", curr_rpy, degrees=False).as_quat()  # (x,y,z,w)
                         # grip_vals = np.linspace(curr_grip, next_grip, CHUNK_STEPS, endpoint=True).reshape(-1, 1)
                         grip_vals = np.ones((CHUNK_STEPS, 1)) * curr_grip
                         grip_vals[-1] = next_grip  # ensure last gripper value is the target

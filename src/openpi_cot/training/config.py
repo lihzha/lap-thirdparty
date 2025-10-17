@@ -145,6 +145,7 @@ class CoTDataConfig(upstream_config.DataConfig):
 
     # Language action configuration
     language_action_config_name: str = "compact"
+    decoding_schema: str = "verbose"
 
     # Prediction training parameters
     max_prediction_horizon: int = 30
@@ -274,7 +275,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                     prediction_prompt=base_cfg.prediction_prompt,
                 )
             ],
-            outputs=[cot_policy.CoTOutputs(decoding_schema="verbose")],
+            outputs=[cot_policy.CoTOutputs(decoding_schema=base_cfg.decoding_schema)],
         )
 
         # assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
@@ -450,34 +451,6 @@ _CONFIGS = [
     build_droid_cfg("v6", fsdp_devices=8, batch_size=256),
     build_droid_cfg("local", fsdp_devices=1, batch_size=4),
     TrainConfig(
-        name="pi_oxe_cot_v4",
-        data=RLDSCoTDataConfig(
-            repo_id="oxe",
-            asset_id="oxe",
-            dataset_type="oxe",
-            rlds_data_dir="gs://pi0-cot/OXE",
-            data_mix="oxe_pi_magic_soup",
-        ),
-        fsdp_devices=4,
-        batch_size=256,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
-    ),
-    TrainConfig(
-        name="pi_oxe_cot_local",
-        data=RLDSCoTDataConfig(
-            repo_id="oxe",
-            asset_id="oxe",
-            dataset_type="oxe",
-            rlds_data_dir="/n/fs/vla-mi/datasets/OXE",
-            data_mix="oxe_pi_magic_soup",
-        ),
-        fsdp_devices=4,
-        batch_size=256,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-    ),
-    TrainConfig(
         name="pi_combined_cot_v4",
         data=RLDSCoTDataConfig(
             repo_id="combined",
@@ -538,7 +511,7 @@ _CONFIGS = [
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
     ),
     TrainConfig(
-        name="pi0_droid_cot_eval",
+        name="pi0_eval",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=110,
@@ -552,10 +525,10 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
-        name="pi05_droid_cot_eval",
+        name="pi05_eval",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
-            max_token_len=140,
+            max_token_len=200,
             pi05=True,
             discrete_state_input=True,
         ),
@@ -566,7 +539,7 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
-        name="paligemma2_droid_cot_eval",
+        name="paligemma2_eval",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=150,
@@ -582,7 +555,24 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
-        name="pi05_vqa_local",
+        name="paligemma2_eval_compact",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=150,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            decoding_schema="compact"
+        ),
+    ),
+    TrainConfig(
+        name="pi05_vqa",
         model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
         data=VQADataConfig(
             repo_id="droid",
@@ -613,50 +603,7 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
-        name="paligemma_vqa_v4",
-        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600, prompt_format="vqa"),
-        data=VQADataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            rlds_data_dir="gs://pi0-cot/OXE",
-            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
-            droid_dataset_name="droid",
-            droid_rlds_data_dir="gs://pi0-cot/OXE",
-        ),
-        fsdp_devices=4,
-        batch_size=16,
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-    ),
-    TrainConfig(
-        name="paligemma2_vqa_v4",
-        model=pi_cot_config.PiCoTConfig(
-            pi05=True,
-            discrete_state_input=False,
-            max_token_len=600,
-            paligemma_variant="gemma2_2b",
-            action_expert_variant="gemma2_300m",
-            prompt_format="vqa",
-        ),
-        data=VQADataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            rlds_data_dir="gs://pi0-cot/OXE",
-            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
-            droid_dataset_name="droid",
-            droid_rlds_data_dir="gs://pi0-cot/OXE",
-        ),
-        fsdp_devices=4,
-        batch_size=16,
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="paligemma2", params_path="gs://pi0-cot/cache/paligemma2-3b-mix-224.b16.npz"
-        ),
-    ),
-    TrainConfig(
-        name="paligemma2_vqa_local",
+        name="paligemma2_vqa",
         model=pi_cot_config.PiCoTConfig(
             pi05=True,
             discrete_state_input=False,
