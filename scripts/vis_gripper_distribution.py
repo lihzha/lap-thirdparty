@@ -107,7 +107,7 @@ def extract_gripper_actions(batch) -> np.ndarray:
     if actions_data is None:
         return np.array([])
     # Last dimension is gripper action
-    gripper_actions = actions_data[..., -1]
+    gripper_actions = actions_data[..., 6]
     gripper_actions = gripper_actions.flatten()
     return gripper_actions
 
@@ -427,7 +427,59 @@ def main(config: _config.TrainConfig):
             }
             logging.info(f"Camera '{cam_key}': Found {len(min_images_cam)} min and {len(max_images_cam)} max images")
 
-    logging.info(f"Extracted images from {len(camera_images)} camera views")
+    logging.info(f"Extracted images from {len(camera_images)} camera views for gripper states")
+
+    # Extract images for min/max gripper actions
+    camera_images_actions = {}  # {camera_key: {"min": [...], "max": [...]}}
+
+    if len(all_gripper_actions) > 0:
+        # Find top-k min/max gripper actions and their locations
+        action_min_indices = np.argpartition(all_gripper_actions, num_examples)[:num_examples]
+        action_max_indices = np.argpartition(all_gripper_actions, -num_examples)[-num_examples:]
+
+        # Sort them by value for nicer display
+        action_min_indices = action_min_indices[np.argsort(all_gripper_actions[action_min_indices])]
+        action_max_indices = action_max_indices[np.argsort(all_gripper_actions[action_max_indices])[::-1]]
+
+        logging.info(f"Finding {num_examples} min and {num_examples} max gripper action examples...")
+        logging.info(f"Min gripper action values: {all_gripper_actions[action_min_indices]}")
+        logging.info(f"Max gripper action values: {all_gripper_actions[action_max_indices]}")
+
+        # Extract images for min/max gripper actions
+        logging.info("Extracting images for min/max gripper actions...")
+
+        for cam_key in camera_keys_to_try:
+            min_images_cam = []
+            max_images_cam = []
+
+            # Extract min examples
+            for idx in action_min_indices:
+                img, gripper_val = get_image_at_index(all_batches, idx, cam_key)
+                if img is not None:
+                    # Get the actual action value instead of state value
+                    action_val = all_gripper_actions[idx]
+                    min_images_cam.append((img, action_val, idx))
+
+            # Extract max examples
+            for idx in action_max_indices:
+                img, gripper_val = get_image_at_index(all_batches, idx, cam_key)
+                if img is not None:
+                    # Get the actual action value instead of state value
+                    action_val = all_gripper_actions[idx]
+                    max_images_cam.append((img, action_val, idx))
+
+            # Limit to num_examples
+            min_images_cam = min_images_cam[:num_examples]
+            max_images_cam = max_images_cam[:num_examples]
+
+            if len(min_images_cam) > 0 or len(max_images_cam) > 0:
+                camera_images_actions[cam_key] = {
+                    "min": min_images_cam,
+                    "max": max_images_cam,
+                }
+                logging.info(f"Camera '{cam_key}': Found {len(min_images_cam)} min and {len(max_images_cam)} max action images")
+
+        logging.info(f"Extracted images from {len(camera_images_actions)} camera views for gripper actions")
 
     # Print summary statistics
     logging.info("=" * 60)
@@ -516,7 +568,32 @@ def main(config: _config.TrainConfig):
                 logging.info(f"Logging {len(max_images)} max gripper images for {cam_key}")
 
         if len(camera_images) == 0:
-            logging.warning("No gripper images found from any camera")
+            logging.warning("No gripper state images found from any camera")
+
+        # Add min/max action images from all cameras if available
+        for cam_key, images_dict in camera_images_actions.items():
+            min_images = images_dict["min"]
+            max_images = images_dict["max"]
+
+            # Clean camera key for wandb (replace underscores with dashes for better display)
+            cam_name = cam_key.replace("_", "-")
+
+            if len(min_images) > 0:
+                log_dict[f"examples/{cam_name}/action-min"] = [
+                    wandb.Image(img, caption=f"Action Min #{i + 1}: {val:.6f} (idx={idx})")
+                    for i, (img, val, idx) in enumerate(min_images)
+                ]
+                logging.info(f"Logging {len(min_images)} min gripper action images for {cam_key}")
+
+            if len(max_images) > 0:
+                log_dict[f"examples/{cam_name}/action-max"] = [
+                    wandb.Image(img, caption=f"Action Max #{i + 1}: {val:.6f} (idx={idx})")
+                    for i, (img, val, idx) in enumerate(max_images)
+                ]
+                logging.info(f"Logging {len(max_images)} max gripper action images for {cam_key}")
+
+        if len(camera_images_actions) == 0 and len(all_gripper_actions) > 0:
+            logging.warning("No gripper action images found from any camera")
 
         wandb.log(log_dict)
         logging.info("Logged gripper distribution and examples to wandb")
@@ -543,6 +620,21 @@ def main(config: _config.TrainConfig):
                 max_img_path = os.path.join(output_dir, f"gripper_max_{cam_key}_{i:02d}_{dataset_name}.png")
                 plt.imsave(max_img_path, img)
                 logging.info(f"Saved {cam_key} max gripper image #{i + 1} (val={val:.6f}) to: {max_img_path}")
+
+        # Save min/max action images locally for all cameras
+        for cam_key, images_dict in camera_images_actions.items():
+            min_images = images_dict["min"]
+            max_images = images_dict["max"]
+
+            for i, (img, val, idx) in enumerate(min_images):
+                min_img_path = os.path.join(output_dir, f"gripper_action_min_{cam_key}_{i:02d}_{dataset_name}.png")
+                plt.imsave(min_img_path, img)
+                logging.info(f"Saved {cam_key} min gripper action image #{i + 1} (val={val:.6f}) to: {min_img_path}")
+
+            for i, (img, val, idx) in enumerate(max_images):
+                max_img_path = os.path.join(output_dir, f"gripper_action_max_{cam_key}_{i:02d}_{dataset_name}.png")
+                plt.imsave(max_img_path, img)
+                logging.info(f"Saved {cam_key} max gripper action image #{i + 1} (val={val:.6f}) to: {max_img_path}")
 
     # Finish wandb run
     if wandb_enabled and wandb is not None and getattr(wandb, "run", None) is not None:
