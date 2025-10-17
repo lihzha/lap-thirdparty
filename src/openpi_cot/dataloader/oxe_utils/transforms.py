@@ -1482,6 +1482,7 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["observation"]["gripper_state"] = (trajectory["observation"]["state"][:, -1:] + 3.14) / 6.28
     # trajectory["action"] = (trajectory["action"][..., :-1] + 3.14) / 6.28
+    gripper_action = trajectory["action"][..., :-2:-1]
 
     movement_actions = tf.concat(
         (
@@ -1494,7 +1495,7 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
 
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    traj_truncated["action"] = tf.concat([movement_actions, gripper_action[:-1]], axis=1)
 
     return traj_truncated
 
