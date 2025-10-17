@@ -1,5 +1,6 @@
 import flax.nnx as nnx
 import jax
+import functools
 
 import openpi_cot.models.claude_tests.pi0_config_gemma3 as _pi0_config
 
@@ -53,7 +54,12 @@ def main():
     their shapes, and their sizes.
     """
     print("--- Loading Full Fine-Tuning Model Configuration ---")
-    config = _pi0_config.Pi0Config()
+    config = _pi0_config.Pi0Config(
+        action_dim=7,
+            action_horizon=10,
+            max_token_len=32,
+            pi05=False
+    )
 
     print("--- Initializing Model and Parameters ---")
     # To get parameter values, we must initialize the model, not just evaluate its shape.
@@ -64,23 +70,64 @@ def main():
 
 
 
-    # Extract all parameters (not just frozen ones) from the model.
-    # We use nnx.Param to filter for only trainable parameters.
+    # NEW, ROBUST HELPER FUNCTION
+    def get_nested_module(root_module, path):
+        """
+        Accesses a nested module using a path tuple, handling both
+        attribute and dictionary/list item access.
+        """
+        current_node = root_module
+        for name in path:
+            if isinstance(current_node, (dict, list, tuple)):
+                # If the current node is a collection, use item access.
+                # The key might be a string representing an integer index.
+                try:
+                    key = int(name) if name.isdigit() else name
+                    current_node = current_node[key]
+                except (KeyError, IndexError):
+                    # Fallback for string keys if int conversion fails/is out of bounds
+                    current_node = current_node[name]
+            else:
+                # Otherwise, it's a module; use attribute access.
+                current_node = getattr(current_node, name)
+        return current_node
+
+
+    # 1. Get the flattened state.
     params = nnx.state(model, nnx.Param).flat_state()
 
-    print(f"\nFound {len(params)} parameter arrays in the model.")
-    print("-" * 80)
+    print(f"\nFound {len(params)} trainable parameter arrays.")
+    print("\nDetailed Parameter Information:")
+    print("-" * 120)
+    print(f"{'Full Parameter Path':<65} | {'Owner Class':<20} | {'Shape':<20} | {'Size'}")
+    print("-" * 120)
 
     total_params = 0
-    # Iterate through the flat dictionary of parameters
-    for name, value in params.items():
-        # value is a JAX array, so .size gives the total number of elements
-        param_count = value.shape
-        total_params += param_count
-        # Print formatted info: name, shape, and element count
-        print(f"- {name:<80} | Shape: {str(value.shape):<20} | Size: {param_count:,}")
+    # 2. Iterate through the flat dictionary of parameters.
+    for path, var_state in params.items():
+        # The owner's path is the full path minus the last element (the param name)
+        owner_path = path[:-1]
 
-    print("=" * 80)
+        # Use our NEW, robust helper to get the actual module object
+        if owner_path: # Ensure path is not empty
+             owner_module = get_nested_module(model, owner_path)
+        else: # The parameter is directly on the top-level model
+            owner_module = model
+            
+        owner_class = owner_module.__class__.__name__
+
+        # Extract parameter info
+        jax_array = var_state.value
+        shape = jax_array.shape
+        size = jax_array.size
+        total_params += size
+
+        full_path_str = '.'.join(path)
+
+        # Print the detailed, formatted line
+        print(f"{full_path_str:<65} | {owner_class:<20} | {str(shape):<20} | {size:,}")
+
+    print("=" * 120)
     print(f"Total Trainable Parameters: {total_params:,}")
 
 
