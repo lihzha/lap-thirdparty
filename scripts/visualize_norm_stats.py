@@ -5,10 +5,10 @@ Reads all norm_stats.json files and creates comparison plots.
 """
 
 import json
-import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
-from collections import defaultdict
+
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 def load_all_norm_stats(norm_stats_dir):
@@ -19,14 +19,12 @@ def load_all_norm_stats(norm_stats_dir):
     for json_file in sorted(norm_stats_dir.glob("*.json")):
         # Parse filename: OXE_{dataset_name}_{version}_norm_stats.json
         filename = json_file.stem  # Remove .json
-        if filename.endswith("_norm_stats"):
-            filename = filename[:-11]  # Remove _norm_stats suffix
-        if filename.startswith("OXE_"):
-            filename = filename[4:]  # Remove OXE_ prefix
+        filename = filename.removesuffix("_norm_stats")  # Remove _norm_stats suffix
+        filename = filename.removeprefix("OXE_")  # Remove OXE_ prefix
 
-        with open(json_file, 'r') as f:
+        with open(json_file) as f:
             data = json.load(f)
-            datasets[filename] = data['norm_stats']
+            datasets[filename] = data["norm_stats"]
             print(f"Loaded: {filename}")
 
     return datasets
@@ -37,45 +35,45 @@ def plot_dataset_sizes(datasets, output_dir):
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
 
     dataset_names = list(datasets.keys())
-    state_transitions = [datasets[d]['state']['num_transitions'] for d in dataset_names]
-    state_trajectories = [datasets[d]['state']['num_trajectories'] for d in dataset_names]
+    state_transitions = [datasets[d]["state"]["num_transitions"] for d in dataset_names]
+    state_trajectories = [datasets[d]["state"]["num_trajectories"] for d in dataset_names]
 
     # Plot transitions
-    bars1 = ax1.barh(range(len(dataset_names)), state_transitions, color='steelblue')
+    bars1 = ax1.barh(range(len(dataset_names)), state_transitions, color="steelblue")
     ax1.set_yticks(range(len(dataset_names)))
     ax1.set_yticklabels(dataset_names, fontsize=8)
-    ax1.set_xlabel('Number of Transitions')
-    ax1.set_title('Dataset Sizes - Number of Transitions')
-    ax1.grid(axis='x', alpha=0.3)
+    ax1.set_xlabel("Number of Transitions")
+    ax1.set_title("Dataset Sizes - Number of Transitions")
+    ax1.grid(axis="x", alpha=0.3)
 
     # Add value labels
     for i, (bar, val) in enumerate(zip(bars1, state_transitions)):
-        ax1.text(val, i, f' {val:,}', va='center', fontsize=7)
+        ax1.text(val, i, f" {val:,}", va="center", fontsize=7)
 
     # Plot trajectories
-    bars2 = ax2.barh(range(len(dataset_names)), state_trajectories, color='coral')
+    bars2 = ax2.barh(range(len(dataset_names)), state_trajectories, color="coral")
     ax2.set_yticks(range(len(dataset_names)))
     ax2.set_yticklabels(dataset_names, fontsize=8)
-    ax2.set_xlabel('Number of Trajectories')
-    ax2.set_title('Dataset Sizes - Number of Trajectories')
-    ax2.grid(axis='x', alpha=0.3)
+    ax2.set_xlabel("Number of Trajectories")
+    ax2.set_title("Dataset Sizes - Number of Trajectories")
+    ax2.grid(axis="x", alpha=0.3)
 
     # Add value labels
     for i, (bar, val) in enumerate(zip(bars2, state_trajectories)):
-        ax2.text(val, i, f' {val:,}', va='center', fontsize=7)
+        ax2.text(val, i, f" {val:,}", va="center", fontsize=7)
 
     plt.tight_layout()
-    plt.savefig(output_dir / 'dataset_sizes.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / "dataset_sizes.png", dpi=150, bbox_inches="tight")
     print(f"Saved: {output_dir / 'dataset_sizes.png'}")
     plt.close()
 
 
-def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
+def plot_dimension_statistics(datasets, output_dir, stat_type="state"):
     """Plot statistics (mean, std, q01, q99) for each dimension across datasets."""
     dataset_names = list(datasets.keys())
 
     # Get max number of dimensions
-    max_dims = max(len(datasets[d][stat_type]['mean']) for d in dataset_names)
+    max_dims = max(len(datasets[d][stat_type]["mean"]) for d in dataset_names)
 
     # Prepare data
     means = np.zeros((len(dataset_names), max_dims))
@@ -85,11 +83,11 @@ def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
 
     for i, dataset in enumerate(dataset_names):
         stats = datasets[dataset][stat_type]
-        n_dims = len(stats['mean'])
-        means[i, :n_dims] = stats['mean']
-        stds[i, :n_dims] = stats['std']
-        q01s[i, :n_dims] = stats['q01']
-        q99s[i, :n_dims] = stats['q99']
+        n_dims = len(stats["mean"])
+        means[i, :n_dims] = stats["mean"]
+        stds[i, :n_dims] = stats["std"]
+        q01s[i, :n_dims] = stats["q01"]
+        q99s[i, :n_dims] = stats["q99"]
 
     # Create subplots for each dimension
     n_cols = 4
@@ -105,9 +103,9 @@ def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
         bars = ax.barh(range(len(dataset_names)), values)
         ax.set_yticks(range(len(dataset_names)))
         ax.set_yticklabels(dataset_names, fontsize=6)
-        ax.set_xlabel('Mean', fontsize=8)
-        ax.set_title(f'{stat_type.capitalize()} Dim {dim} - Mean', fontsize=9)
-        ax.grid(axis='x', alpha=0.3)
+        ax.set_xlabel("Mean", fontsize=8)
+        ax.set_title(f"{stat_type.capitalize()} Dim {dim} - Mean", fontsize=9)
+        ax.grid(axis="x", alpha=0.3)
 
         # Color code by value
         vmin, vmax = values.min(), values.max()
@@ -118,10 +116,10 @@ def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
 
     # Hide unused subplots
     for idx in range(max_dims, len(axes)):
-        axes[idx].axis('off')
+        axes[idx].axis("off")
 
     plt.tight_layout()
-    plt.savefig(output_dir / f'{stat_type}_means.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / f"{stat_type}_means.png", dpi=150, bbox_inches="tight")
     print(f"Saved: {output_dir / f'{stat_type}_means.png'}")
     plt.close()
 
@@ -135,9 +133,9 @@ def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
         bars = ax.barh(range(len(dataset_names)), values)
         ax.set_yticks(range(len(dataset_names)))
         ax.set_yticklabels(dataset_names, fontsize=6)
-        ax.set_xlabel('Std Dev', fontsize=8)
-        ax.set_title(f'{stat_type.capitalize()} Dim {dim} - Std', fontsize=9)
-        ax.grid(axis='x', alpha=0.3)
+        ax.set_xlabel("Std Dev", fontsize=8)
+        ax.set_title(f"{stat_type.capitalize()} Dim {dim} - Std", fontsize=9)
+        ax.grid(axis="x", alpha=0.3)
 
         # Color code by value
         vmin, vmax = values.min(), values.max()
@@ -148,10 +146,10 @@ def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
 
     # Hide unused subplots
     for idx in range(max_dims, len(axes)):
-        axes[idx].axis('off')
+        axes[idx].axis("off")
 
     plt.tight_layout()
-    plt.savefig(output_dir / f'{stat_type}_stds.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / f"{stat_type}_stds.png", dpi=150, bbox_inches="tight")
     print(f"Saved: {output_dir / f'{stat_type}_stds.png'}")
     plt.close()
 
@@ -171,16 +169,16 @@ def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
 
         ax.set_yticks(range(len(dataset_names)))
         ax.set_yticklabels(dataset_names, fontsize=6)
-        ax.set_xlabel('Value Range', fontsize=8)
-        ax.set_title(f'{stat_type.capitalize()} Dim {dim} - Range (q01-q99)', fontsize=9)
-        ax.grid(axis='x', alpha=0.3)
+        ax.set_xlabel("Value Range", fontsize=8)
+        ax.set_title(f"{stat_type.capitalize()} Dim {dim} - Range (q01-q99)", fontsize=9)
+        ax.grid(axis="x", alpha=0.3)
 
     # Hide unused subplots
     for idx in range(max_dims, len(axes)):
-        axes[idx].axis('off')
+        axes[idx].axis("off")
 
     plt.tight_layout()
-    plt.savefig(output_dir / f'{stat_type}_ranges.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / f"{stat_type}_ranges.png", dpi=150, bbox_inches="tight")
     print(f"Saved: {output_dir / f'{stat_type}_ranges.png'}")
     plt.close()
 
@@ -188,40 +186,39 @@ def plot_dimension_statistics(datasets, output_dir, stat_type='state'):
 def plot_dimension_count_comparison(datasets, output_dir):
     """Compare number of dimensions across datasets for state and actions."""
     dataset_names = list(datasets.keys())
-    state_dims = [len(datasets[d]['state']['mean']) for d in dataset_names]
-    action_dims = [len(datasets[d]['actions']['mean']) for d in dataset_names]
+    state_dims = [len(datasets[d]["state"]["mean"]) for d in dataset_names]
+    action_dims = [len(datasets[d]["actions"]["mean"]) for d in dataset_names]
 
     fig, ax = plt.subplots(figsize=(12, 8))
 
     x = np.arange(len(dataset_names))
     width = 0.35
 
-    bars1 = ax.bar(x - width/2, state_dims, width, label='State Dims', color='steelblue')
-    bars2 = ax.bar(x + width/2, action_dims, width, label='Action Dims', color='coral')
+    bars1 = ax.bar(x - width / 2, state_dims, width, label="State Dims", color="steelblue")
+    bars2 = ax.bar(x + width / 2, action_dims, width, label="Action Dims", color="coral")
 
-    ax.set_ylabel('Number of Dimensions')
-    ax.set_title('State and Action Dimensions by Dataset')
+    ax.set_ylabel("Number of Dimensions")
+    ax.set_title("State and Action Dimensions by Dataset")
     ax.set_xticks(x)
-    ax.set_xticklabels(dataset_names, rotation=45, ha='right', fontsize=8)
+    ax.set_xticklabels(dataset_names, rotation=45, ha="right", fontsize=8)
     ax.legend()
-    ax.grid(axis='y', alpha=0.3)
+    ax.grid(axis="y", alpha=0.3)
 
     # Add value labels
     for bars in [bars1, bars2]:
         for bar in bars:
             height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{int(height)}', ha='center', va='bottom', fontsize=7)
+            ax.text(bar.get_x() + bar.get_width() / 2.0, height, f"{int(height)}", ha="center", va="bottom", fontsize=7)
 
     plt.tight_layout()
-    plt.savefig(output_dir / 'dimension_counts.png', dpi=150, bbox_inches='tight')
+    plt.savefig(output_dir / "dimension_counts.png", dpi=150, bbox_inches="tight")
     print(f"Saved: {output_dir / 'dimension_counts.png'}")
     plt.close()
 
 
 def generate_summary_table(datasets, output_dir):
     """Generate a summary table with key statistics."""
-    with open(output_dir / 'summary.txt', 'w') as f:
+    with open(output_dir / "summary.txt", "w") as f:
         f.write("=" * 100 + "\n")
         f.write("DATASET STATISTICS SUMMARY\n")
         f.write("=" * 100 + "\n\n")
@@ -235,8 +232,8 @@ def generate_summary_table(datasets, output_dir):
             f.write(f"  Num Transitions:       {stats['state']['num_transitions']:,}\n")
             f.write(f"  Num Trajectories:      {stats['state']['num_trajectories']:,}\n")
 
-            if stats['state']['num_trajectories'] > 0:
-                avg_traj_len = stats['state']['num_transitions'] / stats['state']['num_trajectories']
+            if stats["state"]["num_trajectories"] > 0:
+                avg_traj_len = stats["state"]["num_transitions"] / stats["state"]["num_trajectories"]
                 f.write(f"  Avg Trajectory Length: {avg_traj_len:.1f}\n")
 
             f.write("\n")
@@ -273,8 +270,8 @@ def main():
     print("Generating visualizations...")
     plot_dataset_sizes(datasets, output_dir)
     plot_dimension_count_comparison(datasets, output_dir)
-    plot_dimension_statistics(datasets, output_dir, stat_type='state')
-    plot_dimension_statistics(datasets, output_dir, stat_type='actions')
+    plot_dimension_statistics(datasets, output_dir, stat_type="state")
+    plot_dimension_statistics(datasets, output_dir, stat_type="actions")
     generate_summary_table(datasets, output_dir)
 
     print(f"\n✓ All visualizations saved to {output_dir}")

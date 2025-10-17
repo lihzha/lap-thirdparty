@@ -92,6 +92,26 @@ def extract_gripper_states(batch, state_padding_mask=None) -> np.ndarray:
     return gripper_states
 
 
+def extract_gripper_actions(batch) -> np.ndarray:
+    """
+    Extract gripper actions from a batch.
+
+    Args:
+        batch: Batch from the data loader
+
+    Returns:
+        Array of gripper action values (non-padded)
+    """
+    actions = batch[1]
+    actions_data = _safe_device_get(actions)
+    if actions_data is None:
+        return np.array([])
+    # Last dimension is gripper action
+    gripper_actions = actions_data[..., -1]
+    gripper_actions = gripper_actions.flatten()
+    return gripper_actions
+
+
 def get_image_at_index(all_batches, global_idx, camera_key="primary"):
     """
     Extract image at a specific global flattened index across all batches.
@@ -310,6 +330,7 @@ def main(config: _config.TrainConfig):
     # Collect gripper states and track batches for min/max visualization
     logging.info("Collecting gripper states from batches...")
     all_gripper_states = []
+    all_gripper_actions = []
     all_batches = []  # Store batches to find min/max later
 
     data_iter = iter(data_loader)
@@ -318,6 +339,7 @@ def main(config: _config.TrainConfig):
         try:
             batch = next(data_iter)
             gripper_states = extract_gripper_states(batch)
+            gripper_actions = extract_gripper_actions(batch)
 
             if len(gripper_states) > 0:
                 all_gripper_states.append(gripper_states)
@@ -325,6 +347,12 @@ def main(config: _config.TrainConfig):
                 logging.info(f"Batch {batch_idx + 1}/{num_batches}: Collected {len(gripper_states)} gripper states")
             else:
                 logging.warning(f"Batch {batch_idx + 1}/{num_batches}: No gripper states found")
+
+            if len(gripper_actions) > 0:
+                all_gripper_actions.append(gripper_actions)
+                logging.info(f"Batch {batch_idx + 1}/{num_batches}: Collected {len(gripper_actions)} gripper actions")
+            else:
+                logging.warning(f"Batch {batch_idx + 1}/{num_batches}: No gripper actions found")
 
         except StopIteration:
             logging.warning(f"Data iterator exhausted at batch {batch_idx + 1}")
@@ -340,6 +368,14 @@ def main(config: _config.TrainConfig):
     # Concatenate all collected states
     all_gripper_states = np.concatenate(all_gripper_states)
     logging.info(f"Total gripper states collected: {len(all_gripper_states):,}")
+
+    # Concatenate all collected actions
+    if all_gripper_actions:
+        all_gripper_actions = np.concatenate(all_gripper_actions)
+        logging.info(f"Total gripper actions collected: {len(all_gripper_actions):,}")
+    else:
+        all_gripper_actions = np.array([])
+        logging.warning("No gripper actions collected!")
 
     # Find top-k min/max gripper states and their locations
     num_examples = 10  # Number of min/max examples to visualize
@@ -407,6 +443,23 @@ def main(config: _config.TrainConfig):
     logging.info(f"% Near 1 (>0.9):  {100 * np.mean(all_gripper_states > 0.9):.2f}%")
     logging.info("=" * 60)
 
+    # Print gripper action statistics
+    if len(all_gripper_actions) > 0:
+        logging.info("")
+        logging.info("=" * 60)
+        logging.info(f"Gripper Action Statistics for {dataset_name}")
+        logging.info("=" * 60)
+        logging.info(f"Sample count:     {len(all_gripper_actions):,}")
+        logging.info(f"Mean:             {np.mean(all_gripper_actions):.6f}")
+        logging.info(f"Median:           {np.median(all_gripper_actions):.6f}")
+        logging.info(f"Std:              {np.std(all_gripper_actions):.6f}")
+        logging.info(f"Min:              {np.min(all_gripper_actions):.6f}")
+        logging.info(f"Max:              {np.max(all_gripper_actions):.6f}")
+        logging.info(f"% Near -1 (<-0.9): {100 * np.mean(all_gripper_actions < -0.9):.2f}%")
+        logging.info(f"% Near 0 (±0.1):   {100 * np.mean(np.abs(all_gripper_actions) < 0.1):.2f}%")
+        logging.info(f"% Near 1 (>0.9):   {100 * np.mean(all_gripper_actions > 0.9):.2f}%")
+        logging.info("=" * 60)
+
     # Create visualization
     fig = plot_gripper_distribution(all_gripper_states, dataset_name)
 
@@ -414,15 +467,31 @@ def main(config: _config.TrainConfig):
     if wandb_enabled and wandb is not None:
         log_dict = {
             "gripper_distribution": wandb.Image(fig),
-            "stats/sample_count": len(all_gripper_states),
-            "stats/mean": np.mean(all_gripper_states),
-            "stats/median": np.median(all_gripper_states),
-            "stats/std": np.std(all_gripper_states),
-            "stats/min": np.min(all_gripper_states),
-            "stats/max": np.max(all_gripper_states),
-            "stats/pct_near_0": 100 * np.mean(all_gripper_states < 0.1),
-            "stats/pct_near_1": 100 * np.mean(all_gripper_states > 0.9),
+            "stats/state/sample_count": len(all_gripper_states),
+            "stats/state/mean": np.mean(all_gripper_states),
+            "stats/state/median": np.median(all_gripper_states),
+            "stats/state/std": np.std(all_gripper_states),
+            "stats/state/min": np.min(all_gripper_states),
+            "stats/state/max": np.max(all_gripper_states),
+            "stats/state/pct_near_0": 100 * np.mean(all_gripper_states < 0.1),
+            "stats/state/pct_near_1": 100 * np.mean(all_gripper_states > 0.9),
         }
+
+        # Add gripper action statistics
+        if len(all_gripper_actions) > 0:
+            log_dict.update(
+                {
+                    "stats/action/sample_count": len(all_gripper_actions),
+                    "stats/action/mean": np.mean(all_gripper_actions),
+                    "stats/action/median": np.median(all_gripper_actions),
+                    "stats/action/std": np.std(all_gripper_actions),
+                    "stats/action/min": np.min(all_gripper_actions),
+                    "stats/action/max": np.max(all_gripper_actions),
+                    "stats/action/pct_near_neg1": 100 * np.mean(all_gripper_actions < -0.9),
+                    "stats/action/pct_near_0": 100 * np.mean(np.abs(all_gripper_actions) < 0.1),
+                    "stats/action/pct_near_1": 100 * np.mean(all_gripper_actions > 0.9),
+                }
+            )
 
         # Add min/max images from all cameras if available
         for cam_key, images_dict in camera_images.items():
