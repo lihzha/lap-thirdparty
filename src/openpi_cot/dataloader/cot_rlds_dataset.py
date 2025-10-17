@@ -937,15 +937,24 @@ class DroidCoTDataset(SingleCoTDataset):
             def _sample_from_table():
                 # Check if instr_bytes is empty (default value)
                 # If empty, return empty string - these will be filtered by _has_instruction later
+                def _select_random_instruction():
+                    parsed_instructions = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
+                    num_instructions = tf.shape(parsed_instructions)[0]
+                    random_idx = tf.random.stateless_uniform(
+                        shape=[],
+                        seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)],
+                        minval=0,
+                        maxval=num_instructions,
+                        dtype=tf.int32
+                    )
+                    return tf.gather(parsed_instructions, random_idx)
+
                 return tf.cond(
                     tf.logical_and(
                         tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
                         tf.greater(tf.strings.length(instr_bytes), 10),
                     ),
-                    lambda: tf.random.stateless_shuffle(
-                        tf.io.parse_tensor(instr_bytes, out_type=tf.string),
-                        seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
-                    )[0],
+                    _select_random_instruction,
                     lambda: tf.constant("", dtype=tf.string),
                 )
 
