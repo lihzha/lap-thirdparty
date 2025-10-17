@@ -373,6 +373,13 @@ def main(config: _config.TrainConfig):
     if all_gripper_actions:
         all_gripper_actions = np.concatenate(all_gripper_actions)
         logging.info(f"Total gripper actions collected: {len(all_gripper_actions):,}")
+
+        # Check if states and actions have same length (they should if extracted from same batches)
+        if len(all_gripper_actions) != len(all_gripper_states):
+            logging.warning(f"Mismatch: {len(all_gripper_actions)} actions vs {len(all_gripper_states)} states")
+            logging.warning("This may cause issues with image extraction for actions!")
+        else:
+            logging.info("✓ Gripper actions and states have matching lengths")
     else:
         all_gripper_actions = np.array([])
         logging.warning("No gripper actions collected!")
@@ -395,8 +402,18 @@ def main(config: _config.TrainConfig):
     # Extract images for min/max gripper states
     logging.info("Extracting images for min/max gripper states...")
 
-    # Try different camera keys and store images per camera
+    # Detect available camera keys from the first batch
     camera_keys_to_try = ["base_0_rgb", "left_wrist_0_rgb"]
+    if len(all_batches) > 0:
+        obs = all_batches[0][0]
+        if hasattr(obs, "images"):
+            available_cameras = list(obs.images.keys())
+            logging.info(f"Available camera keys in dataset: {available_cameras}")
+            camera_keys_to_try = available_cameras
+        else:
+            logging.warning("No images attribute found in observations")
+    else:
+        logging.warning("No batches available to detect camera keys")
 
     camera_images = {}  # {camera_key: {"min": [...], "max": [...]}}
 
@@ -444,29 +461,49 @@ def main(config: _config.TrainConfig):
         logging.info(f"Finding {num_examples} min and {num_examples} max gripper action examples...")
         logging.info(f"Min gripper action values: {all_gripper_actions[action_min_indices]}")
         logging.info(f"Max gripper action values: {all_gripper_actions[action_max_indices]}")
+        logging.info(f"Min gripper action indices: {action_min_indices}")
+        logging.info(f"Max gripper action indices: {action_max_indices}")
+        logging.info(f"Total gripper actions: {len(all_gripper_actions)}, Total gripper states: {len(all_gripper_states)}")
 
         # Extract images for min/max gripper actions
         logging.info("Extracting images for min/max gripper actions...")
+        logging.info(f"Using camera keys: {camera_keys_to_try}")
+        logging.info(f"Number of batches available: {len(all_batches)}")
+
+        # Debug: Check if indices are within valid range
+        total_samples = sum(
+            _safe_device_get(batch[0].state).shape[0] if _safe_device_get(batch[0].state) is not None else 0
+            for batch in all_batches
+        )
+        logging.info(f"Total samples across all batches: {total_samples}")
+        if len(action_min_indices) > 0:
+            logging.info(f"Sample action min index to lookup: {action_min_indices[0]} (value: {all_gripper_actions[action_min_indices[0]]:.6f})")
 
         for cam_key in camera_keys_to_try:
             min_images_cam = []
             max_images_cam = []
 
             # Extract min examples
+            found_count = 0
             for idx in action_min_indices:
                 img, gripper_val = get_image_at_index(all_batches, idx, cam_key)
                 if img is not None:
                     # Get the actual action value instead of state value
                     action_val = all_gripper_actions[idx]
                     min_images_cam.append((img, action_val, idx))
+                    found_count += 1
+            logging.info(f"Camera '{cam_key}': Found {found_count}/{len(action_min_indices)} min action images")
 
             # Extract max examples
+            found_count = 0
             for idx in action_max_indices:
                 img, gripper_val = get_image_at_index(all_batches, idx, cam_key)
                 if img is not None:
                     # Get the actual action value instead of state value
                     action_val = all_gripper_actions[idx]
                     max_images_cam.append((img, action_val, idx))
+                    found_count += 1
+            logging.info(f"Camera '{cam_key}': Found {found_count}/{len(action_max_indices)} max action images")
 
             # Limit to num_examples
             min_images_cam = min_images_cam[:num_examples]

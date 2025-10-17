@@ -621,18 +621,16 @@ class SingleCoTDataset:
             if self.use_json_actions:
                 # JSON case: gather from language_actions
                 def gather_and_pad_json(t_idx, delta):
-                    """Gather language actions from t_idx to t_idx+delta-1, pad to summation_steps."""
-                    # Clamp delta to not exceed trimmed_len
-                    actual_len = tf.minimum(delta, trimmed_len)
-                    # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
-                    indices = tf.range(actual_len) + t_idx
+                    """Gather language actions from t_idx to t_idx+delta-1, pad/truncate to summation_steps."""
+                    # Create indices [t_idx, t_idx+1, ..., t_idx+delta-1]
+                    indices = tf.range(delta) + t_idx
                     indices = tf.minimum(indices, traj_len - 1)
 
-                    # Gather language actions
+                    # Gather language actions (delta steps)
                     lang_window = tf.gather(traj["raw_language_actions"], indices)
 
-                    # Pad to summation_steps
-                    pad_len = summation_steps - actual_len
+                    # Pad to summation_steps if delta < summation_steps, or truncate if delta > summation_steps
+                    pad_len = summation_steps - delta
                     padded = tf.cond(
                         pad_len > 0,
                         lambda: tf.concat([lang_window, tf.fill([pad_len], tf.constant("", dtype=tf.string))], axis=0),
@@ -649,13 +647,12 @@ class SingleCoTDataset:
             else:
                 # Numeric case: gather from raw_action and serialize
                 def gather_and_pad_numeric(t_idx, delta):
-                    """Gather actions from t_idx to t_idx+delta-1, serialize, pad to summation_steps."""
-                    # Clamp delta to not exceed trimmed_len
-                    # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
+                    """Gather actions from t_idx to t_idx+delta-1, serialize, pad/truncate to summation_steps."""
+                    # Create indices [t_idx, t_idx+1, ..., t_idx+delta-1]
                     indices = tf.range(delta) + t_idx
                     indices = tf.minimum(indices, traj_len - 1)
 
-                    # Gather raw actions: [actual_len, A]
+                    # Gather raw actions: [delta, A]
                     actions_window = tf.gather(traj["raw_action"], indices)
 
                     # Serialize each action row
@@ -665,7 +662,7 @@ class SingleCoTDataset:
                         fn_output_signature=tf.string,
                     )
 
-                    # Pad to summation_steps with serialized dummy tensors
+                    # Pad to summation_steps with serialized dummy tensors, or truncate if delta > summation_steps
                     pad_len = summation_steps - delta
                     padded = tf.cond(
                         pad_len > 0,
@@ -1752,16 +1749,17 @@ class OXECoTDatasets:
         # Compute weighted global statistics for actions
         # Note: Action stats are shared across ALL datasets regardless of state type
         total_action_n = sum(stats["actions"].num_transitions for stats in all_dataset_statistics.values())
-        action_weighted_sum = np.zeros_like(list(all_dataset_statistics.values())[0]["actions"].mean)
+        action_weighted_sum = np.zeros(action_dim, dtype=np.float32)
 
         for dataset_name, stats in all_dataset_statistics.items():
             action_n = stats["actions"].num_transitions
-            action_weighted_sum += stats["actions"].mean * action_n
+            # Pad each dataset's mean to action_dim before accumulating
+            action_mean_padded = np.pad(
+                stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode="constant"
+            )
+            action_weighted_sum += action_mean_padded * action_n
 
         action_global_mean = action_weighted_sum / total_action_n
-
-        # Pad global mean to action_dim (padding with zeros)
-        action_global_mean = np.pad(action_global_mean, (0, action_dim - len(action_global_mean)), mode="constant")
 
         # Compute weighted variance using parallel axis theorem
         action_var_sum = np.zeros_like(action_global_mean)
@@ -1774,7 +1772,7 @@ class OXECoTDatasets:
                 stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode="constant"
             )
             action_local_std = np.pad(
-                stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode="constant"
+                stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode="constant", constant_values=1.0
             )
 
             # var_i + (mean_i - global_mean)^2
@@ -1855,7 +1853,7 @@ class OXECoTDatasets:
                 state_local_mean = np.pad(
                     stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
                 )
-                state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant")
+                state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant", constant_values=1.0)
 
                 # var_i + (mean_i - global_mean)^2
                 state_local_var = np.square(state_local_std)
