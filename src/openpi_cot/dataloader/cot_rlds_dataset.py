@@ -583,8 +583,13 @@ class SingleCoTDataset:
             max_horizon_clamped = tf.minimum(max_horizon, traj_len - 1)
             max_horizon_clamped = tf.maximum(max_horizon_clamped, 1)  # Ensure at least 1
 
-            deltas = tf.random.uniform(
+            # Generate deterministic seed from trajectory_id for stateless random ops
+            traj_id_hash = tf.strings.to_hash_bucket_fast(traj["trajectory_id"][0], 2147483647)
+            seed_pair = [self.seed, traj_id_hash]
+
+            deltas = tf.random.stateless_uniform(
                 [traj_len],
+                seed=seed_pair,
                 minval=1,  # At least 1 step into future
                 maxval=max_horizon_clamped + 1,
                 dtype=tf.int32,
@@ -937,7 +942,10 @@ class DroidCoTDataset(SingleCoTDataset):
                         tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
                         tf.greater(tf.strings.length(instr_bytes), 10),
                     ),
-                    lambda: tf.random.shuffle(tf.io.parse_tensor(instr_bytes, out_type=tf.string), seed=self.seed)[0],
+                    lambda: tf.random.stateless_shuffle(
+                        tf.io.parse_tensor(instr_bytes, out_type=tf.string),
+                        seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
+                    )[0],
                     lambda: tf.constant("", dtype=tf.string),
                 )
 
@@ -956,8 +964,12 @@ class DroidCoTDataset(SingleCoTDataset):
             else:
                 # # Randomly samples one of the two exterior images in DROID during training (we only train with one at a time).
                 # # Note: the "left" refers to the left camera in the stereo pair, we only train on the left camera.
+                random_val = tf.random.stateless_uniform(
+                    shape=[],
+                    seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
+                )
                 exterior_img = tf.cond(
-                    tf.random.uniform(shape=[], seed=self.seed) > 0.5,
+                    random_val > 0.5,
                     lambda: traj["observation"][self.spec.images_list[0]],
                     lambda: traj["observation"][self.spec.images_list[1]],
                 )
