@@ -437,12 +437,10 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
     )
 
-    # trajectory["observation"]["state_gripper"] = tf.clip_by_value(
-    #     trajectory["observation"]["end_effector_cartesian_pos"][:, -1:] * 4.33, 0, 1
-    # )
-    trajectory["observation"]["state_gripper"] = rel2abs_gripper_actions(
-        trajectory["observation"]["end_effector_cartesian_pos"][:, -1]
-    )[:, None]
+    trajectory["observation"]["state_gripper"] = tf.clip_by_value(
+        trajectory["observation"]["end_effector_cartesian_pos"][:, -1:] * 4.33, 0, 1
+    )
+
     # trajectory["observation"]["state_gripper"] = gripper_action[:, None]
 
     trajectory["action"] = tf.concat(
@@ -1483,7 +1481,7 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
     trajectory["observation"]["gripper_state"] = (trajectory["observation"]["state"][:, -1:] + 3.14) / 6.28
-    trajectory["action"] = (trajectory["action"][..., :-1] + 3.14) / 6.28
+    # trajectory["action"] = (trajectory["action"][..., :-1] + 3.14) / 6.28
 
     movement_actions = tf.concat(
         (

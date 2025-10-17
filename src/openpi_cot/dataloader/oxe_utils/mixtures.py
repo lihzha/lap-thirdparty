@@ -102,7 +102,10 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("fractal20220817_data", 1.0),
         ("bridge_v2_oxe", 1.0),
         ("taco_play", 1.0),
-        ("jaco_play", 1.0),
+        (
+            "jaco_play",
+            1.0,
+        ),  # gripper state and action still seems incorrect. Action sometimes should be 1 but is 0. State seems random. Ignore for now.
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
