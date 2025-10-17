@@ -191,11 +191,38 @@ def save_state(
         try:
 
             def save_assets(directory: epath.Path):
-                # Save the normalization stats.
-                data_config = data_loader.data_config()
-                norm_stats = data_config.norm_stats
-                if norm_stats is not None and data_config.asset_id is not None:
-                    _normalize_adapter.save(str(directory / data_config.asset_id), norm_stats)
+                # Save the normalization stats from the dataset.
+                # For OXE datasets with global normalization, this saves global statistics.
+                # For DROID or OXE without global normalization, this saves per-dataset statistics.
+                if hasattr(data_loader, "get_norm_stats_for_checkpoint"):
+                    norm_stats, stats_type = data_loader.get_norm_stats_for_checkpoint()
+                    if norm_stats is not None:
+                        save_dir = str(directory / "norm_stats")
+                        _normalize_adapter.save(save_dir, norm_stats)
+
+                        # Log detailed information about saved statistics
+                        if jax.process_index() == 0:
+                            stats_keys = list(norm_stats.keys())
+                            logging.info(
+                                f"Saved {stats_type} normalization statistics | "
+                                f"keys={stats_keys} | "
+                                f"location={save_dir}"
+                            )
+
+                            # Log detailed shape information for each key
+                            for key, stat in norm_stats.items():
+                                if hasattr(stat, "mean") and hasattr(stat.mean, "shape"):
+                                    logging.info(
+                                        f"  {key}: mean_shape={stat.mean.shape}, "
+                                        f"num_transitions={getattr(stat, 'num_transitions', 'N/A')}, "
+                                        f"num_trajectories={getattr(stat, 'num_trajectories', 'N/A')}"
+                                    )
+                    else:
+                        if jax.process_index() == 0:
+                            logging.warning("No normalization statistics available to save with checkpoint")
+                else:
+                    if jax.process_index() == 0:
+                        logging.info("Data loader does not support norm stats checkpointing (non-RLDS dataset)")
 
             # Split params that can be used for inference into a separate item.
             with at.disable_typechecking():

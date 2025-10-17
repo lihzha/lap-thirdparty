@@ -12,7 +12,7 @@ Detailed verification of the dataset pipeline focusing on:
 3. Language action gathering and prediction transforms
 4. Action chunking and window indexing
 
-**Overall Assessment**: The architecture is sound, but **3 critical bugs** were identified that will cause training failures (NaN values) and incorrect statistics.
+**Overall Assessment**: The architecture is sound, but **2 critical bugs** were identified that will cause training failures (NaN values) and incorrect statistics.
 
 ---
 
@@ -94,50 +94,41 @@ action_global_mean = action_weighted_sum / total_action_n
 
 ---
 
-### Bug #3: Inconsistent Delta Clamping in Prediction Transforms
+### ~~Bug #3~~: Prediction Language Actions - CORRECTED UNDERSTANDING
 
-**Location**: Line 655 vs Line 626
-**Severity**: MODERATE - Causes behavioral inconsistency
-**Impact**: JSON and numeric actions use different prediction horizons, breaking assumption of unified behavior
+**Location**: Lines 623-685
+**Status**: ✅ ORIGINAL CODE WAS CORRECT - NOT A BUG
 
-**Current Code**:
+**Initial Misunderstanding**:
+The original analysis incorrectly flagged that prediction language actions should be clamped to `control_frequency` like training language actions.
+
+**Corrected Understanding**:
+Training and prediction language actions serve **different purposes** and should use **different gathering strategies**:
+
+#### Training Language Actions (Lines 505-510, 525)
+- **Purpose**: Provide context about upcoming actions during training
+- **Gathers**: `min(control_frequency, summation_steps)` actions
+- **Rationale**: Respects dataset-specific control rates (e.g., 10Hz vs 50Hz datasets)
+- **Example**: If `control_frequency=10`, gather 10 actions regardless of trajectory length
+
+#### Prediction Language Actions (Lines 623-685)
+- **Purpose**: Describe the ENTIRE action sequence from current frame (t) to future frame (t+delta)
+- **Gathers**: `delta` actions (NOT clamped to control_frequency)
+- **Rationale**: Must capture all actions in the temporal span between frame pairs
+- **Example**: If `delta=15`, gather exactly 15 actions (the full span)
+
+**Why This is Correct**:
 ```python
-# Line 623-626: JSON case - CORRECT
-def gather_and_pad_json(t_idx, delta):
-    """Gather language actions from t_idx to t_idx+delta-1, pad to summation_steps."""
-    # Clamp delta to not exceed trimmed_len
-    actual_len = tf.minimum(delta, trimmed_len)  # ✓ CLAMPED
-    indices = tf.range(actual_len) + t_idx
-    # ...
+# Training: Respects control frequency
+trimmed_len = min(control_frequency, summation_steps)
+la_window = gather(language_actions, indices[:, :trimmed_len])
 
-# Line 651-656: Numeric case - MISSING CLAMP
-def gather_and_pad_numeric(t_idx, delta):
-    """Gather actions from t_idx to t_idx+delta-1, serialize, pad to summation_steps."""
-    # Clamp delta to not exceed trimmed_len
-    # Create indices [t_idx, t_idx+1, ..., t_idx+actual_len-1]
-    indices = tf.range(delta) + t_idx  # ✗ NOT CLAMPED!
-    indices = tf.minimum(indices, traj_len - 1)
+# Prediction: Uses delta (temporal span between frames)
+indices = tf.range(delta) + t_idx  # ✓ CORRECT - gather delta actions
+lang_window = gather(raw_language_actions, indices)
 ```
 
-**Problem**:
-- **JSON actions**: gather at most `min(control_frequency, summation_steps)` actions
-- **Numeric actions**: gather full `delta` actions (up to `max_prediction_horizon`)
-
-This breaks the invariant that both paths should respect dataset-specific control frequencies.
-
-**Fix**:
-```python
-def gather_and_pad_numeric(t_idx, delta):
-    """Gather actions from t_idx to t_idx+delta-1, serialize, pad to summation_steps."""
-    # Add clamping like JSON case
-    actual_len = tf.minimum(delta, trimmed_len)
-    indices = tf.range(actual_len) + t_idx
-    indices = tf.minimum(indices, traj_len - 1)
-
-    # Gather raw actions: [actual_len, A]
-    actions_window = tf.gather(traj["raw_action"], indices)
-    # ... rest of function
-```
+**Key Insight**: Prediction requires ALL actions between frames to properly describe the transition, independent of control frequency. A 15-step prediction should describe all 15 actions, not just the first 10 (if control_frequency=10).
 
 ---
 
@@ -164,15 +155,16 @@ def gather_and_pad_numeric(t_idx, delta):
 - ✓ For numeric: serializes to match DROID format (Lines 540-544)
 - ✓ Both paths properly pad to `summation_steps` (Lines 513-515, 528-533)
 
-### 3. Prediction Frame Pairs
+### 3. Prediction Frame Pairs & Language Actions
 **Lines**: 555-701
 
 **Verified**:
 - ✓ Deterministic per-trajectory sampling using trajectory_id hash (Lines 587-588)
-- ✓ Proper index clamping to avoid out-of-bounds (Lines 597, 629, 656)
+- ✓ Proper index clamping to avoid out-of-bounds (Lines 597, 626, 652)
 - ✓ Correct image stacking: [T, 2, H, W, C] for primary, [T, 1, H, W, C] for wrists (Lines 602-604, 607-615)
 - ✓ Stores prediction deltas for debugging (Line 697)
-- ⚠️ Delta clamping inconsistency (see Bug #3)
+- ✓ **Prediction language actions correctly use `delta` (not clamped to control_frequency)** - see corrected understanding above
+- ✓ Both JSON and numeric cases consistently gather `delta` actions
 
 ### 4. Action Chunking & Window Indexing
 **Lines**: 184-195, 479-489
@@ -224,17 +216,17 @@ t=4: [4, 4, 4]  # Repeats last element
 
 ### Priority 1: Apply Critical Fixes
 
-1. **Fix std padding** (Lines 1776-1778, 1858)
+1. **Fix std padding** (Lines 1776-1778, 1858) ✅ FIXED
    - Add `constant_values=1.0` to all std padding operations
    - Test: Verify no NaN values in normalized data
 
-2. **Fix action mean calculation** (Lines 1755-1764)
+2. **Fix action mean calculation** (Lines 1755-1764) ✅ FIXED
    - Initialize to `action_dim`, pad stats before accumulating
    - Test: Verify correct global mean with mixed-dimension datasets
 
-3. **Fix prediction delta clamping** (Line 655)
-   - Add `actual_len = tf.minimum(delta, trimmed_len)`
-   - Test: Verify JSON and numeric paths produce consistent behavior
+3. ~~**Fix prediction delta clamping**~~ ✅ NOT A BUG - Original code was correct
+   - Prediction language actions should use `delta`, not `control_frequency`
+   - Both JSON and numeric cases correctly gather `delta` actions
 
 ### Priority 2: Validation Tests
 
@@ -260,8 +252,8 @@ After applying fixes, run these validation checks:
 
 3. **Prediction consistency**:
    ```python
-   # Compare JSON vs numeric prediction language action shapes
-   # Both should respect control frequency
+   # Verify JSON and numeric prediction language actions both use delta
+   # Both should gather exactly delta actions (not clamped to control_frequency)
    ```
 
 ### Priority 3: Code Quality Improvements
@@ -290,27 +282,22 @@ After applying fixes, run these validation checks:
 
 ### If Bugs Are NOT Fixed:
 
-**Bug #1 (std padding)**:
+**Bug #1 (std padding)** ✅ NOW FIXED:
 - Training will produce NaN losses within first few iterations
 - Model parameters will become NaN
 - Training completely fails
 
-**Bug #2 (action mean)**:
+**Bug #2 (action mean)** ✅ NOW FIXED:
 - If all datasets have same action dim: May work by accident
 - If mixed dimensions: Fails with shape mismatch or produces biased statistics
 - Silent data corruption if dimensions happen to be compatible
 
-**Bug #3 (delta clamping)**:
-- Datasets with numeric actions behave differently than JSON actions
-- May gather more/fewer actions than intended based on control frequency
-- Subtle behavioral differences hard to debug
+### With Fixes Applied:
 
-### If Bugs ARE Fixed:
-
-- Normalization will work correctly across all dimensions
-- Statistics will be properly computed for mixed-dimension datasets
-- Consistent behavior between JSON and numeric action paths
-- Training will proceed normally without NaN issues
+- ✅ Normalization works correctly across all dimensions
+- ✅ Statistics properly computed for mixed-dimension datasets
+- ✅ Training proceeds normally without NaN issues
+- ✅ Prediction language actions correctly gather `delta` actions (by design)
 
 ---
 
@@ -343,8 +330,11 @@ After applying fixes, run these validation checks:
 
 ## Conclusion
 
-The dataset pipeline has a solid architectural foundation with good separation of concerns and proper handling of multi-modal data. However, the **3 critical bugs identified will prevent successful training** and must be fixed immediately.
+The dataset pipeline has a solid architectural foundation with good separation of concerns and proper handling of multi-modal data. **2 critical bugs were identified and fixed**:
 
-The most critical issue is the std padding bug (#1), which will cause immediate training failure with NaN values. The action mean bug (#2) may cause silent data corruption depending on dataset dimensions. The delta clamping bug (#3) causes behavioral inconsistency but is less likely to break training.
+1. **Std padding bug** (#1) - Would cause immediate training failure with NaN values ✅ FIXED
+2. **Action mean calculation bug** (#2) - Would cause silent data corruption with mixed-dimension datasets ✅ FIXED
 
-**Recommendation**: Apply all three fixes before proceeding with training experiments.
+**Initial Bug #3 was a misunderstanding**: Prediction language actions correctly use `delta` (not clamped to control_frequency), which is the intended behavior. Training and prediction serve different purposes and appropriately use different gathering strategies.
+
+**Status**: ✅ All critical bugs have been fixed. The codebase is now ready for training experiments.

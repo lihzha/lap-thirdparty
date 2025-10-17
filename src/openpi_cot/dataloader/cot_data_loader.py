@@ -482,3 +482,27 @@ class CoTRLDSDataLoader:
         # Delegate to the underlying dataset if it supports checkpointing
         if hasattr(self._dataset, "restore_iterator_checkpoint"):
             self._dataset.restore_iterator_checkpoint(directory)
+
+    def get_norm_stats_for_checkpoint(self) -> tuple[dict | None, str]:
+        """Get normalization statistics to save with checkpoint.
+
+        Returns:
+            tuple: (norm_stats dict, description string)
+            - For OXE with global normalization: (global_statistics, "global")
+            - For OXE without global or DROID: (dataset_statistics, "per-dataset")
+            - For unknown/unsupported: (None, "none")
+        """
+        underlying_dataset = self._dataset._dataset
+
+        # For OXE datasets, prefer global statistics if available
+        if hasattr(underlying_dataset, "global_statistics"):
+            if underlying_dataset.global_statistics is not None:
+                return underlying_dataset.global_statistics, "global"
+
+        # Fall back to per-dataset statistics
+        if hasattr(underlying_dataset, "dataset_statistics"):
+            stats = underlying_dataset.dataset_statistics
+            if stats is not None:
+                return stats, "per-dataset"
+
+        return None, "none"
