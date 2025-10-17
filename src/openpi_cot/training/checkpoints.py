@@ -207,10 +207,10 @@ def save_state(
             }
             manager_to_use.save(step, items)
 
-            # Save TF iterator state if data loader supports it
-            if hasattr(data_loader, "save_iterator_checkpoint"):
-                tf_iter_dir = f"{_extract_directory(manager_to_use)}/{step}/tf_iterator"
-                data_loader.save_iterator_checkpoint(tf_iter_dir, step=step)
+            # # Save TF iterator state if data loader supports it
+            # if hasattr(data_loader, "save_iterator_checkpoint"):
+            #     tf_iter_dir = f"{_extract_directory(manager_to_use)}/{step}/tf_iterator"
+            #     data_loader.save_iterator_checkpoint(tf_iter_dir, step=step)
 
             duration = time.perf_counter() - start_time
             logging.info(
@@ -276,13 +276,13 @@ def restore_state(
             },
         )
 
-    # Restore TF iterator state if data loader supports it
-    if hasattr(data_loader, "restore_iterator_checkpoint"):
-        # Determine which step to restore from
-        restore_step = step if step is not None else checkpoint_manager.latest_step()
-        if restore_step is not None:
-            tf_iter_dir = f"{_extract_directory(checkpoint_manager)}/{restore_step}/tf_iterator"
-            data_loader.restore_iterator_checkpoint(tf_iter_dir)
+    # # Restore TF iterator state if data loader supports it
+    # if hasattr(data_loader, "restore_iterator_checkpoint"):
+    #     # Determine which step to restore from
+    #     restore_step = step if step is not None else checkpoint_manager.latest_step()
+    #     if restore_step is not None:
+    #         tf_iter_dir = f"{_extract_directory(checkpoint_manager)}/{restore_step}/tf_iterator"
+    #         data_loader.restore_iterator_checkpoint(tf_iter_dir)
 
     return _merge_params(restored["train_state"], restored["params"])
 
