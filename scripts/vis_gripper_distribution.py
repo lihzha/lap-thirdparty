@@ -263,7 +263,7 @@ def main(config: _config.TrainConfig):
 
     # Get dataset name from config
     dataset_name = getattr(config.data, "data_mix", "unknown")
-    num_batches = 600
+    num_batches = 200
 
     logging.info(f"Analyzing gripper distribution for dataset: {dataset_name}")
     logging.info(f"Will process {num_batches} batches")
