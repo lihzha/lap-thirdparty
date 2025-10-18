@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import etils.epath as epath
+import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -166,20 +167,20 @@ class MockDataset:
         return obs, actions
 
 
-class MockModel:
+class MockModel(nnx.Module):
     """Mock model with minimal parameters for testing."""
 
     def __init__(self, rng_key, hidden_dim: int = 128, num_layers: int = 2):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        # Create minimal parameters
-        self.params = {}
+        # Create minimal parameters as nnx.Param
+        self.layers = {}
         for i in range(num_layers):
             key1, key2, rng_key = jax.random.split(rng_key, 3)
-            self.params[f'layer_{i}'] = {
-                'weight': jax.random.normal(key1, (hidden_dim, hidden_dim)),
-                'bias': jax.random.normal(key2, (hidden_dim,)),
+            self.layers[f'layer_{i}'] = {
+                'weight': nnx.Param(jax.random.normal(key1, (hidden_dim, hidden_dim))),
+                'bias': nnx.Param(jax.random.normal(key2, (hidden_dim,))),
             }
 
     def compute_loss(
@@ -304,17 +305,15 @@ def create_mock_train_state(config: MockTrainConfig, rng_key) -> training_utils.
     learning_rate = 1e-3
     tx = optax.adam(learning_rate)
 
-    # Mock parameter structure
-    params = model.params
+    # Get params and graphdef using nnx
+    graphdef, state = nnx.split(model)
+    params = nnx.state(model)
     opt_state = tx.init(params)
-
-    # Create mock graphdef (just a simple object)
-    model_def = type('GraphDef', (), {'model_type': 'mock'})()
 
     return training_utils.TrainState(
         step=0,
         params=params,
-        model_def=model_def,
+        model_def=graphdef,
         tx=tx,
         opt_state=opt_state,
         ema_decay=None,
