@@ -261,7 +261,7 @@ class MockTrainConfig:
     seed: int = 42
 
     # Training
-    num_train_steps: int = 100
+    num_train_steps: int = 200
     batch_size: int = 16
     log_interval: int = 10
     save_interval: int = 50
