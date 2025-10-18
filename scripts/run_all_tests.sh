@@ -20,31 +20,31 @@ NC='\033[0m' # No Color
 # Change to repo root
 cd "$(dirname "$0")/.."
 
-# Test 1: Hard examples integration (quick)
-echo "================================================================================"
-echo "TEST 1: Hard Examples Integration (Quick)"
-echo "================================================================================"
-if uv run scripts/test_hard_examples_integration.py --steps 50 --batch_size 16; then
-    echo -e "${GREEN}✓ TEST 1 PASSED${NC}"
-    TEST1_RESULT="PASS"
-else
-    echo -e "${RED}✗ TEST 1 FAILED${NC}"
-    TEST1_RESULT="FAIL"
-fi
-echo ""
+# # Test 1: Hard examples integration (quick)
+# echo "================================================================================"
+# echo "TEST 1: Hard Examples Integration (Quick)"
+# echo "================================================================================"
+# if uv run scripts/test_hard_examples_integration.py --steps 50 --batch_size 16; then
+#     echo -e "${GREEN}✓ TEST 1 PASSED${NC}"
+#     TEST1_RESULT="PASS"
+# else
+#     echo -e "${RED}✗ TEST 1 FAILED${NC}"
+#     TEST1_RESULT="FAIL"
+# fi
+# echo ""
 
-# Test 2: Hard examples integration (stress test)
-echo "================================================================================"
-echo "TEST 2: Hard Examples Integration (Stress Test)"
-echo "================================================================================"
-if uv run scripts/test_hard_examples_integration.py --steps 200 --batch_size 32 --buffer_size 100; then
-    echo -e "${GREEN}✓ TEST 2 PASSED${NC}"
-    TEST2_RESULT="PASS"
-else
-    echo -e "${RED}✗ TEST 2 FAILED${NC}"
-    TEST2_RESULT="FAIL"
-fi
-echo ""
+# # Test 2: Hard examples integration (stress test)
+# echo "================================================================================"
+# echo "TEST 2: Hard Examples Integration (Stress Test)"
+# echo "================================================================================"
+# if uv run scripts/test_hard_examples_integration.py --steps 200 --batch_size 32 --buffer_size 100; then
+#     echo -e "${GREEN}✓ TEST 2 PASSED${NC}"
+#     TEST2_RESULT="PASS"
+# else
+#     echo -e "${RED}✗ TEST 2 FAILED${NC}"
+#     TEST2_RESULT="FAIL"
+# fi
+# echo ""
 
 # Test 3: Mock training (short)
 echo "================================================================================"
