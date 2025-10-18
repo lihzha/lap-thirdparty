@@ -126,10 +126,11 @@ class MockDataset:
 
         # Language action mask (20% of tokens are language actions)
         tokenized_langact_mask = rng.random((self.batch_size, self.seq_len)) < 0.2
-        tokenized_langact_mask = tokenized_langact_mask & tokenized_prompt_mask
+        tokenized_langact_mask = (tokenized_langact_mask & tokenized_prompt_mask).astype(np.int32)
+        tokenized_prompt_mask = tokenized_prompt_mask.astype(np.int32)
 
         # Token AR mask (autoregressive mask)
-        token_ar_mask = rng.random((self.batch_size, self.seq_len)) > 0.1
+        token_ar_mask = (rng.random((self.batch_size, self.seq_len)) > 0.1).astype(np.int32)
 
         # Token loss mask (which tokens contribute to loss)
         token_loss_mask = tokenized_prompt_mask.copy()
