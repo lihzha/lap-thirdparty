@@ -39,16 +39,16 @@ def create_batch_with_missing_images(batch_size: int = 16):
     # (represented by very small dimensions that will fail in visualize_language_actions)
     images = {}
     for i in range(batch_size):
-        if i % 2 == 0:
-            # Normal image
-            if "primary" not in images:
-                images["primary"] = []
-            images["primary"].append(rng.integers(0, 256, (1, 224, 224, 3), dtype=np.float32))
-        else:
-            # Corrupted/missing - will cause extraction to fail
-            if "primary" not in images:
-                images["primary"] = []
-            images["primary"].append(rng.integers(0, 256, (1, 1, 1, 3), dtype=np.float32))  # Too small!
+        # if i % 2 == 0:
+        # Normal image
+        if "primary" not in images:
+            images["primary"] = []
+        images["primary"].append(rng.integers(0, 256, (1, 224, 224, 3), dtype=np.float32))
+        # else:
+        #     # Corrupted/missing - will cause extraction to fail
+        #     if "primary" not in images:
+        #         images["primary"] = []
+        #     images["primary"].append(rng.integers(0, 256, (1, 1, 1, 3), dtype=np.float32))  # Too small!
 
     images["primary"] = np.stack(images["primary"])
 
