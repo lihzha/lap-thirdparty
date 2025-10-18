@@ -192,7 +192,7 @@ def verify_no_duplicate_losses():
     print(f"  Sample: {losses[:5]}")
 
     # Simple batch (all good images)
-    images = {"primary": rng.integers(0, 256, (32, 224, 224, 3), dtype=np.uint8)}
+    images = {"primary": rng.integers(0, 256, (32, 1, 224, 224, 3), dtype=np.uint8)}
     obs = CoTObservation(
         images=images,
         image_masks={"primary": np.ones((32, 1), dtype=bool)},
