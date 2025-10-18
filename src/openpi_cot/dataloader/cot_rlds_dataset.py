@@ -1046,6 +1046,12 @@ class DroidCoTDataset(_SingleCoTDataset):
         # Regex helpers for robust path/id extraction
         # ------------------------------------------------------------------
 
+        # First, filter out empty trajectories to avoid index errors
+        def _non_empty(traj):
+            return tf.greater(tf.shape(traj[action_key])[0], 0)
+
+        self.dataset = self.dataset.filter(_non_empty)
+
         def _id_ok(traj):
             episode_id = traj["trajectory_id"][0]
             if tf.equal(episode_id, self.spec.default_ep_value):
