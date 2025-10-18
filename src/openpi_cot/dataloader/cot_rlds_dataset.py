@@ -249,7 +249,7 @@ class CoTRldsDatasetSpec:
     )
 
 
-class SingleCoTDataset:
+class _SingleCoTDataset:
     spec: ClassVar[CoTRldsDatasetSpec] = CoTRldsDatasetSpec()
 
     def __init__(
@@ -310,52 +310,48 @@ class SingleCoTDataset:
             tf.config.set_visible_devices([], "TPU")
 
         self.builder = self.build_dataset_builder(dataset_name, data_dir)
-        self.dataset = self.build_dataset(self.builder)
 
-        self.get_traj_identifier()
-
+        # Check if we have cached statistics
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
-        if cached_stats is not None:
-            # Prefer early filtering when stats are already available to reduce downstream work.
-            self.apply_traj_filters(action_key="action")
-            self.split_val(split_seed=seed)
-            self.apply_restructure()
-            self.dataset_statistics = cached_stats
 
-            # If state encoding is NONE, ensure state stats are properly padded
-            if self.state_encoding == StateEncoding.NONE:
-                from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
-
-                # If cached stats have empty state arrays, pad them to action_dim
-                if len(self.dataset_statistics["state"].mean) == 0:
-                    self.dataset_statistics["state"] = ExtendedNormStats(
-                        mean=np.zeros(self.action_dim, dtype=np.float32),
-                        std=np.ones(self.action_dim, dtype=np.float32),
-                        q01=np.zeros(self.action_dim, dtype=np.float32),
-                        q99=np.zeros(self.action_dim, dtype=np.float32),
-                        num_transitions=self.dataset_statistics["state"].num_transitions,
-                        num_trajectories=self.dataset_statistics["state"].num_trajectories,
-                    )
-        else:
-            # Build required fields first, compute stats on cardinality-preserving pipeline, then filter.
+        # If no cached stats, compute them first
+        if cached_stats is None:
+            logging.info(f"No cached statistics found for {dataset_name}. Computing statistics...")
+            # Build temporary dataset for stats computation
+            self.dataset = self.build_dataset(self.builder)
+            self.get_traj_identifier()
             self.apply_restructure()
-            self.dataset_statistics = get_dataset_statistics(
+
+            # Compute and save statistics
+            cached_stats = get_dataset_statistics(
                 self.dataset,
                 save_dir=self.builder.data_dir,
                 action_key="actions",
                 state_key="state",
             )
-            self.apply_traj_filters(action_key="actions")
-            self.split_val(split_seed=seed)
+            logging.info(f"Statistics computed and saved for {dataset_name}")
 
-            # If state encoding is NONE, pad the empty state stats to action_dim
-            if self.state_encoding == StateEncoding.NONE:
-                from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+        # Now rebuild dataset using cached stats path for consistent ordering
+        self.dataset = self.build_dataset(self.builder)
+        self.get_traj_identifier()
 
-                # Replace empty state stats with zero-padded stats
+        # Set statistics before filtering (needed for dataset-specific filters)
+        self.dataset_statistics = cached_stats
+
+        # Apply operations in consistent order: filter -> split -> restructure
+        self.apply_traj_filters(action_key="action")
+        self.split_val(split_seed=seed)
+        self.apply_restructure()
+
+        # If state encoding is NONE, ensure state stats are properly padded
+        if self.state_encoding == StateEncoding.NONE:
+            from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
+
+            # If cached stats have empty state arrays, pad them to action_dim
+            if len(self.dataset_statistics["state"].mean) == 0:
                 self.dataset_statistics["state"] = ExtendedNormStats(
                     mean=np.zeros(self.action_dim, dtype=np.float32),
-                    std=np.ones(self.action_dim, dtype=np.float32),  # Std of 1 to avoid division by zero
+                    std=np.ones(self.action_dim, dtype=np.float32),
                     q01=np.zeros(self.action_dim, dtype=np.float32),
                     q99=np.zeros(self.action_dim, dtype=np.float32),
                     num_transitions=self.dataset_statistics["state"].num_transitions,
@@ -395,8 +391,6 @@ class SingleCoTDataset:
             ds_name = "fmb:1.0.0"
         if ds_name == "dobbe":
             ds_name = "dobbe:0.0.1"
-        if ds_name == "bc_z":
-            ds_name = "bc_z:1.0.1"
         return tfds.builder(ds_name, data_dir=data_dir)
 
     def build_dataset(self, builder):
@@ -733,7 +727,7 @@ class SingleCoTDataset:
         return self.dataset_statistics["state"].num_transitions
 
 
-class DroidCoTDataset(SingleCoTDataset):
+class DroidCoTDataset(_SingleCoTDataset):
     def _episode_id_from_traj(self, traj, ep_table):
         """Lookup episode_id from trajectory metadata using regex extraction."""
         file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
@@ -1177,7 +1171,7 @@ class DroidCoTDataset(SingleCoTDataset):
         )
 
 
-class SingleOXECoTDataset(SingleCoTDataset):
+class _SingleOXECoTDataset(_SingleCoTDataset):
     def __init__(
         self,
         *,  # Force keyword-only arguments
@@ -1346,7 +1340,37 @@ class SingleOXECoTDataset(SingleCoTDataset):
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
 
 
-class SampleR1LiteCoTDataset(SingleOXECoTDataset):
+class _DobbeCoTDataset(_SingleOXECoTDataset):
+    """Custom dataset for dobbe with action range filtering."""
+
+    def apply_traj_filters(self, action_key):
+        """Apply trajectory filters including action range filter.
+
+        Filters out trajectories where any action exceeds [q01, q99] bounds.
+        """
+        # First apply standard filters
+        super().apply_traj_filters(action_key)
+
+        # Add dobbe-specific action range filter
+        action_q01 = self.dataset_statistics["actions"].q01
+        action_q99 = self.dataset_statistics["actions"].q99
+
+        def _action_within_bounds(traj):
+            """Check if all actions are within [q01, q99] range."""
+            actions = traj[action_key]
+
+            # Check if any action is below q01 or above q99 (element-wise)
+            below_q01 = tf.reduce_any(tf.less(actions, action_q01))
+            above_q99 = tf.reduce_any(tf.greater(actions, action_q99))
+
+            # Keep trajectory only if all actions are within bounds
+            return tf.logical_not(tf.logical_or(below_q01, above_q99))
+
+        logging.info(f"Applying action range filter for dobbe: q01={action_q01}, q99={action_q99}")
+        self.dataset = self.dataset.filter(_action_within_bounds)
+
+
+class _SampleR1LiteCoTDataset(_SingleOXECoTDataset):
     """Custom dataset for sample_r1_lite with EEF pose lookup table."""
 
     def __init__(
@@ -1618,12 +1642,17 @@ class OXECoTDatasets:
                     "filter_table": ds.filter_table,
                 }
             elif dataset_name == "sample_r1_lite":
-                ds = SampleR1LiteCoTDataset(
+                ds = _SampleR1LiteCoTDataset(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "dobbe":
+                ds = _DobbeCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
             else:
-                ds = SingleOXECoTDataset(
+                ds = _SingleOXECoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )

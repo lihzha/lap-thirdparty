@@ -78,8 +78,8 @@ def plot_dimension_statistics(datasets, output_dir, stat_type="state"):
     # Prepare data
     means = np.zeros((len(dataset_names), max_dims))
     stds = np.zeros((len(dataset_names), max_dims))
-    q01s = np.zeros((len(dataset_names), max_dims))
-    q99s = np.zeros((len(dataset_names), max_dims))
+    # q01s = np.zeros((len(dataset_names), max_dims))
+    # q99s = np.zeros((len(dataset_names), max_dims))
     mins = np.zeros((len(dataset_names), max_dims))
     maxs = np.zeros((len(dataset_names), max_dims))
 
@@ -88,8 +88,8 @@ def plot_dimension_statistics(datasets, output_dir, stat_type="state"):
         n_dims = len(stats["mean"])
         means[i, :n_dims] = stats["mean"]
         stds[i, :n_dims] = stats["std"]
-        q01s[i, :n_dims] = stats["q01"]
-        q99s[i, :n_dims] = stats["q99"]
+        # q01s[i, :n_dims] = stats["q01"]
+        # q99s[i, :n_dims] = stats["q99"]
         print(dataset)
         mins[i, :n_dims] = stats["min"]
         maxs[i, :n_dims] = stats["max"]
@@ -175,7 +175,7 @@ def plot_dimension_statistics(datasets, output_dir, stat_type="state"):
         ax.set_yticks(range(len(dataset_names)))
         ax.set_yticklabels(dataset_names, fontsize=6)
         ax.set_xlabel("Value Range", fontsize=8)
-        ax.set_title(f"{stat_type.capitalize()} Dim {dim} - Range (q01-q99)", fontsize=9)
+        ax.set_title(f"{stat_type.capitalize()} Dim {dim} - Range (max-min)", fontsize=9)
         ax.grid(axis="x", alpha=0.3)
 
     # Hide unused subplots
