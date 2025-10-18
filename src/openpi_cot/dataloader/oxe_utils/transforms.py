@@ -1482,7 +1482,7 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["observation"]["gripper_state"] = (trajectory["observation"]["state"][:, -1:] + 3.14) / 6.28
     # trajectory["action"] = (trajectory["action"][..., :-1] + 3.14) / 6.28
-    gripper_action = trajectory["action"][..., :-2:-1]
+    # gripper_action = trajectory["action"][..., :-2:-1]
 
     movement_actions = tf.concat(
         (

@@ -295,12 +295,28 @@ class MockTrainConfig:
 
 
 def init_logging():
-    """Initialize logging."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s",
+    """Custom logging format for better readability."""
+    level_mapping = {
+        "DEBUG": "D",
+        "INFO": "I",
+        "WARNING": "W",
+        "ERROR": "E",
+        "CRITICAL": "C",
+    }
+
+    class CustomFormatter(logging.Formatter):
+        def format(self, record):
+            record.levelname = level_mapping.get(record.levelname, record.levelname)
+            return super().format(record)
+
+    formatter = CustomFormatter(
+        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)",
         datefmt="%H:%M:%S",
     )
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.handlers[0].setFormatter(formatter)
 
 
 def create_mock_train_state(config: MockTrainConfig, rng_key) -> training_utils.TrainState:
@@ -503,9 +519,7 @@ def mock_training_loop(config: MockTrainConfig):
                 total_samples = payload.get("total_samples", 0)
 
                 logging.info(
-                    f"  Hard examples: {len(entries)} entries, "
-                    f"threshold={threshold:.4f}, "
-                    f"total_samples={total_samples}"
+                    f"  Hard examples: {len(entries)} entries, threshold={threshold:.4f}, total_samples={total_samples}"
                 )
 
                 # Show top 3 in console
@@ -527,7 +541,7 @@ def mock_training_loop(config: MockTrainConfig):
                     if missing_keys:
                         logging.warning(f"  [Mock] Payload missing keys: {missing_keys}")
                     else:
-                        logging.info(f"  [Mock] Payload structure verified ✓")
+                        logging.info("  [Mock] Payload structure verified ✓")
 
                 # If wandb was enabled, this would log to wandb via log_hard_examples_payload
                 # vis_tools.log_hard_examples_payload(payload)  # Commented out since wandb is disabled
