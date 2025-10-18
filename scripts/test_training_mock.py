@@ -16,9 +16,8 @@ Usage:
 
 import dataclasses
 import logging
-import os
-import sys
 from pathlib import Path
+import sys
 from typing import Any
 
 import etils.epath as epath
@@ -33,9 +32,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.training import utils as training_utils
-import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.checkpoints as _checkpoints
-
+import openpi_cot.training.vis_tools as vis_tools
 
 # ============================================================================
 # Mock Components
@@ -52,6 +50,7 @@ class MockTokenizer:
         """Encode text to token IDs."""
         # Simple mock: hash the text to get consistent tokens
         import hashlib
+
         hash_val = int(hashlib.md5(text.encode()).hexdigest(), 16)
         num_tokens = (hash_val % 50) + 10  # 10-60 tokens
         rng = np.random.default_rng(seed=hash_val)
@@ -114,17 +113,13 @@ class MockDataset:
         for cam_idx in range(self.num_cameras):
             cam_name = f"cam_{cam_idx}"
             # Generate images in uint8 first, then normalize
-            img_uint8 = rng.integers(0, 256,
-                                      (self.batch_size, *self.image_size, 3),
-                                      dtype=np.uint8)
+            img_uint8 = rng.integers(0, 256, (self.batch_size, 1, *self.image_size, 3), dtype=np.uint8)
             # Normalize to [-1, 1]
             images[cam_name] = (img_uint8.astype(np.float32) / 127.5) - 1.0
             image_masks[cam_name] = np.ones(self.batch_size, dtype=bool)
 
         # Generate mock tokenized sequences
-        tokenized_prompt = rng.integers(0, 32000,
-                                         (self.batch_size, self.seq_len),
-                                         dtype=np.int32)
+        tokenized_prompt = rng.integers(0, 32000, (self.batch_size, self.seq_len), dtype=np.int32)
 
         # Create masks (80% of tokens are valid)
         tokenized_prompt_mask = rng.random((self.batch_size, self.seq_len)) > 0.2
@@ -158,11 +153,15 @@ class MockDataset:
         )
 
         # Mock actions (not really used in this test)
-        actions = type('Actions', (), {
-            'world_vector': rng.random((self.batch_size, 7), dtype=np.float32),
-            'rotation_vector': rng.random((self.batch_size, 6), dtype=np.float32),
-            'gripper_command': rng.random((self.batch_size, 1), dtype=np.float32),
-        })()
+        actions = type(
+            "Actions",
+            (),
+            {
+                "world_vector": rng.random((self.batch_size, 7), dtype=np.float32),
+                "rotation_vector": rng.random((self.batch_size, 6), dtype=np.float32),
+                "gripper_command": rng.random((self.batch_size, 1), dtype=np.float32),
+            },
+        )()
 
         return obs, actions
 
@@ -178,9 +177,9 @@ class MockModel(nnx.Module):
         self.layers = {}
         for i in range(num_layers):
             key1, key2, rng_key = jax.random.split(rng_key, 3)
-            self.layers[f'layer_{i}'] = {
-                'weight': nnx.Param(jax.random.normal(key1, (hidden_dim, hidden_dim))),
-                'bias': nnx.Param(jax.random.normal(key2, (hidden_dim,))),
+            self.layers[f"layer_{i}"] = {
+                "weight": nnx.Param(jax.random.normal(key1, (hidden_dim, hidden_dim))),
+                "bias": nnx.Param(jax.random.normal(key2, (hidden_dim,))),
             }
 
     def compute_loss(
@@ -225,9 +224,9 @@ class MockModel(nnx.Module):
 
         # Mock additional metrics
         metrics = {
-            'action_loss': per_sample_loss * 0.6,
-            'reasoning_loss': per_sample_loss * 0.4,
-            'action_accuracy': token_accuracy * 1.1,
+            "action_loss": per_sample_loss * 0.6,
+            "reasoning_loss": per_sample_loss * 0.4,
+            "action_accuracy": token_accuracy * 1.1,
         }
 
         return per_sample_loss, token_accuracy, critical_token_accuracy, metrics
@@ -362,17 +361,17 @@ def train_step(
     param_norm = optax.global_norm(new_params)
 
     info = {
-        'loss': loss,
-        'per_sample_loss': per_sample_loss,
-        'grad_norm': grad_norm,
-        'param_norm': param_norm,
-        'token_accuracy': token_accuracy,
-        'critical_token_accuracy': critical_token_accuracy,
+        "loss": loss,
+        "per_sample_loss": per_sample_loss,
+        "grad_norm": grad_norm,
+        "param_norm": param_norm,
+        "token_accuracy": token_accuracy,
+        "critical_token_accuracy": critical_token_accuracy,
     }
 
     # Add loss components
     for key, value in loss_metrics.items():
-        if key.endswith('_loss'):
+        if key.endswith("_loss"):
             info[key] = jnp.mean(value)
         else:
             info[key] = value
@@ -384,16 +383,16 @@ def mock_training_loop(config: MockTrainConfig):
     """Main mock training loop."""
     init_logging()
 
-    logging.info("="*80)
+    logging.info("=" * 80)
     logging.info("MOCK TRAINING TEST")
-    logging.info("="*80)
-    logging.info(f"Configuration:")
+    logging.info("=" * 80)
+    logging.info("Configuration:")
     logging.info(f"  Steps: {config.num_train_steps}")
     logging.info(f"  Batch size: {config.batch_size}")
     logging.info(f"  Log interval: {config.log_interval}")
     logging.info(f"  Track hard examples: {config.track_hard_examples}")
     logging.info(f"  Checkpoint dir: {config.checkpoint_dir}")
-    logging.info("="*80)
+    logging.info("=" * 80)
 
     # Initialize RNG
     rng = jax.random.key(config.seed)
@@ -447,7 +446,7 @@ def mock_training_loop(config: MockTrainConfig):
 
         # Convert info to numpy for logging
         info_np = jax.device_get(info)
-        per_sample_loss = info_np['per_sample_loss']
+        per_sample_loss = info_np["per_sample_loss"]
 
         # Track hard examples
         if hard_example_tracker is not None:
@@ -468,10 +467,10 @@ def mock_training_loop(config: MockTrainConfig):
 
         # Logging
         if step % config.log_interval == 0:
-            loss_val = info_np['loss']
-            grad_norm = info_np['grad_norm']
-            param_norm = info_np['param_norm']
-            token_acc = info_np['token_accuracy']
+            loss_val = info_np["loss"]
+            grad_norm = info_np["grad_norm"]
+            param_norm = info_np["param_norm"]
+            token_acc = info_np["token_accuracy"]
 
             logging.info(
                 f"Step {step:4d}: loss={loss_val:.4f}, "
@@ -484,9 +483,9 @@ def mock_training_loop(config: MockTrainConfig):
             if hard_example_tracker is not None and step % config.hard_example_log_interval == 0 and step > 0:
                 payload = hard_example_tracker.log_if_ready(step_idx=step)
                 if payload is not None:
-                    entries = payload.get('entries', [])
-                    threshold = payload.get('quantile_threshold', 0.0)
-                    total_samples = payload.get('total_samples', 0)
+                    entries = payload.get("entries", [])
+                    threshold = payload.get("quantile_threshold", 0.0)
+                    total_samples = payload.get("total_samples", 0)
 
                     logging.info(
                         f"  Hard examples: {len(entries)} entries, "
@@ -497,7 +496,7 @@ def mock_training_loop(config: MockTrainConfig):
                     # Show top 3
                     for i, entry in enumerate(entries[:3]):
                         logging.info(
-                            f"    #{i+1}: loss={entry['loss']:.4f}, "
+                            f"    #{i + 1}: loss={entry['loss']:.4f}, "
                             f"step={entry['step']}, "
                             f"lang_action={entry.get('language_action', 'N/A')[:50]}..."
                         )
@@ -507,11 +506,11 @@ def mock_training_loop(config: MockTrainConfig):
             logging.info(f"Saving checkpoint at step {step}...")
             # Note: We'd need to adapt save_state for mock dataset
             # For now, just log
-            logging.info(f"  (Checkpoint saving skipped in mock mode)")
+            logging.info("  (Checkpoint saving skipped in mock mode)")
 
-    logging.info("="*80)
+    logging.info("=" * 80)
     logging.info("Training complete!")
-    logging.info("="*80)
+    logging.info("=" * 80)
 
     # Final statistics
     if hard_example_tracker is not None:
@@ -535,15 +534,13 @@ def parse_args():
     parser.add_argument("--save_interval", type=int, default=50, help="Checkpoint save interval")
     parser.add_argument("--fsdp_devices", type=int, default=1, help="Number of FSDP devices")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--checkpoint_dir", type=str, default="/tmp/mock_training_checkpoints",
-                        help="Checkpoint directory")
+    parser.add_argument(
+        "--checkpoint_dir", type=str, default="/tmp/mock_training_checkpoints", help="Checkpoint directory"
+    )
     parser.add_argument("--no_hard_examples", action="store_true", help="Disable hard example tracking")
-    parser.add_argument("--max_hard_examples_buffer", type=int, default=50,
-                        help="Max hard examples to buffer")
-    parser.add_argument("--max_hard_examples_log", type=int, default=10,
-                        help="Max hard examples to log")
-    parser.add_argument("--hard_example_log_interval", type=int, default=50,
-                        help="Interval for logging hard examples")
+    parser.add_argument("--max_hard_examples_buffer", type=int, default=50, help="Max hard examples to buffer")
+    parser.add_argument("--max_hard_examples_log", type=int, default=10, help="Max hard examples to log")
+    parser.add_argument("--hard_example_log_interval", type=int, default=50, help="Interval for logging hard examples")
 
     return parser.parse_args()
 
@@ -573,6 +570,7 @@ def main():
     except Exception as e:
         logging.error(f"Training failed with error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 
