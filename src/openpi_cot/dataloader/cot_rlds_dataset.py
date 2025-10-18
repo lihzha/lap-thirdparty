@@ -1077,7 +1077,7 @@ class DroidCoTDataset(_SingleCoTDataset):
         self.dataset = self.dataset.filter(_path_ok)
         self.dataset = self.dataset.filter(_has_instruction)
         # if not self.use_json_actions:
-        self.dataset = self.dataset.filter(_id_ok)
+        # self.dataset = self.dataset.filter(_id_ok)
 
     def apply_repack_transforms(self):
         def _pop_keys(traj):
