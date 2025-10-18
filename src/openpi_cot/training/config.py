@@ -159,6 +159,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     # support using droid_subset for debugging
     droid_dataset_name: Literal["droid", "droid_subset"] = "droid"
     use_json_actions: bool = False
+    force_recompute_stats: bool = False
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_pi_magic_soup_with_other_states_with_bimanual"
@@ -564,12 +565,7 @@ _CONFIGS = [
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
         ),
-        data=RLDSCoTDataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            decoding_schema="compact"
-        ),
+        data=RLDSCoTDataConfig(repo_id="droid", asset_id="droid", dataset_type="droid", decoding_schema="compact"),
     ),
     TrainConfig(
         name="pi05_vqa",

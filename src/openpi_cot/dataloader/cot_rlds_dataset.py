@@ -315,7 +315,7 @@ class _SingleCoTDataset:
         cached_stats, _, _ = check_dataset_statistics(self.builder.data_dir)
 
         # If no cached stats, compute them first
-        if cached_stats is None:
+        if cached_stats is None or self.config.force_recompute_stats:
             logging.info(f"No cached statistics found for {dataset_name}. Computing statistics...")
             # Build temporary dataset for stats computation
             self.dataset = self.build_dataset(self.builder)
@@ -1802,7 +1802,7 @@ class OXECoTDatasets:
                 stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode="constant"
             )
             action_local_std = np.pad(
-                stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode="constant", constant_values=1.0
+                stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode="constant", constant_values=0.0
             )
 
             # var_i + (mean_i - global_mean)^2
@@ -1823,7 +1823,7 @@ class OXECoTDatasets:
         ]
         action_q99_padded = [
             np.pad(
-                stats["actions"].q99, (0, action_dim - len(stats["actions"].q99)), mode="constant", constant_values=1
+                stats["actions"].q99, (0, action_dim - len(stats["actions"].q99)), mode="constant", constant_values=0
             )
             for stats in all_dataset_statistics.values()
         ]
@@ -1884,7 +1884,7 @@ class OXECoTDatasets:
                     stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
                 )
                 state_local_std = np.pad(
-                    stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant", constant_values=1.0
+                    stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant", constant_values=0.0
                 )
 
                 # var_i + (mean_i - global_mean)^2
@@ -1905,7 +1905,7 @@ class OXECoTDatasets:
             ]
             state_q99_padded = [
                 np.pad(
-                    stats["state"].q99, (0, action_dim - len(stats["state"].q99)), mode="constant", constant_values=1
+                    stats["state"].q99, (0, action_dim - len(stats["state"].q99)), mode="constant", constant_values=0
                 )
                 for stats in state_stats_subset.values()
             ]
