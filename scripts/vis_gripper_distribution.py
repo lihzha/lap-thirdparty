@@ -263,7 +263,7 @@ def main(config: _config.TrainConfig):
 
     # Get dataset name from config
     dataset_name = getattr(config.data, "data_mix", "unknown")
-    num_batches = 200
+    num_batches = 600
 
     logging.info(f"Analyzing gripper distribution for dataset: {dataset_name}")
     logging.info(f"Will process {num_batches} batches")
@@ -463,7 +463,9 @@ def main(config: _config.TrainConfig):
         logging.info(f"Max gripper action values: {all_gripper_actions[action_max_indices]}")
         logging.info(f"Min gripper action indices: {action_min_indices}")
         logging.info(f"Max gripper action indices: {action_max_indices}")
-        logging.info(f"Total gripper actions: {len(all_gripper_actions)}, Total gripper states: {len(all_gripper_states)}")
+        logging.info(
+            f"Total gripper actions: {len(all_gripper_actions)}, Total gripper states: {len(all_gripper_states)}"
+        )
 
         # Extract images for min/max gripper actions
         logging.info("Extracting images for min/max gripper actions...")
@@ -477,7 +479,9 @@ def main(config: _config.TrainConfig):
         )
         logging.info(f"Total samples across all batches: {total_samples}")
         if len(action_min_indices) > 0:
-            logging.info(f"Sample action min index to lookup: {action_min_indices[0]} (value: {all_gripper_actions[action_min_indices[0]]:.6f})")
+            logging.info(
+                f"Sample action min index to lookup: {action_min_indices[0]} (value: {all_gripper_actions[action_min_indices[0]]:.6f})"
+            )
 
         for cam_key in camera_keys_to_try:
             min_images_cam = []
@@ -514,7 +518,9 @@ def main(config: _config.TrainConfig):
                     "min": min_images_cam,
                     "max": max_images_cam,
                 }
-                logging.info(f"Camera '{cam_key}': Found {len(min_images_cam)} min and {len(max_images_cam)} max action images")
+                logging.info(
+                    f"Camera '{cam_key}': Found {len(min_images_cam)} min and {len(max_images_cam)} max action images"
+                )
 
         logging.info(f"Extracted images from {len(camera_images_actions)} camera views for gripper actions")
 
