@@ -752,7 +752,7 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
-    "agibot_dataset": {
+    "agibot_large_dataset": {
         "image_obs_keys": {
             "primary": "head_image",
             "secondary": None,
@@ -1208,7 +1208,7 @@ OXE_DATASET_METADATA = {
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
-    "agibot_dataset": {
+    "agibot_large_dataset": {
         "control_frequency": 30,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Bi-Manual",

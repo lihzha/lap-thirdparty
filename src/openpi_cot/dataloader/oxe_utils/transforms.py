@@ -1737,7 +1737,7 @@ def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     return traj_truncated
 
 
-def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+def agibot_large_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     movement_actions = tf.concat(
@@ -1855,6 +1855,6 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "ego4d_split_3": human_dataset_transform,
     "ego4d_split_4": human_dataset_transform,
     "sample_r1_lite": sample_r1_lite_dataset_transform,
-    "agibot_dataset": agibot_dataset_transform,
+    "agibot_large_dataset": agibot_large_dataset_transform,
     "molmoact_dataset": molmoact_dataset_transform,
 }

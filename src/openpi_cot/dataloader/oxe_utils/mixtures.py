@@ -93,7 +93,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("fmb", 1.0),
         ("dobbe", 0.2),  # question
         # ("sample_r1_lite", 0.2),  # only joint position available for both actions and states
-        # ("agibot_dataset", 0.2),
+        # ("agibot_large_dataset", 0.2),
     ],
     "oxe_pi_magic_soup_with_other_states_with_bimanual": [
         ("kuka", 0.1),  # no language instructions, 580392 trajs
@@ -125,7 +125,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
         ("molmoact_dataset", 1.0),
         ### Bimanual
-        # ("agibot_dataset", 0.2),
+        # ("agibot_large_dataset", 0.2),
         # ("sample_r1_lite", 1.0),
         ### TBD
         # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),  # only joint state, 520 trajs. action scale is 300.
@@ -160,7 +160,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "austin_sailor_dataset_converted_externally_to_rlds": [("austin_sailor_dataset_converted_externally_to_rlds", 1.0)],
     "austin_sirius_dataset_converted_externally_to_rlds": [("austin_sirius_dataset_converted_externally_to_rlds", 1.0)],
     "viola": [("viola", 1.0)],
-    "agibot_dataset": [("agibot_dataset", 1.0)],
+    "agibot_large_dataset": [("agibot_large_dataset", 1.0)],
     "sample_r1_lite": [("sample_r1_lite", 1.0)],
     "molmoact_dataset": [("molmoact_dataset", 1.0)],
 }
