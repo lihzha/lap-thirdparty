@@ -80,6 +80,8 @@ def plot_dimension_statistics(datasets, output_dir, stat_type="state"):
     stds = np.zeros((len(dataset_names), max_dims))
     q01s = np.zeros((len(dataset_names), max_dims))
     q99s = np.zeros((len(dataset_names), max_dims))
+    mins = np.zeros((len(dataset_names), max_dims))
+    maxs = np.zeros((len(dataset_names), max_dims))
 
     for i, dataset in enumerate(dataset_names):
         stats = datasets[dataset][stat_type]
@@ -88,6 +90,9 @@ def plot_dimension_statistics(datasets, output_dir, stat_type="state"):
         stds[i, :n_dims] = stats["std"]
         q01s[i, :n_dims] = stats["q01"]
         q99s[i, :n_dims] = stats["q99"]
+        print(dataset)
+        mins[i, :n_dims] = stats["min"]
+        maxs[i, :n_dims] = stats["max"]
 
     # Create subplots for each dimension
     n_cols = 4
@@ -159,8 +164,8 @@ def plot_dimension_statistics(datasets, output_dir, stat_type="state"):
 
     for dim in range(max_dims):
         ax = axes[dim]
-        q01_vals = q01s[:, dim]
-        q99_vals = q99s[:, dim]
+        q01_vals = mins[:, dim]
+        q99_vals = maxs[:, dim]
         ranges = q99_vals - q01_vals
 
         # Create horizontal bar chart showing range
