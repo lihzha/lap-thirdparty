@@ -759,7 +759,7 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat(
-        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
+        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:-1, -1:], 0, 1))], axis=1
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -857,10 +857,19 @@ def droid_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, tf.clip_by_value(gripper_actions[1:, -1:], 0, 1)], axis=1)
+    padded_movement_actions = tf.concat(
+        [movement_actions, tf.zeros((1, movement_actions.shape[1]))],
+        axis=0,
+    )
+    action = tf.concat(
+        [padded_movement_actions, tf.clip_by_value(gripper_actions[:, -1:], 0, 1)],
+        axis=1,
+    )
+    trajectory["action"] = tf.concat((action, tf.zeros_like))
+    # traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
+    # traj_truncated["action"] = tf.concat([movement_actions, tf.clip_by_value(gripper_actions[1:, -1:], 0, 1)], axis=1)
 
-    return traj_truncated
+    return trajectory
 
 
 def maniskill_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -982,7 +991,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat(
-        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
+        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:-1, -1:], 0, 1))], axis=1
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -1058,7 +1067,7 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     )
     traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     traj_truncated["action"] = tf.concat(
-        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
+        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:-1, -1:], 0, 1))], axis=1
     )
 
     # Randomly pad empty language instructions with fallback text

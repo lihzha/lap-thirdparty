@@ -893,22 +893,14 @@ class DroidCoTDataset(_SingleCoTDataset):
     def apply_restructure(self):
         def restructure(traj):
             """Reformat observation and action keys, sample language instruction."""
-            # if self.standardize_fn is not None:
-            #     traj = self.standardize_fn(traj)
+            if self.standardize_fn is not None:
+                traj = self.standardize_fn(traj)
             actions = convert_action_encoding(
                 action=traj["action"],
                 from_encoding=self.action_encoding,
                 to_encoding=self.config.action_encoding,
                 to_delta_cartesian_pose=False,
             )
-            # # Pad actions to action_dim to ensure fixed shape for dataset interleaving
-            # action_pad_amount = self.action_dim - tf.shape(actions)[-1]
-            # actions = tf.pad(
-            #     actions,
-            #     [[0, 0], [0, action_pad_amount]],
-            # )
-            # # Set static shape for TensorFlow's shape inference
-            # actions.set_shape([None, self.action_dim])
 
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
