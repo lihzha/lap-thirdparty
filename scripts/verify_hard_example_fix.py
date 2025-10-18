@@ -200,7 +200,7 @@ def verify_no_duplicate_losses():
         tokenized_prompt=rng.integers(0, 32000, (32, 128), dtype=np.int32),
         tokenized_prompt_mask=rng.random((32, 128)) > 0.2,
         tokenized_langact_mask=rng.random((32, 128)) < 0.2,
-        token_ar_mask=np.ones((32, 128), dtype=bool),
+        token_ar_mask=np.ones((32, 128), dtype=np.int32),
         token_loss_mask=np.ones((32, 128), dtype=bool),
         sample_mask=np.ones(32, dtype=bool),
     )
