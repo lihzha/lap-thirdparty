@@ -933,7 +933,7 @@ class DroidCoTDataset(_SingleCoTDataset):
                 def _select_random_instruction():
                     parsed_instructions = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
                     num_instructions = tf.shape(parsed_instructions)[0]
-                    random_idx = tf.random.stateless_uniform(
+                    random_idx = tf.random.uniform(
                         shape=[],
                         seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)],
                         minval=0,
