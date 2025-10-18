@@ -7,7 +7,12 @@ import pickle
 import re
 from typing import Any
 
-# import cv2
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
 import jax
 from jax.experimental import multihost_utils as mh
 import jax.numpy as jnp
@@ -48,7 +53,7 @@ class HardExampleTracker:
     buffer_ratio: float = 0.07
     buffer_min: int = 32
     buffer_slack: int = 32
-    max_hard_examples: int = 5
+    max_hard_examples: int = 50
     resize_hw: tuple[int, int] | None = (128, 128)
     _interval_losses: list[np.ndarray] = field(default_factory=list, init=False)
     _interval_total_samples: int = field(default=0, init=False)
@@ -138,7 +143,7 @@ class HardExampleTracker:
         capacity = self._compute_buffer_capacity()
         if len(self._hard_example_buffer) > capacity:
             for removed in self._hard_example_buffer[capacity:]:
-                self._hard_example_keys.discard((removed["step"], removed["global_idx"]))
+                self._hard_example_keys.discard((removed["process_index"], removed["step"], removed["global_idx"]))
             del self._hard_example_buffer[capacity:]
 
     def log_if_ready(self, step_idx: int) -> dict[str, Any] | None:
@@ -265,7 +270,15 @@ def visualize_language_actions(
             else:
                 frame = np.clip(frame, 0, 255).astype(np.uint8)
             if resize_hw is not None and frame.shape[:2] != resize_hw:
-                frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
+                if HAS_CV2:
+                    frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
+                else:
+                    # Fallback: simple nearest-neighbor resize using numpy indexing
+                    h_old, w_old = frame.shape[:2]
+                    h_new, w_new = resize_hw
+                    row_idx = (np.arange(h_new) * h_old // h_new).astype(np.int32)
+                    col_idx = (np.arange(w_new) * w_old // w_new).astype(np.int32)
+                    frame = frame[row_idx[:, None], col_idx[None, :]]
             per_cam.append(frame)
 
         if not per_cam:

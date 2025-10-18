@@ -427,6 +427,14 @@ def main(config: _config.TrainConfig):
         persistent_iterator=True,
     )
 
+    # Initialize hard example tracker for logging difficult samples
+    hard_example_tracker = vis_tools.HardExampleTracker(
+        tokenizer=data_loader.tokenizer,
+        max_hard_examples=50,
+        buffer_ratio=0.1,  # Maintain buffer of top candidates
+        resize_hw=(128, 128),
+    )
+
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
 
@@ -515,6 +523,28 @@ def main(config: _config.TrainConfig):
         per_sample_loss = info.get("per_sample_loss")
         if per_sample_loss is None:
             raise ValueError("Training step info missing per_sample_loss")
+
+        # Update hard example tracker with per-sample losses from current batch
+        per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
+        hard_example_tracker.update(per_sample_loss_local)
+
+        # Add hard examples from current batch to buffer (if they qualify)
+        # This needs to happen for every step, not just at log_interval
+        host_batch_local_curr, local_size_curr = host_batch_cache.ensure(step=step, batch=batch)
+        if per_sample_loss_local is not None and local_size_curr > 0:
+            process_idx = jax.process_index()
+            # Compute global index base for this process
+            global_batch_idx = step * config.batch_size
+            local_batch_offset = process_idx * local_size_curr
+
+            hard_example_tracker.add_local_examples(
+                step_idx=step,
+                host_batch_local=host_batch_local_curr,
+                local_losses=per_sample_loss_local,
+                global_idx_base=global_batch_idx + local_batch_offset,
+                process_idx=process_idx,
+            )
+
         if step % config.log_interval == 0:
             # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
@@ -543,6 +573,12 @@ def main(config: _config.TrainConfig):
                     data_loader.tokenizer,
                     local_batch_size=local_size,
                 )
+
+            # Log hard examples from the interval (multi-host gathering happens inside)
+            payload = hard_example_tracker.log_if_ready(step)
+            if payload is not None:
+                vis_tools.log_hard_examples_payload(payload)
+
             infos = []
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:

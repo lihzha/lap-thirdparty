@@ -2,9 +2,15 @@
 
 This script tests the training loop with:
 - Fake/minimal model (just parameters, no real computation)
-- Fake dataset (random data generation)
-- Fake loss calculation (deterministic with some high-loss samples)
-- Real training infrastructure (optimizer, checkpointing, logging, hard examples)
+- Fake dataset (random data generation with mock images and tokenized sequences)
+- Fake loss calculation (deterministic with some high-loss samples for testing hard example tracking)
+- Real training infrastructure (optimizer, checkpointing, logging, hard example tracking)
+
+Hard Example Tracking:
+- Every step: Accumulates per-sample losses and adds qualifying examples to buffer
+- At log intervals: Prepares payload with top-K hardest examples
+- Multi-host ready: Supports gathering hard examples across all hosts
+- Buffer maintains top-50 hardest examples (configurable) with images
 
 Usage:
     # Single host
@@ -12,6 +18,9 @@ Usage:
 
     # Multi-host simulation (if on TPU/multi-GPU)
     python scripts/test_training_mock.py --num_train_steps 100 --fsdp_devices 2
+
+    # Adjust hard example tracking
+    python scripts/test_training_mock.py --max_hard_examples_buffer 50 --hard_example_log_interval 50
 """
 
 import dataclasses
@@ -271,11 +280,10 @@ class MockTrainConfig:
     # Logging
     wandb_enabled: bool = False
 
-    # Hard examples
+    # Hard examples tracking
     track_hard_examples: bool = True
-    max_hard_examples_buffer: int = 50
-    max_hard_examples_log: int = 10
-    hard_example_log_interval: int = 50
+    max_hard_examples_buffer: int = 50  # Max hard examples to keep in buffer (matches vis_tools default)
+    hard_example_log_interval: int = 50  # How often to log hard examples
 
     def __post_init__(self):
         self.checkpoint_dir = epath.Path(self.checkpoint_dir)
@@ -435,6 +443,13 @@ def mock_training_loop(config: MockTrainConfig):
 
     # Training loop
     logging.info("Starting training loop...")
+    logging.info("")
+    logging.info("Hard example tracking flow:")
+    logging.info("  1. Every step: update() accumulates per-sample losses")
+    logging.info("  2. Every step: add_local_examples() adds qualifying samples to buffer")
+    logging.info("  3. Every hard_example_log_interval: log_if_ready() prepares payload")
+    logging.info("  4. Multi-host: log_hard_examples_payload() gathers and logs to wandb")
+    logging.info("")
     start_step = int(train_state.step)
 
     for step in range(start_step, config.num_train_steps):
@@ -448,22 +463,22 @@ def mock_training_loop(config: MockTrainConfig):
         info_np = jax.device_get(info)
         per_sample_loss = info_np["per_sample_loss"]
 
-        # Track hard examples
+        # Track hard examples - update every step
         if hard_example_tracker is not None:
+            # Accumulate losses for quantile computation
             hard_example_tracker.update(per_sample_loss)
 
-            # Periodically add examples with images
-            if step % config.log_interval == 0:
-                # Convert batch to host (numpy) for visualization
-                host_batch = jax.tree.map(lambda x: np.asarray(x), batch)
+            # Add examples with images every step (only stores if they qualify for buffer)
+            # Convert batch to host (numpy) for visualization
+            host_batch = jax.tree.map(lambda x: np.asarray(x), batch)
 
-                hard_example_tracker.add_local_examples(
-                    step_idx=step,
-                    host_batch_local=host_batch,
-                    local_losses=per_sample_loss,
-                    global_idx_base=0,  # Single host
-                    process_idx=jax.process_index(),
-                )
+            hard_example_tracker.add_local_examples(
+                step_idx=step,
+                host_batch_local=host_batch,
+                local_losses=per_sample_loss,
+                global_idx_base=step * config.batch_size,  # Global index offset
+                process_idx=jax.process_index(),
+            )
 
         # Logging
         if step % config.log_interval == 0:
@@ -479,27 +494,44 @@ def mock_training_loop(config: MockTrainConfig):
                 f"max_per_sample_loss={np.max(per_sample_loss):.4f}"
             )
 
-            # Log hard examples
-            if hard_example_tracker is not None and step % config.hard_example_log_interval == 0 and step > 0:
-                payload = hard_example_tracker.log_if_ready(step_idx=step)
-                if payload is not None:
-                    entries = payload.get("entries", [])
-                    threshold = payload.get("quantile_threshold", 0.0)
-                    total_samples = payload.get("total_samples", 0)
+        # Log hard examples at specified interval
+        if hard_example_tracker is not None and step % config.hard_example_log_interval == 0 and step > 0:
+            payload = hard_example_tracker.log_if_ready(step_idx=step)
+            if payload is not None:
+                entries = payload.get("entries", [])
+                threshold = payload.get("quantile_threshold", 0.0)
+                total_samples = payload.get("total_samples", 0)
 
+                logging.info(
+                    f"  Hard examples: {len(entries)} entries, "
+                    f"threshold={threshold:.4f}, "
+                    f"total_samples={total_samples}"
+                )
+
+                # Show top 3 in console
+                for i, entry in enumerate(entries[:3]):
+                    img_shape = entry.get("image", np.array([])).shape if "image" in entry else "N/A"
                     logging.info(
-                        f"  Hard examples: {len(entries)} entries, "
-                        f"threshold={threshold:.4f}, "
-                        f"total_samples={total_samples}"
+                        f"    #{i + 1}: loss={entry['loss']:.4f}, "
+                        f"step={entry['step']}, "
+                        f"global_idx={entry.get('global_idx', 'N/A')}, "
+                        f"image_shape={img_shape}, "
+                        f"lang_action={entry.get('language_action', 'N/A')[:50]}..."
                     )
 
-                    # Show top 3
-                    for i, entry in enumerate(entries[:3]):
-                        logging.info(
-                            f"    #{i + 1}: loss={entry['loss']:.4f}, "
-                            f"step={entry['step']}, "
-                            f"lang_action={entry.get('language_action', 'N/A')[:50]}..."
-                        )
+                # Verify payload structure
+                if entries:
+                    first_entry = entries[0]
+                    required_keys = ["loss", "step", "global_idx", "image", "language_action"]
+                    missing_keys = [k for k in required_keys if k not in first_entry]
+                    if missing_keys:
+                        logging.warning(f"  [Mock] Payload missing keys: {missing_keys}")
+                    else:
+                        logging.info(f"  [Mock] Payload structure verified ✓")
+
+                # If wandb was enabled, this would log to wandb via log_hard_examples_payload
+                # vis_tools.log_hard_examples_payload(payload)  # Commented out since wandb is disabled
+                logging.info(f"  [Mock] Would log {len(entries)} hard examples to wandb")
 
         # Checkpointing
         if step % config.save_interval == 0 and step > 0:
@@ -539,7 +571,6 @@ def parse_args():
     )
     parser.add_argument("--no_hard_examples", action="store_true", help="Disable hard example tracking")
     parser.add_argument("--max_hard_examples_buffer", type=int, default=50, help="Max hard examples to buffer")
-    parser.add_argument("--max_hard_examples_log", type=int, default=10, help="Max hard examples to log")
     parser.add_argument("--hard_example_log_interval", type=int, default=50, help="Interval for logging hard examples")
 
     return parser.parse_args()
@@ -559,7 +590,6 @@ def main():
         checkpoint_dir=epath.Path(args.checkpoint_dir),
         track_hard_examples=not args.no_hard_examples,
         max_hard_examples_buffer=args.max_hard_examples_buffer,
-        max_hard_examples_log=args.max_hard_examples_log,
         hard_example_log_interval=args.hard_example_log_interval,
     )
 
