@@ -591,7 +591,9 @@ def mock_training_loop(config: MockTrainConfig):
                             for host_data in gathered:
                                 host_data = np.asarray(host_data)
                                 for record in host_data:
-                                    all_gt_losses.append((int(record["step"]), int(record["gidx"]), float(record["loss"])))
+                                    all_gt_losses.append(
+                                        (int(record["step"]), int(record["gidx"]), float(record["loss"]))
+                                    )
                         except Exception as e:
                             logging.warning(f"  [Verification] Multi-host gather failed: {e}, using local only")
                             all_gt_losses = ground_truth_losses
@@ -614,12 +616,16 @@ def mock_training_loop(config: MockTrainConfig):
                     overlap_ratio = len(overlap) / num_to_check if num_to_check > 0 else 0.0
 
                     logging.info(f"  [Verification] Logged {len(entries)} examples, GT top-{num_to_check} available")
-                    logging.info(f"  [Verification] Overlap: {len(overlap)}/{num_to_check} ({overlap_ratio * 100:.1f}%)")
+                    logging.info(
+                        f"  [Verification] Overlap: {len(overlap)}/{num_to_check} ({overlap_ratio * 100:.1f}%)"
+                    )
 
                     if overlap_ratio >= 0.8:
                         logging.info("  [Verification] PASS ✓ - Hard example tracker working correctly!")
                     else:
-                        logging.warning(f"  [Verification] FAIL ✗ - Only {overlap_ratio * 100:.1f}% overlap with true top-K")
+                        logging.warning(
+                            f"  [Verification] FAIL ✗ - Only {overlap_ratio * 100:.1f}% overlap with true top-K"
+                        )
                         # Show what was missed
                         missed = true_top_k_indices - logged_indices
                         if missed and len(missed) <= 3:
@@ -699,16 +705,16 @@ def main():
         hard_example_log_interval=args.hard_example_log_interval,
     )
 
-    try:
-        mock_training_loop(config)
-    except KeyboardInterrupt:
-        logging.info("\nTraining interrupted by user")
-    except Exception as e:
-        logging.error(f"Training failed with error: {e}")
-        import traceback
+    # try:
+    mock_training_loop(config)
+    # except KeyboardInterrupt:
+    # logging.info("\nTraining interrupted by user")
+    # except Exception as e:
+    #     logging.error(f"Training failed with error: {e}")
+    #     import traceback
 
-        traceback.print_exc()
-        sys.exit(1)
+    #     traceback.print_exc()
+    #     sys.exit(1)
 
 
 if __name__ == "__main__":
