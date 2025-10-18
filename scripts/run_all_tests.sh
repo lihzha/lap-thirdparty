@@ -24,7 +24,7 @@ cd "$(dirname "$0")/.."
 echo "================================================================================"
 echo "TEST 1: Hard Examples Integration (Quick)"
 echo "================================================================================"
-if python scripts/test_hard_examples_integration.py --steps 50 --batch_size 16; then
+if uv run scripts/test_hard_examples_integration.py --steps 50 --batch_size 16; then
     echo -e "${GREEN}✓ TEST 1 PASSED${NC}"
     TEST1_RESULT="PASS"
 else
@@ -37,7 +37,7 @@ echo ""
 echo "================================================================================"
 echo "TEST 2: Hard Examples Integration (Stress Test)"
 echo "================================================================================"
-if python scripts/test_hard_examples_integration.py --steps 200 --batch_size 32 --buffer_size 100; then
+if uv run scripts/test_hard_examples_integration.py --steps 200 --batch_size 32 --buffer_size 100; then
     echo -e "${GREEN}✓ TEST 2 PASSED${NC}"
     TEST2_RESULT="PASS"
 else
@@ -50,7 +50,7 @@ echo ""
 echo "================================================================================"
 echo "TEST 3: Mock Training (Short)"
 echo "================================================================================"
-if python scripts/test_training_mock.py --num_train_steps 50 --log_interval 10; then
+if uv run scripts/test_training_mock.py --num_train_steps 50 --log_interval 10; then
     echo -e "${GREEN}✓ TEST 3 PASSED${NC}"
     TEST3_RESULT="PASS"
 else
@@ -63,7 +63,7 @@ echo ""
 echo "================================================================================"
 echo "TEST 4: Mock Training (Longer with Hard Examples)"
 echo "================================================================================"
-if python scripts/test_training_mock.py \
+if uv run scripts/test_training_mock.py \
     --num_train_steps 150 \
     --log_interval 10 \
     --hard_example_log_interval 50 \
