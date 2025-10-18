@@ -93,9 +93,9 @@ def get_dataset_statistics(
     Currently, the statistics include the min/max/mean/std of the actions and proprio as well as the number of
     transitions and trajectories in the dataset.
     """
-    metadata, output_dir, _ = check_dataset_statistics(save_dir)
-    if metadata is not None:
-        return metadata
+    # metadata, output_dir, _ = check_dataset_statistics(save_dir)
+    # if metadata is not None:
+    #     return metadata
 
     # dataset = dataset.traj_map(
     #     lambda traj: {
@@ -316,7 +316,7 @@ def get_dataset_statistics(
     }
 
     if jax.process_index() == 0:
-        logging.info(f"Dataset statistics computed:")
+        logging.info("Dataset statistics computed:")
         logging.info(f"  Total transitions: {a_n}, trajectories: {traj_n}")
         logging.info(f"  Actions ({len(a_mean)} dims):")
         logging.info(f"    min: {a_min}")
