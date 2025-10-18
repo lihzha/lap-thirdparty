@@ -395,6 +395,8 @@ class SingleCoTDataset:
             ds_name = "fmb:1.0.0"
         if ds_name == "dobbe":
             ds_name = "dobbe:0.0.1"
+        if ds_name == "bc_z":
+            ds_name = "bc_z:1.0.1"
         return tfds.builder(ds_name, data_dir=data_dir)
 
     def build_dataset(self, builder):
@@ -942,7 +944,7 @@ class DroidCoTDataset(SingleCoTDataset):
                         seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)],
                         minval=0,
                         maxval=num_instructions,
-                        dtype=tf.int32
+                        dtype=tf.int32,
                     )
                     return tf.gather(parsed_instructions, random_idx)
 
@@ -971,8 +973,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 # # Randomly samples one of the two exterior images in DROID during training (we only train with one at a time).
                 # # Note: the "left" refers to the left camera in the stereo pair, we only train on the left camera.
                 random_val = tf.random.stateless_uniform(
-                    shape=[],
-                    seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
+                    shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
                 )
                 exterior_img = tf.cond(
                     random_val > 0.5,
@@ -1853,7 +1854,9 @@ class OXECoTDatasets:
                 state_local_mean = np.pad(
                     stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
                 )
-                state_local_std = np.pad(stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant", constant_values=1.0)
+                state_local_std = np.pad(
+                    stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant", constant_values=1.0
+                )
 
                 # var_i + (mean_i - global_mean)^2
                 state_local_var = np.square(state_local_std)

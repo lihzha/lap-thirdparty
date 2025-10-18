@@ -5,11 +5,11 @@
 
 # Define all datasets from the mixture (in order as they appear)
 DATASETS=(
-    "kuka"
-    "bc_z"
-    "droid"
-    "fractal20220817_data"
-    "bridge_v2_oxe"
+    # "kuka"
+    # "bc_z"
+    # "droid"
+    # "fractal20220817_data"
+    # "bridge_v2_oxe"
     "taco_play"
     "jaco_play"
     "furniture_bench_dataset_converted_externally_to_rlds"
