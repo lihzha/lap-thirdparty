@@ -6,17 +6,21 @@ This script tests the training loop with:
 - Fake loss calculation (deterministic with some high-loss samples for testing hard example tracking)
 - Real training infrastructure (optimizer, checkpointing, logging, hard example tracking)
 
-Hard Example Tracking:
+Hard Example Tracking & Verification:
 - Every step: Accumulates per-sample losses and adds qualifying examples to buffer
 - At log intervals: Prepares payload with top-K hardest examples
-- Multi-host ready: Supports gathering hard examples across all hosts
+- Multi-host ready: Supports gathering hard examples across all hosts via jax.distributed
 - Buffer maintains top-50 hardest examples (configurable) with images
+- VERIFICATION: Compares logged examples against ground truth losses to verify correctness
+  - Tracks all ground truth (step, global_idx, loss) tuples during interval
+  - After logging, gathers ground truth from all hosts and compares with logged examples
+  - Reports overlap ratio (should be >80% for PASS)
 
 Usage:
     # Single host
     python scripts/test_training_mock.py --num_train_steps 100 --log_interval 10
 
-    # Multi-host simulation (if on TPU/multi-GPU)
+    # Multi-host simulation (requires JAX distributed setup)
     python scripts/test_training_mock.py --num_train_steps 100 --fsdp_devices 2
 
     # Adjust hard example tracking
@@ -416,7 +420,21 @@ def mock_training_loop(config: MockTrainConfig):
     logging.info(f"  Log interval: {config.log_interval}")
     logging.info(f"  Track hard examples: {config.track_hard_examples}")
     logging.info(f"  Checkpoint dir: {config.checkpoint_dir}")
+    logging.info(f"  FSDP devices: {config.fsdp_devices}")
     logging.info("=" * 80)
+
+    # Initialize JAX distributed if needed for multi-host
+    if config.fsdp_devices > 1:
+        logging.info("Initializing JAX distributed for multi-host...")
+        try:
+            jax.distributed.initialize()
+            logging.info(f"JAX distributed initialized: process {jax.process_index()}/{jax.process_count()}")
+        except Exception as e:
+            logging.warning(f"JAX distributed initialization failed (running single-host): {e}")
+
+    process_count = jax.process_count()
+    process_idx = jax.process_index()
+    logging.info(f"Process {process_idx}/{process_count} on {jax.local_device_count()} local devices")
 
     # Initialize RNG
     rng = jax.random.key(config.seed)
@@ -468,6 +486,10 @@ def mock_training_loop(config: MockTrainConfig):
     logging.info("")
     start_step = int(train_state.step)
 
+    # Ground truth loss tracking for verification
+    # Track all (step, global_idx, loss) tuples in the interval
+    ground_truth_losses: list[tuple[int, int, float]] = []
+
     for step in range(start_step, config.num_train_steps):
         # Get batch
         batch = next(data_iter)
@@ -478,6 +500,14 @@ def mock_training_loop(config: MockTrainConfig):
         # Convert info to numpy for logging
         info_np = jax.device_get(info)
         per_sample_loss = info_np["per_sample_loss"]
+
+        # Track ground truth losses for verification
+        if hard_example_tracker is not None:
+            # Record ground truth losses with their global indices
+            global_idx_base = step * config.batch_size + process_idx * len(per_sample_loss)
+            for local_idx, loss_val in enumerate(per_sample_loss):
+                global_idx = global_idx_base + local_idx
+                ground_truth_losses.append((step, global_idx, float(loss_val)))
 
         # Track hard examples - update every step
         if hard_example_tracker is not None:
@@ -492,8 +522,8 @@ def mock_training_loop(config: MockTrainConfig):
                 step_idx=step,
                 host_batch_local=host_batch,
                 local_losses=per_sample_loss,
-                global_idx_base=step * config.batch_size,  # Global index offset
-                process_idx=jax.process_index(),
+                global_idx_base=step * config.batch_size + process_idx * len(per_sample_loss),
+                process_idx=process_idx,
             )
 
         # Logging
@@ -543,9 +573,64 @@ def mock_training_loop(config: MockTrainConfig):
                     else:
                         logging.info("  [Mock] Payload structure verified ✓")
 
+                # VERIFICATION: Compare logged losses with ground truth
+                # This verifies that the hard example tracker correctly identifies the highest-loss samples
+                # by comparing the logged examples against all ground truth losses from the interval
+                if ground_truth_losses and entries:
+                    logging.info("  [Verification] Comparing logged losses with ground truth...")
+
+                    # Gather ground truth losses from all hosts (for multi-host testing)
+                    if process_count > 1:
+                        # Convert to numpy array for gathering
+                        local_gt = np.array(ground_truth_losses, dtype=[("step", "i4"), ("gidx", "i4"), ("loss", "f4")])
+                        try:
+                            from jax.experimental import multihost_utils as mh
+
+                            gathered = mh.process_allgather(local_gt, tiled=False)
+                            all_gt_losses = []
+                            for host_data in gathered:
+                                host_data = np.asarray(host_data)
+                                for record in host_data:
+                                    all_gt_losses.append((int(record["step"]), int(record["gidx"]), float(record["loss"])))
+                        except Exception as e:
+                            logging.warning(f"  [Verification] Multi-host gather failed: {e}, using local only")
+                            all_gt_losses = ground_truth_losses
+                    else:
+                        all_gt_losses = ground_truth_losses
+
+                    # Sort by loss descending to find true top-K
+                    all_gt_losses_sorted = sorted(all_gt_losses, key=lambda x: x[2], reverse=True)
+                    num_to_check = min(len(entries), len(all_gt_losses_sorted))
+
+                    # Get logged losses
+                    logged_losses = {entry["global_idx"]: entry["loss"] for entry in entries}
+
+                    # Check if logged entries are in the true top-K
+                    true_top_k_indices = {x[1] for x in all_gt_losses_sorted[:num_to_check]}
+                    logged_indices = set(logged_losses.keys())
+
+                    # Calculate overlap
+                    overlap = logged_indices & true_top_k_indices
+                    overlap_ratio = len(overlap) / num_to_check if num_to_check > 0 else 0.0
+
+                    logging.info(f"  [Verification] Logged {len(entries)} examples, GT top-{num_to_check} available")
+                    logging.info(f"  [Verification] Overlap: {len(overlap)}/{num_to_check} ({overlap_ratio * 100:.1f}%)")
+
+                    if overlap_ratio >= 0.8:
+                        logging.info("  [Verification] PASS ✓ - Hard example tracker working correctly!")
+                    else:
+                        logging.warning(f"  [Verification] FAIL ✗ - Only {overlap_ratio * 100:.1f}% overlap with true top-K")
+                        # Show what was missed
+                        missed = true_top_k_indices - logged_indices
+                        if missed and len(missed) <= 3:
+                            logging.warning(f"  [Verification] Missed indices: {sorted(list(missed))[:3]}")
+
                 # If wandb was enabled, this would log to wandb via log_hard_examples_payload
                 # vis_tools.log_hard_examples_payload(payload)  # Commented out since wandb is disabled
                 logging.info(f"  [Mock] Would log {len(entries)} hard examples to wandb")
+
+                # Reset ground truth losses for next interval
+                ground_truth_losses.clear()
 
         # Checkpointing
         if step % config.save_interval == 0 and step > 0:
@@ -560,8 +645,15 @@ def mock_training_loop(config: MockTrainConfig):
 
     # Final statistics
     if hard_example_tracker is not None:
-        logging.info(f"Hard example buffer size: {len(hard_example_tracker._hard_example_buffer)}")
-        logging.info(f"Hard example keys tracked: {len(hard_example_tracker._hard_example_keys)}")
+        logging.info("Hard example tracker statistics:")
+        logging.info(f"  Final buffer size: {len(hard_example_tracker._hard_example_buffer)}")
+        logging.info(f"  Total unique keys tracked: {len(hard_example_tracker._hard_example_keys)}")
+        if hard_example_tracker._hard_example_buffer:
+            losses = [e["loss"] for e in hard_example_tracker._hard_example_buffer]
+            logging.info(f"  Buffer loss range: [{min(losses):.4f}, {max(losses):.4f}]")
+
+    logging.info("")
+    logging.info("Test completed successfully!")
 
 
 # ============================================================================
