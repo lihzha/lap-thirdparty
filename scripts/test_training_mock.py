@@ -119,7 +119,7 @@ class MockDataset:
                                       dtype=np.uint8)
             # Normalize to [-1, 1]
             images[cam_name] = (img_uint8.astype(np.float32) / 127.5) - 1.0
-            image_masks[cam_name] = np.ones((self.batch_size, 1), dtype=bool)
+            image_masks[cam_name] = np.ones(self.batch_size, dtype=bool)
 
         # Generate mock tokenized sequences
         tokenized_prompt = rng.integers(0, 32000,
