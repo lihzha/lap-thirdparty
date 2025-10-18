@@ -43,12 +43,12 @@ def create_batch_with_missing_images(batch_size: int = 16):
             # Normal image
             if "primary" not in images:
                 images["primary"] = []
-            images["primary"].append(rng.integers(0, 256, (1, 224, 224, 3), dtype=np.uint8))
+            images["primary"].append(rng.integers(0, 256, (1, 224, 224, 3), dtype=np.float32))
         else:
             # Corrupted/missing - will cause extraction to fail
             if "primary" not in images:
                 images["primary"] = []
-            images["primary"].append(rng.integers(0, 256, (1, 1, 1, 3), dtype=np.uint8))  # Too small!
+            images["primary"].append(rng.integers(0, 256, (1, 1, 1, 3), dtype=np.float32))  # Too small!
 
     images["primary"] = np.stack(images["primary"])
 
@@ -192,7 +192,7 @@ def verify_no_duplicate_losses():
     print(f"  Sample: {losses[:5]}")
 
     # Simple batch (all good images)
-    images = {"primary": rng.integers(0, 256, (32, 1, 224, 224, 3), dtype=np.uint8)}
+    images = {"primary": rng.integers(0, 256, (32, 1, 224, 224, 3), dtype=np.float32)}
     obs = CoTObservation(
         images=images,
         image_masks={"primary": np.ones((32, 1), dtype=bool)},
