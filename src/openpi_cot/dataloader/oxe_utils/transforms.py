@@ -1366,7 +1366,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), tf.clip_by_value(trajectory["observation"]["state"][:, 7:8]) / 0.079, 0, 1),
+        (matrix_to_xyzrpy(state_matrix), tf.clip_by_value(trajectory["observation"]["state"][:, 7:8] / 0.079, 0, 1)),
         axis=-1,
     )
 
