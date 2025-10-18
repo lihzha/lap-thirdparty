@@ -865,7 +865,7 @@ def droid_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         [padded_movement_actions, tf.clip_by_value(gripper_actions[:, -1:], 0, 1)],
         axis=1,
     )
-    trajectory["action"] = tf.concat((action, tf.zeros_like))
+    trajectory["action"] = action
     # traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
     # traj_truncated["action"] = tf.concat([movement_actions, tf.clip_by_value(gripper_actions[1:, -1:], 0, 1)], axis=1)
 
