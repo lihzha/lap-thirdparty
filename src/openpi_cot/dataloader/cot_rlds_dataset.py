@@ -592,11 +592,7 @@ class _SingleCoTDataset:
             # )
             # future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
 
-            future_indices = compute_window_indices(traj_len, summation_steps)
-            # Derive prediction language actions from raw_action, similar to language_actions
-            # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps
-            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
-            future_indices = future_indices[:, :trimmed_len]
+            future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + self.control_frequency, traj_len - 1)
 
             # Stack current and future images (primary only)
             current_imgs = traj["observation"][self.spec.primary_image_key]

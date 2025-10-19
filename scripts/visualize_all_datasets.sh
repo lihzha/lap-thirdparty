@@ -49,7 +49,7 @@ for DATASET in "${DATASETS[@]}"; do
     echo "Started at: $(date)" | tee -a "$LOG_FILE"
 
     # Run the visualization command
-    tpu v4 "source ~/.zshrc && cd openpi-cot && git pull origin main && uv run --group tpu scripts/vis_oxe_dataset.py pi_combined_cot_v4 --exp-name=vis_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=4000 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --data.language_action_config_name=default --model.prompt_format=pi05" 2>&1 | tee -a "$LOG_FILE"
+    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout main && git branch -D debug && git fetch origin && git checkout debug && git pull origin debug && uv run --group tpu scripts/vis_oxe_dataset.py pi_combined_cot_v4 --exp-name=vis_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=4000 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --data.language_action_config_name=default --model.prompt_format=pi05" 2>&1 | tee -a "$LOG_FILE"
 
     EXIT_CODE=${PIPESTATUS[0]}
 
