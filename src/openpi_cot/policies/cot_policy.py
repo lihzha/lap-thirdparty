@@ -372,8 +372,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 "Prediction training enabled in policy but no prediction language action found in data."
             )
 
-        breakpoint()
-
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):
             if k in data["observation"]:
