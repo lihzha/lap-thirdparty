@@ -40,7 +40,6 @@ class TigerInputs(transforms.DataTransformFn):
 
         base_image = parse_image(data["image"])
         wrist_image = parse_image(data["wrist_image"])
-        print(base_image.shape, wrist_image.shape)
 
         # Pi0 models support three image inputs: one third-person view and two wrist views
         # Tiger has base and wrist, so we use zeros for the second wrist camera
@@ -57,7 +56,6 @@ class TigerInputs(transforms.DataTransformFn):
             "image": {IMAGE_KEYS[i]: image[i] for i in range(2)},
             "image_mask": {IMAGE_KEYS[i]: image_mask[i] for i in range(2)},
         }
-        print(inputs["image"].keys())
 
         # Actions are only available during training
         if "actions" in data:
