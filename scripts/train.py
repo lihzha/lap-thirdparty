@@ -539,24 +539,24 @@ def main(config: _config.TrainConfig):
         persistent_iterator=True,
     )
 
-    # Initialize hard example tracker for logging difficult samples
-    hard_example_tracker = vis_tools.HardExampleTracker(
-        tokenizer=data_loader.tokenizer,
-        max_hard_examples=50,
-        buffer_ratio=0.1,  # Maintain buffer of top candidates
-        resize_hw=(128, 128),
-    )
-
     try:
         tok = data_loader.tokenizer
     except:
         tok = PaligemmaCoTTokenizer(max_len=200)
 
+    # Initialize hard example tracker for logging difficult samples
+    hard_example_tracker = vis_tools.HardExampleTracker(
+        tokenizer=tok,
+        max_hard_examples=50,
+        buffer_ratio=0.1,  # Maintain buffer of top candidates
+        resize_hw=(128, 128),
+    )
+
     # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
     data_iter = iter(data_loader)
     log_mem("Before getting batch")
     batch = next(data_iter)
-    vis_batch(batch, tok=tok)
+    # vis_batch(batch, tok=tok)
 
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
@@ -636,7 +636,7 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    # host_batch_cache = HostBatchCache()
+    host_batch_cache = HostBatchCache()
 
     for step in pbar:
         with sharding.set_mesh(mesh):
