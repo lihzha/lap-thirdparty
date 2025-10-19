@@ -274,8 +274,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             prompt_str = prompt
         else:
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
+
+        if "r1_lite" in data["dataset_name"].decode():
+            prompt_str = prompt_str.split("@")[-1]
+
         inputs["prompt"] = prompt_str
-        breakpoint()
 
         # Extract state_type if available
         # state_type = data.get("state_type")
