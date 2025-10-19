@@ -7,115 +7,97 @@ austin_buds_dataset_converted_externally_to_rlds_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       34,049
+  Num Transitions:       34,062
   Num Trajectories:      50
-  Avg Trajectory Length: 681.0
+  Avg Trajectory Length: 681.2
 
 
 austin_sailor_dataset_converted_externally_to_rlds_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       351,020
+  Num Transitions:       352,854
   Num Trajectories:      240
-  Avg Trajectory Length: 1462.6
+  Avg Trajectory Length: 1470.2
 
 
 austin_sirius_dataset_converted_externally_to_rlds_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       280,728
+  Num Transitions:       279,380
   Num Trajectories:      559
-  Avg Trajectory Length: 502.2
-
-
-bc_z_0.1.0
-----------------------------------------------------------------------------------------------------
-  State Dimensions:      7
-  Action Dimensions:     7
-  Num Transitions:       5,977,339
-  Num Trajectories:      43,264
-  Avg Trajectory Length: 138.2
+  Avg Trajectory Length: 499.8
 
 
 berkeley_autolab_ur5_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       96,997
+  Num Transitions:       96,939
   Num Trajectories:      1,000
-  Avg Trajectory Length: 97.0
+  Avg Trajectory Length: 96.9
 
 
 berkeley_fanuc_manipulation_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       61,279
+  Num Transitions:       62,613
   Num Trajectories:      415
-  Avg Trajectory Length: 147.7
+  Avg Trajectory Length: 150.9
 
 
 bridge_v2_oxe_1.0.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       2,133,891
+  Num Transitions:       2,135,463
   Num Trajectories:      60,064
-  Avg Trajectory Length: 35.5
+  Avg Trajectory Length: 35.6
 
 
 cmu_stretch_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       24,957
+  Num Transitions:       24,881
   Num Trajectories:      135
-  Avg Trajectory Length: 184.9
+  Avg Trajectory Length: 184.3
 
 
 dlr_edan_shared_control_converted_externally_to_rlds_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       8,862
+  Num Transitions:       8,824
   Num Trajectories:      104
-  Avg Trajectory Length: 85.2
+  Avg Trajectory Length: 84.8
 
 
 dobbe_0.0.1
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       1,133,438
+  Num Transitions:       1,134,703
   Num Trajectories:      5,208
-  Avg Trajectory Length: 217.6
-
-
-droid_1.0.1
-----------------------------------------------------------------------------------------------------
-  State Dimensions:      7
-  Action Dimensions:     7
-  Num Transitions:       27,667,646
-  Num Trajectories:      95,658
-  Avg Trajectory Length: 289.2
+  Avg Trajectory Length: 217.9
 
 
 fmb_1.0.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       1,126,294
+  Num Transitions:       1,128,847
   Num Trajectories:      8,612
-  Avg Trajectory Length: 130.8
+  Avg Trajectory Length: 131.1
 
 
 fractal20220817_data_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       3,698,857
+  Num Transitions:       3,699,188
   Num Trajectories:      87,212
   Avg Trajectory Length: 42.4
 
@@ -124,25 +106,25 @@ furniture_bench_dataset_converted_externally_to_rlds_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       3,941,428
+  Num Transitions:       3,942,957
   Num Trajectories:      5,100
-  Avg Trajectory Length: 772.8
+  Avg Trajectory Length: 773.1
 
 
 jaco_play_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       77,285
+  Num Transitions:       76,880
   Num Trajectories:      1,085
-  Avg Trajectory Length: 71.2
+  Avg Trajectory Length: 70.9
 
 
 kuka_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       2,245,488
+  Num Transitions:       2,245,999
   Num Trajectories:      209,880
   Avg Trajectory Length: 10.7
 
@@ -160,9 +142,9 @@ roboturk_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      0
   Action Dimensions:     7
-  Num Transitions:       187,687
+  Num Transitions:       187,507
   Num Trajectories:      1,995
-  Avg Trajectory Length: 94.1
+  Avg Trajectory Length: 94.0
 
 
 taco_play_0.1.0
@@ -178,16 +160,16 @@ utaustin_mutex_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       362,081
+  Num Transitions:       360,383
   Num Trajectories:      1,500
-  Avg Trajectory Length: 241.4
+  Avg Trajectory Length: 240.3
 
 
 viola_0.1.0
 ----------------------------------------------------------------------------------------------------
   State Dimensions:      7
   Action Dimensions:     7
-  Num Transitions:       75,797
+  Num Transitions:       76,174
   Num Trajectories:      150
-  Avg Trajectory Length: 505.3
+  Avg Trajectory Length: 507.8
 

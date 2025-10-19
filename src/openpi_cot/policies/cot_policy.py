@@ -275,6 +275,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         else:
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
         inputs["prompt"] = prompt_str
+        breakpoint()
 
         # Extract state_type if available
         # state_type = data.get("state_type")
@@ -353,6 +354,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         else:
             # If no language actions, default to active sample
             inputs["sample_mask"] = True
+
+        breakpoint()
 
         # Additionally prepare prediction if available (independent of regular reasoning)
         if "prediction_language_action" in data:
@@ -708,6 +711,5 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # Store parsed actions separately for inspection
         data["parsed_actions"] = parsed_actions
-
 
         return {"actions": parsed_actions, "reasoning": reasoning}
