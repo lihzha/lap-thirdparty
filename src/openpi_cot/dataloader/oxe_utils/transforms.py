@@ -1727,9 +1727,9 @@ def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     traj_truncated["action"] = tf.concat(
         [
             left_movement,
-            trajectory["action"][:-1, 6:7],  # left gripper
+            trajectory["action"][:-1, 6:7] / 100,  # left gripper
             right_movement,
-            trajectory["action"][:-1, 13:14],  # right gripper
+            trajectory["action"][:-1, 13:14] / 100,  # right gripper
         ],
         axis=1,
     )

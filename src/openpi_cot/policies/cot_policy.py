@@ -274,6 +274,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             prompt_str = prompt
         else:
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
+
+        if "r1_lite" in data["dataset_name"].decode():
+            prompt_str = prompt_str.split("@")[-1]
+
         inputs["prompt"] = prompt_str
 
         # Extract state_type if available
@@ -708,6 +712,5 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # Store parsed actions separately for inspection
         data["parsed_actions"] = parsed_actions
-
 
         return {"actions": parsed_actions, "reasoning": reasoning}

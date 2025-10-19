@@ -34,16 +34,14 @@ import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.weight_loaders as _weight_loaders
 
 
-def vis_batch(batch, tok=None, save_dir="debug_vis"):
+def vis_batch(batch, tok=None, step=None):
     """Visualize a training batch for debugging purposes.
 
     Args:
         batch: Tuple of (observation, actions)
         tok: Tokenizer for decoding tokenized prompts (optional)
-        save_dir: Directory to save sample images (default: "debug_vis")
+        step: Training step number for wandb logging (optional)
     """
-    from PIL import Image
-
     obs = batch[0]
     actions = batch[1]
 
@@ -51,16 +49,15 @@ def vis_batch(batch, tok=None, save_dir="debug_vis"):
     logging.info("BATCH VISUALIZATION")
     logging.info("=" * 80)
 
-    # Create save directory if it doesn't exist
-    os.makedirs(save_dir, exist_ok=True)
-
-    # 1. Visualize images: print shape and save sample images
+    # 1. Visualize images: print shape and log to wandb
     logging.info("\n--- IMAGES ---")
+    wandb_images = {}
     for key, img in obs.images.items():
         logging.info(f"{key}: shape={img.shape}, dtype={img.dtype}, min={img.min():.3f}, max={img.max():.3f}")
 
         num_samples = img.shape[0]
-        for t in range(min(num_samples, 4)):  # Save up to 4 samples
+        sample_images = []
+        for t in range(min(num_samples, 4)):  # Log up to 4 samples
             sample_img = img[t]  # [H, W, C]
 
             # Convert from [-1, 1] to [0, 255]
@@ -69,13 +66,15 @@ def vis_batch(batch, tok=None, save_dir="debug_vis"):
             # Convert to numpy if it's a JAX array
             sample_img_uint8 = np.asarray(sample_img_uint8)
 
-            # Save image
-            save_path = os.path.join(save_dir, f"{key}_t{t}.png")
-            Image.fromarray(sample_img_uint8).save(save_path)
+            # Add to wandb images list
+            sample_images.append(wandb.Image(sample_img_uint8, caption=f"{key}_t{t}"))
             logging.info(
-                f"  Saved image [{key}] timestep {t} to {save_path} "
+                f"  Prepared image [{key}] timestep {t} for wandb "
                 f"(range: [{sample_img_uint8.min()}, {sample_img_uint8.max()}])"
             )
+
+        if sample_images:
+            wandb_images[f"batch_vis/{key}"] = sample_images
 
     # 2. Visualize image_masks: print shape
     logging.info("\n--- IMAGE MASKS ---")
@@ -144,6 +143,11 @@ def vis_batch(batch, tok=None, save_dir="debug_vis"):
             )
 
     logging.info("=" * 80)
+
+    # Log images to wandb
+    if wandb_images and jax.process_index() == 0:
+        wandb.log(wandb_images, step=step)
+        logging.info(f"Logged {len(wandb_images)} image groups to wandb")
 
 
 def log_mem(msg: str):

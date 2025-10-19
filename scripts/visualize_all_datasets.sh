@@ -17,16 +17,16 @@ DATASETS=(
     # "berkeley_fanuc_manipulation"
     # "cmu_stretch"
     # "fmb"
-    "dobbe"
-    "berkeley_autolab_ur5"
-    "dlr_edan_shared_control_converted_externally_to_rlds"
-    "roboturk"
-    "austin_buds_dataset_converted_externally_to_rlds"
-    "austin_sailor_dataset_converted_externally_to_rlds"
-    "austin_sirius_dataset_converted_externally_to_rlds"
-    "viola"
-    "molmoact_dataset"
-    "agibot_large_dataset"
+    # "dobbe"
+    # "berkeley_autolab_ur5"
+    # "dlr_edan_shared_control_converted_externally_to_rlds"
+    # "roboturk"
+    # "austin_buds_dataset_converted_externally_to_rlds"
+    # "austin_sailor_dataset_converted_externally_to_rlds"
+    # "austin_sirius_dataset_converted_externally_to_rlds"
+    # "viola"
+    # "molmoact_dataset"
+    # "agibot_large_dataset"
     "sample_r1_lite"
 )
 
@@ -49,7 +49,7 @@ for DATASET in "${DATASETS[@]}"; do
     echo "Started at: $(date)" | tee -a "$LOG_FILE"
 
     # Run the visualization command
-    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout main && git pull origin main && uv run --group tpu scripts/vis_oxe_dataset.py pi_combined_cot_v4 --exp-name=vis_dataset_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=4000 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --data.force_recompute_stats --data.language_action_config_name=default --model.prompt_format=pi05" 2>&1 | tee -a "$LOG_FILE"
+    tpu v4 "source ~/.zshrc && cd openpi-cot && git checkout debug && git pull origin debug && uv run --group tpu scripts/vis_oxe_dataset.py pi_combined_cot_v4 --exp-name=vis_dataset_${DATASET} --fsdp-devices=4 --batch-size=16 --data.shuffle-buffer-size=4000 --model.max-token-len=180 --model.enable-prediction-training --data.no-use-json-actions --data.data-mix=${DATASET} --data.force_recompute_stats --data.language_action_config_name=default --model.prompt_format=pi05" 2>&1 | tee -a "$LOG_FILE"
 
     EXIT_CODE=${PIPESTATUS[0]}
 

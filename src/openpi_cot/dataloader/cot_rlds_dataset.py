@@ -1503,8 +1503,8 @@ class _SampleR1LiteCoTDataset(_SingleOXECoTDataset):
 
             # Get gripper states from original action (last dimension for each arm)
             # Truncate to match EEF pose length
-            left_gripper = traj["observation"]["gripper_state_left"]
-            right_gripper = traj["observation"]["gripper_state_right"]
+            left_gripper = traj["observation"]["gripper_state_left"] / 100
+            right_gripper = traj["observation"]["gripper_state_right"] / 100
 
             # Construct full state: [left_eef_pose(6), left_gripper(1), right_eef_pose(6), right_gripper(1)]
             traj["observation"]["state"] = tf.concat([left_poses, left_gripper, right_poses, right_gripper], axis=-1)
