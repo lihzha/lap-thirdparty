@@ -16,3 +16,9 @@ videos/
 *.log
 norm_stats/
 norm_stats_visualizations/
+all_data/
+*.npz
+assets/
+logs/
+
+debug_vis/

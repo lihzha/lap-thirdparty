@@ -127,7 +127,7 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         # Get the underlying TensorFlow dataset if available
         # For RLDS datasets (DroidCoTDataset, OXECoTDatasets), they have a .dataset attribute
         # that contains the actual tf.data.Dataset
-        if hasattr(self._dataset, 'dataset'):
+        if hasattr(self._dataset, "dataset"):
             tf_dataset = self._dataset.dataset
         elif isinstance(self._dataset, tf.data.Dataset):
             tf_dataset = self._dataset
@@ -325,11 +325,19 @@ def create_data_loader(
         # 2) transforms (split-aware)
         tx = _make_iterable_transforms(data_cfg, skip_norm_stats=data_cfg.norm_stats is None, split=split)
         iterable = IterableTransformedDataset(
-            max(1, config.batch_size // jax.process_count()), ds, tx, is_batched=True, persistent_iterator=persistent_iterator
+            max(1, config.batch_size // jax.process_count()),
+            ds,
+            tx,
+            is_batched=True,
+            persistent_iterator=persistent_iterator,
         )
 
         return CoTRLDSDataLoader(
-            iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg, persistent_iterator=persistent_iterator
+            iterable,
+            sharding=sharding,
+            num_batches=num_batches,
+            data_cfg=data_cfg,
+            persistent_iterator=persistent_iterator,
         )
 
     # Non-RLDS: delegate entirely to upstream (this will require torch if used)

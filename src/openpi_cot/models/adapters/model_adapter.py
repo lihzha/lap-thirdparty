@@ -117,6 +117,9 @@ def preprocess_observation(
     for key in image_keys:
         image = observation.images[key]
 
+        if len(image.shape) == 4:
+            image = image[:, None]
+
         b, t, h, w, c = image.shape
 
         # Resize if needed (before augmentation)
@@ -183,7 +186,7 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
-        tokenized_langact_mask=observation.tokenized_langact_mask,
+        tokenized_langact_mask=getattr(observation, "tokenized_langact_mask", None),
         crictical_token_mask=getattr(observation, "crictical_token_mask", None),
         sample_mask=getattr(observation, "sample_mask", None),
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),

@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from openpi.models import model as _model
+from openpi.models.model import Observation
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.optimizer as _optimizer
@@ -24,12 +25,125 @@ import wandb
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.weight_loaders as _weight_loaders
+
+
+def vis_batch(batch, tok=None, save_dir="debug_vis"):
+    """Visualize a training batch for debugging purposes.
+
+    Args:
+        batch: Tuple of (observation, actions)
+        tok: Tokenizer for decoding tokenized prompts (optional)
+        save_dir: Directory to save sample images (default: "debug_vis")
+    """
+    from PIL import Image
+
+    obs = batch[0]
+    actions = batch[1]
+
+    logging.info("=" * 80)
+    logging.info("BATCH VISUALIZATION")
+    logging.info("=" * 80)
+
+    # Create save directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 1. Visualize images: print shape and save sample images
+    logging.info("\n--- IMAGES ---")
+    for key, img in obs.images.items():
+        logging.info(f"{key}: shape={img.shape}, dtype={img.dtype}, min={img.min():.3f}, max={img.max():.3f}")
+
+        num_samples = img.shape[0]
+        for t in range(min(num_samples, 4)):  # Save up to 4 samples
+            sample_img = img[t]  # [H, W, C]
+
+            # Convert from [-1, 1] to [0, 255]
+            sample_img_uint8 = ((sample_img + 1.0) / 2.0 * 255.0).clip(0, 255).astype(np.uint8)
+
+            # Convert to numpy if it's a JAX array
+            sample_img_uint8 = np.asarray(sample_img_uint8)
+
+            # Save image
+            save_path = os.path.join(save_dir, f"{key}_t{t}.png")
+            Image.fromarray(sample_img_uint8).save(save_path)
+            logging.info(
+                f"  Saved image [{key}] timestep {t} to {save_path} "
+                f"(range: [{sample_img_uint8.min()}, {sample_img_uint8.max()}])"
+            )
+
+    # 2. Visualize image_masks: print shape
+    logging.info("\n--- IMAGE MASKS ---")
+    for key, mask in obs.image_masks.items():
+        logging.info(f"{key}: shape={mask.shape}, dtype={mask.dtype}, true_count={mask.sum()}/{mask.size}")
+
+    # 3. Visualize state: print shape and min/max for each dimension
+    logging.info("\n--- STATE ---")
+    state = obs.state
+    logging.info(f"state: shape={state.shape}, dtype={state.dtype}")
+    if len(state.shape) >= 2:
+        for dim_idx in range(state.shape[-1]):
+            dim_data = state[..., dim_idx]
+            logging.info(
+                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
+            )
+
+    # 4. Visualize tokenized_prompt with tokenizer
+    logging.info("\n--- TOKENIZED PROMPTS ---")
+    tokenized_prompt = obs.tokenized_prompt
+    tokenized_prompt_mask = obs.tokenized_prompt_mask
+    token_ar_mask = obs.token_ar_mask
+    token_loss_mask = obs.token_loss_mask
+    print(token_ar_mask, token_loss_mask)
+
+    logging.info(f"tokenized_prompt: shape={tokenized_prompt.shape}, dtype={tokenized_prompt.dtype}")
+    logging.info(f"tokenized_prompt_mask: shape={tokenized_prompt_mask.shape}, dtype={tokenized_prompt_mask.dtype}")
+    # logging.info(f"token_ar_mask: shape={token_ar_mask.shape}, dtype={token_ar_mask.dtype}")
+    # logging.info(f"token_loss_mask: shape={token_loss_mask.shape}, dtype={token_loss_mask.dtype}")
+
+    if tok is not None:
+        # Decode first sample in batch
+        sample_idx = 0
+        if tokenized_prompt.shape[0] > 0:
+            # Full tokenized prompt
+            tokens_full = tokenized_prompt[sample_idx]
+            decoded_full = tok.decode(tokens_full)
+            logging.info(f"\n[Sample {sample_idx}] Full tokenized_prompt:")
+            logging.info(f"  Decoded: {decoded_full[:500]}...")  # First 500 chars
+
+            # Tokenized prompt with prompt mask applied
+            tokens_masked = tokenized_prompt[sample_idx] * tokenized_prompt_mask[sample_idx]
+            decoded_masked = tok.decode(tokens_masked)
+            logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * tokenized_prompt_mask:")
+            logging.info(f"  Decoded: {decoded_masked[:500]}...")
+
+            # # Tokenized prompt with AR mask applied
+            # tokens_ar = tokenized_prompt[sample_idx] * token_ar_mask[sample_idx]
+            # decoded_ar = tok.decode(tokens_ar)
+            # logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * token_ar_mask:")
+            # logging.info(f"  Decoded: {decoded_ar[:500]}...")
+    else:
+        logging.info("  (Tokenizer not provided - skipping decode)")
+
+    # 5. Print token_loss_mask statistics
+    # logging.info(f"\ntoken_loss_mask: sum={token_loss_mask.sum()}, mean={token_loss_mask.mean():.4f}")
+
+    # 6. Visualize actions
+    logging.info("\n--- ACTIONS ---")
+    logging.info(f"actions: shape={actions.shape}, dtype={actions.dtype}")
+    if len(actions.shape) >= 2:
+        for dim_idx in range(actions.shape[-1]):
+            dim_data = actions[..., dim_idx]
+            logging.info(
+                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
+            )
+
+    logging.info("=" * 80)
 
 
 def log_mem(msg: str):
@@ -269,7 +383,7 @@ class TrainingStepRunner:
         self,
         rng: at.KeyArrayLike,
         state: training_utils.TrainState,
-        batch: tuple[CoTObservation, _model.Actions],
+        batch: tuple[CoTObservation | Observation, _model.Actions],
     ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
         model = nnx.merge(state.model_def, state.params)
         model.train()
@@ -278,7 +392,7 @@ class TrainingStepRunner:
         def loss_fn(
             model: _model.BaseModel,
             rng: at.KeyArrayLike,
-            observation: CoTObservation,
+            observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
             per_sample_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
@@ -349,7 +463,7 @@ class ValidationStepRunner:
         self,
         rng: at.KeyArrayLike,
         state: training_utils.TrainState,
-        batch: tuple[CoTObservation, _model.Actions],
+        batch: tuple[CoTObservation | Observation, _model.Actions],
     ) -> dict[str, at.Array]:
         model = nnx.merge(state.model_def, state.params)
         model.eval()
@@ -358,7 +472,7 @@ class ValidationStepRunner:
         def loss_fn(
             model: _model.BaseModel,
             rng: at.KeyArrayLike,
-            observation: CoTObservation,
+            observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
             val_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
@@ -368,8 +482,6 @@ class ValidationStepRunner:
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
-        if hasattr(model, "compute_eval_metrics"):
-            return model.compute_eval_metrics(eval_rng, observation, actions)
         loss, token_accuracy, critical_token_accuracy, val_metrics = loss_fn(model, eval_rng, observation, actions)
         result = {
             "val_loss": loss,
@@ -435,6 +547,21 @@ def main(config: _config.TrainConfig):
         resize_hw=(128, 128),
     )
 
+    try:
+        tok = data_loader.tokenizer
+    except:
+        tok = PaligemmaCoTTokenizer(max_len=200)
+
+    # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
+    data_iter = iter(data_loader)
+    log_mem("Before getting batch")
+    batch = next(data_iter)
+    vis_batch(batch, tok=tok)
+
+    log_mem("After getting batch")
+    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
+    sharding.log_batch_sharding(batch)
+
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
 
@@ -447,15 +574,6 @@ def main(config: _config.TrainConfig):
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
 
-    # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
-    data_iter = iter(data_loader)
-    log_mem("Before getting batch")
-    batch = next(data_iter)
-
-    log_mem("After getting batch")
-    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
-    sharding.log_batch_sharding(batch)
-
     train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
         train_runner,
@@ -465,13 +583,17 @@ def main(config: _config.TrainConfig):
     )
 
     if config.do_val:
+        dataset = getattr(data_loader, "dataset", None)
+        hash_tables = None
+        if dataset:
+            hash_tables = dataset.hash_tables
         val_loader = _data_loader.create_data_loader(
             config,
             sharding=data_sharding,
             shuffle=False,
             split="val",
             max_samples=getattr(config.data, "val_max_samples", None),
-            hash_tables=data_loader.dataset.hash_tables,
+            hash_tables=hash_tables,
             persistent_iterator=False,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
@@ -514,7 +636,7 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    host_batch_cache = HostBatchCache()
+    # host_batch_cache = HostBatchCache()
 
     for step in pbar:
         with sharding.set_mesh(mesh):
@@ -566,13 +688,13 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
-                host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-                vis_tools.log_random_examples(
-                    step,
-                    host_batch_local,
-                    data_loader.tokenizer,
-                    local_batch_size=local_size,
-                )
+                # host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+                # vis_tools.log_random_examples(
+                #     step,
+                #     host_batch_local,
+                #     tok,
+                #     local_batch_size=local_size,
+                # )
 
             # Log hard examples from the interval (multi-host gathering happens inside)
             payload = hard_example_tracker.log_if_ready(step)

@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 from openpi.models.gemma import get_config as get_gemma_config
 import openpi.models.model as _model
+from openpi.models.model import Observation
 import openpi.models.pi0 as _pi0
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
@@ -78,6 +79,7 @@ class PiCoT(_pi0.Pi0):
     EOS_ID = 1  # TODO: hard-coded for PaliGemma
 
     def __init__(self, config: _pi_cot_config.PiCoTConfig, rngs: nnx.Rngs):
+        _model.BaseModel.__init__(self, config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
         self.aug_wrist_image = config.aug_wrist_image
         # Loss/control knobs
@@ -133,7 +135,7 @@ class PiCoT(_pi0.Pi0):
         self.deterministic = True
 
     def _embed_images(
-        self, obs: CoTObservation, num_frames: int | None = None
+        self, obs: CoTObservation | Observation, num_frames: int | None = None
     ) -> tuple[
         at.Float[at.Array, "b s emb"],
         at.Bool[at.Array, "b s"],
@@ -201,7 +203,7 @@ class PiCoT(_pi0.Pi0):
 
     @at.typecheck
     def embed_prefix(
-        self, obs: CoTObservation, num_frames: int | None = None
+        self, obs: CoTObservation | Observation, num_frames: int | None = None
     ) -> tuple[
         at.Float[at.Array, "b s emb"],
         at.Bool[at.Array, "b s"],
@@ -237,7 +239,7 @@ class PiCoT(_pi0.Pi0):
     def compute_loss(
         self,
         rng: at.KeyArrayLike,
-        observation: CoTObservation,
+        observation: CoTObservation | Observation,
         actions: _model.Actions,
         *,
         train: bool = False,
@@ -289,7 +291,12 @@ class PiCoT(_pi0.Pi0):
         )
         prefix_tokens = jnp.concatenate([img_tokens_first, text_tokens], axis=1)
         prefix_mask = jnp.concatenate([img_mask_first, text_mask], axis=1)
-        prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
+        if text_ar_mask is not None:
+            prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
+        else:
+            text_ar_mask = jnp.array([False] * text_mask.shape[1])
+            text_ar_mask = einops.repeat(text_ar_mask, "s -> b s", b=prefix_mask.shape[0])
+            prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
 
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
@@ -425,14 +432,17 @@ class PiCoT(_pi0.Pi0):
             time_expanded = time[..., None, None]
             x_t = time_expanded * noise + (1 - time_expanded) * actions
             u_t = noise - actions
-            suffix_tokens, suffix_mask, suffix_ar_mask = self.embed_suffix(observation, x_t, time)
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
             suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
 
             input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
             ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=1)
             attn_mask = _pi0.make_attn_mask(input_mask, ar_mask)
             positions = jnp.cumsum(input_mask, axis=1) - 1
-            (_, suffix_out), _ = self.PaliGemma.llm([prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions)
+
+            (_, suffix_out), _ = self.PaliGemma.llm(
+                [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
+            )
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
             action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
             metrics["action_loss"] = action_loss
@@ -444,7 +454,7 @@ class PiCoT(_pi0.Pi0):
     def sample_actions(
         self,
         rng: at.KeyArrayLike,
-        observation: CoTObservation,
+        observation: CoTObservation | Observation,
         *,
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
