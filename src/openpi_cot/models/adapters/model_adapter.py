@@ -50,7 +50,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     tokenized_prediction_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_prediction_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
     prediction_crictical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
-    tokenized_dataset_name: at.Int[ArrayT, "*b l"] | None = None
+    tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
