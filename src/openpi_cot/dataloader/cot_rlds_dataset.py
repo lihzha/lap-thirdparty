@@ -583,6 +583,8 @@ class _SingleCoTDataset:
             traj_id_hash = tf.strings.to_hash_bucket_fast(traj["trajectory_id"][0], 2147483647)
             seed_pair = [self.seed, traj_id_hash]
 
+            deltas = tf.fill([traj_len], self.control_frequency)
+
             # deltas = tf.random.stateless_uniform(
             #     [traj_len],
             #     seed=seed_pair,
@@ -590,9 +592,7 @@ class _SingleCoTDataset:
             #     maxval=max_horizon_clamped + 1,
             #     dtype=tf.int32,
             # )
-            # future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
-
-            future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + self.control_frequency, traj_len - 1)
+            future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
 
             # Stack current and future images (primary only)
             current_imgs = traj["observation"][self.spec.primary_image_key]
