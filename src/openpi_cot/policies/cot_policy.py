@@ -279,6 +279,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             prompt_str = prompt_str.split("@")[-1]
 
         inputs["prompt"] = prompt_str
+        inputs["dataset_name"] = data["dataset_name"].decode()
 
         # Extract state_type if available
         # state_type = data.get("state_type")
