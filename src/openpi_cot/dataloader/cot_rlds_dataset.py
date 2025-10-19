@@ -583,14 +583,20 @@ class _SingleCoTDataset:
             traj_id_hash = tf.strings.to_hash_bucket_fast(traj["trajectory_id"][0], 2147483647)
             seed_pair = [self.seed, traj_id_hash]
 
-            deltas = tf.random.stateless_uniform(
-                [traj_len],
-                seed=seed_pair,
-                minval=1,  # At least 1 step into future
-                maxval=max_horizon_clamped + 1,
-                dtype=tf.int32,
-            )
-            future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
+            # deltas = tf.random.stateless_uniform(
+            #     [traj_len],
+            #     seed=seed_pair,
+            #     minval=1,  # At least 1 step into future
+            #     maxval=max_horizon_clamped + 1,
+            #     dtype=tf.int32,
+            # )
+            # future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
+
+            future_indices = compute_window_indices(traj_len, summation_steps)
+            # Derive prediction language actions from raw_action, similar to language_actions
+            # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps
+            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
+            future_indices = future_indices[:, :trimmed_len]
 
             # Stack current and future images (primary only)
             current_imgs = traj["observation"][self.spec.primary_image_key]
@@ -599,20 +605,26 @@ class _SingleCoTDataset:
                 [current_imgs, future_imgs], axis=1
             )  # [T, 2, H, W, C]
 
-            # Wrist image: single frame only
-            traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-                traj["observation"][self.spec.wrist_image_key], axis=1
-            )  # [T, 1, H, W, C]
+            current_imgs = traj["observation"][self.spec.wrist_image_key]
+            future_imgs = tf.gather(current_imgs, future_indices)
+            traj["observation"][self.spec.wrist_image_key] = tf.stack(
+                [current_imgs, future_imgs], axis=1
+            )  # [T, 2, H, W, C]
+
+            # # Wrist image: single frame only
+            # traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+            #     traj["observation"][self.spec.wrist_image_key], axis=1
+            # )  # [T, 1, H, W, C]
 
             # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
             if self.spec.wrist_image_right_key in traj["observation"]:
-                traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                    traj["observation"][self.spec.wrist_image_right_key], axis=1
-                )  # [T, 1, H, W, C]
+                # traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                #     traj["observation"][self.spec.wrist_image_right_key], axis=1
+                # )  # [T, 1, H, W, C]
 
-            # Derive prediction language actions from raw_action, similar to language_actions
-            # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps
-            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
+                traj["observation"][self.spec.wrist_image_right_key] = tf.stack(
+                    [current_imgs, future_imgs], axis=1
+                )  # [T, 2, H, W, C]
 
             if self.use_json_actions:
                 # JSON case: gather from language_actions
@@ -645,8 +657,18 @@ class _SingleCoTDataset:
                 def gather_and_pad_numeric(t_idx, delta):
                     """Gather actions from t_idx to t_idx+delta-1, serialize, pad/truncate to summation_steps."""
                     # Create indices [t_idx, t_idx+1, ..., t_idx+delta-1]
-                    indices = tf.range(delta) + t_idx
-                    indices = tf.minimum(indices, traj_len - 1)
+                    effective_delta = tf.maximum(
+                        0,
+                        tf.minimum(delta, (traj_len - 1) - t_idx),  # steps from t_idx to reach up to frame traj_len-1
+                    )
+
+                    # Indices: [t_idx, t_idx+1, ..., t_idx+effective_delta-1], all <= traj_len-2
+                    max_action_index = traj_len - 2
+                    indices = t_idx + tf.range(effective_delta)
+                    indices = tf.minimum(indices, max_action_index)
+
+                    # indices = tf.range(delta) + t_idx
+                    # indices = tf.minimum(indices, traj_len - 1)
 
                     # Gather raw actions: [delta, A]
                     actions_window = tf.gather(traj["raw_action"], indices)
