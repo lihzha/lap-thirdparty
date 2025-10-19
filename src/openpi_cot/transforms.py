@@ -26,7 +26,7 @@ DataDict: TypeAlias = at.PyTree
 class TokenizePromptAndReasoning(DataTransformFn):
     tokenizer: PaligemmaCoTTokenizer
     discrete_state_input: bool = False
-    prediction_prompt: str = "What is the robot's movement between two frames?"]
+    prediction_prompt: str = "What is the robot's movement between two frames?"
     dataset_name_pad_len: int = 100
 
     def __call__(self, data: DataDict) -> DataDict:
@@ -52,7 +52,9 @@ class TokenizePromptAndReasoning(DataTransformFn):
             dataset_name = dataset_name.item()
         tokenized_dataset_name = self.tokenizer._tokenizer.encode(dataset_name)
         pad_id = self.tokenizer._tokenizer.pad_id()
-        tokenized_dataset_name = [pad_id] * (self.dataset_name_pad_len - len(tokenized_dataset_name)) + tokenized_dataset_name
+        tokenized_dataset_name = [pad_id] * (
+            self.dataset_name_pad_len - len(tokenized_dataset_name)
+        ) + tokenized_dataset_name
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
@@ -64,7 +66,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_langact_mask": reasoning_mask,
             # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
             "crictical_token_mask": numeric_mask,
-            "tokenized_dataset_name": tokenized_dataset_name
+            "tokenized_dataset_name": tokenized_dataset_name,
         }
 
         # Additionally tokenize prediction if prediction_language_action is present
