@@ -43,18 +43,20 @@ class TigerInputs(transforms.DataTransformFn):
 
         # Pi0 models support three image inputs: one third-person view and two wrist views
         # Tiger has base and wrist, so we use zeros for the second wrist camera
-        image = [base_image, wrist_image]
+        image = [base_image, wrist_image, np.zeros_like(wrist_image)]
         image_mask = [
             np.True_,
             np.True_,
+            np.False_,
             # np.True_ if self.model_type == ExtendedModelType.PI0_FAST else np.False_,
         ]
 
         # Create inputs dict
+        num_images_allowed = len(IMAGE_KEYS)
         inputs = {
             "state": data["state"],
-            "image": {IMAGE_KEYS[i]: image[i] for i in range(2)},
-            "image_mask": {IMAGE_KEYS[i]: image_mask[i] for i in range(2)},
+            "image": {IMAGE_KEYS[i]: image[i] for i in range(num_images_allowed)},
+            "image_mask": {IMAGE_KEYS[i]: image_mask[i] for i in range(num_images_allowed)},
         }
 
         # Actions are only available during training
@@ -62,12 +64,12 @@ class TigerInputs(transforms.DataTransformFn):
             inputs["actions"] = data["actions"]
 
         # # Pass the prompt (language instruction) to the model
-        # if "prompt" in data:
-        #     inputs["prompt"] = data["prompt"]
-        # elif "task" in data:
-        #     # Some datasets use "task" instead of "prompt"
-        #     inputs["prompt"] = data["task"]
-        inputs["prompt"] = "pick up the tiger"
+        if "prompt" in data:
+            inputs["prompt"] = data["prompt"]
+        elif "task" in data:
+            # Some datasets use "task" instead of "prompt"
+            inputs["prompt"] = data["task"]
+        # inputs["prompt"] = "pick up the tiger"
 
         return inputs
 

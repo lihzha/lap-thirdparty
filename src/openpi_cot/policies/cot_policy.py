@@ -275,8 +275,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         else:
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
 
-        if "r1_lite" in data["dataset_name"].decode():
-            prompt_str = prompt_str.split("@")[-1]
+        if "dataset_name" in data:
+            if "r1_lite" in data["dataset_name"].decode():
+                prompt_str = prompt_str.split("@")[-1]
 
         inputs["prompt"] = prompt_str
 

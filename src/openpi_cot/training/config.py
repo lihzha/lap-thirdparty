@@ -209,6 +209,45 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
             )
         return super().__call__(model_config)
 
+@dataclasses.dataclass(frozen=True)
+class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
+    """Creates model transforms for standard pi0 models."""
+
+    prompt_format: Literal[
+        "pi05",
+        "pi0",
+        "vqa",
+        "coordinate_system",
+        "schema_compact",
+        "schema_compact_with_rotation",
+        "schema_compact_bimanual",
+        "schema_compact_bimanual_with_rotation",
+    ] = "schema_compact"
+    prediction_prompt: str = "What is the robot's movement between two frames?"
+
+    def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
+        if model_config.model_type == ModelType.PI_COT:
+            assert isinstance(model_config, pi_cot_config.PiCoTConfig)
+            return upstream_transforms.Group(
+                inputs=[
+                    upstream_transforms.InjectDefaultPrompt(self.default_prompt),
+                    # upstream_transforms.ResizeImages(224, 224),
+                    TokenizePromptAndReasoning(
+                        PaligemmaCoTTokenizer(
+                            model_config.max_token_len,
+                            prompt_format=self.prompt_format,
+                        ),
+                        discrete_state_input=model_config.discrete_state_input,
+                        prediction_prompt=self.prediction_prompt,
+                    ),
+                    upstream_transforms.PadStatesAndActions(model_config.action_dim),
+                ],
+                outputs=[
+                ],
+            )
+        return super().__call__(model_config)
+
+
 
 @dataclasses.dataclass(frozen=True)
 class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
@@ -453,7 +492,7 @@ class TigerDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
             outputs=[tiger_policy.TigerOutputs()],
         )
 
-        model_transforms = ModelTransformFactory(
+        model_transforms = TigerModelTransformFactory(
             prediction_prompt=base_cfg.prediction_prompt,
             prompt_format=model_config.prompt_format,
         )(model_config)
