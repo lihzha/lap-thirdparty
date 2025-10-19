@@ -136,6 +136,47 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # # ("toto", 1.0),   # no language instructions, 901 trajs, no wrist camera
         # # # ("language_table", 0.1),  442226 trajs
     ],
+    "oxe_pi_magic_soup_with_bimanual": [
+        ("kuka", 0.1),  # no language instructions, 580392 trajs
+        ("bc_z", 1.0),
+        ("droid", 1.0),
+        ("fractal20220817_data", 1.0),
+        ("bridge_v2_oxe", 1.0),
+        ("taco_play", 1.0),
+        (
+            "jaco_play",
+            1.0,
+        ),  # gripper state and action still seems incorrect. Action sometimes should be 1 but is 0. State seems random. Ignore for now.
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        ("utaustin_mutex", 1.0),
+        ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
+        (
+            "cmu_stretch",
+            2.0,
+        ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
+        ("fmb", 1.0),
+        ("dobbe", 0.2),  # question
+        ("berkeley_autolab_ur5", 1.0),
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
+        ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes.
+        ### To be tested
+        ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
+        ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
+        ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
+        ("viola", 1.0),  # gripper mostly out of view, 135 trajs
+        ("molmoact_dataset", 1.0),
+        ### Bimanual
+        ("agibot_large_dataset", 1.0),
+        ("sample_r1_lite", 1.0),
+        ### TBD
+        # ("iamlab_cmu_pickup_insert_converted_externally_to_rlds", 1.0),  # only joint state, 520 trajs. action scale is 300.
+        # ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),  # only joint state. action scale is 100000.
+        # ("berkeley_cable_routing", 1.0),  # only joint pos, 1482 trajs, action scale incorrect and gripper not in view
+        # # ("stanford_hydra_dataset_converted_externally_to_rlds", 2.0), 550 trajs
+        # # # ("nyu_franka_play_dataset_converted_externally_to_rlds", 3.0),  # no language instructions, 456 trajs, no wrist camera
+        # # # ("toto", 1.0),   # no language instructions, 901 trajs, no wrist camera
+        # # # ("language_table", 0.1),  442226 trajs
+    ],
     # === Individual Datasets (for isolated visualization/testing) ===
     "kuka": [("kuka", 1.0)],
     "bc_z": [("bc_z", 1.0)],

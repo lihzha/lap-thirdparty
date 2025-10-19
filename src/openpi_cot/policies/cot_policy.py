@@ -358,8 +358,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             # If no language actions, default to active sample
             inputs["sample_mask"] = True
 
-        breakpoint()
-
         # Additionally prepare prediction if available (independent of regular reasoning)
         if "prediction_language_action" in data:
             assert self.enable_prediction_training, (

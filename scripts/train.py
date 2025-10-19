@@ -560,9 +560,7 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     log_mem("Before getting batch")
     batch = next(data_iter)
-    vis_batch(batch, tok=tok)
-
-    breakpoint()
+    # vis_batch(batch, tok=tok)
 
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
