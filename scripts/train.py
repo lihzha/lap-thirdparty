@@ -544,13 +544,13 @@ def main(config: _config.TrainConfig):
     except:
         tok = PaligemmaCoTTokenizer(max_len=200)
 
-    # Initialize hard example tracker for logging difficult samples
-    hard_example_tracker = vis_tools.HardExampleTracker(
-        tokenizer=tok,
-        max_hard_examples=50,
-        buffer_ratio=0.1,  # Maintain buffer of top candidates
-        resize_hw=(128, 128),
-    )
+    # # Initialize hard example tracker for logging difficult samples
+    # hard_example_tracker = vis_tools.HardExampleTracker(
+    #     tokenizer=tok,
+    #     max_hard_examples=50,
+    #     buffer_ratio=0.1,  # Maintain buffer of top candidates
+    #     resize_hw=(128, 128),
+    # )
 
     # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
     data_iter = iter(data_loader)
@@ -647,25 +647,25 @@ def main(config: _config.TrainConfig):
             raise ValueError("Training step info missing per_sample_loss")
 
         # Update hard example tracker with per-sample losses from current batch
-        per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
-        hard_example_tracker.update(per_sample_loss_local)
+        # per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
+        # hard_example_tracker.update(per_sample_loss_local)
 
         # Add hard examples from current batch to buffer (if they qualify)
         # This needs to happen for every step, not just at log_interval
-        host_batch_local_curr, local_size_curr = host_batch_cache.ensure(step=step, batch=batch)
-        if per_sample_loss_local is not None and local_size_curr > 0:
-            process_idx = jax.process_index()
-            # Compute global index base for this process
-            global_batch_idx = step * config.batch_size
-            local_batch_offset = process_idx * local_size_curr
+        # host_batch_local_curr, local_size_curr = host_batch_cache.ensure(step=step, batch=batch)
+        # if per_sample_loss_local is not None and local_size_curr > 0:
+        #     process_idx = jax.process_index()
+        #     # Compute global index base for this process
+        #     global_batch_idx = step * config.batch_size
+        #     local_batch_offset = process_idx * local_size_curr
 
-            hard_example_tracker.add_local_examples(
-                step_idx=step,
-                host_batch_local=host_batch_local_curr,
-                local_losses=per_sample_loss_local,
-                global_idx_base=global_batch_idx + local_batch_offset,
-                process_idx=process_idx,
-            )
+        # hard_example_tracker.add_local_examples(
+        #     step_idx=step,
+        #     host_batch_local=host_batch_local_curr,
+        #     local_losses=per_sample_loss_local,
+        #     global_idx_base=global_batch_idx + local_batch_offset,
+        #     process_idx=process_idx,
+        # )
 
         if step % config.log_interval == 0:
             # infos appended above
@@ -688,18 +688,19 @@ def main(config: _config.TrainConfig):
             pbar.write(f"Step {step}: {info_str}")
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
-                # host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-                # vis_tools.log_random_examples(
-                #     step,
-                #     host_batch_local,
-                #     tok,
-                #     local_batch_size=local_size,
-                # )
+                if config.model.enable_langact_training:
+                    host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+                    vis_tools.log_random_examples(
+                        step,
+                        host_batch_local,
+                        tok,
+                        local_batch_size=local_size,
+                    )
 
             # Log hard examples from the interval (multi-host gathering happens inside)
-            payload = hard_example_tracker.log_if_ready(step)
-            if payload is not None:
-                vis_tools.log_hard_examples_payload(payload)
+            # payload = hard_example_tracker.log_if_ready(step)
+            # if payload is not None:
+            #     vis_tools.log_hard_examples_payload(payload)
 
             infos = []
         # Periodic validation
