@@ -1351,22 +1351,21 @@ class _DobbeCoTDataset(_SingleOXECoTDataset):
         # First apply standard filters
         super().apply_traj_filters(action_key)
 
-        # Add dobbe-specific action range filter
-        action_q01 = self.dataset_statistics["actions"].q01
-        action_q99 = self.dataset_statistics["actions"].q99
+        min_allowed = -5
+        max_allowed = 5
 
         def _action_within_bounds(traj):
             """Check if all actions are within [q01, q99] range."""
             actions = traj[action_key]
 
             # Check if any action is below q01 or above q99 (element-wise)
-            below_q01 = tf.reduce_any(tf.less(actions, action_q01))
-            above_q99 = tf.reduce_any(tf.greater(actions, action_q99))
+            below_min = tf.reduce_any(tf.less(actions, min_allowed))
+            above_max = tf.reduce_any(tf.greater(actions, max_allowed))
 
             # Keep trajectory only if all actions are within bounds
-            return tf.logical_not(tf.logical_or(below_q01, above_q99))
+            return tf.logical_not(tf.logical_or(below_min, above_max))
 
-        logging.info(f"Applying action range filter for dobbe: q01={action_q01}, q99={action_q99}")
+        logging.info(f"Applying action range filter for dobbe: min={min_allowed}, max={max_allowed}")
         self.dataset = self.dataset.filter(_action_within_bounds)
 
 
