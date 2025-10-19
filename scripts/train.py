@@ -11,6 +11,9 @@ from flax.training import common_utils
 import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
+import matplotlib
+matplotlib.use("Agg")  # Use non-interactive backend for remote environments
+import matplotlib.pyplot as plt
 import numpy as np
 from openpi.models import model as _model
 from openpi.models.model import Observation
@@ -300,6 +303,169 @@ class HostBatchCache:
             self.local_batch_size = vis_tools.infer_local_batch_size(obs_local)
             self.step = step
         return self.host_batch, self.local_batch_size
+
+
+class DatasetStatsTracker:
+    """Tracks per-dataset loss and example counts across training."""
+
+    def __init__(self):
+        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "count": int}}
+
+    def update(self, dataset_names: list[str], losses: np.ndarray):
+        """Update statistics with new batch data.
+
+        Args:
+            dataset_names: List of dataset names for each sample
+            losses: Array of per-sample losses
+        """
+        for name, loss in zip(dataset_names, losses, strict=False):
+            if name not in self.dataset_stats:
+                self.dataset_stats[name] = {"total_loss": 0.0, "count": 0}
+            self.dataset_stats[name]["total_loss"] += float(loss)
+            self.dataset_stats[name]["count"] += 1
+
+    def get_metrics(self) -> dict[str, float]:
+        """Get current average losses and counts for all datasets."""
+        metrics = {}
+        for dataset_name, stats in self.dataset_stats.items():
+            if stats["count"] > 0:
+                avg_loss = stats["total_loss"] / stats["count"]
+                metrics[f"dataset/{dataset_name}/avg_loss"] = avg_loss
+                metrics[f"dataset/{dataset_name}/count"] = stats["count"]
+        return metrics
+
+
+def gather_dataset_info_multihost(
+    tokenized_dataset_names: at.Array,
+    per_sample_losses: at.Array,
+    tokenizer,
+) -> tuple[list[str], np.ndarray]:
+    """Gather dataset names and losses from all hosts.
+
+    Args:
+        tokenized_dataset_names: Tokenized dataset names [batch_size, seq_len]
+        per_sample_losses: Per-sample losses [batch_size]
+        tokenizer: Tokenizer to decode dataset names
+
+    Returns:
+        Tuple of (dataset_names, losses) where both are gathered from all hosts
+    """
+    # Convert to local arrays (process-specific)
+    local_dataset_names = np.asarray(training_utils.to_local_array(tokenized_dataset_names))
+    local_losses = np.asarray(training_utils.to_local_array(per_sample_losses))
+
+    # Decode dataset names on this host
+    local_decoded_names = []
+    for i in range(local_dataset_names.shape[0]):
+        try:
+            name = tokenizer.decode(local_dataset_names[i])
+            # Clean up any special tokens or padding
+            name = name.strip()
+            local_decoded_names.append(name)
+        except Exception as e:
+            logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
+            local_decoded_names.append("unknown")
+
+    # For multi-host: gather all names and losses
+    process_count = jax.process_count()
+    if process_count > 1:
+        # Use JAX's multi-host utilities to gather data
+        # We'll gather on process 0, then broadcast back if needed
+        all_names = jax.experimental.multihost_utils.process_allgather(
+            np.array(local_decoded_names, dtype=object)
+        )
+        all_losses = jax.experimental.multihost_utils.process_allgather(local_losses)
+        # Flatten the gathered arrays
+        all_names = all_names.flatten().tolist()
+        all_losses = all_losses.flatten()
+    else:
+        all_names = local_decoded_names
+        all_losses = local_losses
+
+    return all_names, all_losses
+
+
+def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> dict[str, plt.Figure]:
+    """Create bar plots for dataset statistics.
+
+    Args:
+        dataset_stats: Dictionary mapping dataset names to {"total_loss": float, "count": int}
+
+    Returns:
+        Dictionary with 'counts' and 'avg_loss' matplotlib figures
+    """
+    if not dataset_stats:
+        return {}
+
+    # Extract dataset names and statistics
+    dataset_names = list(dataset_stats.keys())
+    counts = [dataset_stats[name]["count"] for name in dataset_names]
+    avg_losses = [
+        dataset_stats[name]["total_loss"] / dataset_stats[name]["count"]
+        if dataset_stats[name]["count"] > 0
+        else 0.0
+        for name in dataset_names
+    ]
+
+    # Sort by count (descending) for better visualization
+    sorted_indices = np.argsort(counts)[::-1]
+    dataset_names_sorted = [dataset_names[i] for i in sorted_indices]
+    counts_sorted = [counts[i] for i in sorted_indices]
+    avg_losses_sorted = [avg_losses[i] for i in sorted_indices]
+
+    plots = {}
+
+    # Create counts bar plot
+    fig_counts, ax_counts = plt.subplots(figsize=(12, 6))
+    bars_counts = ax_counts.bar(range(len(dataset_names_sorted)), counts_sorted, color="steelblue")
+    ax_counts.set_xlabel("Dataset", fontsize=12)
+    ax_counts.set_ylabel("Number of Examples", fontsize=12)
+    ax_counts.set_title("Dataset Example Counts", fontsize=14, fontweight="bold")
+    ax_counts.set_xticks(range(len(dataset_names_sorted)))
+    ax_counts.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+    ax_counts.grid(axis="y", alpha=0.3)
+
+    # Add value labels on top of bars
+    for i, (bar, count) in enumerate(zip(bars_counts, counts_sorted)):
+        height = bar.get_height()
+        ax_counts.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{int(count)}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    plt.tight_layout()
+    plots["counts"] = fig_counts
+
+    # Create average loss bar plot
+    fig_loss, ax_loss = plt.subplots(figsize=(12, 6))
+    bars_loss = ax_loss.bar(range(len(dataset_names_sorted)), avg_losses_sorted, color="coral")
+    ax_loss.set_xlabel("Dataset", fontsize=12)
+    ax_loss.set_ylabel("Average Loss", fontsize=12)
+    ax_loss.set_title("Dataset Average Loss", fontsize=14, fontweight="bold")
+    ax_loss.set_xticks(range(len(dataset_names_sorted)))
+    ax_loss.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+    ax_loss.grid(axis="y", alpha=0.3)
+
+    # Add value labels on top of bars
+    for i, (bar, loss) in enumerate(zip(bars_loss, avg_losses_sorted)):
+        height = bar.get_height()
+        ax_loss.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{loss:.4f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    plt.tight_layout()
+    plots["avg_loss"] = fig_loss
+
+    return plots
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -641,6 +807,7 @@ def main(config: _config.TrainConfig):
 
     infos = []
     host_batch_cache = HostBatchCache()
+    dataset_stats_tracker = DatasetStatsTracker()
 
     for step in pbar:
         with sharding.set_mesh(mesh):
@@ -649,6 +816,18 @@ def main(config: _config.TrainConfig):
         per_sample_loss = info.get("per_sample_loss")
         if per_sample_loss is None:
             raise ValueError("Training step info missing per_sample_loss")
+
+        # Update dataset statistics tracker
+        if hasattr(batch[0], "tokenized_dataset_name"):
+            try:
+                dataset_names, losses = gather_dataset_info_multihost(
+                    batch[0].tokenized_dataset_name,
+                    per_sample_loss,
+                    tok,
+                )
+                dataset_stats_tracker.update(dataset_names, losses)
+            except Exception as e:
+                logging.warning(f"Failed to update dataset stats at step {step}: {e}")
 
         # Update hard example tracker with per-sample losses from current batch
         # per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
@@ -688,10 +867,31 @@ def main(config: _config.TrainConfig):
                 else:
                     reduced_info[key] = reduce_overrides.get(key, jnp.mean)(value)
             reduced_info = jax.device_get(reduced_info)
+
+            # Add dataset statistics to logging
+            dataset_metrics = dataset_stats_tracker.get_metrics()
+            reduced_info.update(dataset_metrics)
+
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
+
+                # Create and log dataset statistics bar plots
+                if dataset_stats_tracker.dataset_stats:
+                    plots = create_dataset_stats_plots(dataset_stats_tracker.dataset_stats)
+                    if plots:
+                        wandb.log(
+                            {
+                                "dataset_stats/counts_plot": wandb.Image(plots["counts"]),
+                                "dataset_stats/avg_loss_plot": wandb.Image(plots["avg_loss"]),
+                            },
+                            step=step,
+                        )
+                        # Close figures to prevent memory leaks
+                        plt.close(plots["counts"])
+                        plt.close(plots["avg_loss"])
+
                 if config.model.enable_langact_training:
                     host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
                     vis_tools.log_random_examples(
