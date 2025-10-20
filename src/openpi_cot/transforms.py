@@ -56,7 +56,9 @@ class TokenizePromptAndReasoning(DataTransformFn):
             ) + tokenized_dataset_name
             tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
         else:
+            pad_id = self.tokenizer._tokenizer.pad_id()
             tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len
+        breakpoint()
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
