@@ -82,6 +82,7 @@ class PiCoT(_pi0.Pi0):
         _model.BaseModel.__init__(self, config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
         self.aug_wrist_image = config.aug_wrist_image
+        self.image_keys = config.image_keys
         # Loss/control knobs
         self.enable_action_training = bool(getattr(config, "enable_action_training", False))
         self.enable_langact_training = bool(getattr(config, "enable_langact_training", True))
@@ -253,7 +254,7 @@ class PiCoT(_pi0.Pi0):
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
         observation = preprocess_observation(
-            preprocess_rng, observation, train=train, aug_wrist_image=self.aug_wrist_image
+            preprocess_rng, observation, train=train, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
         )
 
         # Optimization: if prediction training is enabled, encode all frames once and reuse
@@ -526,7 +527,7 @@ class PiCoT(_pi0.Pi0):
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
-        observation = preprocess_observation(None, observation, train=False, aug_wrist_image=self.aug_wrist_image)
+        observation = preprocess_observation(None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps
@@ -586,7 +587,7 @@ class PiCoT(_pi0.Pi0):
     ### left padding
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
-        observation = preprocess_observation(None, observation, train=False, aug_wrist_image=self.aug_wrist_image)
+        observation = preprocess_observation(None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image)
         # Inference: only use first frame
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation, num_frames=1)  # (B,Tp,D) + (B,Tp)
         b, tp, d = *p_tokens.shape[:2], p_tokens.shape[-1]

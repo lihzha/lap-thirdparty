@@ -10,7 +10,6 @@ from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
-from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 import openpi_cot.models.gemma2 as _gemma2
@@ -46,6 +45,9 @@ class PiCoTConfig(_model.BaseModelConfig):
     ] = "pi05"
 
     aug_wrist_image: bool = True
+    # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
+    # When False, only uses base_0_rgb and left_wrist_0_rgb to save memory
+    use_bimanual: bool = True
 
     # Enable/disable individual loss components
     # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
@@ -66,6 +68,13 @@ class PiCoTConfig(_model.BaseModelConfig):
             object.__setattr__(self, "discrete_state_input", self.pi05)
 
     @property
+    def image_keys(self) -> tuple[str, ...]:
+        """Returns the image keys to use based on bimanual setting."""
+        if self.use_bimanual:
+            return ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+        return ("base_0_rgb", "left_wrist_0_rgb")
+
+    @property
     @override
     def model_type(self) -> ExtendedModelType:
         return ExtendedModelType.PI_COT
@@ -83,8 +92,8 @@ class PiCoTConfig(_model.BaseModelConfig):
 
         with at.disable_typechecking():
             observation_spec = CoTObservation(
-                images=dict.fromkeys(IMAGE_KEYS, image_spec),
-                image_masks=dict.fromkeys(IMAGE_KEYS, image_mask_spec),
+                images=dict.fromkeys(self.image_keys, image_spec),
+                image_masks=dict.fromkeys(self.image_keys, image_mask_spec),
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
