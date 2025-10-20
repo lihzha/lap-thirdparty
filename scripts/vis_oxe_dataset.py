@@ -310,12 +310,17 @@ def _compose_pages(rows: list[np.ndarray], target_max_height: int = 1600) -> lis
     if not rows:
         return pages
     row_h = rows[0].shape[0]
-    per_page = max(1, (target_max_height - 28) // row_h)
+    legend_height = 40
+    bottom_padding = 20  # Add padding at bottom so last text bar is visible
+    per_page = max(1, (target_max_height - legend_height - bottom_padding) // row_h)
     for i in range(0, len(rows), per_page):
         chunk = rows[i : i + per_page]
         grid = np.concatenate(chunk, axis=0)
-        legend = _make_legend_bar(grid.shape[1], height=40)
-        page = np.concatenate([legend, grid], axis=0)
+        legend = _make_legend_bar(grid.shape[1], height=legend_height)
+        # Add bottom padding bar to prevent text cutoff
+        padding_bar = np.zeros((bottom_padding, grid.shape[1], 3), dtype=np.uint8)
+        padding_bar[:] = 32  # dark gray matching legend
+        page = np.concatenate([legend, grid, padding_bar], axis=0)
         pages.append(page)
     return pages
 
