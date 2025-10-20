@@ -5,6 +5,7 @@ import os
 import re
 from typing import Literal
 
+from etils import epath  # optional, but handy
 import numpy as np
 from openpi.models import tokenizer as _tokenizer
 import sentencepiece
@@ -319,7 +320,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
                 self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
         else:
             cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
-            path = cache_dir + "/gemma3-tokenizer.model"
+            path = epath.Path(cache_dir + "/gemma3-tokenizer.model")
             with path.open("rb") as f:
                 self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
         self._max_len = max_len
