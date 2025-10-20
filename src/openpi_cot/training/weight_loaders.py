@@ -1,13 +1,17 @@
 import dataclasses
 import logging
+import pathlib
 import re
 from typing import Literal, Protocol, runtime_checkable
 
+from flax import traverse_util
 import flax.traverse_util
 import jax
+import jax.numpy as jnp
 import numpy as np
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
+import orbax.checkpoint as ocp
 
 import openpi_cot.shared.download as download
 
@@ -120,6 +124,56 @@ class PaliGemma2WeightLoader(WeightLoader):
         return _merge_params(loaded_params, params, missing_regex=".*")
 
 
+def restore_params(
+    params_path: pathlib.Path | str,
+    *,
+    restore_type: type[np.ndarray] | type[jax.Array] = jax.Array,
+    dtype: jnp.dtype | None = None,
+    sharding: jax.sharding.Sharding | None = None,
+) -> at.Params:
+    """Restores unstructured params PyTree from a checkpoint.
+
+    This works with checkpoints saved with `save_state` during openpi training (see `training/checkpoints.py`) as
+    well as pre-trained checkpoints released for openpi.
+
+    Args:
+        params_path: The local path to the checkpoint directory.
+        restore_type: The type to restore the params as. Can be set to `np.ndarray` to load the params as a numpy array.
+        dtype: The dtype to restore all params as. If not provided, will use the original dtype from the checkpoint.
+        sharding: The sharding to use for the params. If not provided, the params will be replicated across all devices.
+
+    Returns:
+        The restored params.
+    """
+    params_path = pathlib.Path(params_path).resolve() if not str(params_path).startswith("gs://") else params_path
+
+    if restore_type is jax.Array and sharding is None:
+        mesh = jax.sharding.Mesh(jax.devices(), ("x",))
+        sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+    with ocp.PyTreeCheckpointer() as ckptr:
+        metadata = ckptr.metadata(params_path)
+        breakpoint()
+        item = {"params": metadata["params"]}
+
+        params = ckptr.restore(
+            params_path,
+            ocp.args.PyTreeRestore(
+                item=item,
+                restore_args=jax.tree.map(
+                    lambda _: ocp.ArrayRestoreArgs(sharding=sharding, restore_type=restore_type, dtype=dtype), item
+                ),
+            ),
+        )["params"]
+
+    # If the params were saved with `save_state` during openpi training, every key path will end with "value", which is
+    # added by `nnx.State`. We remove the "value" suffix here and always return what NNX calls a "pure dict".
+    flat_params = traverse_util.flatten_dict(params)
+    if all(kp[-1] == "value" for kp in flat_params):
+        flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
+    return traverse_util.unflatten_dict(flat_params)
+
+
 @dataclasses.dataclass(frozen=True)
 class Gemma3WeightLoader(WeightLoader):
     """Loads weights from the official Gemma3 checkpoint.
@@ -132,7 +186,7 @@ class Gemma3WeightLoader(WeightLoader):
 
     def load(self, params: at.Params) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
-        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        loaded_params = restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
         # Add all missing LoRA weights.
         return _merge_params(loaded_params, params, missing_regex=".*")
 
