@@ -214,8 +214,8 @@ def _iter_droid_request_data(
                 "state": np.concatenate([cartesian_pos, grip_obs]),
             },
         }
-        # req["prompt"] = prompt
-        req["prompt"] = step["language_instruction"]
+        req["prompt"] = prompt
+        # req["prompt"] = step["language_instruction"].decode()
         yield req
 
 
