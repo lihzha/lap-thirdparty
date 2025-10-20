@@ -245,10 +245,27 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         images = [base_image]
         image_masks = [base_image_mask]
 
+        # Datasets that need wrist camera rotation by 180 degrees
+        DATASETS_REQUIRING_WRIST_ROTATION = {
+            "taco_play",
+            "droid",
+            "furniture_bench_dataset_converted_externally_to_rlds",
+            "berkeley_fanuc_manipulation",
+            "berkeley_autolab_ur5",
+        }
+
+        # Check if current dataset requires wrist rotation
+        dataset_name = data.get("dataset_name", b"").decode() if isinstance(data.get("dataset_name"), bytes) else data.get("dataset_name", "")
+        needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
+
         for k in IMAGE_KEYS[1:]:
             if k in data["observation"]:
                 wrist_image = parse_image(data["observation"][k])
                 wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
+
+                # Rotate wrist image by 180 degrees for specific datasets
+                if needs_wrist_rotation and wrist_image_mask:
+                    wrist_image = np.rot90(wrist_image, k=2)
             else:
                 wrist_image = np.zeros_like(base_image)
                 wrist_image_mask = np.False_
