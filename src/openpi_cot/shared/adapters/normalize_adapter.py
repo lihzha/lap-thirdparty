@@ -6,6 +6,7 @@ import dlimp as dl
 import jax
 from jax.experimental import multihost_utils as mh
 import numpy as np
+import numpydantic
 from openpi.shared import normalize as _normalize
 import pydantic
 import tensorflow as tf
@@ -16,6 +17,8 @@ from tqdm_loggable.auto import tqdm
 class ExtendedNormStats(_normalize.NormStats):
     num_transitions: int | None = None
     num_trajectories: int | None = None
+    min: numpydantic.NDArray | None = None  # Global minimum across all samples
+    max: numpydantic.NDArray | None = None  # Global maximum across all samples
 
 
 class _NormStatsDict(pydantic.BaseModel):
@@ -91,8 +94,8 @@ def get_dataset_statistics(
     transitions and trajectories in the dataset.
     """
     metadata, output_dir, _ = check_dataset_statistics(save_dir)
-    if metadata is not None:
-        return metadata
+    # if metadata is not None:
+    #     return metadata
 
     # dataset = dataset.traj_map(
     #     lambda traj: {
@@ -124,8 +127,18 @@ def get_dataset_statistics(
         mask = np.isfinite(proprios).all(axis=1)
         proprios = proprios[mask]
 
+    # Promote to float64 for numerical stability in variance calculation
+    # Float32 accumulation errors over millions of samples can cause variance to become
+    # slightly negative (violating E[X^2] >= E[X]^2), which gets clamped to 0.
+    # This produces std=0 even for dimensions with significant variation.
+    # Example: 27M samples with range [0.27, 0.78] had std=0 in float32 but std=0.15 in float64
+    actions = actions.astype(np.float64)
+    if has_state:
+        proprios = proprios.astype(np.float64)
+
     # ------------------------------------------------------------
     # Multi-host aggregation: compute exact global mean/std and counts
+    # Using numerically stable variance calculation (Welford/Chan algorithm)
     # ------------------------------------------------------------
     def _gather_and_reduce(x: np.ndarray, op: str) -> np.ndarray:
         if getattr(jax, "process_count", lambda: 1)() == 1:
@@ -140,46 +153,85 @@ def get_dataset_statistics(
             return xs.max(axis=0)
         raise ValueError(f"Unsupported op: {op}")
 
-    # Per-host sufficient stats
-    a_sum = actions.sum(axis=0)
-    a_sumsq = np.square(actions).sum(axis=0)
+    # Compute numerically stable statistics using shifted values
+    # Shift reduces magnitude of values, preventing catastrophic cancellation
     a_min = actions.min(axis=0)
     a_max = actions.max(axis=0)
+
+    if has_state:
+        s_min = proprios.min(axis=0)
+        s_max = proprios.max(axis=0)
+
+    # Gather min/max across hosts to compute global shift
+    a_min = _gather_and_reduce(a_min, "min")
+    a_max = _gather_and_reduce(a_max, "max")
+
+    if has_state:
+        s_min = _gather_and_reduce(s_min, "min")
+        s_max = _gather_and_reduce(s_max, "max")
+
+    # Use midpoint as shift for numerical stability
+    a_shift = (a_min + a_max) / 2.0
+
+    if has_state:
+        s_shift = (s_min + s_max) / 2.0
+
+    # Compute shifted statistics (per-host)
+    a_shifted = actions - a_shift
+    a_sum = a_shifted.sum(axis=0)
+    a_sumsq = np.square(a_shifted).sum(axis=0)
     a_n = np.array(actions.shape[0], dtype=np.int64)
 
     if has_state:
-        s_sum = proprios.sum(axis=0)
-        s_sumsq = np.square(proprios).sum(axis=0)
-        s_min = proprios.min(axis=0)
-        s_max = proprios.max(axis=0)
+        s_shifted = proprios - s_shift
+        s_sum = s_shifted.sum(axis=0)
+        s_sumsq = np.square(s_shifted).sum(axis=0)
         s_n = np.array(proprios.shape[0], dtype=np.int64)
 
     traj_n = np.array(num_trajectories, dtype=np.int64)
 
-    # All-gather + reduce
+    # All-gather + reduce shifted statistics
     a_sum = _gather_and_reduce(a_sum, "sum")
     a_sumsq = _gather_and_reduce(a_sumsq, "sum")
-    a_min = _gather_and_reduce(a_min, "min")
-    a_max = _gather_and_reduce(a_max, "max")
     a_n = int(_gather_and_reduce(a_n, "sum"))
 
     if has_state:
         s_sum = _gather_and_reduce(s_sum, "sum")
         s_sumsq = _gather_and_reduce(s_sumsq, "sum")
-        s_min = _gather_and_reduce(s_min, "min")
-        s_max = _gather_and_reduce(s_max, "max")
         s_n = int(_gather_and_reduce(s_n, "sum"))
 
     traj_n = int(_gather_and_reduce(traj_n, "sum"))
 
-    # Exact global mean/std
-    a_mean = a_sum / max(a_n, 1)
-    a_var = a_sumsq / max(a_n, 1) - np.square(a_mean)
+    # Compute global mean/std from shifted statistics
+    # mean = shift + E[X']
+    # var = E[X'²] - (E[X'])²  (now numerically stable due to shift)
+    a_shifted_mean = a_sum / max(a_n, 1)
+    a_mean = a_shift + a_shifted_mean
+    a_var = a_sumsq / max(a_n, 1) - np.square(a_shifted_mean)
+
+    # Check for negative variance (indicates numerical instability)
+    if (a_var < 0).any():
+        neg_dims = np.where(a_var < 0)[0]
+        logging.warning(
+            f"Action dims {neg_dims.tolist()} have negative variance {a_var[neg_dims].tolist()}, "
+            f"clamping to 0. This indicates numerical instability - consider float64 promotion."
+        )
+
     a_std = np.sqrt(np.maximum(a_var, 0.0))
 
     if has_state:
-        s_mean = s_sum / max(s_n, 1)
-        s_var = s_sumsq / max(s_n, 1) - np.square(s_mean)
+        s_shifted_mean = s_sum / max(s_n, 1)
+        s_mean = s_shift + s_shifted_mean
+        s_var = s_sumsq / max(s_n, 1) - np.square(s_shifted_mean)
+
+        # Check for negative variance (indicates numerical instability)
+        if (s_var < 0).any():
+            neg_dims = np.where(s_var < 0)[0]
+            logging.warning(
+                f"State dims {neg_dims.tolist()} have negative variance {s_var[neg_dims].tolist()}, "
+                f"clamping to 0. This indicates numerical instability - consider float64 promotion."
+            )
+
         s_std = np.sqrt(np.maximum(s_var, 0.0))
 
     # ------------------------------------------------------------
@@ -226,10 +278,12 @@ def get_dataset_statistics(
         s_q01 = _distributed_quantiles(proprios, s_min, s_max, 0.01)
         s_q99 = _distributed_quantiles(proprios, s_min, s_max, 0.99)
         state_norm_stats = ExtendedNormStats(
-            mean=np.asarray(s_mean),
-            std=np.asarray(s_std),
-            q01=np.asarray(s_q01),
-            q99=np.asarray(s_q99),
+            mean=np.asarray(s_mean, dtype=np.float32),
+            std=np.asarray(s_std, dtype=np.float32),
+            q01=np.asarray(s_q01, dtype=np.float32),
+            q99=np.asarray(s_q99, dtype=np.float32),
+            min=np.asarray(s_min, dtype=np.float32),
+            max=np.asarray(s_max, dtype=np.float32),
             num_transitions=int(s_n),
             num_trajectories=int(traj_n),
         )
@@ -240,23 +294,52 @@ def get_dataset_statistics(
             std=np.array([], dtype=np.float32),
             q01=np.array([], dtype=np.float32),
             q99=np.array([], dtype=np.float32),
+            min=np.array([], dtype=np.float32),
+            max=np.array([], dtype=np.float32),
             num_transitions=int(a_n),
             num_trajectories=int(traj_n),
         )
 
+    # Cast back to float32 for storage efficiency (computed in float64 for precision)
     norm_stats = {
         "state": state_norm_stats,
         "actions": ExtendedNormStats(
-            mean=np.asarray(a_mean),
-            std=np.asarray(a_std),
-            q01=np.asarray(a_q01),
-            q99=np.asarray(a_q99),
+            mean=np.asarray(a_mean, dtype=np.float32),
+            std=np.asarray(a_std, dtype=np.float32),
+            q01=np.asarray(a_q01, dtype=np.float32),
+            q99=np.asarray(a_q99, dtype=np.float32),
+            min=np.asarray(a_min, dtype=np.float32),
+            max=np.asarray(a_max, dtype=np.float32),
             num_transitions=int(a_n),
             num_trajectories=int(traj_n),
         ),
     }
 
     if jax.process_index() == 0:
+        logging.info("Dataset statistics computed:")
+        logging.info(f"  Total transitions: {a_n}, trajectories: {traj_n}")
+        logging.info(f"  Actions ({len(a_mean)} dims):")
+        logging.info(f"    min: {a_min}")
+        logging.info(f"    max: {a_max}")
+        logging.info(f"    mean: {a_mean}")
+        logging.info(f"    std: {a_std}")
+
+        # Check for std=0 dimensions
+        zero_action_dims = np.where(a_std == 0)[0]
+        if len(zero_action_dims) > 0:
+            logging.warning(f"    ⚠️  {len(zero_action_dims)} action dims have std=0: {zero_action_dims.tolist()}")
+
+        if has_state and len(s_mean) > 0:
+            logging.info(f"  State ({len(s_mean)} dims):")
+            logging.info(f"    min: {s_min}")
+            logging.info(f"    max: {s_max}")
+            logging.info(f"    mean: {s_mean}")
+            logging.info(f"    std: {s_std}")
+
+            zero_state_dims = np.where(s_std == 0)[0]
+            if len(zero_state_dims) > 0:
+                logging.warning(f"    ⚠️  {len(zero_state_dims)} state dims have std=0: {zero_state_dims.tolist()}")
+
         print(f"Writing stats to: {output_dir}")
         save(output_dir, norm_stats)
 

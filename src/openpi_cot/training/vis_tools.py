@@ -7,7 +7,12 @@ import pickle
 import re
 from typing import Any
 
-# import cv2
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+
 import jax
 from jax.experimental import multihost_utils as mh
 import jax.numpy as jnp
@@ -48,12 +53,15 @@ class HardExampleTracker:
     buffer_ratio: float = 0.07
     buffer_min: int = 32
     buffer_slack: int = 32
-    max_hard_examples: int = 5
+    max_hard_examples: int = 50
     resize_hw: tuple[int, int] | None = (128, 128)
     _interval_losses: list[np.ndarray] = field(default_factory=list, init=False)
     _interval_total_samples: int = field(default=0, init=False)
     _hard_example_buffer: list[dict[str, Any]] = field(default_factory=list, init=False)
     _hard_example_keys: set[tuple[int, int, int]] = field(default_factory=set, init=False)
+    # Track batch references for lazy image extraction
+    _batch_cache: dict[tuple[int, int], tuple[CoTObservation, _model.Actions]] = field(default_factory=dict, init=False)
+    _extraction_failures: int = field(default=0, init=False)
 
     def update(self, per_sample_losses: np.ndarray | None) -> None:
         if per_sample_losses is None:
@@ -73,6 +81,11 @@ class HardExampleTracker:
         *,
         process_idx: int,
     ) -> None:
+        """Add examples with high losses to the buffer.
+
+        Strategy: Store loss metadata immediately, cache batch reference for lazy image extraction.
+        This ensures we never miss high-loss samples due to image extraction failures.
+        """
         if host_batch_local is None or local_losses is None:
             return
         losses = np.asarray(local_losses, dtype=np.float32).reshape(-1)
@@ -106,42 +119,51 @@ class HardExampleTracker:
         ]
         if not new_indices:
             return
-        visuals = visualize_language_actions(
-            host_batch_local,
-            self.tokenizer,
-            indices=new_indices,
-            max_examples=len(new_indices),
-            resize_hw=self.resize_hw,
-        )
-        if not visuals:
-            return
-        vis_by_index = {int(vis.get("index", idx)): vis for vis, idx in zip(visuals, new_indices)}
+
+        # Cache batch for lazy image extraction
+        batch_key = (process_idx, step_idx)
+        self._batch_cache[batch_key] = host_batch_local
+
+        # Store metadata immediately WITHOUT requiring image extraction
+        # This ensures we never lose high-loss samples due to image failures
+        added_count = 0
         for local_idx in new_indices:
-            vis = vis_by_index.get(local_idx)
-            if vis is None:
-                continue
             loss_val = float(losses[local_idx])
+            global_idx = int(local_idx + global_idx_base)
+
             entry = {
                 "loss": loss_val,
                 "step": step_idx,
                 "local_idx": int(local_idx),
-                "global_idx": int(local_idx + global_idx_base),
+                "global_idx": global_idx,
                 "process_index": int(process_idx),
-                "image": vis["image"],
-                "language_action": vis.get("language_action", "") or "",
-                "dataset_name": vis.get("dataset_name", "") or "",
-                "prompt": vis.get("prompt", "") or "",
+                # Store None placeholders - will extract lazily in log_if_ready()
+                "image": None,
+                "language_action": None,
+                "dataset_name": None,
+                "prompt": None,
             }
             self._hard_example_buffer.append(entry)
-            self._hard_example_keys.add((process_idx, step_idx, entry["global_idx"]))
+            self._hard_example_keys.add((process_idx, step_idx, global_idx))
+            added_count += 1
+
+        # Sort and trim to capacity
         self._hard_example_buffer.sort(key=lambda e: e["loss"], reverse=True)
         capacity = self._compute_buffer_capacity()
         if len(self._hard_example_buffer) > capacity:
             for removed in self._hard_example_buffer[capacity:]:
-                self._hard_example_keys.discard((removed["step"], removed["global_idx"]))
+                self._hard_example_keys.discard((removed["process_index"], removed["step"], removed["global_idx"]))
             del self._hard_example_buffer[capacity:]
 
+        if added_count > 0:
+            logging.debug(
+                f"[HardExampleTracker] Added {added_count} candidates from step {step_idx} "
+                f"(loss range: {min(losses[new_indices]):.4f}-{max(losses[new_indices]):.4f}), "
+                f"buffer size: {len(self._hard_example_buffer)}/{capacity}"
+            )
+
     def log_if_ready(self, step_idx: int) -> dict[str, Any] | None:
+        """Prepare payload with top-K hard examples, extracting images lazily."""
         if not self._interval_losses:
             self.reset()
             return None
@@ -157,15 +179,87 @@ class HardExampleTracker:
             min_logged_loss = float(hard_to_log[-1]["loss"])
             if not np.isfinite(quantile_threshold) or quantile_threshold < min_logged_loss:
                 quantile_threshold = min_logged_loss
+
+        # LAZY IMAGE EXTRACTION: Only extract images for the top-K samples that will be logged
+        # This avoids expensive extraction for samples that won't make the cut
+        extraction_successes = 0
+        extraction_failures = 0
+
+        for entry in hard_to_log:
+            if entry["image"] is not None:
+                # Already extracted
+                continue
+
+            # Extract image lazily from cached batch
+            batch_key = (entry["process_index"], entry["step"])
+            batch = self._batch_cache.get(batch_key)
+
+            if batch is None:
+                logging.warning(
+                    f"[HardExampleTracker] Batch cache miss for step={entry['step']}, "
+                    f"process={entry['process_index']}, global_idx={entry['global_idx']}"
+                )
+                extraction_failures += 1
+                continue
+
+            try:
+                visuals = visualize_language_actions(
+                    batch,
+                    self.tokenizer,
+                    indices=[entry["local_idx"]],
+                    max_examples=1,
+                    resize_hw=self.resize_hw,
+                )
+
+                if visuals and len(visuals) > 0:
+                    vis = visuals[0]
+                    entry["image"] = vis["image"]
+                    entry["language_action"] = vis.get("language_action", "") or ""
+                    entry["dataset_name"] = vis.get("dataset_name", "") or ""
+                    entry["prompt"] = vis.get("prompt", "") or ""
+                    extraction_successes += 1
+                else:
+                    logging.warning(
+                        f"[HardExampleTracker] Image extraction failed for "
+                        f"step={entry['step']}, global_idx={entry['global_idx']}, loss={entry['loss']:.4f}"
+                    )
+                    extraction_failures += 1
+            except Exception as e:
+                logging.warning(
+                    f"[HardExampleTracker] Exception during image extraction for "
+                    f"global_idx={entry['global_idx']}: {e}"
+                )
+                extraction_failures += 1
+
+        # Log extraction statistics
+        if extraction_successes > 0 or extraction_failures > 0:
+            logging.info(
+                f"[HardExampleTracker] Lazy extraction: {extraction_successes} success, "
+                f"{extraction_failures} failures out of {len(hard_to_log)} top samples"
+            )
+
+        # Filter out entries without images for logging
+        entries_with_images = [e for e in hard_to_log if e["image"] is not None]
+
         payload = {
-            "entries": hard_to_log,
+            "entries": entries_with_images,
             "quantile_threshold": quantile_threshold,
             "total_samples": total_samples,
             "max_hard_examples": self.max_hard_examples,
             "step": step_idx,
         }
+
+        # Log buffer statistics before reset
+        if hard_to_log:
+            buffer_losses = [e["loss"] for e in hard_to_log]
+            logging.info(
+                f"[HardExampleTracker] Top-{len(hard_to_log)} losses: "
+                f"max={max(buffer_losses):.4f}, min={min(buffer_losses):.4f}, "
+                f"logged_with_images={len(entries_with_images)}"
+            )
+
         self.reset()
-        if not hard_to_log and total_samples == 0:
+        if not entries_with_images and total_samples == 0:
             return None
         return payload
 
@@ -174,6 +268,7 @@ class HardExampleTracker:
         self._interval_total_samples = 0
         self._hard_example_buffer.clear()
         self._hard_example_keys.clear()
+        self._batch_cache.clear()  # Clear cached batches
 
     def _compute_buffer_capacity(self) -> int:
         # Always maintain capacity equal to the maximum number of hard examples to log.
@@ -265,7 +360,15 @@ def visualize_language_actions(
             else:
                 frame = np.clip(frame, 0, 255).astype(np.uint8)
             if resize_hw is not None and frame.shape[:2] != resize_hw:
-                frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
+                if HAS_CV2:
+                    frame = cv2.resize(frame, (resize_hw[1], resize_hw[0]), interpolation=cv2.INTER_AREA)
+                else:
+                    # Fallback: simple nearest-neighbor resize using numpy indexing
+                    h_old, w_old = frame.shape[:2]
+                    h_new, w_new = resize_hw
+                    row_idx = (np.arange(h_new) * h_old // h_new).astype(np.int32)
+                    col_idx = (np.arange(w_new) * w_old // w_new).astype(np.int32)
+                    frame = frame[row_idx[:, None], col_idx[None, :]]
             per_cam.append(frame)
 
         if not per_cam:

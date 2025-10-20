@@ -1,3 +1,4 @@
+from collections.abc import Callable
 import dataclasses
 import logging
 import re
@@ -10,10 +11,38 @@ from openpi.models import tokenizer as _tokenizer
 @dataclasses.dataclass
 class StateDiscretizationConfig:
     """Configuration for discretizing state vectors into text."""
+
     bins: int = 256
     min_dim: int = 7  # Minimum number of dimensions to include (avoid over-trimming)
     range_min: float = -1.0
     range_max: float = 1.0
+
+
+def _is_critical_directional(piece: str) -> bool:
+    """Check if token contains digits or directional words (for natural language formats)."""
+    # Check for digits
+    if re.search(r"[0-9]", piece):
+        return True
+    # Check for directional words (case-insensitive)
+    piece_lower = piece.lower()
+    directional_words = ["right", "left", "forward", "up", "down", "back"]
+    return any(word in piece_lower for word in directional_words)
+
+
+def _is_critical_schema(piece: str) -> bool:
+    """Check if token contains digits or +/- symbols (for schema-based formats)."""
+    # Check for digits
+    if re.search(r"[0-9]", piece):
+        return True
+    # Check for +/- symbols
+    if "+" in piece or "-" in piece:
+        return True
+    return False
+
+
+def _is_critical_default(piece: str) -> bool:
+    """Default critical token checker - only digits."""
+    return bool(re.search(r"[0-9]", piece))
 
 
 @dataclasses.dataclass
@@ -26,6 +55,7 @@ class PromptComponent:
     - schema: Schema/instruction text (e.g., coordinate system description)
     - action_prefix: Prefix before action output (e.g., "Action: ")
     """
+
     type: Literal["task_prefix", "state_prefix", "schema", "action_prefix"]
     template: str
     # Whether to include state type label in state prefix
@@ -39,11 +69,14 @@ class PromptFormat:
     This allows easy extension to support different prompt formats by composing
     components in different ways.
     """
+
     name: str
     components: list[PromptComponent]
     state_config: StateDiscretizationConfig | None = None
     # Separator between components (e.g., ", " or "\n")
     separator: str = ""
+    # Function to determine if a token piece is critical for this format
+    critical_token_checker: Callable[[str], bool] = _is_critical_default
 
     @property
     def include_state(self) -> bool:
@@ -61,7 +94,7 @@ class PromptFormat:
         Returns:
             Formatted prompt string ready for tokenization
         """
-        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
+        cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ").rstrip(".")
 
         # Prepare state-related variables
         state_str = ""
@@ -88,17 +121,15 @@ class PromptFormat:
                     if component.include_state_type:
                         parts.append(component.template.format(state="", state_label="None"))
                     else:
-                        parts.append(component.template.format(state=""))
+                        parts.append(component.template.format(state="", state_label=""))
                 else:
                     if self.state_config is None:
                         raise ValueError(f"State config required for prompt format '{self.name}'")
                     if component.include_state_type:
                         parts.append(component.template.format(state=state_str, state_label=state_label))
                     else:
-                        parts.append(component.template.format(state=state_str))
-            elif component.type == "schema":
-                parts.append(component.template)
-            elif component.type == "action_prefix":
+                        parts.append(component.template.format(state=state_str, state_label=""))
+            elif component.type == "schema" or component.type == "action_prefix":
                 parts.append(component.template)
 
         return self.separator.join(parts)
@@ -126,11 +157,9 @@ class PromptFormat:
             trimmed = state_arr[..., :last_idx].reshape(-1)
 
         if trimmed.size > 0:
-            bins = np.linspace(
-                self.state_config.range_min,
-                self.state_config.range_max,
-                self.state_config.bins + 1
-            )[:-1]
+            bins = np.linspace(self.state_config.range_min, self.state_config.range_max, self.state_config.bins + 1)[
+                :-1
+            ]
             discretized_state = np.digitize(trimmed, bins=bins) - 1
             return " ".join(map(str, discretized_state))
         return ""
@@ -141,11 +170,12 @@ PI05_PROMPT_FORMAT = PromptFormat(
     name="pi05",
     components=[
         PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
         PromptComponent("action_prefix", "Action: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=", ",
+    critical_token_checker=_is_critical_directional,
 )
 
 PI0_PROMPT_FORMAT = PromptFormat(
@@ -170,24 +200,82 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     name="coordinate_system",
     components=[
         PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=True),
         PromptComponent("schema", "Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up."),
         PromptComponent("action_prefix", "Actions: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=", ",
+    critical_token_checker=_is_critical_schema,
 )
 
 SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     name="schema_compact",
     components=[
-        PromptComponent("schema", "Schema: <A dx dy dz droll dpitch dyaw grip>; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}."),
+        PromptComponent(
+            "schema",
+            "Schema: <dx dy dz g>; units cm; +x fwd, +y left, +z up; g∈{0=close,1=open}",
+        ),
         PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "State ({state_label}): {state}", include_state_type=True),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        # PromptComponent(
+        #     "schema",
+        #     "Actions schema: dx dy dz droll dpitch dyaw grip; units cm/deg; +x forward, +y left, +z up; grip∈{{0=open,1=close}}.",
+        # ),
         PromptComponent("action_prefix", "Actions: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
-    separator="\n",
+    # separator="\n",
+    separator=". ",
+    critical_token_checker=_is_critical_schema,
+)
+
+SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact_with_rotation",
+    components=[
+        PromptComponent(
+            "schema",
+            "Schema: <dx dy dz dr dp dy g>; units cm/deg; +x fwd, +y left, +z up; dr=roll, dp=pitch, dy=yaw; g∈{0=close,1=open}",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=". ",
+    critical_token_checker=_is_critical_schema,
+)
+
+SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact_bimanual",
+    components=[
+        PromptComponent(
+            "schema",
+            "Schema: <L dx dy dz g R dx dy dz g>; units cm; +x fwd, +y left, +z up; L=left arm, R=right arm; g∈{0=close,1=open}",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=". ",
+    critical_token_checker=_is_critical_schema,
+)
+
+SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact_bimanual_with_rotation",
+    components=[
+        PromptComponent(
+            "schema",
+            "Schema: <L dx dy dz dr dp dy g R dx dy dz dr dp dy g>; units cm/deg; +x fwd, +y left, +z up; dr=roll, dp=pitch, dy=yaw; L=left, R=right; g∈{0=close,1=open}",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7),
+    separator=". ",
+    critical_token_checker=_is_critical_schema,
 )
 
 # Registry for easy lookup
@@ -197,6 +285,9 @@ PROMPT_FORMAT_REGISTRY = {
     "vqa": VQA_PROMPT_FORMAT,
     "coordinate_system": COORDINATE_SYSTEM_PROMPT_FORMAT,
     "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
+    "schema_compact_with_rotation": SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT,
+    "schema_compact_bimanual": SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT,
+    "schema_compact_bimanual_with_rotation": SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT,
 }
 
 
@@ -204,7 +295,17 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def __init__(
         self,
         max_len: int = 48,
-        prompt_format: Literal["pi05", "pi0", "vqa", "coordinate_system", "schema_compact"] | PromptFormat = "pi05",
+        prompt_format: Literal[
+            "pi05",
+            "pi0",
+            "vqa",
+            "coordinate_system",
+            "schema_compact",
+            "schema_compact_with_rotation",
+            "schema_compact_bimanual",
+            "schema_compact_bimanual_with_rotation",
+        ]
+        | PromptFormat = "pi05",
     ):
         super().__init__(max_len)
         self._stop_token_id = self._tokenizer.eos_id()
@@ -213,8 +314,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         if isinstance(prompt_format, str):
             if prompt_format not in PROMPT_FORMAT_REGISTRY:
                 raise ValueError(
-                    f"Unknown prompt format: {prompt_format}. "
-                    f"Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                    f"Unknown prompt format: {prompt_format}. Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
                 )
             self._prompt_format = PROMPT_FORMAT_REGISTRY[prompt_format]
         else:
@@ -234,8 +334,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         elif isinstance(prompt_format, str):
             if prompt_format not in PROMPT_FORMAT_REGISTRY:
                 raise ValueError(
-                    f"Unknown prompt format: {prompt_format}. "
-                    f"Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                    f"Unknown prompt format: {prompt_format}. Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
                 )
             fmt = PROMPT_FORMAT_REGISTRY[prompt_format]
         else:
@@ -280,22 +379,14 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
         if end_idx > start_idx:
             reasoning_mask[start_idx:end_idx] = True
-        # Build critical token mask: mark tokens that contain digits or directional words within reasoning span only
+
+        # Build critical token mask using format-specific checker
+        # Only mark tokens within reasoning span (not in the prompt)
         pieces = [self._tokenizer.id_to_piece(t) for t in tokens]
-
-        def _is_critical(p: str) -> bool:
-            # Check for digits
-            if re.search(r"[0-9]", p):
-                return True
-            # Check for directional words (case-insensitive)
-            p_lower = p.lower()
-            directional_words = ["right", "left", "forward", "up", "down", "back"]
-            return any(word in p_lower for word in directional_words)
-
         for i in range(start_idx, end_idx):
             if i < 0 or i >= len(pieces):
                 continue
-            if _is_critical(pieces[i]):
+            if fmt.critical_token_checker(pieces[i]):
                 numeric_mask[i] = True
 
         return (
@@ -309,7 +400,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         """Decode tokens back to a string."""
         if not isinstance(tokens, list):
             tokens = tokens.tolist()
-        return self._tokenizer.decode(tokens)
+        return self._tokenizer.decode(tokens).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
@@ -329,8 +420,5 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         # The reasoning is the prediction language action
         # Use VQA format (no state) for prediction tasks
         return self.tokenize_cot(
-            prediction_prompt,
-            reasoning=prediction_language,
-            state=None,
-            prompt_format=VQA_PROMPT_FORMAT
+            prediction_prompt, reasoning=prediction_language, state=None, prompt_format=VQA_PROMPT_FORMAT
         )

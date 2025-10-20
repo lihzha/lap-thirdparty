@@ -8,7 +8,7 @@ import signal
 import sys
 import time
 from pathlib import Path
-
+import cv2
 import numpy as np
 import tqdm
 import tyro
@@ -16,9 +16,10 @@ from moviepy.editor import ImageSequenceClip
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 from scipy.spatial.transform import Rotation as R
-from droid.robot_env import RobotEnv
+import zmq
 
 # Add parent directory to path to import from src
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from shared import Args, IMAGE_KEYS
 
@@ -26,6 +27,91 @@ faulthandler.enable()
 
 # DROID data collection frequency -- we slow down execution to match this frequency
 DROID_CONTROL_FREQUENCY = 15
+
+
+def _to_radians(a, degrees: bool):
+    return np.deg2rad(a) if degrees else a
+
+
+def _to_degrees(a, degrees: bool):
+    return np.rad2deg(a) if degrees else a
+
+
+def normalize_quat_xyzw(q, eps=1e-12):
+    """
+    Normalize quaternion(s) in xyzw ordering.
+    q: array-like (..., 4)
+    """
+    q = np.asarray(q, dtype=np.float64)
+    norm = np.linalg.norm(q, axis=-1, keepdims=True)
+    return q / np.clip(norm, eps, None)
+
+
+def euler_to_quat(angles, degrees: bool = False):
+    """
+    Convert Euler angles to quaternion(s).
+    Convention: yaw-pitch-roll (Z-Y-X Tait-Bryan, extrinsic).
+    Input:
+        angles: array-like (..., 3) -> [roll (X), pitch (Y), yaw (Z)]
+        degrees: if True, 'angles' are in degrees and converted to radians.
+    Output:
+        q: np.ndarray (..., 4) in (x, y, z, w)
+    """
+    angles = np.asarray(angles, dtype=np.float64)
+    roll, pitch, yaw = np.moveaxis(angles, -1, 0)  # each (...,)
+
+    roll = _to_radians(roll, degrees)
+    pitch = _to_radians(pitch, degrees)
+    yaw = _to_radians(yaw, degrees)
+
+    cr = np.cos(roll * 0.5)
+    sr = np.sin(roll * 0.5)
+    cp = np.cos(pitch * 0.5)
+    sp = np.sin(pitch * 0.5)
+    cy = np.cos(yaw * 0.5)
+    sy = np.sin(yaw * 0.5)
+
+    # ZYX (yaw, pitch, roll) → quaternion (xyzw)
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+
+    q = np.stack([x, y, z, w], axis=-1)
+    return normalize_quat_xyzw(q)
+
+
+def quat_to_euler(q, degrees: bool = False):
+    """
+    Convert quaternion(s) to Euler angles.
+    Convention: yaw-pitch-roll (Z-Y-X Tait-Bryan, extrinsic).
+    Input:
+        q: array-like (..., 4) in (x, y, z, w)
+        degrees: if True, returned angles are in degrees.
+    Output:
+        angles: np.ndarray (..., 3) -> [roll (X), pitch (Y), yaw (Z)]
+    """
+    q = normalize_quat_xyzw(q)
+    x, y, z, w = np.moveaxis(q, -1, 0)  # each (...,)
+
+    # roll (x-axis rotation)
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+    # pitch (y-axis rotation)
+    sinp = 2.0 * (w * y - z * x)
+    # clamp to handle numerical edge cases
+    sinp_clamped = np.clip(sinp, -1.0, 1.0)
+    pitch = np.arcsin(sinp_clamped)
+
+    # yaw (z-axis rotation)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+    angles = np.stack([roll, pitch, yaw], axis=-1)
+    return _to_degrees(angles, degrees)
 
 
 @dataclasses.dataclass
@@ -41,7 +127,6 @@ class Args:
     remote_port: int = (
         8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
-    in_camera_frame: bool = True  # whether the predicted movements are in camera frame or robot/base frame
 
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
@@ -71,14 +156,13 @@ def main(args: Args):
 
     # Initialize the Panda environment. Using joint velocity action space and gripper position action space is very important.
     # env = RobotEnv(action_space="joint_velocity", gripper_action_space="position")
-    env = RobotEnv(
-        robot_type="panda",
-        action_space="cartesian_position",
-        gripper_action_space="position",
-        do_reset=True,
-        default_resolution={"web": (640, 480), "rs": (640, 480)},
-        resize_resolution={"web": (0, 0), "rs": (0, 0)},
-    )
+
+    context = zmq.Context()
+    socket = context.socket(zmq.REP)
+    port = 5555
+    socket.bind(f"tcp://*:{port}")
+    print(f"Server started on port {port}")
+
     extrinsics = [
         0.19344852600560863,
         -0.4704189157280809,
@@ -96,15 +180,14 @@ def main(args: Args):
     cam_to_base_extrinsics_matrix = np.eye(4, dtype=float)
     cam_to_base_extrinsics_matrix[:3, :3] = rot_mat
     cam_to_base_extrinsics_matrix[:3, 3] = pos
-    print("Created the droid env!")
 
-    while True:
-        env.reset()
-        print()
-        ans = input("Correctly reset (enter y or n)? ")
-        if "n" in ans.lower():
-            continue
-        break
+    # while True:
+    #     env.reset()
+    #     print()
+    #     ans = input("Correctly reset (enter y or n)? ")
+    #     if "n" in ans.lower():
+    #         continue
+    #     break
 
     # Connect to the policy server
     policy_client = websocket_client_policy.WebsocketClientPolicy(args.remote_host, args.remote_port)
@@ -125,9 +208,16 @@ def main(args: Args):
             start_time = time.time()
             try:
                 # Get the current observation
+                req = socket.recv_pyobj()
+                if "reset" in req:
+                    time.sleep(1 / DROID_CONTROL_FREQUENCY)
+                    socket.send_pyobj({})
+                    continue
+
+                obs = req["obs"]
                 curr_obs = _extract_observation(
                     args,
-                    env.get_observation(),
+                    obs,
                     # Save the first observation to disk
                     save_to_disk=t_step == 0,
                 )
@@ -139,6 +229,7 @@ def main(args: Args):
                     request_data = {
                         "observation": {
                             IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
+                            IMAGE_KEYS[1]: image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
                             "cartesian_position": curr_obs["observation/cartesian_position"],
                             "gripper_position": curr_obs["observation/gripper_position"],
                             "state": curr_obs["observation/state"],
@@ -146,32 +237,30 @@ def main(args: Args):
                         "prompt": instruction,
                         "batch_size": None,
                     }
-                    if args.in_camera_frame:
-                        request_data["observation"][IMAGE_KEYS[1]] = (
-                            image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
-                        )
 
                     # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                     # Ctrl+C will be handled after the server call is complete
                     with prevent_keyboard_interrupt():
                         # Get response from policy server (may contain actions and/or reasoning)
                         st = time.time()
-                        response = policy_client.infer_reasoning(request_data)
+                        response = policy_client.infer(request_data)
+                        try:
+                            print(response["reasoning"])
+                        except:
+                            pass
+
+                        breakpoint()
+
 
                         # Extract actions from response (either pre-parsed or parse from reasoning)
                         if "actions" in response and response["actions"] is not None:
                             actions = np.asarray(response["actions"])
-                            print(response["reasoning"])
                             # Extract translation delta (first 3 dims) and gripper (last dim)
                             delta_base = actions[0, :3]
-                            grip_actions = 1 - actions[:, -1]
+                            grip_actions = actions[:, -1]
                         else:
                             raise NotImplementedError
 
-                        # Map translation delta to robot/base frame if in camera frame
-                        if args.in_camera_frame:
-                            R_cb = cam_to_base_extrinsics_matrix[:3, :3]
-                            delta_base = R_cb @ delta_base
 
                         # Build absolute target from current state
                         curr_pos = np.asarray(curr_obs["observation/cartesian_position"], dtype=float)[:3]
@@ -209,7 +298,15 @@ def main(args: Args):
                 else:
                     action = np.concatenate([action[:-1], np.zeros((1,))])
 
-                env.step(action)
+                rep = {
+                    "action": {
+                        "base_pose": obs["base_pose"],
+                        "arm_pos": action[:3],
+                        "arm_quat": action[3:7],
+                        "gripper_pos": action[-1:],
+                    }
+                }
+                socket.send_pyobj(rep)
 
                 # Sleep to match DROID data collection frequency
                 elapsed_time = time.time() - start_time
@@ -226,36 +323,26 @@ def main(args: Args):
         answer = input("Do one more eval? (enter y or n) ")
         if "n" in answer.lower():
             break
-        while True:
-            env.reset()
-            answer = input("Correctly reset (enter y or n)? ")
-            if "n" in answer.lower():
-                continue
-            break
 
 
 def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
-    image_observations = obs_dict["image"]
+    base_image = cv2.imdecode(obs_dict["base_image"], cv2.IMREAD_COLOR)
+    wrist_image = cv2.imdecode(obs_dict["wrist_image"], cv2.IMREAD_COLOR)
     # In addition to image observations, also capture the proprioceptive state
-    robot_state = obs_dict["robot_state"]
-    cartesian_position = np.array(robot_state["cartesian_position"])
-    gripper_position = np.array([robot_state["gripper_position"]])
+    cartesian_position = np.concatenate([obs_dict["arm_pos"], quat_to_euler(obs_dict["arm_quat"])])
+    gripper_position = np.array(obs_dict["gripper_pos"]).item()
 
-    if gripper_position > 0.2:
+    if gripper_position > 0.5:
         gripper_position = 1.0
     else:
         gripper_position = 0.0
 
     return {
-        "observation/image": image_observations["0"][..., ::-1][None],
-        "observation/wrist_image": image_observations["1"][None],
-        # "observation/wrist_image": np.rot90(image_observations["1"][..., ::-1], k=1), # rotate 90 degrees
-        # "observation/wrist_image": np.rot90(image_observations["1"][..., ::-1], k=2), # rotate 180 degrees
-        # "observation/wrist_image": image_observations["1"][..., ::-1][::-1],  # flip vertically, up -> dowm
-        #  "observation/wrist_image": image_observations["14846828_left"][..., :3][..., ::-1],  # drop alpha channel and convert BGR to RGB
+        "observation/image": base_image[None],
+        "observation/wrist_image": wrist_image[None],
         "observation/cartesian_position": cartesian_position,
-        "observation/gripper_position": np.array([gripper_position]),
-        "observation/state": np.concatenate([cartesian_position, [gripper_position]]),
+        "observation/gripper_position": np.array(gripper_position).reshape((-1, 1)),
+        "observation/state": np.concatenate([cartesian_position, np.array(gripper_position)[None]]),
     }
 
 

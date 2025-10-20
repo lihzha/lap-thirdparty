@@ -347,20 +347,24 @@ def _rot_z(a):
 
 @tf.function
 def _R_from_euler_xyz(angles):
-    """Intrinsic XYZ: R = Rz(yaw) @ Ry(pitch) @ Rx(roll)."""
+    """Extrinsic XYZ: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)."""
     angles = tf.convert_to_tensor(angles)
     # Ensure last dim is 3
     roll = angles[..., 0]
     pitch = angles[..., 1]
     yaw = angles[..., 2]
-    return tf.linalg.matmul(tf.linalg.matmul(_rot_z(yaw), _rot_y(pitch)), _rot_x(roll))
+    return tf.linalg.matmul(tf.linalg.matmul(_rot_x(roll), _rot_y(pitch)), _rot_z(yaw))
 
 
 @tf.function
 def _euler_xyz_from_R(R, eps=1e-6):
     """
-    Extract intrinsic XYZ (roll, pitch, yaw) from rotation matrix R.
+    Extract extrinsic XYZ (roll, pitch, yaw) from rotation matrix R.
     Handles gimbal lock via elementwise tf.where (graph-safe).
+
+    For extrinsic XYZ: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)
+    Matrix elements: r02 = sin(pitch), r12 = -sin(roll)cos(pitch), r22 = cos(roll)cos(pitch)
+                     r01 = -cos(pitch)sin(yaw), r00 = cos(pitch)cos(yaw)
     """
     R = tf.convert_to_tensor(R)
     dtype = R.dtype
@@ -370,27 +374,25 @@ def _euler_xyz_from_R(R, eps=1e-6):
 
     r00 = R[..., 0, 0]
     r01 = R[..., 0, 1]
+    r02 = R[..., 0, 2]
     r10 = R[..., 1, 0]
     r11 = R[..., 1, 1]
-    r20 = R[..., 2, 0]
-    r21 = R[..., 2, 1]
+    r12 = R[..., 1, 2]
     r22 = R[..., 2, 2]
 
-    # Regular case: |r20| < 1 - eps  (i.e., |cos(pitch)| != 0)
-    pitch_reg = tf.asin(tf.clip_by_value(-r20, -one, one))
-    roll_reg = tf.math.atan2(r21, r22)
-    yaw_reg = tf.math.atan2(r10, r00)
+    # Regular case: |r02| < 1 - eps  (i.e., |cos(pitch)| != 0)
+    pitch_reg = tf.asin(tf.clip_by_value(r02, -one, one))
+    roll_reg = tf.math.atan2(-r12, r22)
+    yaw_reg = tf.math.atan2(-r01, r00)
 
     # Gimbal lock: cos(pitch) ~ 0  -> pitch = ±pi/2
-    pitch_gl = (_tf_pi(dtype) / tf.cast(2.0, dtype)) * tf.sign(-r20)
-    roll_gl = tf.zeros_like(pitch_gl)  # set roll = 0
-    # Distinguish +pi/2 vs -pi/2 using sign of r20 (recall r20 = -sin(pitch))
-    yaw_pos = tf.math.atan2(-r01, r11)  # for +pi/2 (r20 < 0)
-    yaw_neg = tf.math.atan2(r01, r11)  # for -pi/2 (r20 > 0)
-    yaw_gl = tf.where(tf.less(r20, zero), yaw_pos, yaw_neg)
+    pitch_gl = (_tf_pi(dtype) / tf.cast(2.0, dtype)) * tf.sign(r02)
+    roll_gl = tf.zeros_like(pitch_gl)  # set roll = 0 by convention
+    # Both cases use same formula: yaw = atan2(r10, r11)
+    yaw_gl = tf.math.atan2(r10, r11)
 
     # Blend by condition
-    cond = tf.less(tf.abs(r20), (one - eps_t))
+    cond = tf.less(tf.abs(r02), (one - eps_t))
     roll = tf.where(cond, roll_reg, roll_gl)
     pitch = tf.where(cond, pitch_reg, pitch_gl)
     yaw = tf.where(cond, yaw_reg, yaw_gl)
@@ -400,9 +402,9 @@ def _euler_xyz_from_R(R, eps=1e-6):
 @tf.function
 def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
     """
-    Convert intrinsic Z-X-Y Euler angles to intrinsic X-Y-Z Euler angles.
-    angles: tensor of shape (..., 3) -> (az, ax, ay) in radians by default.
-    returns: tensor of shape (..., 3) -> (roll[x], pitch[y], yaw[z]) in same unit.
+    Convert intrinsic Z-X-Y Euler angles to extrinsic X-Y-Z Euler angles.
+    angles: tensor of shape (..., 3) -> (az, ax, ay) in radians by default (intrinsic ZXY).
+    returns: tensor of shape (..., 3) -> (roll[x], pitch[y], yaw[z]) in same unit (extrinsic XYZ).
     """
     angles = tf.convert_to_tensor(angles, dtype=tf.float32)
     if degrees:
@@ -418,34 +420,8 @@ def zxy_to_xyz_tf(angles, degrees=False, eps=1e-6):
     Ry = _rot_y(ay)
     R = tf.linalg.matmul(tf.linalg.matmul(Rz, Rx), Ry)
 
-    # Elements we need
-    r20 = R[..., 2, 0]
-    r21 = R[..., 2, 1]
-    r22 = R[..., 2, 2]
-    r10 = R[..., 1, 0]
-    r00 = R[..., 0, 0]
-    r01 = R[..., 0, 1]
-    r11 = R[..., 1, 1]
-
-    # Regular branch (no gimbal lock): |r20| < 1 - eps
-    cond = tf.less(tf.abs(r20), 1.0 - tf.convert_to_tensor(eps, R.dtype))
-    theta_reg = tf.asin(tf.clip_by_value(-r20, -1.0, 1.0))  # pitch (y)
-    phi_reg = tf.atan2(r21, r22)  # roll  (x)
-    psi_reg = tf.atan2(r10, r00)  # yaw   (z)
-
-    # Gimbal lock branch: |cos(theta)| ~ 0  -> theta = ±pi/2, set roll=0, solve yaw
-    theta_gl = (_tf_pi(tf.float32) / 2) * tf.sign(-r20)
-    phi_gl = tf.zeros_like(theta_gl)
-    # If r20 < 0 (theta ≈ +pi/2):  psi = atan2(-r01, r11)
-    # Else (theta ≈ -pi/2):       psi = atan2( r01, r11)
-    psi_gl = tf.where(r20 < 0.0, tf.atan2(-r01, r11), tf.atan2(r01, r11))
-
-    # Select per element
-    phi = tf.where(cond, phi_reg, phi_gl)
-    theta = tf.where(cond, theta_reg, theta_gl)
-    psi = tf.where(cond, psi_reg, psi_gl)
-
-    out = tf.stack([phi, theta, psi], axis=-1)
+    # Extract extrinsic XYZ angles from rotation matrix
+    out = _euler_xyz_from_R(R, eps=eps)
     if degrees:
         out = tf.math.multiply(out, 180.0 / _tf_pi(tf.float32))
     return out
@@ -458,44 +434,26 @@ def euler_diff(angles1, angles2, order="xyz", degrees=False):
         R(angles2) * R(angles_rel) = R(angles1)
 
     Args:
-        angles1: (..., 3) tensor of Euler angles [a1, a2, a3]
-        angles2: (..., 3) tensor of Euler angles [a1, a2, a3]
-        order:   rotation order string, e.g. "xyz" (intrinsic)
+        angles1: (..., 3) tensor of Euler angles [roll, pitch, yaw] (extrinsic XYZ)
+        angles2: (..., 3) tensor of Euler angles [roll, pitch, yaw] (extrinsic XYZ)
+        order:   rotation order string (currently only "xyz" extrinsic is supported)
         degrees: whether input/output are in degrees
     Returns:
-        (..., 3) tensor of relative Euler angles (same order)
+        (..., 3) tensor of relative Euler angles [roll, pitch, yaw] (extrinsic XYZ)
     """
     if degrees:
         angles1 = tf.math.multiply(angles1, _tf_pi(tf.float32) / 180.0)
         angles2 = tf.math.multiply(angles2, _tf_pi(tf.float32) / 180.0)
 
-    # map axis char -> rotation fn
-    rot_map = {"x": _rot_x, "y": _rot_y, "z": _rot_z}
+    # Build rotation matrices using extrinsic XYZ convention
+    R1 = _R_from_euler_xyz(angles1)
+    R2 = _R_from_euler_xyz(angles2)
 
-    def build_R(angles):
-        R = None
-        for i, ax in enumerate(order):
-            Ri = rot_map[ax](angles[..., i])
-            R = Ri if R is None else tf.linalg.matmul(R, Ri)
-        return R
+    # Compute relative rotation: Rrel = R2^T * R1
+    Rrel = tf.linalg.matmul(R2, R1, transpose_a=True)
 
-    R1 = build_R(angles1)
-    R2 = build_R(angles2)
-
-    Rrel = tf.linalg.matmul(R2, R1, transpose_a=True)  # Rrel = R2^T * R1
-
-    # Extract back Euler from Rrel, here only for "xyz" (extendable)
-    r20 = Rrel[..., 2, 0]
-    r21 = Rrel[..., 2, 1]
-    r22 = Rrel[..., 2, 2]
-    r10 = Rrel[..., 1, 0]
-    r00 = Rrel[..., 0, 0]
-
-    theta = tf.asin(-r20)
-    phi = tf.atan2(r21, r22)
-    psi = tf.atan2(r10, r00)
-
-    out = tf.stack([phi, theta, psi], axis=-1)
+    # Extract Euler angles from Rrel using robust method with gimbal lock handling
+    out = _euler_xyz_from_R(Rrel)
     if degrees:
         out = tf.math.multiply(out, 180.0 / _tf_pi(tf.float32))
     return out
@@ -511,7 +469,7 @@ def matrix_to_xyzrpy(T, eps=1e-6):
         eps: epsilon for gimbal lock handling
 
     Returns:
-        tensor of shape (..., 6) - [x, y, z, roll, pitch, yaw]
+        tensor of shape (..., 6) - [x, y, z, roll, pitch, yaw] (extrinsic XYZ)
     """
     T = tf.convert_to_tensor(T)
 
@@ -521,7 +479,7 @@ def matrix_to_xyzrpy(T, eps=1e-6):
     # Extract rotation matrix (top-left 3x3)
     R = T[..., :3, :3]
 
-    # Convert rotation matrix to Euler XYZ (roll, pitch, yaw)
+    # Convert rotation matrix to extrinsic XYZ Euler angles (roll, pitch, yaw)
     rpy = _euler_xyz_from_R(R, eps=eps)
 
     # Concatenate position and orientation
@@ -532,7 +490,7 @@ def matrix_to_xyzrpy(T, eps=1e-6):
 def coordinate_transform_bcz(movement_actions):
     """
     movement_actions: (..., 6) where [:3] = translation deltas (xyz),
-                      [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
+                      [3:6] = Euler deltas in extrinsic XYZ (roll,pitch,yaw).
     Returns transformed actions under x'=-y, y'=-x, z'=-z.
 
     """
@@ -547,7 +505,7 @@ def coordinate_transform_bcz(movement_actions):
     t = movement_actions[..., :3]
     t_prime = tf.linalg.matvec(C, t)
 
-    # rotations: R' = C R C^T, then back to Euler XYZ
+    # rotations: R' = C R C^T, then back to extrinsic XYZ Euler angles
     e = movement_actions[..., 3:6]
     R = _R_from_euler_xyz(e)
     # _C is symmetric here, but keep transpose for clarity / generality
@@ -562,7 +520,7 @@ def coordinate_transform_bcz(movement_actions):
 def coordinate_transform_dobbe(movement_actions):
     """
     movement_actions: (..., 6) where [:3] = translation deltas (xyz),
-                      [3:6] = Euler deltas in intrinsic XYZ (roll,pitch,yaw).
+                      [3:6] = Euler deltas in extrinsic XYZ (roll,pitch,yaw).
     Returns transformed actions under x'=y, y'=-x, z'=z.
 
     """
@@ -576,7 +534,36 @@ def coordinate_transform_dobbe(movement_actions):
     t = movement_actions[..., :3]
     t_prime = tf.linalg.matvec(C, t)
 
-    # rotations: R' = C R C^T, then back to Euler XYZ
+    # rotations: R' = C R C^T, then back to extrinsic XYZ Euler angles
+    e = movement_actions[..., 3:6]
+    R = _R_from_euler_xyz(e)
+    # _C is symmetric here, but keep transpose for clarity / generality
+    CT = tf.linalg.matrix_transpose(C)
+    R_prime = tf.linalg.matmul(tf.linalg.matmul(C, R), CT)
+    e_prime = _euler_xyz_from_R(R_prime)
+
+    return tf.concat([t_prime, e_prime], axis=-1)
+
+
+@tf.function
+def coordinate_transform_jaco(movement_actions):
+    """
+    movement_actions: (..., 6) where [:3] = translation deltas (xyz),
+                      [3:6] = Euler deltas in extrinsic XYZ (roll,pitch,yaw).
+    Returns transformed actions under x'=-y, y'=x, z'=z.
+
+    """
+    movement_actions = tf.convert_to_tensor(movement_actions)
+    dtype = movement_actions.dtype
+
+    # Ensure _C matches input dtype
+    C = tf.constant([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], dtype=dtype)
+
+    # translations: t' = C t
+    t = movement_actions[..., :3]
+    t_prime = tf.linalg.matvec(C, t)
+
+    # rotations: R' = C R C^T, then back to extrinsic XYZ Euler angles
     e = movement_actions[..., 3:6]
     R = _R_from_euler_xyz(e)
     # _C is symmetric here, but keep transpose for clarity / generality

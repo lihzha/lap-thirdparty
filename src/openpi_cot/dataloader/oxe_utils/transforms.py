@@ -81,7 +81,88 @@ def rel2abs_gripper_actions(actions: tf.Tensor) -> tf.Tensor:
     return new_actions
 
 
+def rescale_action_with_bound(
+    actions: tf.Tensor,
+    low: float,
+    high: float,
+    safety_margin: float = 0,
+    post_scaling_max: float = 1.0,
+    post_scaling_min: float = -1.0,
+) -> tf.Tensor:
+    """Formula taken from https://stats.stackexchange.com/questions/281162/scale-a-number-between-a-range."""
+    resc_actions = (actions - low) / (high - low) * (post_scaling_max - post_scaling_min) + post_scaling_min
+    return tf.clip_by_value(
+        resc_actions,
+        post_scaling_min + safety_margin,
+        post_scaling_max - safety_margin,
+    )
+
+
+def normalize_action(value: tf.Tensor, mean: tf.Tensor, std: tf.Tensor) -> tf.Tensor:
+    """Normalize values using mean and standard deviation."""
+    return (value - mean) / std
+
+
+def compute_padded_movement_actions(eef_state: tf.Tensor) -> tf.Tensor:
+    """
+    Computes movement actions as deltas between consecutive states, with zero-padding for the last timestep.
+
+    This follows the DROID dataset convention where action[t] represents the delta from state[t] to state[t+1],
+    and action[T-1] = 0. This approach preserves trajectory length without truncation.
+
+    Args:
+        eef_state: End-effector state tensor of shape (T, 6) containing [xyz, rpy]
+
+    Returns:
+        Padded movement actions of shape (T, 6) containing [delta_xyz, delta_rpy]
+    """
+    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+
+    # Compute deltas between consecutive timesteps: action[t] = state[t+1] - state[t]
+    movement_actions = tf.concat(
+        (
+            eef_state[1:, :3] - eef_state[:-1, :3],  # Position deltas
+            euler_diff(eef_state[1:, 3:6], eef_state[:-1, 3:6]),  # Rotation deltas
+        ),
+        axis=-1,
+    )
+    # Pad with zeros for the last timestep: action[T-1] = 0
+    padded_movement_actions = tf.concat(
+        [movement_actions, tf.zeros((1, tf.shape(movement_actions)[1]))],
+        axis=0,
+    )
+    return padded_movement_actions
+
+
 # === Bridge-V2 =>> Dataset-Specific Transform ===
+def rescale_bridge_action(action: tf.Tensor) -> tf.Tensor:
+    """
+    Rescales Bridge action to span RT-1 action space.
+
+    Values taken from
+    https://github.com/Asap7772/rt1_eval/blob/2fad77e9bf4def2ef82604d445270f83475e9726/kitchen_eval/rt1_wrapper.py#L39
+    """
+    # Rescale world_vector (xyz position delta)
+    world_vector = rescale_action_with_bound(
+        action[:, :3],
+        low=-0.05,
+        high=0.05,
+        safety_margin=0.01,
+        post_scaling_max=1.75,
+        post_scaling_min=-1.75,
+    )
+    # Rescale rotation_delta
+    rotation_delta = rescale_action_with_bound(
+        action[:, 3:6],
+        low=-0.25,
+        high=0.25,
+        safety_margin=0.01,
+        post_scaling_max=1.4,
+        post_scaling_min=-1.4,
+    )
+    return tf.concat([world_vector, rotation_delta, action[:, 6:]], axis=-1)
+
+
 def relabel_bridge_actions(traj: dict[str, Any]) -> dict[str, Any]:
     """Relabels actions to use reached proprioceptive state; discards last timestep (no-action)."""
     movement_actions = traj["observation"]["state"][1:, :6] - traj["observation"]["state"][:-1, :6]
@@ -127,8 +208,6 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     Note =>> In original Bridge V2 dataset, the first timestep has an all-zero action, so we remove it!
     """
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
     for key in trajectory:
         if key == "traj_metadata":
             continue
@@ -145,24 +224,16 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         ],
         axis=1,
     )
+
     # trajectory = relabel_bridge_actions(trajectory)
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
-    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
+    trajectory["observation"]["gripper_state"] = tf.clip_by_value(trajectory["observation"]["state"][:, -1:], 0, 1)
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["EEF_state"][1:, :3] - trajectory["observation"]["EEF_state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["EEF_state"][1:, 3:6],
-                trajectory["observation"]["EEF_state"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["EEF_state"])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    return traj_truncated
+    return trajectory
 
 
 def bridge_orig_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -187,6 +258,7 @@ def bridge_orig_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ],
         axis=1,
     )
+
     # print(trajectory.keys(), trajectory['observation'].keys())
     trajectory = relabel_bridge_actions(trajectory)
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
@@ -210,7 +282,9 @@ def ppgm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    trajectory["observation"]["gripper_closed"] = tf.clip_by_value(
+        invert_gripper_actions(trajectory["observation"]["gripper_closed"]), 0, 1
+    )
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -234,37 +308,16 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["base_pose_tool_reached"][1:, :3]
-            - trajectory["observation"]["base_pose_tool_reached"][:-1, :3],
-            euler_diff(
-                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][1:, 3:7]),
-                tft.euler.from_quaternion(trajectory["observation"]["base_pose_tool_reached"][:-1, 3:7]),
-            ),
-        ),
-        axis=-1,
-    )
-    # movement_actions = transform_actions_xyz(movement_actions)
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["eef_state"])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    return traj_truncated
+    return trajectory
 
 
 def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    # make gripper action absolute action, +1 = open, 0 = close
-    gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
-    gripper_action = rel2abs_gripper_actions(gripper_action)
+    import tensorflow_graphics.geometry.transformation as tft
 
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"]["world_vector"],
-            trajectory["action"]["rotation_delta"],
-            gripper_action[:, None],
-        ),
-        axis=-1,
-    )
     # decode compressed state
     eef_value = tf.io.decode_compressed(
         trajectory["observation"]["clip_function_input/base_pose_tool_reached"],
@@ -274,57 +327,102 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["clip_function_input/base_pose_tool_reached"] = tf.reshape(eef_value, (-1, 7))
     gripper_value = tf.io.decode_compressed(trajectory["observation"]["gripper_closed"], compression_type="ZLIB")
     gripper_value = tf.io.decode_raw(gripper_value, tf.float32)
-    trajectory["observation"]["gripper_closed"] = tf.reshape(gripper_value, (-1, 1))
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["observation"]["natural_language_instruction"]), ""
-    # )  # delete uninformative language instruction
+    trajectory["observation"]["gripper_closed"] = tf.reshape(gripper_value, (-1,))
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
+
+    # gripper_abs_state = rel2abs_gripper_actions(trajectory["observation"]["gripper_closed"])
+    gripper_abs_state = invert_gripper_actions(trajectory["observation"]["gripper_closed"])
+
+    # Create EEF state with xyz + euler angles + gripper
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["clip_function_input/base_pose_tool_reached"][:, 3:7]),
+            tf.clip_by_value(tf.reshape(gripper_abs_state, (-1, 1)), 0, 1),
+        ),
+        axis=-1,
+    )
+
+    gripper_action_abs = rel2abs_gripper_actions(trajectory["action"]["gripper_closedness_action"][:, 0])
+
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, gripper_action_abs[:, None]], axis=1)
+
     return trajectory
 
 
-def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+def rescale_taco_play_action(action: tf.Tensor) -> tf.Tensor:
+    """
+    Rescales Taco Play actions based on measured per dimension ranges.
 
+    Args:
+        action: Action tensor with shape (..., 7) containing [xyz, rpy, gripper]
+    """
+    # Rotation Delta (indices 3:6)
+    rd_lows = tf.constant([-3.2, -0.8, -1.8])
+    rd_highs = tf.constant([3.2, 0.2, 2.5])
+    rotation_delta = (action[:, 3:6] - rd_lows) / (rd_highs - rd_lows) * 2 - 1
+    rotation_delta = tf.clip_by_value(rotation_delta, -1 + 0.01, 1 - 0.01)
+
+    # World Vector (indices 0:3)
+    wv_lows = tf.constant([0.0, -0.5, 0.0])
+    wv_highs = tf.constant([0.8, 0.7, 0.6])
+    world_vector = (action[:, :3] - wv_lows) / (wv_highs - wv_lows) * 2 - 1
+    world_vector = tf.clip_by_value(world_vector, -1 + 0.01, 1 - 0.01)
+
+    return tf.concat([world_vector, rotation_delta, action[:, 6:]], axis=-1)
+
+
+def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["state_eef"] = trajectory["observation"]["robot_obs"][:, :6]
-    trajectory["observation"]["state_gripper"] = trajectory["observation"]["robot_obs"][:, 7:8]
+    # trajectory["observation"]["state_gripper"] = (
+    #     (trajectory["observation"]["robot_obs"][:, 6:7] + 1) / 2 - 0.459656
+    # ) / (0.5 - 0.459656)
+
+    trajectory["observation"]["state_gripper"] = tf.clip_by_value(
+        12.3903 * trajectory["observation"]["robot_obs"][:, 6:7], 0, 1
+    )
+    # trajectory["observation"]["state_gripper"] = trajectory["observation"]["robot_obs"][:, 7:8]
     trajectory["action"] = trajectory["action"]["rel_actions_world"]
 
     # invert gripper action + clip, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
         (
             trajectory["action"][:, :6],
-            tf.clip_by_value(trajectory["action"][:, -1:], 0, 1),
+            tf.clip_by_value((trajectory["action"][:, -1:] + 1) / 2, 0, 1),
         ),
         axis=-1,
     )
+
+    # # Apply action rescaling from RT-1 preprocessing
+    # trajectory["action"] = rescale_taco_play_action(trajectory["action"])
 
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state_eef"][1:, :3] - trajectory["observation"]["state_eef"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state_eef"][1:, 3:6],
-                trajectory["observation"]["state_eef"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state_eef"])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    return traj_truncated
+    return trajectory
 
 
 def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
-    trajectory["observation"]["state_eef"] = trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
-    trajectory["observation"]["state_gripper"] = trajectory["observation"]["end_effector_cartesian_pos"][:, -1:]
+    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_jaco
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
     gripper_action = rel2abs_gripper_actions(gripper_action)
+
+    trajectory["observation"]["state_eef"] = coordinate_transform_jaco(
+        trajectory["observation"]["end_effector_cartesian_pos"][:, :6]
+    )
+
+    trajectory["observation"]["state_gripper"] = tf.clip_by_value(
+        trajectory["observation"]["end_effector_cartesian_pos"][:, -1:] * 4.33, 0, 1
+    )
+
+    # trajectory["observation"]["state_gripper"] = gripper_action[:, None]
 
     trajectory["action"] = tf.concat(
         (
@@ -336,20 +434,11 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state_eef"][1:, :3] - trajectory["observation"]["state_eef"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state_eef"][1:, 3:6],
-                trajectory["observation"]["state_eef"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state_eef"])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    return traj_truncated
+    return trajectory
 
 
 def berkeley_cable_routing_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -380,6 +469,7 @@ def roboturk_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
+
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["observation"]["natural_language_instruction"]), ""
     # )  # delete uninformative language instruction
@@ -426,7 +516,6 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # )  # delete uninformative language instruction
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
@@ -434,28 +523,13 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # state_matrix = tf.transpose(state_matrix, [0, 2, 1])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["gripper_states"]),
+        (matrix_to_xyzrpy(state_matrix), tf.clip_by_value(trajectory["observation"]["gripper_states"] / 0.079, 0, 1)),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, gripper_action[:-1]], axis=1)
-    return traj_truncated
-
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["language_instruction"]), ""
-    # )  # delete uninformative language instruction
-    return trajectory
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
 
     return trajectory
 
@@ -463,9 +537,16 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
     trajectory["observation"]["state"] = trajectory["observation"]["robot_state"][:, 6:14]
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
+            tf.clip_by_value(invert_gripper_actions(trajectory["observation"]["state"][:, -1:]), 0, 1),
+        ),
+        axis=-1,
+    )
+
     trajectory["observation"]["depth"] = trajectory["observation"].pop("image_with_depth")
 
     # make gripper action absolute action, +1 = open, 0 = close
@@ -483,20 +564,11 @@ def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[s
 
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                tft.euler.from_quaternion(trajectory["observation"]["state"][1:, 3:7]),
-                tft.euler.from_quaternion(trajectory["observation"]["state"][:-1, 3:7]),
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    return traj_truncated
+    return trajectory
 
 
 def toto_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -508,6 +580,7 @@ def toto_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
+
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["observation"]["natural_language_instruction"]), ""
     # )  # delete uninformative language instruction
@@ -585,7 +658,7 @@ def stanford_hydra_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         ),
         axis=-1,
     )
-    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -3:-2]
+    trajectory["observation"]["gripper_state"] = invert_gripper_actions(trajectory["observation"]["state"][:, -3:-2])
     # trajectory["language_instruction"] = tf.fill(
     #     tf.shape(trajectory["language_instruction"]), ""
     # )  # delete uninformative language instruction
@@ -608,30 +681,20 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # # )  # delete uninformative language instruction
     # return trajectory
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
+        (matrix_to_xyzrpy(state_matrix), tf.clip_by_value(trajectory["observation"]["state"][:, 7:8] / 0.079, 0, 1)),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat(
-        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat(
+        [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -660,8 +723,8 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
 
     # Check if language instruction is empty and replace with random fallback
-    traj_len = tf.shape(traj_truncated["language_instruction"])[0]
-    instruction = traj_truncated["language_instruction"][0]
+    traj_len = tf.shape(trajectory["language_instruction"])[0]
+    instruction = trajectory["language_instruction"][0]
     is_empty = tf.logical_or(
         tf.equal(tf.strings.length(tf.strings.strip(instruction)), 0),
         tf.equal(instruction, tf.constant("", dtype=tf.string)),
@@ -669,9 +732,9 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     random_fallback = tf.random.shuffle(fallback_instructions)[0]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
-    traj_truncated["language_instruction"] = tf.fill([traj_len], selected_instruction)
+    trajectory["language_instruction"] = tf.fill([traj_len], selected_instruction)
 
-    return traj_truncated
+    return trajectory
 
 
 def nyu_franka_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -699,6 +762,35 @@ def nyu_franka_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, A
     return trajectory
 
 
+def droid_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    cartesian = tf.cast(trajectory["observation"]["cartesian_position"], tf.float32)
+    gripper = trajectory["observation"]["gripper_position"]
+
+    gripper = tf.cond(
+        tf.equal(tf.rank(cartesian), tf.rank(gripper)),
+        lambda: gripper,  # same rank → no change
+        lambda: tf.expand_dims(gripper, axis=-1),  # add new axis if rank differs
+    )
+
+    trajectory["state"] = tf.concat(
+        [cartesian, binarize_gripper_actions(invert_gripper_actions(gripper), threshold=0.5)], axis=-1
+    )
+
+    gripper_actions = binarize_gripper_actions(
+        invert_gripper_actions(trajectory["action_dict"]["gripper_position"]), threshold=0.5
+    )
+
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(cartesian)
+
+    trajectory["action"] = tf.concat(
+        [padded_movement_actions, tf.clip_by_value(gripper_actions[:, -1:], 0, 1)],
+        axis=1,
+    )
+
+    return trajectory
+
+
 def maniskill_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][..., 7:8]
     return trajectory
@@ -707,40 +799,23 @@ def maniskill_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
     trajectory["observation"]["state"] = tf.concat(
         (
-            trajectory["observation"]["state"][:, :7],
-            trajectory["observation"]["state"][:, -1:],
+            trajectory["observation"]["state"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
+            tf.clip_by_value(trajectory["observation"]["state"][:, -1:] / 0.079, 0, 1),
         ),
         axis=-1,
     )
 
-    # invert gripper action + clip, +1 = open, 0 = close
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
     trajectory["action"] = tf.concat(
-        (
-            trajectory["action"][:, :3],
-            tft.euler.from_quaternion(trajectory["action"][:, 3:7]),
-            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
-        ),
-        axis=-1,
+        [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))],
+        axis=1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                tft.euler.from_quaternion(trajectory["observation"]["state"][1:, 3:7]),
-                tft.euler.from_quaternion(trajectory["observation"]["state"][:-1, 3:7]),
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-
-    return traj_truncated
+    return trajectory
 
 
 def cmu_franka_exploration_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -800,30 +875,20 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     # # )  # delete uninformative language instruction
     # return trajectory
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["state_ee"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, -1:]),
+        (matrix_to_xyzrpy(state_matrix), tf.clip_by_value(trajectory["observation"]["state"][:, -1:] / 0.079, 0, 1)),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat(
-        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1:, -1:], 0, 1))], axis=1
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat(
+        [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -852,8 +917,8 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     )
 
     # Check if language instruction is empty and replace with random fallback
-    traj_len = tf.shape(traj_truncated["language_instruction"])[0]
-    instruction = traj_truncated["language_instruction"][0]
+    traj_len = tf.shape(trajectory["language_instruction"])[0]
+    instruction = trajectory["language_instruction"][0]
     is_empty = tf.logical_or(
         tf.equal(tf.strings.length(tf.strings.strip(instruction)), 0),
         tf.equal(instruction, tf.constant("", dtype=tf.string)),
@@ -861,13 +926,12 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     random_fallback = tf.random.shuffle(fallback_instructions)[0]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
-    traj_truncated["language_instruction"] = tf.fill([traj_len], selected_instruction)
+    trajectory["language_instruction"] = tf.fill([traj_len], selected_instruction)
 
-    return traj_truncated
+    return trajectory
 
 
 def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
     # # invert gripper action + clip, +1 = open, 0 = close
@@ -883,23 +947,14 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     state_matrix = tf.reshape(trajectory["observation"]["state_ee"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, -1:]),
+        (matrix_to_xyzrpy(state_matrix), tf.clip_by_value(trajectory["observation"]["state"][:, -1:] / 0.079, 0, 1)),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat(
-        [movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][1::, -1:], 0, 1))], axis=1
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat(
+        [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -928,8 +983,8 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     )
 
     # Check if language instruction is empty and replace with random fallback
-    traj_len = tf.shape(traj_truncated["language_instruction"])[0]
-    instruction = traj_truncated["language_instruction"][0]
+    traj_len = tf.shape(trajectory["language_instruction"])[0]
+    instruction = trajectory["language_instruction"][0]
     is_empty = tf.logical_or(
         tf.equal(tf.strings.length(tf.strings.strip(instruction)), 0),
         tf.equal(instruction, tf.constant("", dtype=tf.string)),
@@ -937,30 +992,45 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     random_fallback = tf.random.shuffle(fallback_instructions)[0]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
-    traj_truncated["language_instruction"] = tf.fill([traj_len], selected_instruction)
+    trajectory["language_instruction"] = tf.fill([traj_len], selected_instruction)
 
-    return traj_truncated
-
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["language_instruction"]), ""
-    # )  # delete uninformative language instruction
+    return trajectory
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_bcz
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     trajectory["action"] = tf.concat(
         (
             trajectory["action"]["future/xyz_residual"][:, :3],
             trajectory["action"]["future/axis_angle_residual"][:, :3],
-            invert_gripper_actions(tf.cast(trajectory["action"]["future/target_close"][:, :1], tf.float32)),
+            invert_gripper_actions(tf.cast(trajectory["action"]["future/target_close"], tf.float32))[:, :1],
         ),
         axis=-1,
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    trajectory["observation"]["eef_state"] = coordinate_transform_bcz(
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            coordinate_transform_bcz(
+                tf.concat(
+                    (
+                        trajectory["observation"]["present/xyz"][:, :3],
+                        trajectory["observation"]["present/axis_angle"][:, :3],
+                    ),
+                    axis=-1,
+                ),
+            ),
+            tf.clip_by_value(
+                invert_gripper_actions(trajectory["observation"]["present/sensed_close"])[:, :1] / 0.8, 0, 1
+            ),  # max seems to be 0.8
+        ),
+        axis=-1,
+    )
+
+    # Compute movement actions with zero-padding (no truncation)
+    # Note: BC-Z uses coordinate_transform_bcz after computing movement actions
+    movement_actions_raw = compute_padded_movement_actions(
         tf.concat(
             (
                 trajectory["observation"]["present/xyz"][:, :3],
@@ -969,32 +1039,10 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
             axis=-1,
         )
     )
+    movement_actions = coordinate_transform_bcz(movement_actions_raw)
+    trajectory["action"] = tf.concat([movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    # movement_actions = tf.concat(
-    #     (
-    #         trajectory["observation"]["present/xyz"][1:, :3] - trajectory["observation"]["present/xyz"][:-1, :3],
-    #         euler_diff(
-    #             axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][1:, :3]),
-    #             axis_angle_to_euler(trajectory["observation"]["present/axis_angle"][:-1, :3]),
-    #         ),
-    #     ),
-    #     axis=-1,
-    # )
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["present/xyz"][1:, :3] - trajectory["observation"]["present/xyz"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["present/axis_angle"][1:, :3],
-                trajectory["observation"]["present/axis_angle"][:-1, :3],
-            ),
-        ),
-        axis=-1,
-    )
-    movement_actions = coordinate_transform_bcz(movement_actions)
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-
-    return traj_truncated
+    return trajectory
 
 
 def tokyo_pr2_opening_fridge_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -1096,7 +1144,6 @@ def dlr_sara_grid_clamp_dataset_transform(trajectory: dict[str, Any]) -> dict[st
 
 
 def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import zxy_to_xyz_tf
 
     # invert gripper action, +1 = open, 0 = close
@@ -1104,7 +1151,7 @@ def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dic
         (
             trajectory["action"][:, :3],
             zxy_to_xyz_tf(trajectory["action"][:, 3:6]),
-            invert_gripper_actions(trajectory["action"][:, -1:]),
+            tf.clip_by_value(invert_gripper_actions(trajectory["action"][:, -1:]), 0, 1),
         ),
         axis=-1,
     )
@@ -1113,26 +1160,16 @@ def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dic
         (
             trajectory["observation"]["state"][:, :3],
             zxy_to_xyz_tf(trajectory["observation"]["state"][:, 3:6]),
-            trajectory["observation"]["state"][:, -1:],
+            invert_gripper_actions(trajectory["observation"]["state"][:, -1:]),
         ),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                zxy_to_xyz_tf(trajectory["observation"]["state"][1:, 3:6]),
-                zxy_to_xyz_tf(trajectory["observation"]["state"][:-1, 3:6]),
-            ),
-        ),
-        axis=-1,
-    )
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-
-    return traj_truncated
+    return trajectory
 
 
 def asu_table_top_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -1192,35 +1229,39 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
     from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
     state_matrix = tf.transpose(state_matrix, [0, 2, 1])  # Transpose to convert column-major to row-major
     trajectory["observation"]["state"] = tf.concat(
-        (matrix_to_xyzrpy(state_matrix), trajectory["observation"]["state"][:, 7:8]),
+        (matrix_to_xyzrpy(state_matrix), tf.clip_by_value(trajectory["observation"]["state"][:, 7:8] / 0.079, 0, 1)),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+
+    return trajectory
+
+
+def molmoact_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    trajectory["action"] = tf.concat(
         (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
+            trajectory["action"][:, :-1],
+            invert_gripper_actions(trajectory["action"][:, -1:]),
         ),
         axis=-1,
     )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-    return traj_truncated
-
-    # trajectory["language_instruction"] = tf.fill(
-    #     tf.shape(trajectory["language_instruction"]), ""
-    # )  # delete uninformative language instruction
-    # return trajectory
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :-1],
+            invert_gripper_actions(trajectory["observation"]["state"][:, -1:]),
+        ),
+        axis=-1,
+    )
+    return trajectory
 
 
 def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -1243,7 +1284,7 @@ def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         (
             trajectory["observation"]["end_effector_state"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["end_effector_state"][:, 3:7]),
-            invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]),
+            tf.clip_by_value(invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]), 0, 1),
         ),
         axis=-1,
     )
@@ -1291,8 +1332,6 @@ def playfusion_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
     trajectory["observation"]["eef_state"] = tf.concat(
         (
             trajectory["observation"]["state"][:, :3],
@@ -1300,23 +1339,15 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
-    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -1:]
-    trajectory["action"] = trajectory["action"][..., :-1]
+    trajectory["observation"]["gripper_state"] = (trajectory["observation"]["state"][:, -1:] + 3.14) / 6.28
+    # trajectory["action"] = (trajectory["action"][..., :-1] + 3.14) / 6.28
+    # gripper_action = trajectory["action"][..., :-2:-1]
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["eef_state"][1:, :3] - trajectory["observation"]["eef_state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["eef_state"][1:, 3:6], trajectory["observation"]["eef_state"][:-1, 3:6]
-            ),
-        ),
-        axis=-1,
-    )
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["eef_state"])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["observation"]["gripper_state"]], axis=1)
 
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-
-    return traj_truncated
+    return trajectory
 
 
 def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
@@ -1343,63 +1374,56 @@ def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     import tensorflow_graphics.geometry.transformation as tft
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
-
     # every input feature is batched, ie has leading batch dimension
     trajectory["observation"]["proprio"] = tf.concat(
         (
             trajectory["observation"]["eef_pose"][:, :3],
             tft.euler.from_quaternion(trajectory["observation"]["eef_pose"][:, 3:7]),
-            trajectory["observation"]["state_gripper_pose"][..., None],
+            tf.clip_by_value(invert_gripper_actions(trajectory["observation"]["state_gripper_pose"][..., None]), 0, 1),
         ),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["proprio"][1:, :3] - trajectory["observation"]["proprio"][:-1, :3],
-            euler_diff(trajectory["observation"]["proprio"][1:, 3:6], trajectory["observation"]["proprio"][:-1, 3:6]),
-        ),
-        axis=-1,
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["proprio"][:, :6])
+    trajectory["action"] = tf.concat(
+        [padded_movement_actions, invert_gripper_actions(trajectory["action"][:, -1:])], axis=1
     )
 
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
-
-    return traj_truncated
+    return trajectory
 
 
 def dobbe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # every input feature is batched, ie has leading batch dimension
 
     from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_dobbe
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
 
     # every input feature is batched, ie has leading batch dimension
     trajectory["observation"]["proprio"] = tf.concat(
         (
             coordinate_transform_dobbe(trajectory["observation"]["state"][:, :6]),
-            trajectory["observation"]["state"][:, -1:],
+            tf.clip_by_value(trajectory["observation"]["state"][:, -1:], 0, 1),
         ),
         axis=-1,
     )
 
-    movement_actions = tf.concat(
-        (
-            trajectory["observation"]["proprio"][1:, :3] - trajectory["observation"]["proprio"][:-1, :3],
-            euler_diff(trajectory["observation"]["proprio"][1:, 3:6], trajectory["observation"]["proprio"][:-1, 3:6]),
-        ),
-        axis=-1,
-    )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = tf.concat([movement_actions, trajectory["action"][:-1, -1:]], axis=1)
+    # Compute movement actions with zero-padding (no truncation)
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["proprio"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
 
-    return traj_truncated
+    return trajectory
 
 
 def roboset_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # every input feature is batched, ie has leading batch dimension
-    trajectory["observation"]["proprio"] = trajectory["observation"]["state"]
+    # Invert gripper state to match inverted gripper action convention
+    trajectory["observation"]["proprio"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :-1],
+            invert_gripper_actions(tf.clip_by_value(trajectory["observation"]["state"][:, -1:], 0, 1)),
+        ),
+        axis=-1,
+    )
 
     # gripper action is in -1...1 --> clip to 0...1, flip
     gripper_action = trajectory["action"][:, -1:]
@@ -1495,35 +1519,47 @@ def human_dataset_transform(sample: dict[str, Any]) -> dict[str, Any]:
 
 
 def sample_r1_lite_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    trajectory["action"] = trajectory["action"][..., :14]  # exclude torso action
-    # Apply R1 Lite specific transformations
+    """Transform for sample_r1_lite dataset with bimanual EEF pose states."""
+    # Extract EEF states for both arms (left and right)
+    # Assuming state contains [left_xyz, left_rpy, left_gripper, right_xyz, right_rpy, right_gripper]
+    # Total: 3 + 3 + 1 + 3 + 3 + 1 = 14 dimensions
+    left_eef_state = trajectory["observation"]["state"][:, :6]  # left xyz + rpy
+    right_eef_state = trajectory["observation"]["state"][:, 7:13]  # right xyz + rpy
+
+    # Compute movement actions with zero-padding (no truncation) for both arms
+    left_movement = compute_padded_movement_actions(left_eef_state)
+    right_movement = compute_padded_movement_actions(right_eef_state)
+
+    # Combine left and right movement actions with gripper actions
+    trajectory["action"] = tf.concat(
+        [
+            left_movement,
+            trajectory["action"][:, 6:7] / 100,  # left gripper
+            right_movement,
+            trajectory["action"][:, 13:14] / 100,  # right gripper
+        ],
+        axis=1,
+    )
+
     return trajectory
 
 
-def agibot_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+def agibot_large_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    # Compute movement actions with zero-padding (no truncation) for both arms
+    left_movement = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    right_movement = compute_padded_movement_actions(trajectory["observation"]["state"][:, 7:13])
 
-    movement_actions = tf.concat(
+    trajectory["action"] = tf.concat(
         (
-            trajectory["observation"]["state"][1:, :3] - trajectory["observation"]["state"][:-1, :3],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 3:6],
-                trajectory["observation"]["state"][:-1, 3:6],
-            ),
-            invert_gripper_actions(trajectory["action"][:-1, 6:7]),
-            trajectory["observation"]["state"][1:, 7:10] - trajectory["observation"]["state"][:-1, 7:10],
-            euler_diff(
-                trajectory["observation"]["state"][1:, 10:13],
-                trajectory["observation"]["state"][:-1, 10:13],
-            ),
-            invert_gripper_actions(trajectory["action"][:-1, 13:14]),
+            left_movement,
+            invert_gripper_actions(trajectory["action"][:, 6:7]),
+            right_movement,
+            invert_gripper_actions(trajectory["action"][:, 13:14]),
         ),
         axis=-1,
     )
-    traj_truncated = tf.nest.map_structure(lambda x: x[:-1], trajectory)
-    traj_truncated["action"] = movement_actions
 
-    return traj_truncated
+    return trajectory
 
 
 # === Registry ===
@@ -1586,7 +1622,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "berkeley_gnm_cory_hall": gnm_dataset_transform,
     "berkeley_gnm_sac_son": gnm_dataset_transform,
     # "droid": droid_baseact_transform,
-    "droid": lambda x: x,
+    "droid": droid_dataset_transform,
     "fmb": fmb_dataset_transform,
     "dobbe": dobbe_dataset_transform,
     "roboset": roboset_dataset_transform,
@@ -1618,5 +1654,6 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "ego4d_split_3": human_dataset_transform,
     "ego4d_split_4": human_dataset_transform,
     "sample_r1_lite": sample_r1_lite_dataset_transform,
-    "agibot_dataset": agibot_dataset_transform,
+    "agibot_large_dataset": agibot_large_dataset_transform,
+    "molmoact_dataset": molmoact_dataset_transform,
 }

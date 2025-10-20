@@ -5,12 +5,12 @@ import numpy as np
 import tensorflow as tf
 
 
-# Note: Both DROID and OXE use roll-pitch-yaw convention.
+# Note: Both DROID and OXE use roll-pitch-yaw convention (extrinsic XYZ).
 # Note: quaternion is in xyzw order.
 # Defines Proprioceptive State Encoding Schemes
 class StateEncoding(IntEnum):
     NONE = -1  # No Proprioceptive State
-    POS_EULER = 1  # EEF XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1)  Note: no <PAD>
+    POS_EULER = 1  # EEF XYZ (3) + Roll-Pitch-Yaw extrinsic XYZ (3) + Gripper Open/Close (1)  Note: no <PAD>
     POS_QUAT = 2  # EEF XYZ (3) + Quaternion (4) + Gripper Open/Close (1)
     JOINT = 3  # Joint Angles (7, <PAD> if fewer) + Gripper Open/Close (1)
     JOINT_BIMANUAL = 4  # Joint Angles (2 x [ Joint Angles (6) + Gripper Open/Close (1) ])
@@ -19,11 +19,11 @@ class StateEncoding(IntEnum):
 
 # Defines Action Encoding Schemes
 class ActionEncoding(IntEnum):
-    EEF_POS = 1  # EEF Delta XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1).
+    EEF_POS = 1  # EEF Delta XYZ (3) + Roll-Pitch-Yaw extrinsic XYZ (3) + Gripper Open/Close (1).
     JOINT_POS = 2  # Joint Delta Position (7) + Gripper Open/Close (1)
     JOINT_POS_BIMANUAL = 3  # Joint Delta Position (2 x [ Joint Delta Position (6) + Gripper Open/Close (1) ])
     EEF_R6 = 4  # EEF Delta XYZ (3) + R6 (6) + Gripper Open/Close (1)
-    ABS_EEF_POS = 5  # EEF Absolute XYZ (3) + Roll-Pitch-Yaw (3) + Gripper Open/Close (1)
+    ABS_EEF_POS = 5  # EEF Absolute XYZ (3) + Roll-Pitch-Yaw extrinsic XYZ (3) + Gripper Open/Close (1)
 
 
 # Defines supported normalization schemes for action and proprioceptive state.
@@ -46,23 +46,22 @@ def state_encoding_to_type(encoding: StateEncoding) -> str:
     """
     if encoding == StateEncoding.NONE:
         return "none"
-    elif encoding in (StateEncoding.JOINT, StateEncoding.JOINT_BIMANUAL):
+    if encoding in (StateEncoding.JOINT, StateEncoding.JOINT_BIMANUAL):
         return "joint_pos"
-    elif encoding in (StateEncoding.POS_EULER, StateEncoding.POS_QUAT, StateEncoding.EEF_R6):
+    if encoding in (StateEncoding.POS_EULER, StateEncoding.POS_QUAT, StateEncoding.EEF_R6):
         return "eef_pose"
-    else:
-        raise ValueError(f"Unknown StateEncoding: {encoding}")
+    raise ValueError(f"Unknown StateEncoding: {encoding}")
 
 
 def euler_xyz_to_rot(rx, ry, rz):
-    # Build rotation matrix from XYZ intrinsic rotations
+    # Build rotation matrix from XYZ extrinsic rotations
     cx, sx = np.cos(rx), np.sin(rx)
     cy, sy = np.cos(ry), np.sin(ry)
     cz, sz = np.cos(rz), np.sin(rz)
     Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]], dtype=np.float32)
     Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=np.float32)
     Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]], dtype=np.float32)
-    return Rz @ Ry @ Rx
+    return Rx @ Ry @ Rz
 
 
 def extract_episode_path_from_file_path(file_path):
@@ -175,8 +174,6 @@ def convert_action_encoding(
     Returns:
         Converted action tensor
     """
-    if to_delta_cartesian_pose:
-        action = _convert_abs_eef_pose_to_delta_eef_pose(action)
     if from_encoding == to_encoding:
         return action
 
@@ -190,34 +187,6 @@ def convert_action_encoding(
     if from_encoding == ActionEncoding.EEF_POS and to_encoding == ActionEncoding.ABS_EEF_POS:
         return action
     raise ValueError(f"Unsupported action encoding conversion: {from_encoding} -> {to_encoding}")
-
-
-def _convert_abs_eef_pose_to_delta_eef_pose(action: tf.Tensor) -> tf.Tensor:
-    """Convert absolute EEF pose [pos(3), euler(3)] to delta EEF pose.
-    Assumes action shape [..., 6] = [x,y,z,roll,pitch,yaw].
-    Pads last timestep with zeros so output has same shape as input.
-    Works in TF graph mode.
-    """
-
-    # Positions: simple difference
-    delta_pos = action[1:, ..., :3] - action[:-1, ..., :3]
-
-    # Euler angles: use tf.atan2(sin, cos) to handle wrap-around correctly
-    e1 = action[1:, ..., 3:6]
-    e2 = action[:-1, ..., 3:6]
-    raw_delta = e1 - e2
-    delta_euler = tf.atan2(tf.sin(raw_delta), tf.cos(raw_delta))  # wrap to [-pi, pi]
-
-    # Concatenate delta position + delta euler
-    delta_eef = tf.concat([delta_pos, delta_euler], axis=-1)
-
-    # Pad last timestep with zeros so output shape == input shape
-    pad_shape = tf.concat([[1], tf.shape(delta_eef)[1:]], axis=0)
-    last_zero = tf.zeros(pad_shape, dtype=delta_eef.dtype)
-    delta_eef = tf.concat([delta_eef, last_zero], axis=0)
-    delta_eef = tf.concat([delta_eef, action[..., -1:]], axis=-1)
-
-    return delta_eef
 
 
 def _convert_pos_euler_quat(state: tf.Tensor, from_encoding: StateEncoding, to_encoding: StateEncoding) -> tf.Tensor:
@@ -333,7 +302,7 @@ def _convert_eef_pos_to_eef_r6(action: tf.Tensor) -> tf.Tensor:
 
 
 def _euler_to_quaternion(euler: tf.Tensor) -> tf.Tensor:
-    """Convert euler angles (rx, ry, rz) to quaternion (qx, qy, qz, qw)."""
+    """Convert euler angles (rx, ry, rz) to quaternion (qx, qy, qz, qw) using extrinsic XYZ convention."""
     rx, ry, rz = tf.unstack(euler, axis=-1)
 
     # Half angles
@@ -341,17 +310,19 @@ def _euler_to_quaternion(euler: tf.Tensor) -> tf.Tensor:
     cy, sy = tf.cos(ry * 0.5), tf.sin(ry * 0.5)
     cz, sz = tf.cos(rz * 0.5), tf.sin(rz * 0.5)
 
-    # Quaternion components
-    qw = cx * cy * cz + sx * sy * sz
-    qx = sx * cy * cz - cx * sy * sz
-    qy = cx * sy * cz + sx * cy * sz
-    qz = cx * cy * sz - sx * sy * cz
+    # Quaternion components for extrinsic XYZ (equivalent to intrinsic ZYX)
+    # For extrinsic XYZ: R = Rx(rx) @ Ry(ry) @ Rz(rz)
+    # Quaternion: q = qx * qy * qz (in quaternion multiplication order)
+    qw = cx * cy * cz - sx * sy * sz
+    qx = sx * cy * cz + cx * sy * sz
+    qy = cx * sy * cz - sx * cy * sz
+    qz = cx * cy * sz + sx * sy * cz
 
     return tf.stack([qx, qy, qz, qw], axis=-1)
 
 
 def _euler_to_rotation_matrix(euler: tf.Tensor) -> tf.Tensor:
-    """Convert euler angles (rx, ry, rz) to rotation matrix."""
+    """Convert euler angles (rx, ry, rz) to rotation matrix using extrinsic XYZ convention."""
     rx, ry, rz = tf.unstack(euler, axis=-1)
 
     cx, sx = tf.cos(rx), tf.sin(rx)
@@ -394,35 +365,15 @@ def _euler_to_rotation_matrix(euler: tf.Tensor) -> tf.Tensor:
         axis=-2,
     )
 
-    # Combine rotations: R = Rz * Ry * Rx (intrinsic XYZ)
-    return tf.linalg.matmul(tf.linalg.matmul(Rz, Ry), Rx)
+    # Combine rotations: R = Rx * Ry * Rz (extrinsic XYZ)
+    return tf.linalg.matmul(tf.linalg.matmul(Rx, Ry), Rz)
 
 
 def _quaternion_to_euler(quat: tf.Tensor) -> tf.Tensor:
-    """Convert quaternion (qx, qy, qz, qw) to euler angles (rx, ry, rz) - XYZ intrinsic."""
-    qx, qy, qz, qw = tf.unstack(quat, axis=-1)
-
-    # Normalize quaternion
-    norm = tf.sqrt(qw**2 + qx**2 + qy**2 + qz**2)
-    qw, qx, qy, qz = qw / norm, qx / norm, qy / norm, qz / norm
-
-    # Convert to euler angles (XYZ intrinsic)
-    # Roll (x-axis rotation)
-    sinr_cosp = 2 * (qw * qx + qy * qz)
-    cosr_cosp = 1 - 2 * (qx * qx + qy * qy)
-    rx = tf.atan2(sinr_cosp, cosr_cosp)
-
-    # Pitch (y-axis rotation)
-    sinp = 2 * (qw * qy - qz * qx)
-    sinp = tf.clip_by_value(sinp, -1.0, 1.0)
-    ry = tf.asin(sinp)
-
-    # Yaw (z-axis rotation)
-    siny_cosp = 2 * (qw * qz + qx * qy)
-    cosy_cosp = 1 - 2 * (qy * qy + qz * qz)
-    rz = tf.atan2(siny_cosp, cosy_cosp)
-
-    return tf.stack([rx, ry, rz], axis=-1)
+    """Convert quaternion (qx, qy, qz, qw) to euler angles (rx, ry, rz) using extrinsic XYZ convention."""
+    # Convert via rotation matrix to ensure consistency with extrinsic XYZ convention
+    rot_matrix = _quaternion_to_rotation_matrix(quat)
+    return _rotation_matrix_to_euler(rot_matrix)
 
 
 def _quaternion_to_rotation_matrix(quat: tf.Tensor) -> tf.Tensor:
@@ -452,14 +403,20 @@ def _quaternion_to_rotation_matrix(quat: tf.Tensor) -> tf.Tensor:
 
 
 def _rotation_matrix_to_euler(rot_matrix: tf.Tensor) -> tf.Tensor:
+    """Convert rotation matrix to Euler angles using extrinsic XYZ convention.
+
+    For extrinsic XYZ: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)
+    """
     r11, r12, r13 = tf.unstack(rot_matrix[..., 0, :], axis=-1)
     r21, r22, r23 = tf.unstack(rot_matrix[..., 1, :], axis=-1)
     r31, r32, r33 = tf.unstack(rot_matrix[..., 2, :], axis=-1)
 
-    rx = tf.atan2(r32, r33)
-    ry = tf.asin(tf.clip_by_value(-r31, -1.0, 1.0))
-    rz = tf.atan2(r21, r11)
-    return tf.stack([rx, ry, rz], axis=-1)
+    # Extrinsic XYZ extraction:
+    # pitch = asin(r13), roll = atan2(-r23, r33), yaw = atan2(-r12, r11)
+    pitch = tf.asin(tf.clip_by_value(r13, -1.0, 1.0))
+    roll = tf.atan2(-r23, r33)
+    yaw = tf.atan2(-r12, r11)
+    return tf.stack([roll, pitch, yaw], axis=-1)
 
 
 def _rotation_matrix_to_quaternion(rot_matrix: tf.Tensor) -> tf.Tensor:

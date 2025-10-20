@@ -191,11 +191,35 @@ def save_state(
         try:
 
             def save_assets(directory: epath.Path):
-                # Save the normalization stats.
+                # Save the normalization stats from the dataset.
+                # For OXE datasets with global normalization, this saves global statistics.
+                # For DROID or OXE without global normalization, this saves per-dataset statistics.
                 data_config = data_loader.data_config()
-                norm_stats = data_config.norm_stats
-                if norm_stats is not None and data_config.asset_id is not None:
-                    _normalize_adapter.save(str(directory / data_config.asset_id), norm_stats)
+                if hasattr(data_loader, "get_norm_stats_for_checkpoint"):
+                    norm_stats, stats_type = data_loader.get_norm_stats_for_checkpoint()
+                    if norm_stats is not None:
+                        save_dir = str(directory / data_config.asset_id)
+                        _normalize_adapter.save(save_dir, norm_stats)
+
+                        # Log detailed information about saved statistics
+                        if jax.process_index() == 0:
+                            stats_keys = list(norm_stats.keys())
+                            logging.info(
+                                f"Saved {stats_type} normalization statistics | keys={stats_keys} | location={save_dir}"
+                            )
+
+                            # Log detailed shape information for each key
+                            for key, stat in norm_stats.items():
+                                if hasattr(stat, "mean") and hasattr(stat.mean, "shape"):
+                                    logging.info(
+                                        f"  {key}: mean_shape={stat.mean.shape}, "
+                                        f"num_transitions={getattr(stat, 'num_transitions', 'N/A')}, "
+                                        f"num_trajectories={getattr(stat, 'num_trajectories', 'N/A')}"
+                                    )
+                    elif jax.process_index() == 0:
+                        logging.warning("No normalization statistics available to save with checkpoint")
+                elif jax.process_index() == 0:
+                    logging.info("Data loader does not support norm stats checkpointing (non-RLDS dataset)")
 
             # Split params that can be used for inference into a separate item.
             with at.disable_typechecking():
@@ -206,6 +230,12 @@ def save_state(
                 "params": {"params": params},
             }
             manager_to_use.save(step, items)
+
+            # # Save TF iterator state if data loader supports it
+            # if hasattr(data_loader, "save_iterator_checkpoint"):
+            #     tf_iter_dir = f"{_extract_directory(manager_to_use)}/{step}/tf_iterator"
+            #     data_loader.save_iterator_checkpoint(tf_iter_dir, step=step)
+
             duration = time.perf_counter() - start_time
             logging.info(
                 "Checkpoint save complete | step=%d | dir=%s | duration=%.2fs",
@@ -269,6 +299,15 @@ def restore_state(
                 "params": {"params": params},
             },
         )
+
+    # # Restore TF iterator state if data loader supports it
+    # if hasattr(data_loader, "restore_iterator_checkpoint"):
+    #     # Determine which step to restore from
+    #     restore_step = step if step is not None else checkpoint_manager.latest_step()
+    #     if restore_step is not None:
+    #         tf_iter_dir = f"{_extract_directory(checkpoint_manager)}/{restore_step}/tf_iterator"
+    #         data_loader.restore_iterator_checkpoint(tf_iter_dir)
+
     return _merge_params(restored["train_state"], restored["params"])
 
 

@@ -50,6 +50,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     tokenized_prediction_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_prediction_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
     prediction_crictical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
+    tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
@@ -92,6 +93,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             tokenized_prediction_mask=getk("tokenized_prediction_mask"),
             tokenized_prediction_langact_mask=getk("tokenized_prediction_langact_mask"),
             prediction_crictical_token_mask=getk("prediction_crictical_token_mask"),
+            tokenized_dataset_name=getk("tokenized_dataset_name"),
         )
 
 
@@ -116,6 +118,9 @@ def preprocess_observation(
     out_images = {}
     for key in image_keys:
         image = observation.images[key]
+
+        if len(image.shape) == 4:
+            image = image[:, None]
 
         b, t, h, w, c = image.shape
 
@@ -183,7 +188,7 @@ def preprocess_observation(
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
-        tokenized_langact_mask=observation.tokenized_langact_mask,
+        tokenized_langact_mask=getattr(observation, "tokenized_langact_mask", None),
         crictical_token_mask=getattr(observation, "crictical_token_mask", None),
         sample_mask=getattr(observation, "sample_mask", None),
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),
@@ -193,4 +198,5 @@ def preprocess_observation(
         tokenized_prediction_mask=getattr(observation, "tokenized_prediction_mask", None),
         tokenized_prediction_langact_mask=getattr(observation, "tokenized_prediction_langact_mask", None),
         prediction_crictical_token_mask=getattr(observation, "prediction_crictical_token_mask", None),
+        tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
     )

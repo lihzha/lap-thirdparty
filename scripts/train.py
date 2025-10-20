@@ -11,8 +11,12 @@ from flax.training import common_utils
 import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
+import matplotlib
+matplotlib.use("Agg")  # Use non-interactive backend for remote environments
+import matplotlib.pyplot as plt
 import numpy as np
 from openpi.models import model as _model
+from openpi.models.model import Observation
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.optimizer as _optimizer
@@ -24,12 +28,129 @@ import wandb
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.weight_loaders as _weight_loaders
+
+
+def vis_batch(batch, tok=None, step=None):
+    """Visualize a training batch for debugging purposes.
+
+    Args:
+        batch: Tuple of (observation, actions)
+        tok: Tokenizer for decoding tokenized prompts (optional)
+        step: Training step number for wandb logging (optional)
+    """
+    obs = batch[0]
+    actions = batch[1]
+
+    logging.info("=" * 80)
+    logging.info("BATCH VISUALIZATION")
+    logging.info("=" * 80)
+
+    # 1. Visualize images: print shape and log to wandb
+    logging.info("\n--- IMAGES ---")
+    wandb_images = {}
+    for key, img in obs.images.items():
+        logging.info(f"{key}: shape={img.shape}, dtype={img.dtype}, min={img.min():.3f}, max={img.max():.3f}")
+
+        num_samples = img.shape[0]
+        sample_images = []
+        for t in range(min(num_samples, 4)):  # Log up to 4 samples
+            sample_img = img[t]  # [H, W, C]
+
+            # Convert from [-1, 1] to [0, 255]
+            sample_img_uint8 = ((sample_img + 1.0) / 2.0 * 255.0).clip(0, 255).astype(np.uint8)
+
+            # Convert to numpy if it's a JAX array
+            sample_img_uint8 = np.asarray(sample_img_uint8)
+
+            # Add to wandb images list
+            sample_images.append(wandb.Image(sample_img_uint8, caption=f"{key}_t{t}"))
+            logging.info(
+                f"  Prepared image [{key}] timestep {t} for wandb "
+                f"(range: [{sample_img_uint8.min()}, {sample_img_uint8.max()}])"
+            )
+
+        if sample_images:
+            wandb_images[f"batch_vis/{key}"] = sample_images
+
+    # 2. Visualize image_masks: print shape
+    logging.info("\n--- IMAGE MASKS ---")
+    for key, mask in obs.image_masks.items():
+        logging.info(f"{key}: shape={mask.shape}, dtype={mask.dtype}, true_count={mask.sum()}/{mask.size}")
+
+    # 3. Visualize state: print shape and min/max for each dimension
+    logging.info("\n--- STATE ---")
+    state = obs.state
+    logging.info(f"state: shape={state.shape}, dtype={state.dtype}")
+    if len(state.shape) >= 2:
+        for dim_idx in range(state.shape[-1]):
+            dim_data = state[..., dim_idx]
+            logging.info(
+                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
+            )
+
+    # 4. Visualize tokenized_prompt with tokenizer
+    logging.info("\n--- TOKENIZED PROMPTS ---")
+    tokenized_prompt = obs.tokenized_prompt
+    tokenized_prompt_mask = obs.tokenized_prompt_mask
+    token_ar_mask = obs.token_ar_mask
+    token_loss_mask = obs.token_loss_mask
+    print(token_ar_mask, token_loss_mask)
+
+    logging.info(f"tokenized_prompt: shape={tokenized_prompt.shape}, dtype={tokenized_prompt.dtype}")
+    logging.info(f"tokenized_prompt_mask: shape={tokenized_prompt_mask.shape}, dtype={tokenized_prompt_mask.dtype}")
+    # logging.info(f"token_ar_mask: shape={token_ar_mask.shape}, dtype={token_ar_mask.dtype}")
+    # logging.info(f"token_loss_mask: shape={token_loss_mask.shape}, dtype={token_loss_mask.dtype}")
+
+    if tok is not None:
+        # Decode first sample in batch
+        sample_idx = 0
+        if tokenized_prompt.shape[0] > 0:
+            # Full tokenized prompt
+            tokens_full = tokenized_prompt[sample_idx]
+            decoded_full = tok.decode(tokens_full)
+            logging.info(f"\n[Sample {sample_idx}] Full tokenized_prompt:")
+            logging.info(f"  Decoded: {decoded_full[:500]}...")  # First 500 chars
+
+            # Tokenized prompt with prompt mask applied
+            tokens_masked = tokenized_prompt[sample_idx] * tokenized_prompt_mask[sample_idx]
+            decoded_masked = tok.decode(tokens_masked)
+            logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * tokenized_prompt_mask:")
+            logging.info(f"  Decoded: {decoded_masked[:500]}...")
+
+            # # Tokenized prompt with AR mask applied
+            # tokens_ar = tokenized_prompt[sample_idx] * token_ar_mask[sample_idx]
+            # decoded_ar = tok.decode(tokens_ar)
+            # logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * token_ar_mask:")
+            # logging.info(f"  Decoded: {decoded_ar[:500]}...")
+    else:
+        logging.info("  (Tokenizer not provided - skipping decode)")
+
+    # 5. Print token_loss_mask statistics
+    # logging.info(f"\ntoken_loss_mask: sum={token_loss_mask.sum()}, mean={token_loss_mask.mean():.4f}")
+
+    # 6. Visualize actions
+    logging.info("\n--- ACTIONS ---")
+    logging.info(f"actions: shape={actions.shape}, dtype={actions.dtype}")
+    if len(actions.shape) >= 2:
+        for dim_idx in range(actions.shape[-1]):
+            dim_data = actions[..., dim_idx]
+            logging.info(
+                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
+            )
+
+    logging.info("=" * 80)
+
+    # Log images to wandb
+    if wandb_images and jax.process_index() == 0:
+        wandb.log(wandb_images, step=step)
+        logging.info(f"Logged {len(wandb_images)} image groups to wandb")
 
 
 def log_mem(msg: str):
@@ -184,6 +305,170 @@ class HostBatchCache:
         return self.host_batch, self.local_batch_size
 
 
+class DatasetStatsTracker:
+    """Tracks per-dataset loss and example counts across training."""
+
+    def __init__(self):
+        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "count": int}}
+
+    def update(self, dataset_names: list[str], losses: np.ndarray):
+        """Update statistics with new batch data.
+
+        Args:
+            dataset_names: List of dataset names for each sample
+            losses: Array of per-sample losses
+        """
+        for name, loss in zip(dataset_names, losses, strict=False):
+            if name not in self.dataset_stats:
+                self.dataset_stats[name] = {"total_loss": 0.0, "count": 0}
+            self.dataset_stats[name]["total_loss"] += float(loss)
+            self.dataset_stats[name]["count"] += 1
+
+    def get_metrics(self) -> dict[str, float]:
+        """Get current average losses and counts for all datasets."""
+        metrics = {}
+        for dataset_name, stats in self.dataset_stats.items():
+            if stats["count"] > 0:
+                avg_loss = stats["total_loss"] / stats["count"]
+                metrics[f"dataset/{dataset_name}/avg_loss"] = avg_loss
+                metrics[f"dataset/{dataset_name}/count"] = stats["count"]
+        return metrics
+
+
+def gather_dataset_info_multihost(
+    tokenized_dataset_names: at.Array,
+    per_sample_losses: at.Array,
+    tokenizer,
+) -> tuple[list[str], np.ndarray]:
+    """Gather dataset names and losses from all hosts.
+
+    Args:
+        tokenized_dataset_names: Tokenized dataset names [batch_size, seq_len]
+        per_sample_losses: Per-sample losses [batch_size]
+        tokenizer: Tokenizer to decode dataset names
+
+    Returns:
+        Tuple of (dataset_names, losses) where both are gathered from all hosts
+    """
+    # Convert to local arrays (process-specific)
+    local_dataset_names_tokens = np.asarray(training_utils.to_local_array(tokenized_dataset_names))
+    local_losses = np.asarray(training_utils.to_local_array(per_sample_losses))
+
+    # For multi-host: gather tokenized names and losses (both numeric)
+    process_count = jax.process_count()
+    if process_count > 1:
+        # Gather numeric arrays using JAX (works fine with int/float dtypes)
+        all_dataset_names_tokens = jax.experimental.multihost_utils.process_allgather(
+            local_dataset_names_tokens
+        )
+        all_losses = jax.experimental.multihost_utils.process_allgather(local_losses)
+
+        # Flatten: shape goes from [num_processes, batch_per_process, seq_len] to [total_batch, seq_len]
+        # For losses: [num_processes, batch_per_process] to [total_batch]
+        all_dataset_names_tokens = np.asarray(all_dataset_names_tokens).reshape(-1, local_dataset_names_tokens.shape[-1])
+        all_losses = np.asarray(all_losses).flatten()
+    else:
+        all_dataset_names_tokens = local_dataset_names_tokens
+        all_losses = local_losses
+
+    # Now decode all the gathered tokenized names (on all hosts, but with same data)
+    all_decoded_names = []
+    for i in range(all_dataset_names_tokens.shape[0]):
+        try:
+            name = tokenizer.decode(all_dataset_names_tokens[i])
+            # Clean up any special tokens or padding
+            name = name.strip()
+            all_decoded_names.append(name)
+        except Exception as e:
+            logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
+            all_decoded_names.append("unknown")
+
+    return all_decoded_names, all_losses
+
+
+def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> dict[str, plt.Figure]:
+    """Create bar plots for dataset statistics.
+
+    Args:
+        dataset_stats: Dictionary mapping dataset names to {"total_loss": float, "count": int}
+
+    Returns:
+        Dictionary with 'counts' and 'avg_loss' matplotlib figures
+    """
+    if not dataset_stats:
+        return {}
+
+    # Extract dataset names and statistics
+    dataset_names = list(dataset_stats.keys())
+    counts = [dataset_stats[name]["count"] for name in dataset_names]
+    avg_losses = [
+        dataset_stats[name]["total_loss"] / dataset_stats[name]["count"]
+        if dataset_stats[name]["count"] > 0
+        else 0.0
+        for name in dataset_names
+    ]
+
+    # Sort by count (descending) for better visualization
+    sorted_indices = np.argsort(counts)[::-1]
+    dataset_names_sorted = [dataset_names[i] for i in sorted_indices]
+    counts_sorted = [counts[i] for i in sorted_indices]
+    avg_losses_sorted = [avg_losses[i] for i in sorted_indices]
+
+    plots = {}
+
+    # Create counts bar plot
+    fig_counts, ax_counts = plt.subplots(figsize=(12, 6))
+    bars_counts = ax_counts.bar(range(len(dataset_names_sorted)), counts_sorted, color="steelblue")
+    ax_counts.set_xlabel("Dataset", fontsize=12)
+    ax_counts.set_ylabel("Number of Examples", fontsize=12)
+    ax_counts.set_title("Dataset Example Counts", fontsize=14, fontweight="bold")
+    ax_counts.set_xticks(range(len(dataset_names_sorted)))
+    ax_counts.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+    ax_counts.grid(axis="y", alpha=0.3)
+
+    # Add value labels on top of bars
+    for i, (bar, count) in enumerate(zip(bars_counts, counts_sorted)):
+        height = bar.get_height()
+        ax_counts.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{int(count)}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    plt.tight_layout()
+    plots["counts"] = fig_counts
+
+    # Create average loss bar plot
+    fig_loss, ax_loss = plt.subplots(figsize=(12, 6))
+    bars_loss = ax_loss.bar(range(len(dataset_names_sorted)), avg_losses_sorted, color="coral")
+    ax_loss.set_xlabel("Dataset", fontsize=12)
+    ax_loss.set_ylabel("Average Loss", fontsize=12)
+    ax_loss.set_title("Dataset Average Loss", fontsize=14, fontweight="bold")
+    ax_loss.set_xticks(range(len(dataset_names_sorted)))
+    ax_loss.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+    ax_loss.grid(axis="y", alpha=0.3)
+
+    # Add value labels on top of bars
+    for i, (bar, loss) in enumerate(zip(bars_loss, avg_losses_sorted)):
+        height = bar.get_height()
+        ax_loss.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{loss:.4f}",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    plt.tight_layout()
+    plots["avg_loss"] = fig_loss
+
+    return plots
+
+
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
     """Loads and validates the weights. Returns a loaded subset of the weights."""
     loaded_params = loader.load(params_shape)
@@ -269,7 +554,7 @@ class TrainingStepRunner:
         self,
         rng: at.KeyArrayLike,
         state: training_utils.TrainState,
-        batch: tuple[CoTObservation, _model.Actions],
+        batch: tuple[CoTObservation | Observation, _model.Actions],
     ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
         model = nnx.merge(state.model_def, state.params)
         model.train()
@@ -278,7 +563,7 @@ class TrainingStepRunner:
         def loss_fn(
             model: _model.BaseModel,
             rng: at.KeyArrayLike,
-            observation: CoTObservation,
+            observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
             per_sample_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
@@ -349,7 +634,7 @@ class ValidationStepRunner:
         self,
         rng: at.KeyArrayLike,
         state: training_utils.TrainState,
-        batch: tuple[CoTObservation, _model.Actions],
+        batch: tuple[CoTObservation | Observation, _model.Actions],
     ) -> dict[str, at.Array]:
         model = nnx.merge(state.model_def, state.params)
         model.eval()
@@ -358,7 +643,7 @@ class ValidationStepRunner:
         def loss_fn(
             model: _model.BaseModel,
             rng: at.KeyArrayLike,
-            observation: CoTObservation,
+            observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
             val_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
@@ -368,8 +653,6 @@ class ValidationStepRunner:
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
-        if hasattr(model, "compute_eval_metrics"):
-            return model.compute_eval_metrics(eval_rng, observation, actions)
         loss, token_accuracy, critical_token_accuracy, val_metrics = loss_fn(model, eval_rng, observation, actions)
         result = {
             "val_loss": loss,
@@ -424,15 +707,27 @@ def main(config: _config.TrainConfig):
         sharding=data_sharding,
         shuffle=True,
         seed=config.seed,
+        persistent_iterator=True,
     )
-    data_iter = iter(data_loader)
 
+    try:
+        tok = data_loader.tokenizer
+    except:
+        tok = PaligemmaCoTTokenizer(max_len=200)
+
+    # # Initialize hard example tracker for logging difficult samples
+    # hard_example_tracker = vis_tools.HardExampleTracker(
+    #     tokenizer=tok,
+    #     max_hard_examples=50,
+    #     buffer_ratio=0.1,  # Maintain buffer of top candidates
+    #     resize_hw=(128, 128),
+    # )
+
+    # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
+    data_iter = iter(data_loader)
     log_mem("Before getting batch")
-    # if resuming and start_step > 0:
-    #     # Fast-forward the iterator so that step `start_step` uses batch index `start_step`.
-    #     for _ in range(start_step):
-    #         _ = next(data_iter)
     batch = next(data_iter)
+    # vis_batch(batch, tok=tok)
 
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
@@ -459,13 +754,18 @@ def main(config: _config.TrainConfig):
     )
 
     if config.do_val:
+        dataset = getattr(data_loader, "dataset", None)
+        hash_tables = None
+        if dataset:
+            hash_tables = dataset.hash_tables
         val_loader = _data_loader.create_data_loader(
             config,
             sharding=data_sharding,
             shuffle=False,
             split="val",
             max_samples=getattr(config.data, "val_max_samples", None),
-            hash_tables=data_loader.dataset.hash_tables,
+            hash_tables=hash_tables,
+            persistent_iterator=False,
         )
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
@@ -507,11 +807,8 @@ def main(config: _config.TrainConfig):
     )
 
     infos = []
-    # hard_example_tracker = vis_tools.HardExampleTracker(
-    #     tokenizer=data_loader.tokenizer,
-    #     hard_quantile=0.99,
-    # )
     host_batch_cache = HostBatchCache()
+    dataset_stats_tracker = DatasetStatsTracker()
 
     for step in pbar:
         with sharding.set_mesh(mesh):
@@ -520,21 +817,40 @@ def main(config: _config.TrainConfig):
         per_sample_loss = info.get("per_sample_loss")
         if per_sample_loss is None:
             raise ValueError("Training step info missing per_sample_loss")
-        # per_sample_np_local = np.asarray(training_utils.to_local_array(per_sample_loss), dtype=np.float32).reshape(-1)
-        # global_per_sample_np = training_utils.global_concat(per_sample_np_local)
-        # if global_per_sample_np.size > 0:
-        # hard_example_tracker.update(global_per_sample_np)
-        # host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-        # if local_size > 0 and per_sample_np_local.size >= local_size:
-        #     process_idx = getattr(jax, "process_index", lambda: 0)()
-        #     start = process_idx * local_size
-        #     hard_example_tracker.add_local_examples(
-        #         step,
-        #         host_batch_local,
-        #         per_sample_np_local[:local_size],
-        #         global_idx_base=start,
-        #         process_idx=process_idx,
-        #     )
+
+        # Update dataset statistics tracker
+        if hasattr(batch[0], "tokenized_dataset_name"):
+            try:
+                dataset_names, losses = gather_dataset_info_multihost(
+                    batch[0].tokenized_dataset_name,
+                    per_sample_loss,
+                    tok,
+                )
+                dataset_stats_tracker.update(dataset_names, losses)
+            except Exception as e:
+                logging.warning(f"Failed to update dataset stats at step {step}: {e}")
+
+        # Update hard example tracker with per-sample losses from current batch
+        # per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
+        # hard_example_tracker.update(per_sample_loss_local)
+
+        # Add hard examples from current batch to buffer (if they qualify)
+        # This needs to happen for every step, not just at log_interval
+        # host_batch_local_curr, local_size_curr = host_batch_cache.ensure(step=step, batch=batch)
+        # if per_sample_loss_local is not None and local_size_curr > 0:
+        #     process_idx = jax.process_index()
+        #     # Compute global index base for this process
+        #     global_batch_idx = step * config.batch_size
+        #     local_batch_offset = process_idx * local_size_curr
+
+        # hard_example_tracker.add_local_examples(
+        #     step_idx=step,
+        #     host_batch_local=host_batch_local_curr,
+        #     local_losses=per_sample_loss_local,
+        #     global_idx_base=global_batch_idx + local_batch_offset,
+        #     process_idx=process_idx,
+        # )
+
         if step % config.log_interval == 0:
             # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
@@ -552,25 +868,45 @@ def main(config: _config.TrainConfig):
                 else:
                     reduced_info[key] = reduce_overrides.get(key, jnp.mean)(value)
             reduced_info = jax.device_get(reduced_info)
-            # if per_sample_losses_chunk:
-            #     concatenated = np.concatenate(per_sample_losses_chunk)
-            #     global_per_sample_np = training_utils.global_concat(concatenated)
-            #     if global_per_sample_np.size > 0:
-            #         hard_example_tracker.update(global_per_sample_np)
+
+            # Add dataset statistics to logging
+            dataset_metrics = dataset_stats_tracker.get_metrics()
+            reduced_info.update(dataset_metrics)
+
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
-            # hard_payload = hard_example_tracker.log_if_ready(step)
-            # if hard_payload:
-            #     vis_tools.log_hard_examples_payload(hard_payload)
             if jax.process_index() == 0:
                 wandb.log(reduced_info, step=step)
-                host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-                vis_tools.log_random_examples(
-                    step,
-                    host_batch_local,
-                    data_loader.tokenizer,
-                    local_batch_size=local_size,
-                )
+
+                # Create and log dataset statistics bar plots
+                if dataset_stats_tracker.dataset_stats:
+                    plots = create_dataset_stats_plots(dataset_stats_tracker.dataset_stats)
+                    if plots:
+                        wandb.log(
+                            {
+                                "dataset_stats/counts_plot": wandb.Image(plots["counts"]),
+                                "dataset_stats/avg_loss_plot": wandb.Image(plots["avg_loss"]),
+                            },
+                            step=step,
+                        )
+                        # Close figures to prevent memory leaks
+                        plt.close(plots["counts"])
+                        plt.close(plots["avg_loss"])
+
+                if config.model.enable_langact_training:
+                    host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+                    vis_tools.log_random_examples(
+                        step,
+                        host_batch_local,
+                        tok,
+                        local_batch_size=local_size,
+                    )
+
+            # Log hard examples from the interval (multi-host gathering happens inside)
+            # payload = hard_example_tracker.log_if_ready(step)
+            # if payload is not None:
+            #     vis_tools.log_hard_examples_payload(payload)
+
             infos = []
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
@@ -586,8 +922,6 @@ def main(config: _config.TrainConfig):
             # num_images_to_log = 64
             with sharding.set_mesh(mesh):
                 val_infos = []
-                # Collect L2 distances (in cm) between parsed vectors from GT and predicted texts
-                l2_cm_values: list[float] = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
                 for _ in val_pbar:
@@ -597,12 +931,6 @@ def main(config: _config.TrainConfig):
 
                 stacked_val = common_utils.stack_forest(val_infos)
                 reduced_val = jax.device_get(jax.tree.map(jnp.mean, stacked_val))
-                # Add movement L2 metric if any collected
-                if l2_cm_values:
-                    reduced_val = {
-                        **reduced_val,
-                        "val_movement_l2_cm": float(np.mean(l2_cm_values)),
-                    }
                 val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val.items())
                 val_pbar.write(f"Step {step} (val): {val_info_str}")
                 if jax.process_index() == 0:

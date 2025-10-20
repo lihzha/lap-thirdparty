@@ -1,5 +1,4 @@
 import dataclasses
-import re
 from typing import TypeAlias
 
 import numpy as np
@@ -28,6 +27,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
     tokenizer: PaligemmaCoTTokenizer
     discrete_state_input: bool = False
     prediction_prompt: str = "What is the robot's movement between two frames?"
+    dataset_name_pad_len: int = 100
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -47,30 +47,15 @@ class TokenizePromptAndReasoning(DataTransformFn):
         if language_actions is not None and not isinstance(language_actions, str):
             language_actions = language_actions.item()
 
-        # Idle check: mark examples whose summed language action is effectively zero on all axes
-        def _is_idle_language_action(s: str | None) -> bool:
-            if s is None:
-                return False
-            s = s.strip()
-            if s == "":
-                return True
-            # Robust parse: accept patterns like "move forward 0.00 cm" joined by " and "
-            parts = [p.strip() for p in s.split(" and ") if p.strip()]
-            if not parts:
-                return True
-            any_nonzero = False
-            for p in parts:
-                m = re.match(r"move\s+(\w+)\s+([-+]?\d*\.?\d+)\s*(\w+)", p)
-                if not m:
-                    continue
-                val = float(m.group(2))
-                if abs(val) > 1e-6:
-                    any_nonzero = True
-                    break
-            return not any_nonzero
-
-        is_idle = _is_idle_language_action(language_actions)
-        sample_mask = not is_idle
+        dataset_name = data.pop("dataset_name", None)  # if None, inference
+        if dataset_name is not None and not isinstance(dataset_name, str):
+            dataset_name = dataset_name.item()
+        tokenized_dataset_name = self.tokenizer._tokenizer.encode(dataset_name)
+        pad_id = self.tokenizer._tokenizer.pad_id()
+        tokenized_dataset_name = [pad_id] * (
+            self.dataset_name_pad_len - len(tokenized_dataset_name)
+        ) + tokenized_dataset_name
+        tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
@@ -82,7 +67,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_langact_mask": reasoning_mask,
             # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
             "crictical_token_mask": numeric_mask,
-            "sample_mask": np.asarray(sample_mask, dtype=bool),
+            "tokenized_dataset_name": tokenized_dataset_name,
         }
 
         # Additionally tokenize prediction if prediction_language_action is present

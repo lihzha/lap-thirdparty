@@ -4,6 +4,7 @@ import platform
 
 import etils.epath as epath
 import jax
+import jax.experimental.multihost_utils as multihost_utils
 import numpy as np
 from rail_tpu_utils import prevent_cross_region
 
@@ -16,6 +17,25 @@ try:
     import wandb
 except ImportError:  # pragma: no cover - wandb is an optional dependency when running offline
     wandb = None  # type: ignore[assignment]
+
+
+def _safe_device_get(arr):
+    """Safely get array to host, handling multi-host sharded arrays."""
+    if arr is None:
+        return None
+    try:
+        # Try direct device_get first (works for single-host or local shards)
+        return jax.device_get(arr)
+    except RuntimeError as e:
+        if "non-addressable" in str(e):
+            # Array spans multiple hosts, need to gather
+            try:
+                gathered = multihost_utils.process_allgather(arr, tiled=True)
+                return jax.device_get(gathered)
+            except Exception as gather_error:
+                logging.warning(f"Failed to gather array: {gather_error}")
+                return None
+        raise
 
 
 def init_logging():
@@ -109,13 +129,35 @@ def _decode_langact_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the langact (language action) tokens per example."""
     if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
         return []
-    tokens = jax.device_get(obs.tokenized_prediction)
-    rmask = jax.device_get(obs.tokenized_prediction_langact_mask)
+    tokens = _safe_device_get(obs.tokenized_prediction)
+    rmask = _safe_device_get(obs.tokenized_prediction_langact_mask)
+    if tokens is None or rmask is None:
+        return []
     out: list[str] = []
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
         try:
             text = tokenizer.decode(sel.astype(np.int32))
+        except Exception:
+            text = ""
+        out.append(text)
+    return out
+
+
+def _decode_prompt_strings(obs, tokenizer) -> list[str]:
+    """Extract and decode the prompt tokens per example."""
+    if not hasattr(obs, "tokenized_prompt") or obs.tokenized_prompt is None:
+        return []
+    tokens = _safe_device_get(obs.tokenized_prompt)
+    rmask = _safe_device_get(obs.tokenized_langact_mask)
+    if tokens is None or rmask is None:
+        return []
+    out: list[str] = []
+    for i in range(tokens.shape[0]):
+        # Filter out padding tokens (typically 0)
+        valid_tokens = tokens[i][~rmask[i].astype(bool)]
+        try:
+            text = tokenizer.decode(valid_tokens.astype(np.int32))
         except Exception:
             text = ""
         out.append(text)
@@ -192,7 +234,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     block_h = max(1, y1 - y0)
     base_scale = 2.5
     scale = max(0.4, min(1.5, block_h / 110.0)) * base_scale
-    font_size = int(13 * scale)
+    font_size = int(13 * scale * 0.8)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
@@ -219,7 +261,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
                     draw.text((x0 + 8 + dx, y + dy), line, font=font, fill=(0, 0, 0))
         # Draw text (white)
         draw.text((x0 + 8, y), line, font=font, fill=(255, 255, 255))
-        y += line_h + 8
+        y += line_h - 4
 
     return np.array(pil_img)
 
@@ -268,12 +310,17 @@ def _compose_pages(rows: list[np.ndarray], target_max_height: int = 1600) -> lis
     if not rows:
         return pages
     row_h = rows[0].shape[0]
-    per_page = max(1, (target_max_height - 28) // row_h)
+    legend_height = 40
+    bottom_padding = 20  # Add padding at bottom so last text bar is visible
+    per_page = max(1, (target_max_height - legend_height - bottom_padding) // row_h)
     for i in range(0, len(rows), per_page):
         chunk = rows[i : i + per_page]
         grid = np.concatenate(chunk, axis=0)
-        legend = _make_legend_bar(grid.shape[1], height=40)
-        page = np.concatenate([legend, grid], axis=0)
+        legend = _make_legend_bar(grid.shape[1], height=legend_height)
+        # Add bottom padding bar to prevent text cutoff
+        padding_bar = np.zeros((bottom_padding, grid.shape[1], 3), dtype=np.uint8)
+        padding_bar[:] = 32  # dark gray matching legend
+        page = np.concatenate([legend, grid, padding_bar], axis=0)
         pages.append(page)
     return pages
 
@@ -342,7 +389,6 @@ def main(config: _config.TrainConfig):
         effective_fsdp_devices = config.fsdp_devices
         assert global_devices % effective_fsdp_devices == 0
 
-    logging.info(f"sum_decimal: {config.data.sum_decimal}, ema_decay: {config.ema_decay}")
     logging.info(f"Running on: {platform.node()}")
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
@@ -372,44 +418,54 @@ def main(config: _config.TrainConfig):
     for j in range(10):
         # Visualize language-action projection per example
         obs = batch[0]
-        # Decode langact strings
+        # Decode langact and prompt strings
         langact_texts = _decode_langact_strings(obs, tok)
-        # Prepare start/end images for the first camera view
-        first_cam_key = next(iter(obs.images))
-        imgs = obs.images[first_cam_key]
-        logging.info(f"imgs: {imgs.shape}")
-        start_imgs = np.array(imgs[:, 0])
-        end_imgs = np.array(imgs[:, -1])
-        B = start_imgs.shape[0]
-        vis_rows = []
-        for i in range(B):
-            start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-            end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-            la_text = langact_texts[i] if i < len(langact_texts) else ""
-            logging.info(f"la_text: {la_text}")
-            col1 = np.copy(_ensure_color(start_u8))
-            col2 = np.copy(_ensure_color(end_u8))
-            panels = [col1]
-            panels.append(col2)
-            panels = [p for p in panels if p is not None]
-            if not panels:
+        prompt_texts = _decode_prompt_strings(obs, tok)
+
+        # Visualize all camera views
+        for cam_key in obs.images.keys():
+            imgs = obs.images[cam_key]
+            logging.info(f"{cam_key} imgs: {imgs.shape}")
+            start_imgs = _safe_device_get(imgs[:, 0])
+            end_imgs = _safe_device_get(imgs[:, -1])
+            if start_imgs is None or end_imgs is None:
+                logging.warning(f"Failed to get images for {cam_key}, skipping")
                 continue
-            row = np.concatenate(panels, axis=1)
-            # Single bottom overlay spanning the entire row
-            band_h_row = max(50, row.shape[0] // 8)
-            row = _draw_text_block(row, la_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2))
-            vis_rows.append(row)
-        if vis_rows:
-            pages = _compose_pages(vis_rows, target_max_height=1600)
-            assert wandb_enabled and wandb is not None
-            wandb.log(
-                {
-                    "vis_dataset/pages": [
-                        wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
-                    ]
-                },
-                step=j,
-            )
+            B = start_imgs.shape[0]
+            vis_rows = []
+            for i in range(B):
+                start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+                end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+                la_text = langact_texts[i] if i < len(langact_texts) else ""
+                prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
+                # Combine prompt and langact for display
+                combined_text = f"{prompt_text} {la_text}" if prompt_text else f"LangAct: {la_text}"
+                logging.info(f"{prompt_text} {la_text}")
+                col1 = np.copy(_ensure_color(start_u8))
+                col2 = np.copy(_ensure_color(end_u8))
+                panels = [col1]
+                panels.append(col2)
+                panels = [p for p in panels if p is not None]
+                if not panels:
+                    continue
+                row = np.concatenate(panels, axis=1)
+                # Single bottom overlay spanning the entire row
+                band_h_row = max(50, row.shape[0] // 8)
+                row = _draw_text_block(
+                    row, combined_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2)
+                )
+                vis_rows.append(row)
+            if vis_rows:
+                pages = _compose_pages(vis_rows, target_max_height=1600)
+                assert wandb_enabled and wandb is not None
+                wandb.log(
+                    {
+                        f"vis_dataset/{cam_key}": [
+                            wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
+                        ]
+                    },
+                    step=j,
+                )
 
         batch = next(data_iter)
 

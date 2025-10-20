@@ -11,7 +11,14 @@ paligemma2-3b-pt-224/
 pt_224.npz_.gstmp
 pt_224.npz
 .claude
-
+*.png
+videos/
+*.log
 norm_stats/
 norm_stats_visualizations/
-*.log
+all_data/
+*.npz
+assets/
+logs/
+
+debug_vis/

@@ -92,8 +92,8 @@ def create_policy(args: Args) -> _policy.Policy:
                 return _policy_config.create_trained_policy_cot(
                     _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
                 )
-            return upstream_policy_config.create_trained_policy(
-                upstream_config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+            return _policy_config.create_trained_policy(
+                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

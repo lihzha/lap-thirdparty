@@ -109,12 +109,162 @@ def _make_iterable_transforms(
 
 
 class IterableTransformedDataset(up.IterableTransformedDataset):
-    def __init__(self, batch_size, *args, **kwargs):
+    def __init__(self, batch_size, *args, persistent_iterator=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.batch_size = batch_size
+        self.persistent_iterator = persistent_iterator
+        self._tf_iterator = None
+        self._tf_checkpoint = None
+
+        # If persistent, set up TF iterator and checkpoint
+        if persistent_iterator:
+            self._setup_persistent_iterator()
+
+    def _setup_persistent_iterator(self):
+        """Initialize persistent TF iterator with checkpoint support."""
+        import tensorflow as tf
+
+        # Get the underlying TensorFlow dataset if available
+        # For RLDS datasets (DroidCoTDataset, OXECoTDatasets), they have a .dataset attribute
+        # that contains the actual tf.data.Dataset
+        if hasattr(self._dataset, "dataset"):
+            tf_dataset = self._dataset.dataset
+        elif isinstance(self._dataset, tf.data.Dataset):
+            tf_dataset = self._dataset
+        else:
+            logging.warning(
+                f"Cannot create persistent iterator: dataset type {type(self._dataset)} "
+                "does not expose a TensorFlow dataset. Iterator checkpointing disabled."
+            )
+            self.persistent_iterator = False
+            return
+
+        # Create a TF iterator that can be checkpointed
+        # We need to use iter() to create the iterator, which will be checkpointed
+        self._tf_iterator = iter(tf_dataset)
+
+        # Create a variable to track the step (useful for checkpoint management)
+        self._tf_step = tf.Variable(0, dtype=tf.int64, name='iterator_step')
+
+        # Try to create TF checkpoint for the iterator with CheckpointManager
+        # If the iterator is not trackable, this will fail
+        try:
+            self._tf_checkpoint = tf.train.Checkpoint(
+                step=self._tf_step,
+                iterator=self._tf_iterator
+            )
+            # CheckpointManager will be created when we know the directory
+            self._checkpoint_manager = None
+        except (ValueError, TypeError) as e:
+            logging.warning(
+                f"Cannot create checkpoint for iterator type {type(self._tf_iterator)}: {e}. "
+                "Iterator checkpointing disabled."
+            )
+            self.persistent_iterator = False
+            self._tf_iterator = None
+            self._tf_step = None
+            return
+
+    def save_iterator_checkpoint(self, directory: str, step: int = 0):
+        """Save TF iterator state to checkpoint directory using CheckpointManager.
+
+        Args:
+            directory: Directory to save checkpoint
+            step: Training step number (useful for tracking)
+        """
+        if not self.persistent_iterator:
+            logging.debug("Skipping iterator checkpoint save: persistent_iterator=False")
+            return
+
+        if self._tf_checkpoint is None:
+            logging.error(
+                "Cannot save iterator checkpoint: _tf_checkpoint is None despite persistent_iterator=True. "
+                "This indicates an initialization error."
+            )
+            return
+
+        import tensorflow as tf
+
+        # Ensure directory exists
+        tf.io.gfile.makedirs(directory)
+
+        # Create or reuse CheckpointManager
+        if self._checkpoint_manager is None or self._checkpoint_manager.directory != directory:
+            self._checkpoint_manager = tf.train.CheckpointManager(
+                self._tf_checkpoint,
+                directory,
+                max_to_keep=3,  # Keep last 3 checkpoints for safety
+            )
+
+        # Update step variable
+        self._tf_step.assign(step)
+
+        # Save checkpoint
+        save_path = self._checkpoint_manager.save()
+        logging.info(f"Saved TF iterator checkpoint to {save_path} (step={step})")
+
+    def restore_iterator_checkpoint(self, directory: str):
+        """Restore TF iterator state from checkpoint directory using CheckpointManager.
+
+        Args:
+            directory: Directory containing checkpoint
+        """
+        if not self.persistent_iterator:
+            logging.debug("Skipping iterator checkpoint restore: persistent_iterator=False")
+            return
+
+        if self._tf_checkpoint is None:
+            logging.error(
+                "Cannot restore iterator checkpoint: _tf_checkpoint is None despite persistent_iterator=True. "
+                "This indicates an initialization error."
+            )
+            return
+
+        import tensorflow as tf
+
+        # Create CheckpointManager for restoration
+        checkpoint_manager = tf.train.CheckpointManager(
+            self._tf_checkpoint,
+            directory,
+            max_to_keep=3,
+        )
+
+        # Get latest checkpoint
+        latest_checkpoint = checkpoint_manager.latest_checkpoint
+        if latest_checkpoint is None:
+            logging.warning(f"No iterator checkpoint found in {directory}")
+            return
+
+        # Restore checkpoint
+        status = self._tf_checkpoint.restore(latest_checkpoint)
+
+        # Optionally assert all variables were restored (can catch mismatches)
+        # status.assert_consumed()  # Uncomment to catch issues during development
+
+        logging.info(f"Restored TF iterator checkpoint from {latest_checkpoint} (step={int(self._tf_step.numpy())})")
 
     def __iter__(self):
-        for sample in self._dataset:
+        # If using persistent iterator, use the stored TF iterator
+        if self.persistent_iterator and self._tf_iterator is not None:
+            dataset_iter = self._tf_iterator
+            # TF iterators yield EagerTensors, need to convert to numpy
+            import tensorflow as tf
+
+            def to_numpy(x):
+                """Convert TF tensor to numpy if needed."""
+                if isinstance(x, tf.Tensor):
+                    return x.numpy()
+                return x
+
+        else:
+            dataset_iter = iter(self._dataset)
+            # Regular dataset iterator already yields numpy arrays
+            to_numpy = lambda x: x
+
+        for sample in dataset_iter:
+            # Convert sample from TF tensors to numpy if needed
+            sample = jax.tree.map(to_numpy, sample)
+
             if self._is_batched:
                 # Transforms are designed to be applied to individual samples. So we need to split the batch into
                 # individual samples and apply the transform to each sample individually.
@@ -143,6 +293,7 @@ def create_data_loader(
     split: str = "train",
     framework: Literal["jax", "pytorch"] = "jax",
     hash_tables: dict | None = None,
+    persistent_iterator: bool = False,
 ) -> up.DataLoader[tuple[CoTObservation, _model.Actions]]:
     # Avoid import-time side effects:
     # Only clear LEROBOT_HOME if we are about to construct a LeRobot dataset.
@@ -173,9 +324,21 @@ def create_data_loader(
 
         # 2) transforms (split-aware)
         tx = _make_iterable_transforms(data_cfg, skip_norm_stats=data_cfg.norm_stats is None, split=split)
-        iterable = IterableTransformedDataset(max(1, config.batch_size // jax.process_count()), ds, tx, is_batched=True)
+        iterable = IterableTransformedDataset(
+            max(1, config.batch_size // jax.process_count()),
+            ds,
+            tx,
+            is_batched=True,
+            persistent_iterator=persistent_iterator,
+        )
 
-        return CoTRLDSDataLoader(iterable, sharding=sharding, num_batches=num_batches, data_cfg=data_cfg)
+        return CoTRLDSDataLoader(
+            iterable,
+            sharding=sharding,
+            num_batches=num_batches,
+            data_cfg=data_cfg,
+            persistent_iterator=persistent_iterator,
+        )
 
     # Non-RLDS: delegate entirely to upstream (this will require torch if used)
     return up.create_torch_data_loader(
@@ -207,12 +370,14 @@ class CoTRLDSDataLoader:
         sharding: jax.sharding.Sharding | None = None,
         num_batches: int | None = None,
         data_cfg: _config.CoTDataConfig,
+        persistent_iterator: bool = False,
     ):
         self._dataset = dataset
         self._num_batches = num_batches
         self._data_cfg = data_cfg
         self._n_proc = jax.process_count()
         self._proc_idx = jax.process_index()
+        self._persistent_iterator = persistent_iterator
 
         if sharding is None:
             sharding = jax.sharding.PositionalSharding(jax.local_devices())
@@ -298,3 +463,54 @@ class CoTRLDSDataLoader:
     @property
     def tokenizer(self) -> PaligemmaCoTTokenizer:
         return self._dataset._transform.transforms[-2].tokenizer
+
+    def save_iterator_checkpoint(self, directory: str, step: int = 0):
+        """Save TF iterator state if persistent iterator is enabled.
+
+        Args:
+            directory: Directory to save checkpoint
+            step: Training step number
+        """
+        if not self._persistent_iterator:
+            return
+
+        # Delegate to the underlying dataset if it supports checkpointing
+        if hasattr(self._dataset, "save_iterator_checkpoint"):
+            self._dataset.save_iterator_checkpoint(directory, step=step)
+
+    def restore_iterator_checkpoint(self, directory: str):
+        """Restore TF iterator state if persistent iterator is enabled.
+
+        Args:
+            directory: Directory containing checkpoint
+        """
+        if not self._persistent_iterator:
+            return
+
+        # Delegate to the underlying dataset if it supports checkpointing
+        if hasattr(self._dataset, "restore_iterator_checkpoint"):
+            self._dataset.restore_iterator_checkpoint(directory)
+
+    def get_norm_stats_for_checkpoint(self) -> tuple[dict | None, str]:
+        """Get normalization statistics to save with checkpoint.
+
+        Returns:
+            tuple: (norm_stats dict, description string)
+            - For OXE with global normalization: (global_statistics, "global")
+            - For OXE without global or DROID: (dataset_statistics, "per-dataset")
+            - For unknown/unsupported: (None, "none")
+        """
+        underlying_dataset = self._dataset._dataset
+
+        # For OXE datasets, prefer global statistics if available
+        if hasattr(underlying_dataset, "global_statistics"):
+            if underlying_dataset.global_statistics is not None:
+                return underlying_dataset.global_statistics, "global"
+
+        # Fall back to per-dataset statistics
+        if hasattr(underlying_dataset, "dataset_statistics"):
+            stats = underlying_dataset.dataset_statistics
+            if stats is not None:
+                return stats, "per-dataset"
+
+        return None, "none"

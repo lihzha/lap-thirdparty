@@ -29,7 +29,6 @@ class DroidEvalRunner(BaseEvalRunner):
             gripper_action_space="position",
         )
 
-
     def _extract_observation(self, obs_dict, save_to_disk=False):
         image_observations = obs_dict["image"]
         left_image, right_image, wrist_image = None, None, None
@@ -85,14 +84,15 @@ class DroidExtrEvalRunner(DroidEvalRunner):
             extrinsics = extrinsics[:3] + R.from_euler("xyz", extrinsics[3:6], degrees=False).as_quat().tolist()
         # Turn (pos, quat_wxyz) into 4x4 cam->base extrinsics matrix
         pos = np.array(extrinsics[:3], dtype=float)
-        w, x, y, z = extrinsics[3:7]
+        x, y, z, w = extrinsics[3:7]
         quat_xyzw = np.array([x, y, z, w], dtype=float)  # convert (w,x,y,z) -> (x,y,z,w)
         rot_mat = R.from_quat(quat_xyzw).as_matrix()
         cam_to_base_extrinsics_matrix = np.eye(4, dtype=float)
         cam_to_base_extrinsics_matrix[:3, :3] = rot_mat
         cam_to_base_extrinsics_matrix[:3, 3] = pos
         return cam_to_base_extrinsics_matrix
-    
+
+
 class DroidUpstreamEvalRunner(DroidEvalRunner):
     def __init__(self, args):
         super().__init__(args)
@@ -102,7 +102,6 @@ class DroidUpstreamEvalRunner(DroidEvalRunner):
             action_space="joint_velocity",
             gripper_action_space="position",
         )
-    
 
 
 if __name__ == "__main__":

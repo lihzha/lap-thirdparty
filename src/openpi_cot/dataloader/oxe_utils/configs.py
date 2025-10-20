@@ -42,10 +42,11 @@ OXE_DATASET_CONFIGS = {
         "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": [
-            "clip_function_input/base_pose_tool_reached",
-            "gripper_closed",
+            # "clip_function_input/base_pose_tool_reached",
+            # "gripper_closed",
+            "state"
         ],
-        "state_encoding": StateEncoding.POS_QUAT,
+        "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     # "bridge_v2_oxe": {  # Version of Bridge V2 in Open X-Embodiment mixture
@@ -332,9 +333,8 @@ OXE_DATASET_CONFIGS = {
         "state_obs_keys": [
             # "present/xyz",
             # "present/axis_angle",
-            "eef_state",
-            None,
-            "present/sensed_close",
+            "state",
+            # "present/sensed_close",
         ],
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
@@ -752,7 +752,7 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
-    "agibot_dataset": {
+    "agibot_large_dataset": {
         "image_obs_keys": {
             "primary": "head_image",
             "secondary": None,
@@ -771,6 +771,19 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
+    "molmoact_dataset": {
+        "image_obs_keys": {
+            "primary": "first_view_image",
+            "secondary": "second_view_image",
+            "wrist": "wrist_image",
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            "state",
+        ],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
 }
 
 
@@ -783,7 +796,7 @@ OXE_DATASET_METADATA = {
     },
     "kuka": {
         "control_frequency": 10,
-        "language_annotations": "None",
+        "language_annotations": "Templated",  # None
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
@@ -1195,10 +1208,16 @@ OXE_DATASET_METADATA = {
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
-    "agibot_dataset": {
+    "agibot_large_dataset": {
         "control_frequency": 30,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Bi-Manual",
+        "has_suboptimal": "No",
+    },
+    "molmoact_dataset": {
+        "control_frequency": 15,
+        "language_annotations": "Natual detailed instructions",
+        "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
 }

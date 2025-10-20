@@ -22,6 +22,7 @@ from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_policy as libero_policy
+import openpi_cot.policies.tiger_policy as tiger_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
@@ -132,8 +133,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     shuffle_buffer_size: int = 250_000
     # Optional cap on number of unique flattened samples for overfitting tests
     max_samples: int | None = None
-    # Tokenization / formatting controls for CoT numeric aggregation
-    sum_decimal: str = "0f"
     # Validation controls for RLDS-CoT dataset splitting/visualization
     val_max_samples: int | None = 60000
     val_fraction: float | None = 0.02
@@ -144,7 +143,10 @@ class CoTDataConfig(upstream_config.DataConfig):
     state_encoding: StateEncoding = StateEncoding.POS_EULER
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     resize_resolution: tuple[int, int] = (224, 224)
-    include_rotation: bool = False
+
+    # Language action configuration
+    language_action_config_name: str = "compact"
+    decoding_schema: str = "verbose"
 
     # Prediction training parameters
     max_prediction_horizon: int = 30
@@ -158,16 +160,26 @@ class CoTDataConfig(upstream_config.DataConfig):
     # support using droid_subset for debugging
     droid_dataset_name: Literal["droid", "droid_subset"] = "droid"
     use_json_actions: bool = False
+    force_recompute_stats: bool = False
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
-    data_mix: str | None = "oxe_pi_magic_soup"
+    data_mix: str | None = "oxe_pi_magic_soup_with_other_states_with_bimanual"
 
 
 @dataclasses.dataclass(frozen=True)
 class ModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
 
-    prompt_format: Literal["pi05", "pi0", "vqa"] = "pi05"
+    prompt_format: Literal[
+        "pi05",
+        "pi0",
+        "vqa",
+        "coordinate_system",
+        "schema_compact",
+        "schema_compact_with_rotation",
+        "schema_compact_bimanual",
+        "schema_compact_bimanual_with_rotation",
+    ] = "schema_compact"
     prediction_prompt: str = "What is the robot's movement between two frames?"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
@@ -196,6 +208,45 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                 ],
             )
         return super().__call__(model_config)
+
+@dataclasses.dataclass(frozen=True)
+class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
+    """Creates model transforms for standard pi0 models."""
+
+    prompt_format: Literal[
+        "pi05",
+        "pi0",
+        "vqa",
+        "coordinate_system",
+        "schema_compact",
+        "schema_compact_with_rotation",
+        "schema_compact_bimanual",
+        "schema_compact_bimanual_with_rotation",
+    ] = "schema_compact"
+    prediction_prompt: str = "What is the robot's movement between two frames?"
+
+    def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
+        if model_config.model_type == ModelType.PI_COT:
+            assert isinstance(model_config, pi_cot_config.PiCoTConfig)
+            return upstream_transforms.Group(
+                inputs=[
+                    upstream_transforms.InjectDefaultPrompt(self.default_prompt),
+                    # upstream_transforms.ResizeImages(224, 224),
+                    TokenizePromptAndReasoning(
+                        PaligemmaCoTTokenizer(
+                            model_config.max_token_len,
+                            prompt_format=self.prompt_format,
+                        ),
+                        discrete_state_input=model_config.discrete_state_input,
+                        prediction_prompt=self.prediction_prompt,
+                    ),
+                    upstream_transforms.PadStatesAndActions(model_config.action_dim),
+                ],
+                outputs=[
+                ],
+            )
+        return super().__call__(model_config)
+
 
 
 @dataclasses.dataclass(frozen=True)
@@ -257,16 +308,15 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
                 cot_policy.CoTInputs(
                     action_dim=model_config.action_dim,
                     model_type=model_config.model_type,
-                    sum_decimal=base_cfg.sum_decimal,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
-                    include_rotation=base_cfg.include_rotation,
                     action_encoding=base_cfg.action_encoding,
+                    language_action_config=cot_policy.get_language_action_config(base_cfg.language_action_config_name),
                     # Add prediction fields
                     enable_prediction_training=model_config.enable_prediction_training,
                     prediction_prompt=base_cfg.prediction_prompt,
                 )
             ],
-            outputs=[cot_policy.CoTOutputs()],
+            outputs=[cot_policy.CoTOutputs(decoding_schema=base_cfg.decoding_schema)],
         )
 
         # assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
@@ -393,6 +443,69 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class TigerDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
+    """
+    Config for training on Tiger demos, using LeRobot format.
+    """
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        cot_fields = CoTDataConfig.__dataclass_fields__.keys()
+        data = {k: getattr(self, k) for k in cot_fields}
+        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
+        asset_id = self.assets.asset_id or repo_id
+        data.update(
+            repo_id=repo_id,
+            asset_id=asset_id,
+            norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
+            use_quantile_norm=model_config.model_type != ModelType.PI0,
+        )
+        return CoTDataConfig(**data)
+
+    def _load_norm_stats(
+        self, assets_dir: epath.Path, asset_id: str | None
+    ) -> dict[str, upstream_transforms.NormStats] | None:
+        """Load normalization statistics if available."""
+        if asset_id is None:
+            return None
+        try:
+            data_assets_dir = str(assets_dir / asset_id)
+            norm_stats = _normalize_adapter.load(maybe_download(data_assets_dir))
+            logging.info(f"Loaded norm stats from {data_assets_dir}")
+            return norm_stats
+        except FileNotFoundError:
+            logging.warning(
+                f"Norm stats not found in {data_assets_dir}. "
+                f"Run 'python scripts/compute_norm_stats.py --config-name <config_name>' to compute them."
+            )
+        return None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        base_cfg = self.create_base_config(assets_dirs, model_config)
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                tiger_policy.TigerInputs(
+                    model_type=model_config.model_type,
+                )
+            ],
+            outputs=[tiger_policy.TigerOutputs()],
+        )
+
+        model_transforms = TigerModelTransformFactory(
+            prediction_prompt=base_cfg.prediction_prompt,
+            prompt_format=model_config.prompt_format,
+        )(model_config)
+
+        return dataclasses.replace(
+            base_cfg,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig(upstream_config.TrainConfig):
     # Overide
     project_name: str = "openpi-cot"
@@ -408,6 +521,7 @@ class TrainConfig(upstream_config.TrainConfig):
     resume: bool = True
     # New field
     do_val: bool = True
+    val_interval: int = 2000
     checkpoint_async_timeout_secs: int | None = 7200
     checkpoint_async_enable: bool = True
     checkpoint_max_retries: int = 1
@@ -441,34 +555,6 @@ _CONFIGS = [
     build_droid_cfg("v6", fsdp_devices=8, batch_size=256),
     build_droid_cfg("local", fsdp_devices=1, batch_size=4),
     TrainConfig(
-        name="pi_oxe_cot_v4",
-        data=RLDSCoTDataConfig(
-            repo_id="oxe",
-            asset_id="oxe",
-            dataset_type="oxe",
-            rlds_data_dir="gs://pi0-cot/OXE",
-            data_mix="oxe_pi_magic_soup",
-        ),
-        fsdp_devices=4,
-        batch_size=256,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
-    ),
-    TrainConfig(
-        name="pi_oxe_cot_local",
-        data=RLDSCoTDataConfig(
-            repo_id="oxe",
-            asset_id="oxe",
-            dataset_type="oxe",
-            rlds_data_dir="/n/fs/vla-mi/datasets/OXE",
-            data_mix="oxe_pi_magic_soup",
-        ),
-        fsdp_devices=4,
-        batch_size=256,
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-    ),
-    TrainConfig(
         name="pi_combined_cot_v4",
         data=RLDSCoTDataConfig(
             repo_id="combined",
@@ -491,6 +577,28 @@ _CONFIGS = [
         resume=True,
     ),
     TrainConfig(
+        name="pi_combined_cot_v6",
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            droid_dataset_name="droid",
+            rlds_data_dir="gs://v6_east1d/OXE",
+            language_action_dir="gs://v6_east1d/droid-base-lang-actions",
+            data_mix="oxe_pi_magic_soup_with_other_states_with_bimanual",
+            shuffle_buffer_size=400_000,
+        ),
+        fsdp_devices=4,
+        batch_size=256,
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        checkpoint_base_dir="gs://v6_east1d/checkpoints",
+        save_interval=500,
+        keep_period=5000,
+        resume=True,
+    ),
+    TrainConfig(
         name="pi_combined_cot_local",
         data=RLDSCoTDataConfig(
             repo_id="combined",
@@ -507,7 +615,7 @@ _CONFIGS = [
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
     ),
     TrainConfig(
-        name="pi0_droid_cot_eval",
+        name="pi0_eval",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=110,
@@ -521,7 +629,49 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
-        name="pi05_vqa_local",
+        name="pi05_eval",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=200,
+            pi05=True,
+            discrete_state_input=True,
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+        ),
+    ),
+    TrainConfig(
+        name="paligemma2_eval",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=150,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+        ),
+    ),
+    TrainConfig(
+        name="paligemma2_eval_compact",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=150,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ),
+        data=RLDSCoTDataConfig(repo_id="droid", asset_id="droid", dataset_type="droid", decoding_schema="compact"),
+    ),
+    TrainConfig(
+        name="pi05_vqa",
         model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
         data=VQADataConfig(
             repo_id="droid",
@@ -535,7 +685,7 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=1,
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma2", params_path="tbd"),
     ),
     TrainConfig(
         name="pi05_libero_eval",
@@ -552,64 +702,75 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
-        name="pi05_droid_cot_eval",
+        name="pi05_tiger_finetune_local",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
-            max_token_len=140,
+            max_token_len=180,
             pi05=True,
             discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
+            prompt_format="pi05",
         ),
-        data=RLDSCoTDataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
+        data=TigerDataConfig(
+            repo_id="your_hf_username/tiger_demos",
+            asset_id="tiger",
+            dataset_type="droid",  # Use droid type for compatibility
+            rlds_data_dir=None,  # LeRobot dataset will be loaded from HF_LEROBOT_HOME
         ),
-    ),
-    TrainConfig(
-        name="paligemma_vqa_v4",
-        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600, prompt_format="vqa"),
-        data=VQADataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            rlds_data_dir="gs://pi0-cot/OXE",
-            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
-            droid_dataset_name="droid",
-            droid_rlds_data_dir="gs://pi0-cot/OXE",
-        ),
-        fsdp_devices=4,
-        batch_size=16,
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-    ),
-    TrainConfig(
-        name="paligemma2_vqa_v4",
-        model=pi_cot_config.PiCoTConfig(
-            pi05=True,
-            discrete_state_input=False,
-            max_token_len=600,
-            paligemma_variant="gemma2_2b",
-            action_expert_variant="gemma2_300m",
-            prompt_format="vqa",
-        ),
-        data=VQADataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            rlds_data_dir="gs://pi0-cot/OXE",
-            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
-            droid_dataset_name="droid",
-            droid_rlds_data_dir="gs://pi0-cot/OXE",
-        ),
-        fsdp_devices=4,
-        batch_size=16,
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        fsdp_devices=1,
+        batch_size=4,
+        num_train_steps=10000,
+        save_interval=500,
+        log_interval=50,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="paligemma2", params_path="gs://pi0-cot/cache/paligemma2-3b-mix-224.b16.npz"
+            kind="checkpoint",
+            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
         ),
     ),
     TrainConfig(
-        name="paligemma2_vqa_local",
+        name="pi05_tiger_finetune_local_low_mem",
+        # Here is an example of loading a pi0 model for LoRA fine-tuning.
+        model=pi_cot_config.PiCoTConfig(
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
+            prompt_format="pi05",
+        ),
+        data=TigerDataConfig(
+            repo_id="your_hf_username/tiger_demos",
+            asset_id="tiger",
+            dataset_type="droid",  # Use droid type for compatibility
+            rlds_data_dir=None,  # LeRobot dataset will be loaded from HF_LEROBOT_HOME
+        ),
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint",
+            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
+        ),
+        num_train_steps=30_000,
+        # The freeze filter defines which parameters should be frozen during training.
+        # We have a convenience function in the model config that returns the default freeze filter
+        # for the given model config for LoRA finetuning. Just make sure it matches the model config
+        # you chose above.
+        freeze_filter=pi_cot_config.PiCoTConfig(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        # Turn off EMA for LoRA finetuning.
+        ema_decay=None,
+        fsdp_devices=4,
+        batch_size=32,
+        save_interval=1000,
+        log_interval=100,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+    ),
+    TrainConfig(
+        name="paligemma2_vqa",
         model=pi_cot_config.PiCoTConfig(
             pi05=True,
             discrete_state_input=False,
