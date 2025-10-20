@@ -222,7 +222,7 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     else:
         parts.append("close gripper")
     # parts.append(f"set gripper to {g_last:.0f}")
-    return " and ".join(parts)
+    return ", ".join(parts)
 
 
 def summarize_bimanual_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:
