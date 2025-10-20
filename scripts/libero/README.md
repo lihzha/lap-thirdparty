@@ -69,3 +69,25 @@ checkpoint was trained in openpi with the `pi05_libero` config.
 | Model | Libero Spatial | Libero Object | Libero Goal | Libero 10 | Average |
 |-------|---------------|---------------|-------------|-----------|---------|
 | π0.5 @ 30k (finetuned) | 98.8 | 98.2 | 98.0 | 92.4 | 96.85
+
+## Evaluation of COT and pi05 policies
+
+Evaluate the COT policy:
+```bash
+# in one terminal, run the server
+uv run --active scripts/serve_policy.py policy:checkpoint --policy.config=pi05_libero_eval --policy.dir=checkpoint_path
+
+# in another terminal, run the sim
+python examples/libero/main.py --args.policy-type COT
+```
+
+Evaluate the pi05 policy:
+```bash
+# in one terminal, run the server
+uv run --active scripts/serve_pi_policy.py policy:checkpoint \
+    --policy.config=pi05_droid \
+    --policy.dir=checkpoint_path
+
+# in another terminal, run the sim
+python examples/libero/main.py --args.policy-type PI05
+```

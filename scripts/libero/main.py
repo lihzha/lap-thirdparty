@@ -1,5 +1,6 @@
 import collections
 import dataclasses
+import enum
 import logging
 import math
 import pathlib
@@ -19,6 +20,12 @@ LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
 
+class PolicyType(str, enum.Enum):
+    """Supported policy serving modes."""
+    COT = "cot"
+    PI05 = "pi05"
+
+
 @dataclasses.dataclass
 class Args:
     #################################################################################################################
@@ -28,6 +35,7 @@ class Args:
     port: int = 8000
     resize_size: int = 224
     replan_steps: int = 5
+    policy_type: PolicyType = PolicyType.COT  # CoT (default) or standard pi05 policy outputs
 
     #################################################################################################################
     # LIBERO environment-specific parameters
@@ -35,15 +43,15 @@ class Args:
     task_suite_name: str = (
         "libero_spatial"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
     )
-    num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
+    num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize in sim
     num_trials_per_task: int = 50  # Number of rollouts per task
 
     #################################################################################################################
     # Utils
     #################################################################################################################
     video_out_path: str = "data/libero/videos"  # Path to save videos
-
     seed: int = 7  # Random Seed (for reproducibility)
+    wrist_only_policy: bool = True  # Reuse wrist camera for base view when serving wrist-only checkpoints
 
 
 def eval_libero(args: Args) -> None:
@@ -103,6 +111,7 @@ def eval_libero(args: Args) -> None:
             actions_xyz = []  # Store first 3 action dimensions
 
             logging.info(f"Starting episode {task_episodes + 1}...")
+            done = False
             while t < max_steps + args.num_steps_wait:
                 try:
                     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
@@ -112,50 +121,106 @@ def eval_libero(args: Args) -> None:
                         t += 1
                         continue
 
-                    # Get preprocessed image
-                    # IMPORTANT: rotate 180 degrees to match train preprocessing
-                    img = np.ascontiguousarray(obs["agentview_image"][:, :])
-                    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][:, :])
-                    img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
-                    )
+                    # Get preprocessed images.
+                    # IMPORTANT: rotate 180 degrees to match training preprocessing.
+                    wrist_img_raw = np.asarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
                     wrist_img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(wrist_img, args.resize_size, args.resize_size)
+                        image_tools.resize_with_pad(wrist_img_raw, args.resize_size, args.resize_size)
                     )
+                    # Mask the agent (base) view with zeros since we only use wrist observations.
+                    base_img = np.zeros_like(wrist_img)
+                    base_img = np.ascontiguousarray(base_img)
+                    wrist_img = np.ascontiguousarray(wrist_img)
 
-                    # Save preprocessed image for replay video
-                    replay_images.append(img)
+                    # Save preprocessed image for replay video (use wrist view for debug)
+                    replay_images.append(wrist_img)
 
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
-                        # Prepare observations dict
-                        element = {
-                            "observation/image": img,
-                            "observation/wrist_image": wrist_img,
-                            "observation/state": np.concatenate(
-                                (
-                                    obs["robot0_eef_pos"],
-                                    # _quat2axisangle(obs["robot0_eef_quat"]),
-                                    _quat2euler(obs["robot0_eef_quat"]),
-                                    # obs["robot0_gripper_qpos"],
-                                )
-                            ),
-                            "prompt": str(task_description),
-                        }
+                        if args.policy_type == PolicyType.COT:
+                            eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
+                            eef_rot = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32)
+                            gripper_state = np.array(
+                                [float(np.mean(obs["robot0_gripper_qpos"]))], dtype=np.float32
+                            )
+                            # Compose state as (xyz, rotation, gripper).
+                            state = np.concatenate((eef_pos, eef_rot, gripper_state)).astype(np.float32)
+                            element = {
+                                "observation/image": base_img,
+                                "observation/wrist_image": wrist_img,
+                                "observation/state": state,
+                                "prompt": str(task_description),
+                            }
+                        else:
+                            joint_pos = obs.get("robot0_joint_pos")
+                            if joint_pos is None:
+                                joint_pos = obs.get("joint_pos")
+                            if joint_pos is None:
+                                raise KeyError("Observation missing joint positions for pi05 policy.")
+                            joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
+                            if joint_pos.size > 7:
+                                joint_pos = joint_pos[:7]
+                            gripper_qpos = obs.get("robot0_gripper_qpos")
+                            if gripper_qpos is None:
+                                gripper_qpos = obs.get("gripper_qpos")
+                            if gripper_qpos is None:
+                                raise KeyError("Observation missing gripper position for pi05 policy.")
+                            gripper_pos = float(np.mean(np.asarray(gripper_qpos, dtype=np.float32)))
+                            element = {
+                                "observation/exterior_image_1_left": base_img,
+                                "observation/wrist_image_left": wrist_img,
+                                "observation/joint_position": joint_pos,
+                                "observation/gripper_position": np.array([gripper_pos], dtype=np.float32),
+                                "prompt": str(task_description),
+                            }
 
-                        # Query model to get action
-                        action_chunk = client.infer(element)["actions"]
+                        # Query model to get action chunk (and optionally reasoning for CoT policies).
+                        response = client.infer(element)
+                        if "actions" not in response:
+                            raise KeyError("Policy response missing 'actions' field")
+
+                        if args.policy_type == PolicyType.COT:
+                            action_chunk = np.asarray(response["actions"], dtype=np.float32)
+                            reasoning = response.get("reasoning")
+                            if reasoning is not None:
+                                logging.debug("Policy reasoning: %s", reasoning)
+                            if action_chunk.ndim == 1:
+                                action_chunk = action_chunk[None, ...]
+                            if action_chunk.ndim != 2 or action_chunk.shape[1] != 7:
+                                raise ValueError(
+                                    f"Expected action chunk with shape (T, 7), got {action_chunk.shape}"
+                                )
+                        else:
+                            # Standard pi05 policy already returns direct actions; ensure correct shape.
+                            action_chunk = np.asarray(response["actions"], dtype=np.float32)
+                            if action_chunk.ndim == 1:
+                                action_chunk = action_chunk[None, ...]
+                            elif action_chunk.ndim > 2:
+                                # Flatten leading dimensions except time.
+                                action_chunk = action_chunk.reshape(-1, action_chunk.shape[-1])
+                            if action_chunk.shape[1] < 7:
+                                raise ValueError(
+                                    f"pi05 policy returned {action_chunk.shape[1]}-D actions; expected at least 7 dims."
+                                )
+                            if action_chunk.shape[1] > 7:
+                                action_chunk = action_chunk[:, :7]
+                            logging.info(
+                                "pi05 actions shape=%s dtype=%s first_step=%s",
+                                action_chunk.shape,
+                                action_chunk.dtype,
+                                action_chunk[0].tolist() if len(action_chunk) else None,
+                            )
+
                         assert len(action_chunk) >= args.replan_steps, (
                             f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
                         )
                         action_plan.extend(action_chunk[: args.replan_steps])
 
-                    action = action_plan.popleft()
-                    print(action)
+                    action = np.asarray(action_plan.popleft(), dtype=np.float32)
+                    logging.debug("Action: %s", action)
 
                     # Store first 3 action dimensions (XYZ position deltas)
-                    # actions_xyz.append(action[:3].copy())
-                    actions_xyz.append(obs["robot0_eef_pos"].copy())
+                    actions_xyz.append(action[:3].copy())
 
                     # Execute action in environment
                     obs, reward, done, info = env.step(action.tolist())
@@ -175,23 +240,28 @@ def eval_libero(args: Args) -> None:
             # Save a replay video of the episode
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_")
+            episode_tag = f"ep{episode_idx + 1:03d}"
+
+            task_video_dir = pathlib.Path(args.video_out_path) / task_segment
+            task_video_dir.mkdir(parents=True, exist_ok=True)
 
             # Create combined video with action visualization
             if actions_xyz and replay_images:
                 combined_frames = _create_action_visualization(actions_xyz, replay_images, fps=10)
                 if combined_frames:
                     imageio.mimwrite(
-                        pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}_with_actions.mp4",
+                        task_video_dir / f"rollout_{episode_tag}_{suffix}_with_actions.mp4",
                         combined_frames,
                         fps=10,
                     )
 
-            # Also save the original replay video
-            imageio.mimwrite(
-                pathlib.Path(args.video_out_path) / f"rollout_{task_segment}_{suffix}.mp4",
-                [np.asarray(x) for x in replay_images],
-                fps=10,
-            )
+            # Also save the original replay video when frames are available
+            if replay_images:
+                imageio.mimwrite(
+                    task_video_dir / f"rollout_{episode_tag}_{suffix}.mp4",
+                    [np.asarray(x) for x in replay_images],
+                    fps=10,
+                )
 
             # Log current results
             logging.info(f"Success: {done}")
@@ -339,22 +409,22 @@ def _quat2euler(quat):
     return np.array([roll, pitch, yaw], dtype=np.float64)
 
 
-# def _quat2axisangle(quat):
-#     """
-#     Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
-#     """
-#     # clip quaternion
-#     if quat[3] > 1.0:
-#         quat[3] = 1.0
-#     elif quat[3] < -1.0:
-#         quat[3] = -1.0
+def _quat2axisangle(quat):
+    """
+    Convert quaternion [x, y, z, w] to axis-angle (3-vector).
+    Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py
+    """
+    q = np.asarray(quat, dtype=np.float64).copy()
+    if q.shape != (4,):
+        raise ValueError("quat must be shape (4,), ordered as [x, y, z, w]")
 
-#     den = np.sqrt(1.0 - quat[3] * quat[3])
-#     if math.isclose(den, 0.0):
-#         # This is (close to) a zero degree rotation, immediately return
-#         return np.zeros(3)
+    # Clip quaternion scalar part to valid range
+    q[3] = np.clip(q[3], -1.0, 1.0)
+    den = np.sqrt(max(1.0 - q[3] * q[3], 0.0))
+    if math.isclose(den, 0.0):
+        return np.zeros(3, dtype=np.float64)
 
-#     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
+    return (q[:3] * 2.0 * math.acos(q[3])) / den
 
 
 if __name__ == "__main__":
