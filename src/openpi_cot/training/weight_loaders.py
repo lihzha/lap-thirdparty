@@ -151,7 +151,7 @@ class WeightLoaderChoice(WeightLoader):
     """
 
     # Which loader to use.
-    kind: Literal["none", "checkpoint", "paligemma", "paligemma2"] = "paligemma"
+    kind: Literal["none", "checkpoint", "paligemma", "paligemma2", "gemma3"] = "paligemma"
     # Only used when kind == "checkpoint".
     params_path: str | None = None
 
@@ -167,6 +167,10 @@ class WeightLoaderChoice(WeightLoader):
                 if not self.params_path:
                     raise ValueError("--weight-loader.params-path must be set when kind=paligemma2")
                 return PaliGemma2WeightLoader(self.params_path)
+            case "gemma3":
+                if not self.params_path:
+                    raise ValueError("--weight-loader.params-path must be set when kind=gemma3")
+                return Gemma3WeightLoader(self.params_path)
             case "none":
                 return NoOpWeightLoader()
             case _:
