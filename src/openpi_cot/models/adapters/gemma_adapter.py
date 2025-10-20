@@ -80,10 +80,10 @@ class Gemma3ModuleWithDecode(_gemma3.Module):
         def _decode_one(x, apply_softcap=False):
             # self.embedder is created in setup(); params are shared/tied.
             logits = self.embedder.decode(x)
-            # Apply final_logits_softcap only to the first expert if configured
-            if apply_softcap and self.configs[0].final_logits_softcap is not None:
-                softcap = self.configs[0].final_logits_softcap
-                logits = jnp.tanh(logits / softcap) * softcap
+            # # Apply final_logits_softcap only to the first expert if configured
+            # if apply_softcap and self.configs[0].final_logits_softcap is not None:
+            #     softcap = self.configs[0].final_logits_softcap
+            #     logits = jnp.tanh(logits / softcap) * softcap
             # most losses expect float32 logits; cast if your pipeline needs it
             return jnp.asarray(logits, jnp.float32)
 
