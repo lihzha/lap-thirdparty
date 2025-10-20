@@ -534,7 +534,9 @@ class PiCoT(_pi0.Pi0):
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
-        observation = preprocess_observation(None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image)
+        observation = preprocess_observation(
+            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
+        )
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps
@@ -590,13 +592,15 @@ class PiCoT(_pi0.Pi0):
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0
 
-
     ### left padding
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
-        observation = preprocess_observation(None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image)
+        observation = preprocess_observation(
+            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
+        )
         # Inference: only use first frame
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation, num_frames=1)  # (B,Tp,D) + (B,Tp)
+        breakpoint()
         b, tp, d = *p_tokens.shape[:2], p_tokens.shape[-1]
         gen_len = observation.tokenized_prompt.shape[1]
         max_len = gen_len + tp
