@@ -181,18 +181,64 @@ def print_memory_usage(label):
     logging.info(f"[{label}] Memory usage: {mem:.2f} MB")
 
 
-def compute_window_indices(sequence_length: tf.Tensor, window_size: int) -> tf.Tensor:
-    """Return [T, window] indices for gathering sliding windows with end padding.
+def gather_with_padding(
+    data: tf.Tensor,
+    sequence_length: tf.Tensor,
+    window_size: int | tf.Tensor,
+    per_timestep_windows: tf.Tensor | None = None,
+) -> tf.Tensor:
+    """Gather sliding windows with proper zero-padding (not repetition).
 
-    Builds indices for each timestep t to gather the next `window_size` steps,
-    clamped to the final index so the tail windows repeat the last element.
+    This function replaces the buggy compute_window_indices approach that would
+    repeat the last element instead of zero-padding.
+
+    Args:
+        data: Source tensor to gather from, shape [T, ...] where T is sequence length
+        sequence_length: Scalar tensor, length of the sequence
+        window_size: Scalar or tensor, size of the window to gather. If per_timestep_windows
+                    is provided, this should be the maximum window size.
+        per_timestep_windows: Optional [T] tensor specifying variable window size per timestep.
+                             If None, uses fixed window_size for all timesteps.
+
+    Returns:
+        Gathered windows with shape [T, window_size, ...], properly zero-padded.
     """
-    # Shape: [T, window]
-    base = tf.broadcast_to(tf.range(window_size)[None], [sequence_length, window_size])
-    offsets = tf.broadcast_to(tf.range(sequence_length)[:, None], [sequence_length, window_size])
-    indices = base + offsets
-    # Cap to the last valid index to repeat the final element
-    return tf.minimum(indices, sequence_length - 1)
+    # Create base indices [T, window_size]
+    if isinstance(window_size, int):
+        window_size_tensor = tf.constant(window_size, dtype=tf.int32)
+    else:
+        window_size_tensor = tf.cast(window_size, tf.int32)
+
+    base = tf.broadcast_to(tf.range(window_size_tensor)[None], [sequence_length, window_size_tensor])
+    offsets = tf.broadcast_to(tf.range(sequence_length)[:, None], [sequence_length, window_size_tensor])
+    indices = base + offsets  # [T, window_size], can exceed sequence_length - 1
+
+    # Create validity mask
+    if per_timestep_windows is not None:
+        # Variable window sizes: check both sequence bounds and per-timestep window size
+        sequence_valid = indices < sequence_length  # [T, window_size]
+        window_valid = base < tf.expand_dims(per_timestep_windows, -1)  # [T, window_size]
+        valid_mask = tf.logical_and(sequence_valid, window_valid)
+    else:
+        # Fixed window size: just check sequence bounds
+        valid_mask = indices < sequence_length  # [T, window_size]
+
+    # Clamp indices for gathering (to avoid TF errors)
+    clamped_indices = tf.minimum(indices, sequence_length - 1)
+
+    # Gather data
+    gathered = tf.gather(data, clamped_indices)  # [T, window_size, ...]
+
+    # Zero out invalid positions
+    # Expand mask to match gathered shape
+    mask_expanded = tf.cast(valid_mask, gathered.dtype)
+    if len(gathered.shape) > 2:  # Has additional dimensions beyond [T, window]
+        for _ in range(len(gathered.shape) - 2):
+            mask_expanded = tf.expand_dims(mask_expanded, -1)
+
+    gathered = gathered * mask_expanded
+
+    return gathered
 
 
 # Helper: try cardinality; fall back to counting if UNKNOWN/INFINITE
@@ -473,11 +519,15 @@ class _SingleCoTDataset:
         self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
 
         def chunk_actions(traj):
-            """Splits episode into action chunks using shared indexing utility."""
+            """Splits episode into action chunks with proper zero-padding."""
             traj_len = tf.shape(traj[action_key])[0]
 
-            action_chunk_indices = compute_window_indices(traj_len, action_horizon)
-            traj[action_key] = tf.gather(traj[action_key], action_chunk_indices)
+            # Use unified gather function with proper zero-padding
+            traj[action_key] = gather_with_padding(
+                data=traj[action_key],
+                sequence_length=traj_len,
+                window_size=action_horizon,
+            )
             # Ensure static shape is preserved: [T, action_horizon, action_dim]
             traj[action_key].set_shape([None, action_horizon, self.action_dim])
             return traj
@@ -493,57 +543,44 @@ class _SingleCoTDataset:
             have a single language string aligned to its action chunk.
             """
             traj_len = tf.shape(traj[action_key])[0]
-            # First, create indices for summation (current + future steps)
-            summation_indices = compute_window_indices(traj_len, summation_steps)
 
             # Trim to dataset control frequency and pad to fixed window length (summation_steps)
             # Note: self.control_frequency is a Python int constant per dataset instance
             trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
-            if self.use_json_actions:
-                # Save raw language actions (shape [T]) before windowing for use in prediction
-                raw_lang_actions = traj["language_actions"]
 
-                la_window = tf.gather(traj["language_actions"], summation_indices[:, :trimmed_len])
-                pad_len = summation_steps - trimmed_len
+            # Use unified gather function with proper zero-padding
+            actions_window_trim = gather_with_padding(
+                data=traj["raw_action"],
+                sequence_length=traj_len,
+                window_size=trimmed_len,
+            )  # [T, trimmed_len, A]
 
-                def _pad_text():
-                    pad = tf.fill([tf.shape(la_window)[0], pad_len], tf.constant("", dtype=tf.string))
-                    return tf.concat([la_window, pad], axis=1)
+            # Pad to full summation_steps if needed
+            pad_len = int(summation_steps) - trimmed_len
 
-                traj["language_actions"] = tf.cond(pad_len > 0, _pad_text, lambda: la_window)
-                # Set static shape for TensorFlow's shape inference
-                traj["language_actions"].set_shape([None, summation_steps])
-
-                # Store raw for prediction (shape [T])
-                traj["raw_language_actions"] = raw_lang_actions
-            else:
-                # Gather numeric actions for the future window up to control frequency: [T, trimmed_len, A]
-                actions_window_trim = tf.gather(traj["raw_action"], summation_indices[:, :trimmed_len])
-                pad_len = int(summation_steps) - trimmed_len
-
-                def _pad_numeric():
-                    zeros_pad = tf.zeros(
-                        [tf.shape(actions_window_trim)[0], pad_len, tf.shape(actions_window_trim)[-1]],
-                        dtype=actions_window_trim.dtype,
-                    )
-                    return tf.concat([actions_window_trim, zeros_pad], axis=1)
-
-                actions_window = tf.cond(pad_len > 0, _pad_numeric, lambda: actions_window_trim)
-
-                # Unify spec with DROID by converting per-step numeric rows to tf.string via serialization.
-                # Result shape: [T, summation_steps] tf.string (each element is a serialized [A] float32 tensor)
-                flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
-                serialized_flat = tf.map_fn(
-                    lambda v: tf.io.serialize_tensor(v),
-                    flat_rows,
-                    fn_output_signature=tf.string,
+            def _pad_numeric():
+                zeros_pad = tf.zeros(
+                    [tf.shape(actions_window_trim)[0], pad_len, tf.shape(actions_window_trim)[-1]],
+                    dtype=actions_window_trim.dtype,
                 )
-                traj["language_actions"] = tf.reshape(
-                    serialized_flat,
-                    [tf.shape(actions_window)[0], int(summation_steps)],
-                )
-                # Set static shape for TensorFlow's shape inference
-                traj["language_actions"].set_shape([None, summation_steps])
+                return tf.concat([actions_window_trim, zeros_pad], axis=1)
+
+            actions_window = tf.cond(pad_len > 0, _pad_numeric, lambda: actions_window_trim)
+
+            # Unify spec with DROID by converting per-step numeric rows to tf.string via serialization.
+            # Result shape: [T, summation_steps] tf.string (each element is a serialized [A] float32 tensor)
+            flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
+            serialized_flat = tf.map_fn(
+                lambda v: tf.io.serialize_tensor(v),
+                flat_rows,
+                fn_output_signature=tf.string,
+            )
+            traj["language_actions"] = tf.reshape(
+                serialized_flat,
+                [tf.shape(actions_window)[0], int(summation_steps)],
+            )
+            # Set static shape for TensorFlow's shape inference
+            traj["language_actions"].set_shape([None, summation_steps])
             return traj
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
@@ -599,95 +636,57 @@ class _SingleCoTDataset:
                 [current_imgs, future_imgs], axis=1
             )  # [T, 2, H, W, C]
 
-            # Wrist image: single frame only
-            traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-                traj["observation"][self.spec.wrist_image_key], axis=1
-            )  # [T, 1, H, W, C]
+            current_imgs = traj["observation"][self.spec.wrist_image_key]
+            future_imgs = tf.gather(current_imgs, future_indices)
+            traj["observation"][self.spec.wrist_image_key] = tf.stack(
+                [current_imgs, future_imgs], axis=1
+            )  # [T, 2, H, W, C]
+
+            # # Wrist image: single frame only
+            # traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+            #     traj["observation"][self.spec.wrist_image_key], axis=1
+            # )  # [T, 1, H, W, C]
 
             # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
             if self.spec.wrist_image_right_key in traj["observation"]:
-                traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                    traj["observation"][self.spec.wrist_image_right_key], axis=1
-                )  # [T, 1, H, W, C]
+                # traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                #     traj["observation"][self.spec.wrist_image_right_key], axis=1
+                # )  # [T, 1, H, W, C]
 
-            # Derive prediction language actions from raw_action, similar to language_actions
-            # For each timestep t with delta d, gather actions from t to t+d and pad to summation_steps
-            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
+                traj["observation"][self.spec.wrist_image_right_key] = tf.stack(
+                    [current_imgs, future_imgs], axis=1
+                )  # [T, 2, H, W, C]
 
-            if self.use_json_actions:
-                # JSON case: gather from language_actions
-                def gather_and_pad_json(t_idx, delta):
-                    """Gather language actions from t_idx to t_idx+delta-1, pad/truncate to summation_steps."""
-                    # Create indices [t_idx, t_idx+1, ..., t_idx+delta-1]
-                    indices = tf.range(delta) + t_idx
-                    indices = tf.minimum(indices, traj_len - 1)
+            # Numeric case: Use 2D gather with variable-length windows (more efficient than tf.map_fn)
+            # Use realized_deltas (not original deltas) to ensure we only gather valid actions
+            # that correspond to the actual visual gap between current and future images
+            deltas_clamped = tf.minimum(deltas, summation_steps)
 
-                    # Gather language actions (delta steps)
-                    lang_window = tf.gather(traj["raw_language_actions"], indices)
+            # Use unified gather function with per-timestep windows
+            # This handles variable deltas efficiently in a batched 2D operation
+            actions_window = gather_with_padding(
+                data=traj["raw_action"],
+                sequence_length=traj_len,
+                window_size=summation_steps,  # Maximum window size
+                per_timestep_windows=deltas_clamped,  # Variable window per timestep
+            )  # [T, summation_steps, A]
 
-                    # Pad to summation_steps if delta < summation_steps, or truncate if delta > summation_steps
-                    pad_len = summation_steps - delta
-                    padded = tf.cond(
-                        pad_len > 0,
-                        lambda: tf.concat([lang_window, tf.fill([pad_len], tf.constant("", dtype=tf.string))], axis=0),
-                        lambda: lang_window[:summation_steps],
-                    )
-                    return padded
-
-                prediction_lang_actions = tf.map_fn(
-                    lambda x: gather_and_pad_json(x[0], x[1]),
-                    (tf.range(traj_len, dtype=tf.int32), deltas),
-                    fn_output_signature=tf.TensorSpec(shape=[summation_steps], dtype=tf.string),
-                )
-                traj.pop("raw_language_actions")  # No longer needed
-            else:
-                # Numeric case: gather from raw_action and serialize
-                def gather_and_pad_numeric(t_idx, delta):
-                    """Gather actions from t_idx to t_idx+delta-1, serialize, pad/truncate to summation_steps."""
-                    # Create indices [t_idx, t_idx+1, ..., t_idx+delta-1]
-                    indices = tf.range(delta) + t_idx
-                    indices = tf.minimum(indices, traj_len - 1)
-
-                    # Gather raw actions: [delta, A]
-                    actions_window = tf.gather(traj["raw_action"], indices)
-
-                    # Serialize each action row
-                    serialized = tf.map_fn(
-                        lambda v: tf.io.serialize_tensor(v),
-                        actions_window,
-                        fn_output_signature=tf.string,
-                    )
-
-                    # Pad to summation_steps with serialized dummy tensors, or truncate if delta > summation_steps
-                    pad_len = summation_steps - delta
-                    padded = tf.cond(
-                        pad_len > 0,
-                        lambda: tf.concat(
-                            [
-                                serialized,
-                                tf.tile(
-                                    [
-                                        tf.io.serialize_tensor(
-                                            tf.zeros(tf.shape(traj["raw_action"])[-1:], dtype=traj["raw_action"].dtype)
-                                        )
-                                    ],
-                                    [pad_len],
-                                ),
-                            ],
-                            axis=0,
-                        ),
-                        lambda: serialized[:summation_steps],
-                    )
-                    return padded
-
-                prediction_lang_actions = tf.map_fn(
-                    lambda x: gather_and_pad_numeric(x[0], x[1]),
-                    (tf.range(traj_len, dtype=tf.int32), deltas),
-                    fn_output_signature=tf.TensorSpec(shape=[summation_steps], dtype=tf.string),
-                )
+            # Serialize each action in the 2D array
+            # Reshape to [T * summation_steps, A] for efficient serialization
+            flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
+            serialized_flat = tf.map_fn(
+                lambda v: tf.io.serialize_tensor(v),
+                flat_rows,
+                fn_output_signature=tf.string,
+            )
+            # Reshape back to [T, summation_steps]
+            prediction_lang_actions = tf.reshape(
+                serialized_flat,
+                [traj_len, summation_steps],
+            )
 
             traj["prediction_language_action"] = prediction_lang_actions  # [T, summation_steps]
-            traj["prediction_delta"] = deltas  # Store for debugging
+            traj["prediction_delta"] = deltas
 
             return traj
 
@@ -734,6 +733,7 @@ class DroidCoTDataset(_SingleCoTDataset):
         episode_path = extract_episode_path_from_file_path(file_path)
         return ep_table.lookup(episode_path)
 
+    # Not needed
     def build_lang_action_table(self, language_action_dir):
         # ---------------------------------------------------------------------
         # 1. Language-action table (episode_id → serialized tensor)
@@ -786,6 +786,7 @@ class DroidCoTDataset(_SingleCoTDataset):
         print_memory_usage("After building ep_table")
         return ep_table
 
+    # Not needed
     def build_cam_tables(self, metadata_path):
         # ---------------------------------------------------------------------
         # 3. Camera-index table  (episode_id → ext-cam idx)
@@ -905,17 +906,7 @@ class DroidCoTDataset(_SingleCoTDataset):
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
             episode_id = traj["trajectory_id"][0]
-            if self.use_json_actions:
-                lang_bytes = self.lang_table.lookup(episode_id)
-                # Check if lang_bytes is valid before parsing
-                lang_tensor = tf.cond(
-                    tf.not_equal(lang_bytes, tf.constant(self.spec.default_lang_value, dtype=tf.string)),
-                    lambda: tf.io.parse_tensor(lang_bytes, tf.string)[:traj_len],
-                    lambda: tf.fill([traj_len], tf.constant("", dtype=tf.string)),
-                )
-
-            else:
-                lang_tensor = tf.fill([traj_len], tf.constant(""))
+            lang_tensor = tf.fill([traj_len], tf.constant(""))
             # Sample instruction from merged table
             instr_bytes = self.instr_table.lookup(episode_id)
 
@@ -947,27 +938,17 @@ class DroidCoTDataset(_SingleCoTDataset):
             instruction = _sample_from_table()
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
 
-            if self.use_json_actions:
-                cam_idx = self.cam_table.lookup(episode_id)
-                cam_images = [
-                    traj["observation"][self.spec.images_list[0]],
-                    traj["observation"][self.spec.images_list[1]],
-                ]
-                cam_images = tf.stack(cam_images, axis=0)  # shape (2, H, W, C)
-                cam_idx_clamped = tf.clip_by_value(cam_idx, 0, tf.shape(cam_images)[0] - 1)
-                exterior_img = tf.gather(cam_images, cam_idx_clamped)
-            else:
-                # # Randomly samples one of the two exterior images in DROID during training (we only train with one at a time).
-                # # Note: the "left" refers to the left camera in the stereo pair, we only train on the left camera.
-                # random_val = tf.random.stateless_uniform(
-                #     shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
-                # )
-                exterior_img = tf.cond(
-                    # random_val > 0.5,
-                    tf.random.uniform(shape=[], seed=self.seed) > 0.5,
-                    lambda: traj["observation"][self.spec.images_list[0]],
-                    lambda: traj["observation"][self.spec.images_list[1]],
-                )
+            # # Randomly samples one of the two exterior images in DROID during training (we only train with one at a time).
+            # # Note: the "left" refers to the left camera in the stereo pair, we only train on the left camera.
+            # random_val = tf.random.stateless_uniform(
+            #     shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
+            # )
+            exterior_img = tf.cond(
+                # random_val > 0.5,
+                tf.random.uniform(shape=[], seed=self.seed) > 0.5,
+                lambda: traj["observation"][self.spec.images_list[0]],
+                lambda: traj["observation"][self.spec.images_list[1]],
+            )
 
             # state = convert_state_encoding(
             #     state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding

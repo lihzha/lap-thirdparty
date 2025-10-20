@@ -280,6 +280,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 prompt_str = prompt_str.split("@")[-1]
 
         inputs["prompt"] = prompt_str
+        inputs["dataset_name"] = data["dataset_name"].decode()
 
         # Extract state_type if available
         # state_type = data.get("state_type")
@@ -372,6 +373,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             assert not self.enable_prediction_training, (
                 "Prediction training enabled in policy but no prediction language action found in data."
             )
+
+        # import wandb; wandb.log({"image": [wandb.Image(inputs["image"]["base_0_rgb"][0]), wandb.Image(inputs["image"]["base_0_rgb"][1])]})
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):
