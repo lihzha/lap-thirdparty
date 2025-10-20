@@ -374,6 +374,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             )
 
         breakpoint()
+        # import wandb; wandb.log({"image": [wandb.Image(inputs["image"]["base_0_rgb"][0]), wandb.Image(inputs["image"]["base_0_rgb"][1])]})
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

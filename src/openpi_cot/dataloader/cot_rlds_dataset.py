@@ -635,6 +635,10 @@ class _SingleCoTDataset:
             )
             future_indices = tf.minimum(tf.range(traj_len, dtype=tf.int32) + deltas, traj_len - 1)
 
+            # Compute the REALIZED delta (actual gap between images after clamping)
+            # This ensures we only gather valid actions that bridge the actual visual gap
+            realized_deltas = future_indices - tf.range(traj_len, dtype=tf.int32)
+
             # Stack current and future images (primary only)
             current_imgs = traj["observation"][self.spec.primary_image_key]
             future_imgs = tf.gather(current_imgs, future_indices)
@@ -664,8 +668,9 @@ class _SingleCoTDataset:
                 )  # [T, 2, H, W, C]
 
             # Numeric case: Use 2D gather with variable-length windows (more efficient than tf.map_fn)
-            # Clamp deltas to summation_steps to avoid gathering too much
-            deltas_clamped = tf.minimum(deltas, summation_steps)
+            # Use realized_deltas (not original deltas) to ensure we only gather valid actions
+            # that correspond to the actual visual gap between current and future images
+            deltas_clamped = tf.minimum(realized_deltas, summation_steps)
 
             # Use unified gather function with per-timestep windows
             # This handles variable deltas efficiently in a batched 2D operation
@@ -691,7 +696,7 @@ class _SingleCoTDataset:
             )
 
             traj["prediction_language_action"] = prediction_lang_actions  # [T, summation_steps]
-            traj["prediction_delta"] = deltas  # Store for debugging
+            traj["prediction_delta"] = realized_deltas  # Store actual visual gap (not sampled delta)
 
             return traj
 
