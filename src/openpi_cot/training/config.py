@@ -833,6 +833,23 @@ _CONFIGS = [
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b"),
     ),
+    TrainConfig(
+        name="pi05_vqa_v4",
+        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="gs://pi0-cot/OXE",
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+    ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]
 
