@@ -47,7 +47,7 @@ class PiCoTConfig(_model.BaseModelConfig):
     aug_wrist_image: bool = True
     # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
     # When False, only uses base_0_rgb and left_wrist_0_rgb to save memory
-    use_bimanual: bool = True
+    use_bimanual: bool = False
 
     # Enable/disable individual loss components
     # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
