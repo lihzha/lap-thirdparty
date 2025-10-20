@@ -57,7 +57,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
         else:
             pad_id = self.tokenizer._tokenizer.pad_id()
-            tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len
+            tokenized_dataset_name = np.asarray([pad_id] * self.dataset_name_pad_len, dtype=np.int32)
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
@@ -96,8 +96,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
                 result["tokenized_prediction_mask"] = pred_pad_mask
                 result["tokenized_prediction_langact_mask"] = pred_reasoning_mask
                 result["prediction_crictical_token_mask"] = pred_numeric_mask
-
-        breakpoint()
 
         return result
 
