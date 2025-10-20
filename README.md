@@ -68,7 +68,7 @@ uv run scripts/eval.py \
       --eval-mode=token_accuracy
 
 ## Running VQA
-uv run scripts/train.py policy:checkpoint --policy.config=paligemma2_vqa_v4 --policy.dir=None
+uv run scripts/vqa.py policy:checkpoint --policy.config=paligemma2_vqa_v4 --policy.dir=None
 
 ## New Features Summary
 
