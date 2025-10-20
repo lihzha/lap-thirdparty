@@ -239,6 +239,7 @@ def main(args: Args) -> None:
         print({"request_keys": list(req.keys()), "prompt": req["prompt"], "text": outputs.get("reasoning")})
         if idx + 1 >= args.droid_max_examples:
             break
+        breakpoint()
 
 
 if __name__ == "__main__":
