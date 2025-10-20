@@ -1,11 +1,15 @@
 from collections.abc import Callable
 import dataclasses
 import logging
+import os
 import re
 from typing import Literal
 
 import numpy as np
 from openpi.models import tokenizer as _tokenizer
+import sentencepiece
+
+import openpi_cot.shared.download as download
 
 
 @dataclasses.dataclass
@@ -306,8 +310,19 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             "schema_compact_bimanual_with_rotation",
         ]
         | PromptFormat = "pi05",
+        tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma",
     ):
-        super().__init__(max_len)
+        # super().__init__(max_len)
+        if tokenizer_type == "paligemma":
+            path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
+            with path.open("rb") as f:
+                self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
+        else:
+            cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
+            path = cache_dir + "/gemma3-tokenizer.model"
+            with path.open("rb") as f:
+                self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
+        self._max_len = max_len
         self._stop_token_id = self._tokenizer.eos_id()
 
         # Support both string and PromptFormat instance

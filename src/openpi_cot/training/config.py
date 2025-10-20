@@ -181,6 +181,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
         "schema_compact_bimanual_with_rotation",
     ] = "schema_compact"
     prediction_prompt: str = "What is the robot's movement between two frames?"
+    tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -193,6 +194,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
+                            tokenizer_type=self.tokenizer_type,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         prediction_prompt=self.prediction_prompt,
@@ -203,11 +205,14 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     DetokenizeReasoning(
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
+                            prompt_format=self.prompt_format,
+                            tokenizer_type=self.tokenizer_type,
                         )
                     )
                 ],
             )
         return super().__call__(model_config)
+
 
 @dataclasses.dataclass(frozen=True)
 class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
@@ -224,6 +229,7 @@ class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
         "schema_compact_bimanual_with_rotation",
     ] = "schema_compact"
     prediction_prompt: str = "What is the robot's movement between two frames?"
+    tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -236,17 +242,16 @@ class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
+                            tokenizer_type=self.tokenizer_type,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         prediction_prompt=self.prediction_prompt,
                     ),
                     upstream_transforms.PadStatesAndActions(model_config.action_dim),
                 ],
-                outputs=[
-                ],
+                outputs=[],
             )
         return super().__call__(model_config)
-
 
 
 @dataclasses.dataclass(frozen=True)
@@ -330,6 +335,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         model_transforms = ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_prompt=base_cfg.prediction_prompt,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
@@ -363,6 +369,7 @@ class VQADataConfig(RLDSCoTDataConfig):
         model_transforms = ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_prompt=base_cfg.prediction_prompt,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
@@ -431,6 +438,7 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
         model_transforms = ModelTransformFactory(
             prediction_prompt=base_cfg.prediction_prompt,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
@@ -495,6 +503,7 @@ class TigerDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         model_transforms = TigerModelTransformFactory(
             prediction_prompt=base_cfg.prediction_prompt,
             prompt_format=model_config.prompt_format,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
