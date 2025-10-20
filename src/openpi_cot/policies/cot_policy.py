@@ -373,6 +373,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 "Prediction training enabled in policy but no prediction language action found in data."
             )
 
+        pred = data.get("prediction_language_action")
+        if not pred or not pred.strip():
+            breakpoint()
+
         # import wandb; wandb.log({"image": [wandb.Image(inputs["image"]["base_0_rgb"][0]), wandb.Image(inputs["image"]["base_0_rgb"][1])]})
 
         # Optional calibration/context passthroughs for visualization
