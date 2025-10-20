@@ -374,7 +374,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             )
 
         pred = data.get("prediction_language_action")
-        if not pred or not pred.strip():
+        if not pred:
+            breakpoint()
+        if not inputs["prediction_language_action"].strip():
             breakpoint()
 
         # import wandb; wandb.log({"image": [wandb.Image(inputs["image"]["base_0_rgb"][0]), wandb.Image(inputs["image"]["base_0_rgb"][1])]})
