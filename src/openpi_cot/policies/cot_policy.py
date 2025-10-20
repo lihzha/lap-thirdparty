@@ -374,7 +374,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             )
 
         pred = data.get("prediction_language_action")
-        if not pred:
+        if pred is None:
             breakpoint()
         if not inputs["prediction_language_action"].strip():
             breakpoint()
