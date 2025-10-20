@@ -1,24 +1,23 @@
 import logging
+from typing import Sequence, Union
 
 import einops
+import flax.linen as nn
 import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
 from typing_extensions import override
 
-# --- NEW: Import your MoE model and the Gemma 3 configs ---
-from gemma3 import Gemma3MoEModel  # Assumes your model is in gemma3.py
-from gemma.gm.nn import _config as gemma3_config
-from gemma.gm.nn import _modules as gemma3_modules
-from gemma.multimodal import vision as gemma_vision
-# ---
-
 from openpi.models import model as _model
-from openpi.models import pi0_config
+#from openpi.models import pi0_config
+from openpi_cot.models.pi0_config_gemma3 import Pi0Config  # Changed from openpi.models
+import openpi_cot.models.gemma3 as _gemma3
+import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
 
 logger = logging.getLogger("openpi")
+
 
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
@@ -68,125 +67,170 @@ def posemb_sincos(
 
 
 class Pi0(_model.BaseModel):
-    def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
+    def __init__(self, config: Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
-
-        # --- 1. UNIFIED GEMMA 3 CONFIGURATION ---
-        # Create one single, multimodal config for our unified model.
-        # This config defines the vision encoder, text model, and attention patterns.
-        gemma3_base_config = gemma3_config.TransformerConfig(
-            final_logit_softcap=None,
-            num_embed=262_144,
-            embed_dim=2560,
-            hidden_dim=2560 * 8 // 2,
-            num_heads=8,
-            head_dim=256,
-            num_kv_heads=4,
-            use_post_attn_norm=True,
-            use_post_ffw_norm=True,
-            use_qk_norm=True,
-            # This example uses a simple global attention pattern for all layers.
-            # You can customize this as needed.
-            attention_types=(gemma3_modules.AttentionType.GLOBAL,) * 18,
-            query_pre_attn_norm=gemma3_config.QueryPreAttentionNormalisation.BY_ONE_OVER_SQRT_HEAD_DIM,
-            attn_logits_soft_cap=None,
-            sliding_window_size=None, # Not using sliding attention in this example
-            transpose_gating_einsum=True,
-            local_base_frequency=10_000,
-            global_base_frequency=1_000_000,
-            global_scale_factor=8.0,
-            # CRITICAL: This makes the model multimodal.
-            vision_encoder=gemma_vision.SigLiPFromPatches(),
-        )
-
-        # --- 2. INSTANTIATE THE UNIFIED MoE MODEL ---
-        # We replace the separate llm and img with one model.
-        # num_experts=2 corresponds to the prefix and action experts.
-        self.gemma3_model = nnx_bridge.ToNNX(
-            Gemma3MoEModel(config=gemma3_base_config, num_experts=2)
-        )
-        # Initialization will happen on the first call or via lazy_init if needed.
         
-        embed_dim = gemma3_base_config.embed_dim
+        # Get Gemma3 configs for both PaliGemma and action expert
+        paligemma_config = _gemma3.get_config(config.paligemma_variant)
+        action_expert_config = _gemma3.get_config(config.action_expert_variant)
+
+        print(f"Pi0: VLM Variant: {config.paligemma_variant}, Action Expert Variant: {config.action_expert_variant}")
         
-        # --- 3. ACTION/STATE PROJECTION LAYERS ---
-        # These remain, but their dimensions are now tied to the unified model's embed_dim.
-        self.action_in_proj = nnx.Linear(config.action_dim, embed_dim, rngs=rngs)
+        # Create the Gemma3 MoE transformer
+        llm = nnx_bridge.ToNNX(
+            _gemma3.Module(
+                configs=[paligemma_config, action_expert_config],
+                embed_dtype=config.dtype,
+                adarms=config.pi05,  # Use AdaRMS for Pi0.5
+            )
+        )
+        llm.lazy_init(
+            rngs=rngs, 
+            method="init", 
+            use_adarms=[False, True] if config.pi05 else [False, False]
+        )
+        
+        # Vision encoder (SigLIP)
+        img = nnx_bridge.ToNNX(
+            _siglip.Module(
+                num_classes=paligemma_config.embed_dim,  # Changed from .width to .embed_dim
+                variant="So400m/14",
+                pool_type="none",
+                scan=True,
+                dtype_mm=config.dtype,
+            )
+        )
+        img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
+        
+        self.Gemma3 = nnx.Dict(llm=llm, img=img)
+        
+        # Action projections
+        self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.embed_dim, rngs=rngs)
+        
         if config.pi05:
-            self.time_mlp_in = nnx.Linear(embed_dim, embed_dim, rngs=rngs)
-            self.time_mlp_out = nnx.Linear(embed_dim, embed_dim, rngs=rngs)
+            # Pi0.5: Use AdaRMS for timestep conditioning
+            self.time_mlp_in = nnx.Linear(
+                action_expert_config.embed_dim, 
+                action_expert_config.embed_dim, 
+                rngs=rngs
+            )
+            self.time_mlp_out = nnx.Linear(
+                action_expert_config.embed_dim, 
+                action_expert_config.embed_dim, 
+                rngs=rngs
+            )
         else:
-            self.state_proj = nnx.Linear(config.action_dim, embed_dim, rngs=rngs)
-            self.action_time_mlp_in = nnx.Linear(2 * embed_dim, embed_dim, rngs=rngs)
-            self.action_time_mlp_out = nnx.Linear(embed_dim, embed_dim, rngs=rngs)
-        self.action_out_proj = nnx.Linear(embed_dim, config.action_dim, rngs=rngs)
+            # Pi0: Concatenate state and use MLP for timestep
+            self.state_proj = nnx.Linear(
+                config.action_dim, 
+                action_expert_config.embed_dim, 
+                rngs=rngs
+            )
+            self.action_time_mlp_in = nnx.Linear(
+                2 * action_expert_config.embed_dim, 
+                action_expert_config.embed_dim, 
+                rngs=rngs
+            )
+            self.action_time_mlp_out = nnx.Linear(
+                action_expert_config.embed_dim, 
+                action_expert_config.embed_dim, 
+                rngs=rngs
+            )
+        
+        self.action_out_proj = nnx.Linear(
+            action_expert_config.embed_dim, 
+            config.action_dim, 
+            rngs=rngs
+        )
 
+        # This attribute gets automatically set by model.train() and model.eval()
         self.deterministic = True
 
     @at.typecheck
-    def _prepare_prefix_inputs(
+    def embed_prefix(
         self, obs: _model.Observation
-    ) -> tuple[at.Int[at.Array, "b s"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
-        """Prepares raw token IDs and masks for the prefix (vision + language)."""
-        # This method NO LONGER creates embeddings. It just prepares token IDs.
-        # The logic for handling image placeholders inside the token stream is assumed
-        # to be handled by the data loading/tokenization step.
+    ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
+        input_mask = []
+        ar_mask = []
+        tokens = []
         
-        # We assume obs.tokenized_prompt now contains the full sequence with image placeholders
-        tokens = obs.tokenized_prompt
-        input_mask = obs.tokenized_prompt_mask
+        # Embed images
+        for name in obs.images:
+            image_tokens, _ = self.Gemma3.img(obs.images[name], train=False)
+            tokens.append(image_tokens)
+            input_mask.append(
+                einops.repeat(
+                    obs.image_masks[name],
+                    "b -> b s",
+                    s=image_tokens.shape[1],
+                )
+            )
+            # Image tokens attend to each other
+            ar_mask += [False] * image_tokens.shape[1]
+
+        # Add language (tokenized inputs)
+        if obs.tokenized_prompt is not None:
+            tokenized_inputs = self.Gemma3.llm(obs.tokenized_prompt, method="embed")
+            tokens.append(tokenized_inputs)
+            input_mask.append(obs.tokenized_prompt_mask)
+            # Full attention between image and language inputs
+            ar_mask += [False] * tokenized_inputs.shape[1]
         
-        # The AR mask is still needed to control attention flow.
-        # This logic is simplified; the original was likely more complex.
-        ar_mask = jnp.zeros(tokens.shape[1], dtype=jnp.bool_)
-        
+        tokens = jnp.concatenate(tokens, axis=1)
+        input_mask = jnp.concatenate(input_mask, axis=1)
+        ar_mask = jnp.array(ar_mask)
         return tokens, input_mask, ar_mask
-    
 
     @at.typecheck
-    def _prepare_suffix_inputs(
+    def embed_suffix(
         self, obs: _model.Observation, noisy_actions: _model.Actions, timestep: at.Float[at.Array, " b"]
-    ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"], at.Float[at.Array, "b emb"] | None]:
-        """Prepares embedded action/state tokens for the suffix."""
-        # This method is a bit different. Since actions/state are continuous, we still
-        # need to project them into the embedding space before the main model call.
+    ) -> tuple[
+        at.Float[at.Array, "b s emb"],
+        at.Bool[at.Array, "b s"],
+        at.Bool[at.Array, " s"],
+        at.Float[at.Array, "b emb"] | None,
+    ]:
         input_mask = []
         ar_mask = []
         tokens = []
         if not self.pi05:
+            # add a single state token
             state_token = self.state_proj(obs.state)[:, None, :]
             tokens.append(state_token)
             input_mask.append(jnp.ones((obs.state.shape[0], 1), dtype=jnp.bool_))
+            # image/language inputs do not attend to state or actions
             ar_mask += [True]
 
         action_tokens = self.action_in_proj(noisy_actions)
+        # embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
         time_emb = posemb_sincos(timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0)
-        
         if self.pi05:
-            time_emb_processed = self.time_mlp_in(time_emb)
-            time_emb_processed = nnx.swish(time_emb_processed)
-            time_emb_processed = self.time_mlp_out(time_emb_processed)
-            adarms_cond = nnx.swish(time_emb_processed)
+            # time MLP (for adaRMS)
+            time_emb = self.time_mlp_in(time_emb)
+            time_emb = nnx.swish(time_emb)
+            time_emb = self.time_mlp_out(time_emb)
+            time_emb = nnx.swish(time_emb)
             action_expert_tokens = action_tokens
+            adarms_cond = time_emb
         else:
+            # mix timestep + action information using an MLP (no adaRMS)
             time_tokens = einops.repeat(time_emb, "b emb -> b s emb", s=self.action_horizon)
             action_time_tokens = jnp.concatenate([action_tokens, time_tokens], axis=-1)
-            action_expert_tokens = self.action_time_mlp_in(action_time_tokens)
-            action_expert_tokens = nnx.swish(action_expert_tokens)
-            action_expert_tokens = self.action_time_mlp_out(action_expert_tokens)
+            action_time_tokens = self.action_time_mlp_in(action_time_tokens)
+            action_time_tokens = nnx.swish(action_time_tokens)
+            action_time_tokens = self.action_time_mlp_out(action_time_tokens)
+            action_expert_tokens = action_time_tokens
             adarms_cond = None
-            
         tokens.append(action_expert_tokens)
         input_mask.append(jnp.ones(action_expert_tokens.shape[:2], dtype=jnp.bool_))
+        # image/language/state inputs do not attend to action tokens
         ar_mask += [True] + ([False] * (self.action_horizon - 1))
-        
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
         return tokens, input_mask, ar_mask, adarms_cond
     
-
     @override
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
@@ -194,7 +238,6 @@ class Pi0(_model.BaseModel):
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
-        # Noise and time logic remains the same
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
@@ -202,31 +245,20 @@ class Pi0(_model.BaseModel):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
-        # --- REFACTORED FORWARD PASS ---
-        # 1. Prepare raw prefix inputs and embedded suffix inputs.
-        prefix_tokens_ids, prefix_mask, prefix_ar_mask = self._prepare_prefix_inputs(observation)
-        suffix_embeddings, suffix_mask, suffix_ar_mask, adarms_cond = self._prepare_suffix_inputs(observation, x_t, time)
-
-        # 2. Construct masks for the full sequence.
+        # one big forward pass of prefix + suffix at once
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
         attn_mask = make_attn_mask(input_mask, ar_mask)
         positions = jnp.cumsum(input_mask, axis=1) - 1
-
-        # 3. A SINGLE call to our unified MoE model.
-        #    The model handles vision embedding internally.
-        (prefix_out, suffix_out), _ = self.gemma3_model(
-            prefix_tok_ids=prefix_tokens_ids,
-            suffix_embeddings=suffix_embeddings,
-            images=next(iter(observation.images.values())) if observation.images else None,
-            mask=attn_mask,
-            positions=positions,
-            adarms_cond=[None, adarms_cond], # Pass adarms only to the action expert
+        (prefix_out, suffix_out), _ = self.Gemma3.llm(
+            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
         )
-        
-        # 4. Project action expert output and compute loss.
-        v_t = self.action_out_proj(suffix_out)
+        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+
         return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+
     
 
     @override
@@ -239,55 +271,57 @@ class Pi0(_model.BaseModel):
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
         observation = _model.preprocess_observation(None, observation, train=False)
+        # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
+        # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
         if noise is None:
             noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
 
-        # --- REFACTORED KV CACHING ---
-        # 1. Fill KV cache with a prefix-only pass.
-        prefix_tokens_ids, prefix_mask, prefix_ar_mask = self._prepare_prefix_inputs(observation)
+        # first fill KV cache with a forward pass of the prefix
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        
-        # Pass only prefix data to the model to generate the KV cache.
-        _, kv_cache = self.gemma3_model(
-            prefix_tok_ids=prefix_tokens_ids,
-            suffix_embeddings=None, # No suffix data in this pass
-            images=next(iter(observation.images.values())) if observation.images else None,
-            mask=prefix_attn_mask,
-            positions=positions,
-            adarms_cond=[None, None],
-        )
+        _, kv_cache = self.Gemma3.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
 
         def step(carry):
             x_t, time = carry
-            suffix_embeddings, suffix_mask, suffix_ar_mask, adarms_cond = self._prepare_suffix_inputs(
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
                 observation, x_t, jnp.broadcast_to(time, batch_size)
             )
-            # ... (masking and position logic for the suffix remains the same) ...
-            full_attn_mask = ...
-            positions = ...
+            # `suffix_attn_mask` is shape (b, suffix_len, suffix_len) indicating how the suffix tokens can attend to each
+            # other
+            suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
+            # `prefix_attn_mask` is shape (b, suffix_len, prefix_len) indicating how the suffix tokens can attend to the
+            # prefix tokens
+            prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
+            # `combined_mask` is shape (b, suffix_len, prefix_len + suffix_len) indicating how the suffix tokens (which
+            # generate the queries) can attend to the full prefix + suffix sequence (which generates the keys and values)
+            full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
+            assert full_attn_mask.shape == (
+                batch_size,
+                suffix_tokens.shape[1],
+                prefix_tokens.shape[1] + suffix_tokens.shape[1],
+            )
+            # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
+            positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
 
-            # 2. In the loop, do a suffix-only pass using the pre-filled cache.
-            (prefix_out, suffix_out), _ = self.gemma3_model(
-                prefix_tok_ids=None, # No prefix data in this pass
-                suffix_embeddings=suffix_embeddings,
-                images=None, # Images are already cached
+            (prefix_out, suffix_out), _ = self.Gemma3.llm(
+                [None, suffix_tokens],
                 mask=full_attn_mask,
                 positions=positions,
                 kv_cache=kv_cache,
                 adarms_cond=[None, adarms_cond],
             )
             assert prefix_out is None
-            v_t = self.action_out_proj(suffix_out)
+            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+
             return x_t + dt * v_t, time + dt
-        
+
         def cond(carry):
             x_t, time = carry
             # robust to floating-point error
             return time >= -dt / 2
 
-        # ... (while loop remains the same) ...
         x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
         return x_0

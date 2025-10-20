@@ -383,12 +383,19 @@ class Attention(nn.Module):
                                    lora_config=config.lora_configs.get("attn"),
                                    dtype=dtype)
                 k, v = kv_einsum('BSD,2KDH->2BSKH', x)
+
+                # Apply RMSNorm to Q and K if configured
+                if config.use_qk_norm:
+                    rmsnorm_q = RMSNorm(name=_name("q_rmsnorm", i))
+                    rmsnorm_k = RMSNorm(name=_name("k_rmsnorm", i))
+                    q, _ = rmsnorm_q(q, None)
+                    k, _ = rmsnorm_k(k, None)
                 qkvs.append((q, k, v))
 
         # concatenate all experts along the sequence dimension
         q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
-        # Apply Norms if configured
+       
 
 
         # 2) Apply RoPE and scale queries

@@ -7,12 +7,12 @@ import jax.numpy as jnp
 from typing_extensions import override
 
 from openpi.models import model as _model
-import openpi_cot.models.claude_tests.gemma3 as _gemma3  # Changed from gemma to gemma3
+import openpi_cot.models.gemma3 as _gemma3  # Changed from gemma to gemma3
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 
 if TYPE_CHECKING:
-    from openpi_cot.models.claude_tests.pi0_gemma3 import Pi0
+    from openpi_cot.models.pi0_gemma3 import Pi0
 
 
 @dataclasses.dataclass(frozen=True)

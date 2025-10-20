@@ -2,7 +2,7 @@ import flax.nnx as nnx
 import jax
 import functools
 
-import openpi_cot.models.claude_tests.pi0_config_gemma3 as _pi0_config
+import openpi_cot.models.pi0_config_gemma3 as _pi0_config
 
 
 def _get_frozen_state(config: _pi0_config.Pi0Config) -> nnx.State:
