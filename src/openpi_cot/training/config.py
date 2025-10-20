@@ -848,7 +848,10 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=1,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint",
+            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
+        ),
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001
 ]
