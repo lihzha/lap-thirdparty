@@ -121,6 +121,24 @@ class PaliGemma2WeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class Gemma3WeightLoader(WeightLoader):
+    """Loads weights from the official Gemma3 checkpoint.
+
+    This will overwrite existing weights with similar names while keeping all extra weights intact.
+    This allows us to support the action expert which is used by the Pi0 model.
+    """
+
+    def load(self, params: at.Params) -> at.Params:
+        path = download.maybe_download("/kaggle/input/gemma-3/flax/gemma3-4b-it/1", gs={"token": "anon"})
+        with path.open("rb") as f:
+            flat_params = dict(np.load(f, allow_pickle=False))
+        loaded_params = {"Gemma3": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
+        loaded_params = jax.tree.map(recover_dtype, loaded_params)
+        # Add all missing weights.
+        return _merge_params(loaded_params, params, missing_regex=".*")
+
+
+@dataclasses.dataclass(frozen=True)
 class WeightLoaderChoice(WeightLoader):
     """CLI-friendly wrapper to choose a weight loader without nested subcommands.
 

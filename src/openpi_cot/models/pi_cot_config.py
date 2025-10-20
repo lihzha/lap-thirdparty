@@ -13,6 +13,7 @@ from typing_extensions import override
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 import openpi_cot.models.gemma2 as _gemma2
+import openpi_cot.models.gemma3 as _gemma3
 
 if TYPE_CHECKING:
     from openpi_cot.models.pi_cot import PiCoT
@@ -23,8 +24,8 @@ from typing import Literal
 @dataclasses.dataclass(frozen=True)
 class PiCoTConfig(_model.BaseModelConfig):
     dtype: str = "bfloat16"
-    paligemma_variant: _gemma.Variant | _gemma2.Variant = "gemma_2b"
-    action_expert_variant: _gemma.Variant | _gemma2.Variant = "gemma_300m"
+    paligemma_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_2b"
+    action_expert_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_300m"
 
     # Set the model specific defaults.
     action_dim: int = 32
