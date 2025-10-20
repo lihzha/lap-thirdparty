@@ -11,3 +11,7 @@ paligemma2-3b-pt-224/
 pt_224.npz_.gstmp
 pt_224.npz
 .claude
+
+norm_stats/
+norm_stats_visualizations/
+*.log

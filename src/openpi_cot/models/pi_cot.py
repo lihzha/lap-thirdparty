@@ -13,10 +13,12 @@ from openpi.shared import array_typing as at
 from typing_extensions import override
 
 from openpi_cot.models.adapters.gemma_adapter import Gemma2ModuleWithDecode
+from openpi_cot.models.adapters.gemma_adapter import Gemma3ModuleWithDecode
 from openpi_cot.models.adapters.gemma_adapter import ModuleWithDecode
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import preprocess_observation
 from openpi_cot.models.gemma2 import get_config as get_gemma2_config
+from openpi_cot.models.gemma3 import get_config as get_gemma3_config
 import openpi_cot.models.pi_cot_config as _pi_cot_config
 
 logger = logging.getLogger("openpi")
@@ -94,6 +96,11 @@ class PiCoT(_pi0.Pi0):
             paligemma_config = get_gemma2_config(config.paligemma_variant)
             action_expert_config = get_gemma2_config(config.action_expert_variant)
             module = Gemma2ModuleWithDecode
+        elif "gemma3" in config.paligemma_variant:
+            assert "gemma3" in config.action_expert_variant, "gemma3 must be used for both LLM and action expert"
+            paligemma_config = get_gemma3_config(config.paligemma_variant)
+            action_expert_config = get_gemma3_config(config.action_expert_variant)
+            module = Gemma3ModuleWithDecode
         else:
             paligemma_config = get_gemma_config(config.paligemma_variant)
             action_expert_config = get_gemma_config(config.action_expert_variant)
@@ -388,7 +395,10 @@ class PiCoT(_pi0.Pi0):
             metrics["pred_token_accuracy"] = pred_token_accuracy
 
             # Compute prediction critical token accuracy if available
-            if hasattr(observation, "crictical_prediction_token_mask") and observation.crictical_prediction_token_mask is not None:
+            if (
+                hasattr(observation, "crictical_prediction_token_mask")
+                and observation.crictical_prediction_token_mask is not None
+            ):
                 critical_pred_mask = observation.crictical_prediction_token_mask[:, 1:] * ex_mask_pred
                 critical_correct_pred = correct_pred * critical_pred_mask
                 num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)

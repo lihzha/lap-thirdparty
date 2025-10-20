@@ -74,7 +74,7 @@ cuda = [
 
 
 [tool.uv]
-override-dependencies = ["tensorstore==0.1.74"]
+override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74"]
 
 
 [tool.uv.sources]
