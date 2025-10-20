@@ -199,8 +199,8 @@ def _iter_droid_request_data(
                 )
             return arr
 
-        base_img = to_np(base_img_t)
-        wrist_img = to_np(wrist_img_t)
+        base_img = to_np(base_img_t)[None]
+        wrist_img = to_np(wrist_img_t)[None]
 
         # State
         cartesian_pos = to_np(step["observation"]["cartesian_position"], to_uint8=False)
