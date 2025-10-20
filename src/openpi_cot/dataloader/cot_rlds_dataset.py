@@ -389,9 +389,6 @@ class _SingleCoTDataset:
         self.split_val(split_seed=seed)
         self.apply_restructure()
 
-        breakpoint()
-        ds_size = dataset_size(self.dataset)
-
         # If state encoding is NONE, ensure state stats are properly padded
         if self.state_encoding == StateEncoding.NONE:
             from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
@@ -418,9 +415,6 @@ class _SingleCoTDataset:
         self.apply_flatten()
 
         self.apply_frame_filters()
-
-        breakpoint()
-        ds_size = dataset_size(self.dataset)
 
         if standalone:
             # Apply common shuffling/take/cache behavior

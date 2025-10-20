@@ -390,7 +390,7 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["action"] = tf.concat(
         (
             trajectory["action"][:, :6],
-            tf.clip_by_value(invert_gripper_actions((trajectory["action"][:, -1:] + 1) / 2), 0, 1),
+            tf.clip_by_value((trajectory["action"][:, -1:] + 1) / 2, 0, 1),
         ),
         axis=-1,
     )

@@ -139,7 +139,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "oxe_pi_magic_soup_with_bimanual": [
         ("kuka", 0.1),  # no language instructions, 580392 trajs
         ("bc_z", 1.0),
-        ("droid", 1.0),
+        ("droid", 1.0),  # after filter: 54946 trajs, 12825295 frames
         ("fractal20220817_data", 1.0),
         ("bridge_v2_oxe", 1.0),
         ("taco_play", 1.0),

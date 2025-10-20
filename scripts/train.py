@@ -351,38 +351,39 @@ def gather_dataset_info_multihost(
         Tuple of (dataset_names, losses) where both are gathered from all hosts
     """
     # Convert to local arrays (process-specific)
-    local_dataset_names = np.asarray(training_utils.to_local_array(tokenized_dataset_names))
+    local_dataset_names_tokens = np.asarray(training_utils.to_local_array(tokenized_dataset_names))
     local_losses = np.asarray(training_utils.to_local_array(per_sample_losses))
 
-    # Decode dataset names on this host
-    local_decoded_names = []
-    for i in range(local_dataset_names.shape[0]):
-        try:
-            name = tokenizer.decode(local_dataset_names[i])
-            # Clean up any special tokens or padding
-            name = name.strip()
-            local_decoded_names.append(name)
-        except Exception as e:
-            logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
-            local_decoded_names.append("unknown")
-
-    # For multi-host: gather all names and losses
+    # For multi-host: gather tokenized names and losses (both numeric)
     process_count = jax.process_count()
     if process_count > 1:
-        # Use JAX's multi-host utilities to gather data
-        # We'll gather on process 0, then broadcast back if needed
-        all_names = jax.experimental.multihost_utils.process_allgather(
-            np.array(local_decoded_names, dtype=object)
+        # Gather numeric arrays using JAX (works fine with int/float dtypes)
+        all_dataset_names_tokens = jax.experimental.multihost_utils.process_allgather(
+            local_dataset_names_tokens
         )
         all_losses = jax.experimental.multihost_utils.process_allgather(local_losses)
-        # Flatten the gathered arrays
-        all_names = all_names.flatten().tolist()
-        all_losses = all_losses.flatten()
+
+        # Flatten: shape goes from [num_processes, batch_per_process, seq_len] to [total_batch, seq_len]
+        # For losses: [num_processes, batch_per_process] to [total_batch]
+        all_dataset_names_tokens = np.asarray(all_dataset_names_tokens).reshape(-1, local_dataset_names_tokens.shape[-1])
+        all_losses = np.asarray(all_losses).flatten()
     else:
-        all_names = local_decoded_names
+        all_dataset_names_tokens = local_dataset_names_tokens
         all_losses = local_losses
 
-    return all_names, all_losses
+    # Now decode all the gathered tokenized names (on all hosts, but with same data)
+    all_decoded_names = []
+    for i in range(all_dataset_names_tokens.shape[0]):
+        try:
+            name = tokenizer.decode(all_dataset_names_tokens[i])
+            # Clean up any special tokens or padding
+            name = name.strip()
+            all_decoded_names.append(name)
+        except Exception as e:
+            logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
+            all_decoded_names.append("unknown")
+
+    return all_decoded_names, all_losses
 
 
 def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> dict[str, plt.Figure]:
