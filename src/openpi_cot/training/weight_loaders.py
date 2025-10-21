@@ -83,6 +83,8 @@ class CheckpointWeightLoader(WeightLoader):
         else:
             params_source = str(download.maybe_download(params_path_str))
 
+        breakpoint()
+
         # loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
         loaded_params = restore_params(params_source, restore_type=np.ndarray)
         # Add all missing LoRA weights.
@@ -153,8 +155,6 @@ def restore_params(
 
     with ocp.PyTreeCheckpointer() as ckptr:
         metadata = ckptr.metadata(params_path)
-        breakpoint()
-        metadata = {"params": metadata["params"]}
         # params = ckptr.restore(params_path,ocp.args.PyTreeRestore(item=metadata,restore_args=jax.tree.map(lambda _: ocp.ArrayRestoreArgs(sharding=None, restore_type=np.ndarray, dtype=None), metadata),),)
 
         params = ckptr.restore(
