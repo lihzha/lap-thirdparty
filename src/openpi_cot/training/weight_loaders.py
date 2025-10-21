@@ -259,8 +259,6 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
 
-    breakpoint()
-
     # First, take all weights that are a subset of the reference weights.
     result = {}
     for k, v in flat_loaded.items():
