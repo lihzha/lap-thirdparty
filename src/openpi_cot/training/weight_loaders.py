@@ -9,7 +9,6 @@ import flax.traverse_util
 import jax
 import jax.numpy as jnp
 import numpy as np
-import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import orbax.checkpoint as ocp
 
@@ -84,8 +83,8 @@ class CheckpointWeightLoader(WeightLoader):
         else:
             params_source = str(download.maybe_download(params_path_str))
 
-        loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
-        breakpoint()
+        # loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
+        loaded_params = restore_params(params_source, restore_type=np.ndarray)
         # Add all missing LoRA weights.
         return _merge_params(loaded_params, params, missing_regex=".*lora.*")
 
@@ -154,6 +153,9 @@ def restore_params(
 
     with ocp.PyTreeCheckpointer() as ckptr:
         metadata = ckptr.metadata(params_path)
+        breakpoint()
+        metadata = {"params": metadata["params"]}
+        # params = ckptr.restore(params_path,ocp.args.PyTreeRestore(item=metadata,restore_args=jax.tree.map(lambda _: ocp.ArrayRestoreArgs(sharding=None, restore_type=np.ndarray, dtype=None), metadata),),)
 
         params = ckptr.restore(
             params_path,
