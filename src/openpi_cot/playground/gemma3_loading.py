@@ -39,7 +39,7 @@ class Gemma3ScanCompatibleLoader(WeightLoader):
 
             flat_remapped = {}
             weights_to_stack = defaultdict(list)
-            used_keys = set()
+           
 
             print("Remapping checkpoint keys to match the nn.scan model structure...")
 

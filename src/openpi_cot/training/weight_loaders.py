@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 import openpi.shared.array_typing as at
 import orbax.checkpoint as ocp
+from collections import defaultdict
 
 import openpi_cot.shared.download as download
 
@@ -184,10 +185,222 @@ def restore_params(
         flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
     return traverse_util.unflatten_dict(flat_params)
 
+@dataclasses.dataclass(frozen=True)
+class Gemma3ScanCompatibleWeightLoader(WeightLoader):
+    """Loads and remaps Gemma3 weights to match Pi0's nn.scan naming conventions.
+    
+    This loader:
+    1. Loads raw Gemma3 checkpoint with per-layer naming (layer_0, layer_1, ...)
+    2. Stacks per-layer weights into a single 'layers' array dimension
+    3. Remaps key names (_key_norm -> k_rmsnorm, gating_einsum -> Einsum_0, etc.)
+    4. Extracts and remaps vision encoder (SigLiP) from per-layer to stacked format
+    5. Extracts embedder to PaliGemma namespace
+    """
+    
+    params_path: str
+
+    def _remap_siglip(self, siglip_params: dict) -> dict:
+        """Remap SigLiP from encoderblock_0, encoderblock_1, ... to stacked encoderblock."""
+        siglip_encoder = siglip_params.get('siglip_encoder', {})
+        transformer = siglip_encoder.get('Transformer', {})
+        
+        # Pattern to match encoderblock_0, encoderblock_1, etc.
+        encoderblock_pattern = re.compile(r'encoderblock_(\d+)')
+        
+        # Separate encoder blocks from other components
+        encoder_blocks = {}
+        other_components = {}
+        
+        for key, value in transformer.items():
+            m = encoderblock_pattern.match(key)
+            if m:
+                layer_idx = int(m.group(1))
+                encoder_blocks[layer_idx] = value
+            else:
+                other_components[key] = value
+        
+        # Stack encoder blocks
+        if encoder_blocks:
+            # Get the structure from first block
+            num_layers = max(encoder_blocks.keys()) + 1
+            first_block = encoder_blocks[0]
+            
+            # Flatten each block and collect by subkey
+            stacked_weights = defaultdict(list)
+            for layer_idx in range(num_layers):
+                block = encoder_blocks[layer_idx]
+                flat_block = flax.traverse_util.flatten_dict(block, sep='/')
+                for subkey, subval in flat_block.items():
+                    stacked_weights[subkey].append((layer_idx, subval))
+            
+            # Stack into single arrays
+            stacked_block = {}
+            for subkey, layer_values in stacked_weights.items():
+                layer_values.sort(key=lambda x: x[0])
+                arrays = [v for _, v in layer_values]
+                # Convert subkey string back to nested dict structure
+                stacked_block[tuple(subkey.split('/'))] = jnp.stack(arrays, axis=0)
+            
+            # Unflatten the stacked block
+            encoderblock_dict = flax.traverse_util.unflatten_dict(stacked_block)
+            
+            # Reconstruct transformer with stacked encoderblock
+            new_transformer = {
+                'encoderblock': encoderblock_dict,
+                **other_components
+            }
+        else:
+            new_transformer = other_components
+        
+        # Reconstruct full structure
+        result = {
+            'Transformer': new_transformer,
+            'embedding': siglip_params.get('siglip_encoder', {}).get('embedding', siglip_encoder.get('embedding', {})),
+        }
+        
+        # Add head and pos_embedding if they exist at siglip_encoder level
+        if 'head' in siglip_encoder:
+            result['head'] = siglip_encoder['head']
+        if 'pos_embedding' in siglip_encoder:
+            result['pos_embedding'] = siglip_encoder['pos_embedding']
+            
+        return result
+
+    def load(self, params: at.Params) -> at.Params:
+        logger.info("Loading Gemma3 weights using Gemma3ScanCompatibleWeightLoader...")
+        
+        # Load raw checkpoint
+        loaded_params = restore_params(
+            download.maybe_download(self.params_path), 
+            restore_type=np.ndarray
+        )
+
+        # Do everything on CPU to avoid device memory issues during remapping
+        with jax.default_device(jax.devices("cpu")[0]):
+            # Turn 'a/b/c' -> ('a','b','c') and unflatten
+            flat_dict = {}
+            for k, v in loaded_params.items():
+                # If k is already a tuple, use it
+                if isinstance(k, tuple):
+                    flat_dict[k] = v
+                # Otherwise split only once
+                elif isinstance(k, str):
+                    flat_dict[tuple(k.split('/'))] = v
+                else:
+                    raise TypeError(f"Unexpected key type: {type(k)} for key {k}")
+            
+            flat_original = flax.traverse_util.unflatten_dict(flat_dict)
+
+            logger.info("Remapping checkpoint keys to match the nn.scan model structure...")
+
+            # ===== TRANSFORMER (LLM) REMAPPING =====
+            transformer = flat_original.get('transformer', {})
+            layer_pattern = re.compile(r'layer_(\d+)')
+
+            weights_to_stack = defaultdict(list)
+            layerless = {}
+
+            # Separate per-layer and global transformer weights
+            for key, value in transformer.items():
+                m = layer_pattern.match(key)
+                if m:
+                    layer_idx = int(m.group(1))
+                    for subkey, subval in flax.traverse_util.flatten_dict(value, sep='/').items():
+                        weights_to_stack[subkey].append((layer_idx, subval))
+                else:
+                    layerless[key] = value  # e.g., final_norm, embedder, etc.
+
+            # Stack all layer weights
+            flat_remapped = {}
+            for subkey, layer_values in weights_to_stack.items():
+                layer_values.sort(key=lambda x: x[0])
+                arrays = [v for _, v in layer_values]
+                flat_remapped[('layers',) + tuple(subkey.split('/'))] = jnp.stack(arrays, axis=0)
+
+            # Add layerless (non-layer) weights back
+            for key, value in flax.traverse_util.flatten_dict(layerless, sep='/').items():
+                flat_remapped[('transformer',) + tuple(key.split('/'))] = jnp.array(value)
+
+            # Rebuild final structure
+            remapped_params = flax.traverse_util.unflatten_dict(flat_remapped)
+
+            # Do final adjustments to naming
+            if 'final_norm' in remapped_params.get('transformer', {}):
+                remapped_params['final_norm'] = remapped_params['transformer'].pop('final_norm')
+
+            if 'embedder' in remapped_params.get('transformer', {}):
+                remapped_params['embedder'] = remapped_params['transformer'].pop('embedder')
+
+            # Change _key_norm -> k_rmsnorm and _query_norm -> q_rmsnorm
+            remapped_params['layers']['attn']['k_rmsnorm'] = remapped_params['layers']['attn'].pop('_key_norm')
+            remapped_params['layers']['attn']['q_rmsnorm'] = remapped_params['layers']['attn'].pop('_query_norm')
+
+            # Fix Einsum in Gemma3
+            gating_dict = remapped_params['layers']['mlp'].pop('gating_einsum')
+            remapped_params['layers']['mlp']['Einsum_0'] = {}
+            remapped_params['layers']['mlp']['Einsum_0']['gating_einsum'] = gating_dict['w']   
+
+            linear_dict = remapped_params['layers']['mlp'].pop('linear')
+            remapped_params['layers']['mlp']['Einsum_1'] = {}
+            remapped_params['layers']['mlp']['Einsum_1']['linear'] = linear_dict['w']
+
+            # ===== SIGLIP (VISION ENCODER) REMAPPING =====
+            siglip_remapped = None
+            if 'SigLiPFromPatches_0' in flat_original:
+                logger.info("Remapping SigLiP vision encoder...")
+                siglip_remapped = self._remap_siglip(flat_original['SigLiPFromPatches_0'])
+
+            # ===== BUILD PALIGEMMA STRUCTURE =====
+            
+            # Flatten model params once
+            flat_model = flax.traverse_util.flatten_dict(params, sep='/')
+            
+            # ===== MERGE LLM PARAMS =====
+            logger.info("Merging LLM parameters...")
+            flat_llm = flax.traverse_util.flatten_dict(remapped_params, sep='/')
+            
+            logger.info("Gemma3 LLM Checkpoint Keys (first 20):")
+            for i, k in enumerate(sorted(flat_llm.keys())):
+                if i < 20:
+                    logger.info(f"  {k}")
+                else:
+                    logger.info(f"  ... and {len(flat_llm) - 20} more")
+                    break
+            
+            # Merge LLM weights - fills in missing action expert, LoRA, etc.
+            merged = _merge_params(flat_llm, flat_model, missing_regex=".*")  
+
+            vlm_params = {
+                'Gemma3': {
+                    'llm': merged,
+                }
+            }
+
+            # Delete temporary variables to free memory
+            del flat_llm
+            del merged
+            del flat_model
+
+            
+            # ===== MERGE VISION ENCODER PARAMS =====
+            if siglip_remapped is not None:
+                logger.info("Merging SigLiP vision encoder parameters...")
+                vlm_params['Gemma3']['img'] = siglip_remapped
+                
+            # Add embedder (contains input_embedding, mm_input_projection, mm_soft_embedding_norm)
+            if 'embedder' in remapped_params:
+                vlm_params['Gemma3']['mm_embedder'] = remapped_params['embedder']
+                logger.info("Added multimodal embedder to Gemma3 params")
+                # mm_embedder.input_embedding is for text input embedding (vocab size -> embedding dim)
+                # mm_embedder.mm_input_projection is for image patch projection (patch embedding dim -> model dim)
+                # mm_embedder.mm_soft_embedding_norm is the RMSNorm after multimodal input projection
+
+        logger.info("Gemma3 Weights Loaded, Siglip not yet done to match pi0 model building")
+        return vlm_params
 
 @dataclasses.dataclass(frozen=True)
 class Gemma3WeightLoader(WeightLoader):
-    """Loads weights from the official Gemma3 checkpoint.
+    """Loads weights from the official Gemma3 checkpoint and converts them to the correct format.
 
     This will overwrite existing weights with similar names while keeping all extra weights intact.
     This allows us to support the action expert which is used by the Pi model.
@@ -198,7 +411,9 @@ class Gemma3WeightLoader(WeightLoader):
     def load_initial_params(self) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
         return restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
-       
+
+
+ 
 
     def load(self, params: at.Params) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
