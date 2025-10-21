@@ -11,7 +11,6 @@ import jax.numpy as jnp
 import openpi.models.lora as lora
 import openpi.shared.array_typing as at
 
-
 # ============================================================================
 # Base Layer Implementations (unified from both gemma2 and gemma3)
 # ============================================================================
@@ -109,7 +108,6 @@ class RMSNorm(nn.Module):
             kernel_init=nn.initializers.zeros,
             dtype=dtype,
             param_dtype=pdtype,
-            name="ada_modulation",
         )(cond)
         scale, shift, gate = jnp.split(modulation[:, None, :], 3, axis=-1)
         normed_inputs = normed_inputs * (1 + scale) + shift
