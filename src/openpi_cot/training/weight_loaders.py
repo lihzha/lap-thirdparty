@@ -163,6 +163,7 @@ def restore_params(
                 ),
             ),
         )
+        breakpoint()
 
     # If the params were saved with `save_state` during openpi training, every key path will end with "value", which is
     # added by `nnx.State`. We remove the "value" suffix here and always return what NNX calls a "pure dict".
