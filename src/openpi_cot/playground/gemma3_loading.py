@@ -126,9 +126,12 @@ class Gemma3ScanCompatibleLoader(WeightLoader):
             # --- Merge into model params ---
             merged = _merge_params(flat_ckpt, flat_model, missing_regex=".*") # first arg are parameters to load, second arg is reference parameters
 
-            # --- (Optional) Return diagnostics too ---
+            # Get siglip and multimodal embeddings from gemma3 and put into unmerged
+            unmerged = {}
+            unmerged['SigLiPFromPatches_0'] = flat_original['SigLiPFromPatches_0']
+            unmerged['embedder'] = flat_original['embedder']
             
-        return merged
+        return merged, unmerged
         
 
 
