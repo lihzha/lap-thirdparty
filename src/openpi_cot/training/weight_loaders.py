@@ -83,6 +83,17 @@ class CheckpointWeightLoader(WeightLoader):
         else:
             params_source = str(download.maybe_download(params_path_str))
 
+        def get_all_keys(d, prefix=""):
+            keys = []
+            for k, v in d.items():
+                full_key = f"{prefix}.{k}" if prefix else k
+                keys.append(full_key)
+                if isinstance(v, dict):
+                    keys.extend(get_all_keys(v, prefix=full_key))
+            return keys
+
+        all_keys = get_all_keys(params)
+        print(all_keys)
         breakpoint()
 
         # loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
