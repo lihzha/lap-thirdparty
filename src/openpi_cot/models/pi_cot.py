@@ -139,8 +139,6 @@ class PiCoT(_pi0.Pi0):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
-        breakpoint()
-
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
@@ -602,7 +600,6 @@ class PiCoT(_pi0.Pi0):
         )
         # Inference: only use first frame
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation, num_frames=1)  # (B,Tp,D) + (B,Tp)
-        breakpoint()
         b, tp, d = *p_tokens.shape[:2], p_tokens.shape[-1]
         gen_len = observation.tokenized_prompt.shape[1]
         max_len = gen_len + tp

@@ -835,7 +835,12 @@ _CONFIGS = [
     ),
     TrainConfig(
         name="pi05_vqa_v4",
-        model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=600,
+            prompt_format="vqa",
+        ),
         data=VQADataConfig(
             repo_id="droid",
             asset_id="droid",

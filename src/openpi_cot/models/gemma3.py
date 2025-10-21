@@ -556,6 +556,7 @@ class Module(nn.Module):
                 nn.broadcast,  # positions
                 nn.broadcast,  # attn_mask
                 nn.broadcast,  # adarms_cond
+                nn.broadcast,  # deterministic
             ),
             length=self.configs[0].num_layers,
         )(
@@ -586,7 +587,7 @@ class Module(nn.Module):
         if adarms_cond is None:
             adarms_cond = [None] * len(self.configs)
 
-        embedded, kv_cache = self.layers(embedded, kv_cache, positions, mask, adarms_cond, deterministic=deterministic)
+        embedded, kv_cache = self.layers(embedded, kv_cache, positions, mask, adarms_cond, deterministic)
 
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
