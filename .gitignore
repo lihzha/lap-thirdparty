@@ -22,3 +22,5 @@ assets/
 logs/
 
 debug_vis/
+gemma3-4b/
+tokenizer.model

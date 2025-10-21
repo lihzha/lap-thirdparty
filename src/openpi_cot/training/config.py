@@ -757,6 +757,11 @@ _CONFIGS = [
             asset_id="tiger",
             dataset_type="droid",  # Use droid type for compatibility
             rlds_data_dir=None,  # LeRobot dataset will be loaded from HF_LEROBOT_HOME
+            assets=upstream_config.AssetsConfig(
+                # Important: reuse the original DROID norm stats during fine-tuning!
+                assets_dir="/n/fs/robot-data/openpi-cot/assets/pi05_tiger_finetune_local/your_hf_username",
+                asset_id="tiger_demos",
+            ),
         ),
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint",

@@ -2,12 +2,13 @@ import dataclasses
 import faulthandler
 import logging
 from pathlib import Path
+import pickle
 import sys
 
+import cv2
 import numpy as np
 from openpi.policies import policy as _policy
 from openpi_client import image_tools
-from scipy.spatial.transform import Rotation as R
 import tyro
 
 import openpi_cot.policies.adapters.policy_config_adapter as _policy_config
@@ -16,7 +17,11 @@ from openpi_cot.training import config as _config
 # Add parent directory to path to import from src
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from shared import IMAGE_KEYS
+IMAGE_KEYS = (
+    "base_0_rgb",
+    "left_wrist_0_rgb",
+    # "right_wrist_0_rgb",
+)
 
 faulthandler.enable()
 
@@ -31,14 +36,7 @@ class Args:
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy_config: str
     policy_dir: str
-    # Environment to serve the policy for. This is only used when serving default policies.
-    # If provided, will be used in case the "prompt" key is not present in the data, or if the model doesn't have a default
-    # prompt.
     default_prompt: str | None = None
-    # Port to serve the policy on.
-    port: int = 8000
-    # Record the policy's behavior for debugging.
-    record: bool = False
 
     # Rollout parameters
     max_timesteps: int = 600
@@ -49,12 +47,12 @@ class Args:
 
 def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
-    if "cot" in args.policy.config or "eval" in args.policy.config:
+    if "cot" in args.policy_config or "eval" in args.policy_config:
         return _policy_config.create_trained_policy_cot(
-            _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+            _config.get_config(args.policy_config), args.policy_dir, default_prompt=args.default_prompt
         )
     return _policy_config.create_trained_policy(
-        _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+        _config.get_config(args.policy_config), args.policy_dir, default_prompt=args.default_prompt
     )
 
 
@@ -105,67 +103,120 @@ def quat_to_euler(q, degrees: bool = False):
     return _to_degrees(angles, degrees)
 
 
+def read_video_frames(video_path: Path) -> list[np.ndarray]:
+    """Read all frames from a video file."""
+    cap = cv2.VideoCapture(str(video_path))
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        # Convert BGR to RGB
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(frame_rgb)
+    cap.release()
+    return frames
+
+
+def load_tiger_demo_data(demo_name: str, timestep: int, data_dir: str = "all_data/data_tiger/demos"):
+    """
+    Load Tiger demo data for a specific timestep.
+
+    Args:
+        demo_name: Name of the demo folder
+        timestep: Timestep index (t)
+        data_dir: Base directory containing demo folders
+
+    Returns:
+        dict containing:
+            - base_image: RGB image from base camera (H, W, 3)
+            - wrist_image: RGB image from wrist camera (H, W, 3)
+            - cartesian_position: arm_pos (3) + arm_quat (4) in xyzw format = (7,)
+            - gripper_position: gripper position scalar
+    """
+    demo_path = Path(data_dir) / demo_name
+
+    # Load pickle data
+    pkl_path = demo_path / "data.pkl"
+    with open(pkl_path, "rb") as f:
+        data = pickle.load(f)
+
+    observations = data["observations"]
+
+    # Verify timestep is valid
+    if timestep >= len(observations):
+        raise ValueError(f"Timestep {timestep} out of range (max: {len(observations) - 1})")
+
+    # Load video frames
+    base_video_path = demo_path / "base_image.mp4"
+    wrist_video_path = demo_path / "wrist_image.mp4"
+
+    base_frames = read_video_frames(base_video_path)
+    wrist_frames = read_video_frames(wrist_video_path)
+
+    # Get observation at timestep t
+    obs = observations[timestep]
+
+    # Extract data
+    base_image = base_frames[timestep]  # (H, W, 3) RGB
+    wrist_image = wrist_frames[timestep]  # (H, W, 3) RGB
+
+    # Cartesian position: arm_pos (3) + arm_quat (4)
+    cartesian_position = np.concatenate(
+        [
+            obs["arm_pos"],  # (3,)
+            obs["arm_quat"],  # (4,) in xyzw format
+        ]
+    )
+
+    gripper_position = obs["gripper_pos"][0]  # Scalar
+
+    return {
+        "base_image": base_image,
+        "wrist_image": wrist_image,
+        "cartesian_position": cartesian_position,
+        "gripper_position": gripper_position,
+    }
+
+
 def main(args: Args):
-    CHUNK_STEPS = 8
     policy = create_policy(args)
-    base_image = imageio.load()
-    wrist_image = imageio.load()
-    cartesian_position = np.zeros_like(0)
-    gripper_position = 0
+
+    # Load demo data
+    # demo_name = input("Enter demo name: ")
+    # timestep = int(input("Enter timestep: "))
+    demo_name = "20251013T175003694774"
+    timestep = 0
+
+    demo_data = load_tiger_demo_data(demo_name, timestep)
+    base_image = demo_data["base_image"]
+    wrist_image = demo_data["wrist_image"]
+    cartesian_position = demo_data["cartesian_position"]
+    gripper_position = demo_data["gripper_position"]
+
     instruction = input("Enter instruction: ")
     curr_obs = {
-        "observation/image": base_image[None],
-        "observation/wrist_image": wrist_image[None],
+        "observation/image": base_image,
+        "observation/wrist_image": wrist_image,
         "observation/cartesian_position": cartesian_position,
         "observation/gripper_position": np.array(gripper_position).reshape((-1, 1)),
         "observation/state": np.concatenate([cartesian_position, np.array(gripper_position)[None]]),
     }
 
     request_data = {
-        "observation": {
-            IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
-            IMAGE_KEYS[1]: image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
-            "cartesian_position": curr_obs["observation/cartesian_position"],
-            "gripper_position": curr_obs["observation/gripper_position"],
-            "state": curr_obs["observation/state"],
-        },
+        "image": image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
+        "wrist_image": image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
+        "state": curr_obs["observation/state"],
         "prompt": instruction,
-        "batch_size": None,
     }
-
     response = policy.infer(request_data)
-    try:
-        print(response["reasoning"])
-    except:
-        pass
 
     # Extract actions from response (either pre-parsed or parse from reasoning)
     if "actions" in response and response["actions"] is not None:
-        actions = np.asarray(response["actions"])
-        # Extract translation delta (first 3 dims) and gripper (last dim)
-        delta_base = actions[0, :3]
-        grip_actions = actions[:, -1]
+        pred_action_chunk = np.asarray(response["actions"])
     else:
         raise NotImplementedError
-
-    # Build absolute target from current state
-    curr_pos = np.asarray(curr_obs["observation/cartesian_position"], dtype=float)[:3]
-    curr_rpy = np.asarray(curr_obs["observation/cartesian_position"], dtype=float)[3:6]
-    curr_grip = float(np.asarray(curr_obs["observation/gripper_position"], dtype=float).reshape(-1)[0])
-    next_pos = curr_pos + delta_base
-    next_grip = float(grip_actions[0]) if grip_actions.size > 0 else curr_grip
-
-    # Linearly interpolate to CHUNK_STEPS actions
-    positions = np.linspace(curr_pos, next_pos, CHUNK_STEPS, endpoint=True)
-    curr_quat = R.from_euler("xyz", curr_rpy, degrees=False).as_quat()  # (x,y,z,w)
-    # grip_vals = np.linspace(curr_grip, next_grip, CHUNK_STEPS, endpoint=True).reshape(-1, 1)
-    grip_vals = np.ones((CHUNK_STEPS, 1)) * curr_grip
-    grip_vals[-1] = next_grip  # ensure last gripper value is the target
-    # turn rpy_arr to quat_arr
-    # convert (x,y,z,w) to (w,x,y,z)
-    curr_quat = np.ones((CHUNK_STEPS, 4)) * curr_quat
-    pred_action_chunk = np.concatenate([positions, curr_quat, grip_vals], axis=1)
-    breakpoint()
+    print(pred_action_chunk)
 
 
 if __name__ == "__main__":
