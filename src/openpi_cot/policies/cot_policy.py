@@ -255,7 +255,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         }
 
         # Check if current dataset requires wrist rotation
-        dataset_name = data.get("dataset_name", b"").decode() if isinstance(data.get("dataset_name"), bytes) else data.get("dataset_name", "")
+        dataset_name = (
+            data.get("dataset_name", b"").decode()
+            if isinstance(data.get("dataset_name"), bytes)
+            else data.get("dataset_name", "")
+        )
         needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
 
         for k in IMAGE_KEYS[1:]:
