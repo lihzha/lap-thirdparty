@@ -209,6 +209,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
             )
         return super().__call__(model_config)
 
+
 @dataclasses.dataclass(frozen=True)
 class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
@@ -242,11 +243,9 @@ class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
                     ),
                     upstream_transforms.PadStatesAndActions(model_config.action_dim),
                 ],
-                outputs=[
-                ],
+                outputs=[],
             )
         return super().__call__(model_config)
-
 
 
 @dataclasses.dataclass(frozen=True)
@@ -594,6 +593,28 @@ _CONFIGS = [
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
         ),
         checkpoint_base_dir="gs://v6_east1d/checkpoints",
+        save_interval=500,
+        keep_period=5000,
+        resume=True,
+    ),
+    TrainConfig(
+        name="pi_combined_cot_v6europe",
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            droid_dataset_name="droid",
+            rlds_data_dir="gs://v6_europe_west4a/OXE",
+            language_action_dir="gs://v6_europe_west4a/droid-base-lang-actions",
+            data_mix="oxe_pi_magic_soup_with_other_states_with_bimanual",
+            shuffle_buffer_size=400_000,
+        ),
+        fsdp_devices=4,
+        batch_size=256,
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        checkpoint_base_dir="gs://v6_europe_west4a/checkpoints",
         save_interval=500,
         keep_period=5000,
         resume=True,
