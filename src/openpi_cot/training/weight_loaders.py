@@ -85,6 +85,7 @@ class CheckpointWeightLoader(WeightLoader):
             params_source = str(download.maybe_download(params_path_str))
 
         loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
+        breakpoint()
         # Add all missing LoRA weights.
         return _merge_params(loaded_params, params, missing_regex=".*lora.*")
 
@@ -163,7 +164,6 @@ def restore_params(
                 ),
             ),
         )
-        breakpoint()
 
     # If the params were saved with `save_state` during openpi training, every key path will end with "value", which is
     # added by `nnx.State`. We remove the "value" suffix here and always return what NNX calls a "pure dict".
