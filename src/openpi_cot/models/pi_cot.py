@@ -139,6 +139,8 @@ class PiCoT(_pi0.Pi0):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
+        breakpoint()
+
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
