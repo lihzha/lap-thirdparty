@@ -406,6 +406,101 @@ def visualize_language_actions(
     return visuals
 
 
+@dataclass
+class DatasetLogTracker:
+    """Tracks per-dataset logging counts to ensure uniform sample distribution across datasets."""
+
+    tokenizer: PaligemmaCoTTokenizer
+    _dataset_log_counts: dict[str, int] = field(default_factory=dict, init=False)
+
+    def get_dataset_names_from_batch(
+        self,
+        batch: tuple[CoTObservation, _model.Actions]
+    ) -> list[str]:
+        """Extract dataset names from batch."""
+        obs = batch[0]
+        if not hasattr(obs, "tokenized_dataset_name"):
+            return []
+
+        tokenized_names = _utils.to_local_array(obs.tokenized_dataset_name)
+        if tokenized_names is None:
+            return []
+
+        dataset_names = []
+        for i in range(tokenized_names.shape[0]):
+            try:
+                name = self.tokenizer.decode(tokenized_names[i])
+                name = name.strip()
+                dataset_names.append(name)
+            except Exception as e:
+                logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
+                dataset_names.append("unknown")
+
+        return dataset_names
+
+    def select_indices_uniform(
+        self,
+        dataset_names: list[str],
+        num_to_select: int,
+        rng: np.random.Generator,
+    ) -> list[int]:
+        """Select indices to ensure uniform sampling across datasets.
+
+        Strategy: Prioritize datasets with fewer logged samples, then randomly sample
+        within each dataset.
+        """
+        if not dataset_names or num_to_select <= 0:
+            return []
+
+        # Group indices by dataset
+        dataset_to_indices: dict[str, list[int]] = {}
+        for idx, name in enumerate(dataset_names):
+            dataset_to_indices.setdefault(name, []).append(idx)
+
+        # Sort datasets by their current log count (ascending)
+        datasets_sorted = sorted(
+            dataset_to_indices.keys(),
+            key=lambda d: self._dataset_log_counts.get(d, 0)
+        )
+
+        selected_indices = []
+        round_idx = 0
+
+        # Round-robin selection: prioritize datasets with fewer samples logged
+        while len(selected_indices) < num_to_select:
+            added_any = False
+            for dataset_name in datasets_sorted:
+                if len(selected_indices) >= num_to_select:
+                    break
+
+                indices_for_dataset = dataset_to_indices[dataset_name]
+
+                # Shuffle indices for this dataset to get random samples
+                if round_idx == 0:
+                    rng.shuffle(indices_for_dataset)
+
+                if round_idx < len(indices_for_dataset):
+                    selected_indices.append(indices_for_dataset[round_idx])
+                    added_any = True
+
+            if not added_any:
+                break
+            round_idx += 1
+
+        return selected_indices
+
+    def update_counts(self, dataset_names: list[str], selected_indices: list[int]) -> None:
+        """Update logging counts for selected datasets."""
+        for idx in selected_indices:
+            if idx < len(dataset_names):
+                dataset_name = dataset_names[idx]
+                self._dataset_log_counts[dataset_name] = self._dataset_log_counts.get(dataset_name, 0) + 1
+
+    def get_stats(self) -> dict[str, int]:
+        """Get current logging statistics."""
+        return dict(self._dataset_log_counts)
+
+
 def log_random_examples(
     step: int,
     host_batch: tuple[CoTObservation, _model.Actions] | None,
@@ -413,6 +508,7 @@ def log_random_examples(
     *,
     local_batch_size: int,
     num_random: int = 5,
+    dataset_log_tracker: DatasetLogTracker | None = None,
 ) -> None:
     if host_batch is None or local_batch_size <= 0:
         return
@@ -422,11 +518,26 @@ def log_random_examples(
     process_idx = getattr(jax, "process_index", lambda: 0)()
     rng_seed = int(step + 997 * process_idx)
     rng_local = np.random.default_rng(rng_seed)
-    rand_idx = rng_local.choice(local_batch_size, size=count, replace=False)
+
+    # If tracker is provided, use uniform sampling across datasets
+    if dataset_log_tracker is not None:
+        dataset_names = dataset_log_tracker.get_dataset_names_from_batch(host_batch)
+        if dataset_names:
+            rand_idx = dataset_log_tracker.select_indices_uniform(
+                dataset_names, count, rng_local
+            )
+            dataset_log_tracker.update_counts(dataset_names, rand_idx)
+        else:
+            # Fallback to random sampling if dataset names not available
+            rand_idx = rng_local.choice(local_batch_size, size=count, replace=False).tolist()
+    else:
+        # Original random sampling
+        rand_idx = rng_local.choice(local_batch_size, size=count, replace=False).tolist()
+
     random_visuals = visualize_language_actions(
         host_batch,
         tokenizer,
-        indices=rand_idx.tolist(),
+        indices=rand_idx,
         max_examples=count,
     )
     if not random_visuals:

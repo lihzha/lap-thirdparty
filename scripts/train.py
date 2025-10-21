@@ -715,6 +715,9 @@ def main(config: _config.TrainConfig):
     except:
         tok = PaligemmaCoTTokenizer(max_len=200)
 
+    # Initialize dataset log tracker for uniform sample logging across datasets
+    dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
+
     # # Initialize hard example tracker for logging difficult samples
     # hard_example_tracker = vis_tools.HardExampleTracker(
     #     tokenizer=tok,
@@ -900,7 +903,17 @@ def main(config: _config.TrainConfig):
                         host_batch_local,
                         tok,
                         local_batch_size=local_size,
+                        dataset_log_tracker=dataset_log_tracker,
                     )
+
+                    # Log dataset logging statistics periodically
+                    if step % (config.log_interval * 10) == 0:
+                        log_stats = dataset_log_tracker.get_stats()
+                        if log_stats:
+                            logging.info(f"Dataset logging counts: {log_stats}")
+                            # Log to wandb as well
+                            wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
+                            wandb.log(wandb_log_stats, step=step)
 
             # Log hard examples from the interval (multi-host gathering happens inside)
             # payload = hard_example_tracker.log_if_ready(step)
