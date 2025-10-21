@@ -94,7 +94,6 @@ class CheckpointWeightLoader(WeightLoader):
 
         all_keys = get_all_keys(params)
         print(all_keys)
-        breakpoint()
 
         # loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
         loaded_params = restore_params(params_source, restore_type=np.ndarray)
@@ -259,6 +258,8 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     """
     flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+
+    breakpoint()
 
     # First, take all weights that are a subset of the reference weights.
     result = {}
