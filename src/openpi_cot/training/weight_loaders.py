@@ -195,6 +195,11 @@ class Gemma3WeightLoader(WeightLoader):
 
     params_path: str
 
+    def load_initial_params(self) -> at.Params:
+        # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
+        return restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+       
+
     def load(self, params: at.Params) -> at.Params:
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
         loaded_params = restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)

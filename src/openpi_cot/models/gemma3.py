@@ -446,6 +446,8 @@ class Block(nn.Module):
     configs: Sequence[Config]
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
+    use_post_attn_norm: bool = True  # new in gemma2 and gemma3
+    use_post_ffw_norm: bool = True  # new in gemma2 and gemma3
 
     @nn.compact
     def __call__(
@@ -477,6 +479,15 @@ class Block(nn.Module):
 
         post_attn = jax.tree.map(lambda x: drop(x, deterministic), post_attn)
         post_attn = sharding.activation_sharding_constraint(post_attn)
+
+        # Apply post attention to first expert only if configured
+        if self.use_post_attn_norm:
+            post_attn_normed = []
+            for i, x in enumerate(post_attn):
+                if x is not None and i == 0:
+                    x, _ = RMSNorm(name="post_attention_norm")(x, None)  # noqa: PLW2901
+                post_attn_normed.append(x)
+            post_attn = post_attn_normed
 
         # First residual with gating
         xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, post_attn, gates, strict=True)]
@@ -511,8 +522,19 @@ class Block(nn.Module):
         ffn_outs = sharding.activation_sharding_constraint(ffn_outs)
         ffn_outs = jax.tree.map(lambda x: drop(x, deterministic), ffn_outs)
 
+        # Apply post_ffw_norm only to the first expert if post_norms is enabled
+        if self.use_post_ffw_norm:
+            out_normed = []
+            for i, x in enumerate(ffn_outs):
+                if x is not None and i == 0:
+                    x, _ = RMSNorm(name="post_ffw_norm")(x, None)  # noqa: PLW2901
+                out_normed.append(x)
+            out = out_normed
+
+    
+
         # Second residual with gating
-        xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, ffn_outs, gates, strict=True)]
+        xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, out, gates, strict=True)]
         xs = sharding.activation_sharding_constraint(xs)
 
         return xs, kv_cache
@@ -563,6 +585,8 @@ class Module(nn.Module):
             configs=self.configs,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
+            use_post_attn_norm=self.configs[0].use_post_attn_norm,
+            use_post_ffw_norm=self.configs[0].use_post_ffw_norm,
         )
 
         self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
@@ -595,12 +619,12 @@ class Module(nn.Module):
             f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
         ], kv_cache
 
-    def init(self, use_adarms: Sequence[bool]):
-        """Initialize all parameters."""
-        self.embed(jnp.zeros((1, 1), dtype=jnp.int32))
-        self(
-            [jnp.zeros((1, 1, c.width)) for c in self.configs],
-            jnp.zeros((1, len(self.configs)), dtype=jnp.int32),
-            jnp.zeros((1, len(self.configs), len(self.configs)), dtype=bool),
-            adarms_cond=[jnp.zeros((1, c.width)) if u else None for u, c in zip(use_adarms, self.configs, strict=True)],
-        )
+    # def init(self, use_adarms: Sequence[bool]):
+    #     """Initialize all parameters."""
+    #     self.embed(jnp.zeros((1, 1), dtype=jnp.int32))
+    #     self(
+    #         [jnp.zeros((1, 1, c.width)) for c in self.configs],
+    #         jnp.zeros((1, len(self.configs)), dtype=jnp.int32),
+    #         jnp.zeros((1, len(self.configs), len(self.configs)), dtype=bool),
+    #         adarms_cond=[jnp.zeros((1, c.width)) if u else None for u, c in zip(use_adarms, self.configs, strict=True)],
+    #     )
