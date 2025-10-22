@@ -7,3 +7,4 @@
 [submodule "third_party/rlds_dataset_builder"]
 	path = third_party/rlds_dataset_builder
 	url = https://github.com/lihzha/rlds_dataset_builder
+	branch = multithreaded
