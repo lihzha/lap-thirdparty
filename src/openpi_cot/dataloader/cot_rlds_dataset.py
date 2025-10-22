@@ -1615,8 +1615,8 @@ class OXECoTDatasets:
                     hash_tables=self.hash_tables,
                 )
                 self.hash_tables = {
-                    "cam_table": ds.cam_table,
-                    "lang_table": ds.lang_table,
+                    # "cam_table": ds.cam_table,
+                    # "lang_table": ds.lang_table,
                     "ep_table": ds.ep_table,
                     "instr_table": ds.instr_table,
                     "filter_table": ds.filter_table,
