@@ -306,32 +306,39 @@ class HostBatchCache:
 
 
 class DatasetStatsTracker:
-    """Tracks per-dataset loss and example counts across training."""
+    """Tracks per-dataset loss, critical token accuracy, and example counts across training."""
 
     def __init__(self):
-        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "count": int}}
+        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "total_critical_acc": float, "count": int}}
 
-    def update(self, dataset_names: list[str], losses: np.ndarray):
+    def update(self, dataset_names: list[str], losses: np.ndarray, critical_token_accuracies: np.ndarray | None = None):
         """Update statistics with new batch data.
 
         Args:
             dataset_names: List of dataset names for each sample
             losses: Array of per-sample losses
+            critical_token_accuracies: Array of per-sample critical token accuracies (optional)
         """
-        for name, loss in zip(dataset_names, losses, strict=False):
+        for idx, name in enumerate(dataset_names):
             if name not in self.dataset_stats:
-                self.dataset_stats[name] = {"total_loss": 0.0, "count": 0}
-            self.dataset_stats[name]["total_loss"] += float(loss)
+                self.dataset_stats[name] = {"total_loss": 0.0, "total_critical_acc": 0.0, "count": 0}
+            self.dataset_stats[name]["total_loss"] += float(losses[idx])
+            if critical_token_accuracies is not None:
+                self.dataset_stats[name]["total_critical_acc"] += float(critical_token_accuracies[idx])
             self.dataset_stats[name]["count"] += 1
 
     def get_metrics(self) -> dict[str, float]:
-        """Get current average losses and counts for all datasets."""
+        """Get current average losses, critical token accuracies, and counts for all datasets."""
         metrics = {}
         for dataset_name, stats in self.dataset_stats.items():
             if stats["count"] > 0:
                 avg_loss = stats["total_loss"] / stats["count"]
                 metrics[f"dataset/{dataset_name}/avg_loss"] = avg_loss
                 metrics[f"dataset/{dataset_name}/count"] = stats["count"]
+                # Add average critical token accuracy if we have it
+                if stats["total_critical_acc"] > 0:
+                    avg_critical_acc = stats["total_critical_acc"] / stats["count"]
+                    metrics[f"dataset/{dataset_name}/avg_critical_token_acc"] = avg_critical_acc
         return metrics
 
 
@@ -390,10 +397,10 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
     """Create bar plots for dataset statistics.
 
     Args:
-        dataset_stats: Dictionary mapping dataset names to {"total_loss": float, "count": int}
+        dataset_stats: Dictionary mapping dataset names to {"total_loss": float, "total_critical_acc": float, "count": int}
 
     Returns:
-        Dictionary with 'counts' and 'avg_loss' matplotlib figures
+        Dictionary with 'counts', 'avg_loss', and 'avg_critical_token_acc' matplotlib figures
     """
     if not dataset_stats:
         return {}
@@ -407,12 +414,19 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
         else 0.0
         for name in dataset_names
     ]
+    avg_critical_accs = [
+        dataset_stats[name]["total_critical_acc"] / dataset_stats[name]["count"]
+        if dataset_stats[name]["count"] > 0 and dataset_stats[name]["total_critical_acc"] > 0
+        else 0.0
+        for name in dataset_names
+    ]
 
     # Sort by count (descending) for better visualization
     sorted_indices = np.argsort(counts)[::-1]
     dataset_names_sorted = [dataset_names[i] for i in sorted_indices]
     counts_sorted = [counts[i] for i in sorted_indices]
     avg_losses_sorted = [avg_losses[i] for i in sorted_indices]
+    avg_critical_accs_sorted = [avg_critical_accs[i] for i in sorted_indices]
 
     plots = {}
 
@@ -465,6 +479,33 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
 
     plt.tight_layout()
     plots["avg_loss"] = fig_loss
+
+    # Create average critical token accuracy bar plot (if data is available)
+    if any(acc > 0 for acc in avg_critical_accs_sorted):
+        fig_acc, ax_acc = plt.subplots(figsize=(12, 6))
+        bars_acc = ax_acc.bar(range(len(dataset_names_sorted)), avg_critical_accs_sorted, color="mediumseagreen")
+        ax_acc.set_xlabel("Dataset", fontsize=12)
+        ax_acc.set_ylabel("Average Critical Token Accuracy", fontsize=12)
+        ax_acc.set_title("Dataset Average Critical Token Accuracy", fontsize=14, fontweight="bold")
+        ax_acc.set_xticks(range(len(dataset_names_sorted)))
+        ax_acc.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+        ax_acc.grid(axis="y", alpha=0.3)
+        ax_acc.set_ylim([0, 1])  # Accuracy should be between 0 and 1
+
+        # Add value labels on top of bars
+        for i, (bar, acc) in enumerate(zip(bars_acc, avg_critical_accs_sorted)):
+            height = bar.get_height()
+            ax_acc.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{acc:.4f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+
+        plt.tight_layout()
+        plots["avg_critical_token_acc"] = fig_acc
 
     return plots
 
@@ -829,7 +870,21 @@ def main(config: _config.TrainConfig):
                     per_sample_loss,
                     tok,
                 )
-                dataset_stats_tracker.update(dataset_names, losses)
+
+                # Gather per-sample critical token accuracy if available
+                per_sample_critical_token_accuracy = info.get("per_sample_critical_token_accuracy")
+                critical_accs = None
+                if per_sample_critical_token_accuracy is not None:
+                    # Convert to local array and gather across hosts
+                    local_critical_accs = np.asarray(training_utils.to_local_array(per_sample_critical_token_accuracy))
+                    process_count = jax.process_count()
+                    if process_count > 1:
+                        all_critical_accs = jax.experimental.multihost_utils.process_allgather(local_critical_accs)
+                        critical_accs = np.asarray(all_critical_accs).flatten()
+                    else:
+                        critical_accs = local_critical_accs
+
+                dataset_stats_tracker.update(dataset_names, losses, critical_accs)
             except Exception as e:
                 logging.warning(f"Failed to update dataset stats at step {step}: {e}")
 
@@ -885,16 +940,19 @@ def main(config: _config.TrainConfig):
                 if dataset_stats_tracker.dataset_stats:
                     plots = create_dataset_stats_plots(dataset_stats_tracker.dataset_stats)
                     if plots:
-                        wandb.log(
-                            {
-                                "dataset_stats/counts_plot": wandb.Image(plots["counts"]),
-                                "dataset_stats/avg_loss_plot": wandb.Image(plots["avg_loss"]),
-                            },
-                            step=step,
-                        )
+                        log_dict = {
+                            "dataset_stats/counts_plot": wandb.Image(plots["counts"]),
+                            "dataset_stats/avg_loss_plot": wandb.Image(plots["avg_loss"]),
+                        }
+                        # Add critical token accuracy plot if available
+                        if "avg_critical_token_acc" in plots:
+                            log_dict["dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(plots["avg_critical_token_acc"])
+                        wandb.log(log_dict, step=step)
                         # Close figures to prevent memory leaks
                         plt.close(plots["counts"])
                         plt.close(plots["avg_loss"])
+                        if "avg_critical_token_acc" in plots:
+                            plt.close(plots["avg_critical_token_acc"])
 
                 if config.model.enable_langact_training:
                     host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
