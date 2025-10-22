@@ -387,8 +387,12 @@ class PiCoT(_pi0.Pi0):
             # Scalar (for backward compatibility)
             num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
             critical_token_accuracy = critical_correct.sum() / num_critical_tokens
-            # Store per-sample accuracy in metrics
-            metrics["per_sample_critical_token_accuracy"] = per_sample_critical_token_accuracy
+            # Store per-sample accuracy in metrics only during training (avoid stacking issues during validation)
+            if train:
+                metrics["per_sample_critical_token_accuracy"] = per_sample_critical_token_accuracy
+            else:
+                # For validation, store mean of per-sample accuracies
+                metrics["per_sample_critical_token_accuracy"] = jnp.mean(per_sample_critical_token_accuracy)
 
         # Prediction (cross-entropy) loss - independent of langact loss
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
