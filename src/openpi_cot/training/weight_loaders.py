@@ -380,7 +380,8 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         logger.info("Gemma3 Weights Loaded, Siglip not yet done to match pi0 model building")
         return merged
 
-
+class Gemma3WeightLoader(WeightLoader):
+    """Loads weights using official Gemma3 remapping strategy"""
 
 @dataclasses.dataclass(frozen=True)
 class WeightLoaderChoice(WeightLoader):
