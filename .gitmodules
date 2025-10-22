@@ -4,3 +4,6 @@
 [submodule "third_party/openpi-tpu-tools"]
 	path = third_party/openpi-tpu-tools
 	url = https://github.com/lihzha/openpi-tpu-tools.git
+[submodule "third_party/rlds_dataset_builder"]
+	path = third_party/rlds_dataset_builder
+	url = https://github.com/lihzha/rlds_dataset_builder
