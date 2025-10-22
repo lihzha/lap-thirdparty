@@ -12,6 +12,7 @@ import numpy as np
 import openpi.shared.array_typing as at
 import orbax.checkpoint as ocp
 from collections import defaultdict
+from flax.traverse_util import unflatten_dict, flatten_dict
 
 import openpi_cot.shared.download as download
 
@@ -185,6 +186,87 @@ def restore_params(
         flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
     return traverse_util.unflatten_dict(flat_params)
 
+def print_param_shapes(d, path=''):
+  """
+  Recursively traverses a nested dictionary and prints the path and shape
+  of any value that has a 'shape' attribute.
+
+  Args:
+    d (dict): The dictionary to traverse.
+    path (str): The current key path (used for recursion).
+  """
+  for key, value in d.items():
+    # Append the current key to the path
+    new_path = f"{path}['{key}']"
+
+    if isinstance(value, dict):
+      # If the value is another dictionary, recurse deeper
+      print_param_shapes(value, new_path)
+    elif hasattr(value, 'shape'):
+      # If the value has a 'shape' attribute, print the path and shape
+      print(f"Param: {new_path} | Shape: {value.shape}")
+
+def get_param_info(params: dict) -> dict:
+    """
+    Flattens a nested dictionary of parameters and returns a dictionary
+    mapping each parameter's path (as a string) to its shape and size.
+    """
+    # Using '/' as a separator is standard and simpler for set operations.
+    flat_params = flatten_dict(params, sep='/')
+    info = {}
+    for key, value in flat_params.items():
+        if hasattr(value, 'shape') and hasattr(value, 'size'):
+            info[key] = {'shape': value.shape, 'size': value.size}
+    return info
+
+def compare_checkpoints(source_info: dict, target_info: dict):
+    """
+    Compares two parameter dictionaries (source and target) to debug loading.
+
+    - Checks for parameter names in source that are missing in target.
+    - Checks for shape mismatches for common parameters.
+    - Lists parameters in target that are not in source (uninitialized).
+    """
+    source_keys = set(source_info.keys())
+    target_keys = set(target_info.keys())
+
+    print("\n--- Starting Checkpoint Comparison ---")
+
+    # Critical Error: Keys in our remapped checkpoint that DON'T exist in the model
+    mismatched_keys = source_keys - target_keys
+    if mismatched_keys:
+        print(f"\n❌ ERROR: Found {len(mismatched_keys)} keys in the remapped checkpoint that are NOT in the final model:")
+        for key in sorted(list(mismatched_keys)):
+            print(f"  - {key}")
+    else:
+        print("\n✅ SUCCESS: All remapped checkpoint keys exist in the final model.")
+
+    # Informational: Keys in the model that are NOT loaded from the checkpoint
+    uninitialized_keys = target_keys - source_keys
+    if uninitialized_keys:
+        print(f"\nℹ️ INFO: Found {len(uninitialized_keys)} keys in the final model that will NOT be loaded from the checkpoint (expected for new layers):")
+        for key in sorted(list(uninitialized_keys)):
+            print(f"  - {key} (Shape: {target_info[key]['shape']})")
+
+    # Critical Error: Shape mismatches for keys that exist in both
+    shape_mismatches = []
+    common_keys = source_keys.intersection(target_keys)
+    for key in common_keys:
+        source_shape = source_info[key]['shape']
+        target_shape = target_info[key]['shape']
+        if source_shape != target_shape:
+            shape_mismatches.append((key, source_shape, target_shape))
+
+    if shape_mismatches:
+        print(f"\n❌ ERROR: Found {len(shape_mismatches)} shape mismatches between the checkpoint and the model:")
+        for key, source_shape, target_shape in shape_mismatches:
+            print(f"  - Key: {key}")
+            print(f"    Checkpoint Shape: {source_shape} -> Model Shape: {target_shape}")
+    else:
+        print("\n✅ SUCCESS: All common parameter shapes match.")
+
+    print("\n--- End of Checkpoint Comparison ---\n")
+
 @dataclasses.dataclass(frozen=True)
 class Gemma3ScanCompatibleWeightLoader(WeightLoader):
     """Loads and remaps Gemma3 weights to match Pi0's nn.scan naming conventions.
@@ -275,6 +357,10 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             restore_type=np.ndarray
         )
 
+        print_param_shapes(loaded_params)
+        print("")
+        print_param_shapes(params)
+
         # Do everything on CPU to avoid device memory issues during remapping
         with jax.default_device(jax.devices("cpu")[0]):
             # Turn 'a/b/c' -> ('a','b','c') and unflatten
@@ -351,8 +437,116 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                 siglip_remapped = self._remap_siglip(flat_original['SigLiPFromPatches_0'])
 
             # ===== BUILD PALIGEMMA STRUCTURE =====
+
+            logger.info("Remapping and preparing parameters for final model structure...")
+
+            # This will be our final, clean dictionary of remapped parameters to be loaded.
+            flat_llm = {}
+
+            # --- Part A: Handle Special Embedder Weights ---
+            # We process these first by MOVING them out of the main `remapped_params` dict.
+            # Using .pop() retrieves the value AND removes it, preventing duplication later.
+            embedder_params = remapped_params.get('embedder', {})
+
+            if 'input_embedding' in embedder_params:
+                flat_llm['PaliGemma/llm/embedder/input_embedding'] = embedder_params.pop('input_embedding')
+
+            if 'mm_input_projection' in embedder_params:
+                # The debug output shows the final model needs this weight here:
+                mm_projection = embedder_params.pop('mm_input_projection') # <-- MODIFIED
+
+                # Map the kernel
+                flat_llm['PaliGemma/img/head/kernel'] = mm_projection['w']
+                
+                # Map the bias, which is the missing parameter
+                if 'b' in mm_projection: # Check if bias exists
+                    flat_llm['PaliGemma/img/head/bias'] = mm_projection['b'] # <-- NEW LINE
+
+            # We previously discarded this, but now we know the correct destination name
+            if 'mm_soft_embedding_norm' in embedder_params:
+                flat_llm['PaliGemma/img/mm_soft_embedding_norm/scale'] = embedder_params.pop('mm_soft_embedding_norm')['scale'] # <-- MODIFIED
+
+            # Now, put the modified (and smaller) embedder_params back, if anything is left.
+            if embedder_params:
+                remapped_params['embedder'] = embedder_params
+            else:
+                remapped_params.pop('embedder', None)
+
+
+            # --- Part B: Handle SigLIP Vision Encoder Weights ---
+            if siglip_remapped:
+                flat_siglip = flax.traverse_util.flatten_dict(siglip_remapped, sep='/')
+                flat_siglip.pop('pos_embedding', None)
+                flat_llm.update({f'PaliGemma/img/{k}': v for k, v in flat_siglip.items()})
+
             
-            # Flatten model params once
+            # --- Part C: Handle the Rest of the LLM Weights ---
+            flat_remaining_llm = flax.traverse_util.flatten_dict(remapped_params, sep='/')
+            flat_llm.update({f'PaliGemma/llm/{k}': v for k, v in flat_remaining_llm.items()})
+
+
+            # ==========================================================
+            # ===== RUN DEBUGGING CHECKS ON OUR CLEANED PARAMS =========
+            # ==========================================================
+            logger.info("Running post-remapping validation checks...")
+            
+            original_info = get_param_info(loaded_params)
+            original_total_params = sum(p['size'] for p in original_info.values())
+            
+            final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
+            final_llm_info = get_param_info(final_llm_nested)
+            final_total_params = sum(p['size'] for p in final_llm_info.values())
+
+            print("\n--- Starting Parameter Conservation Check ---")
+            print(f"Total params in original checkpoint: {original_total_params:,}")
+            print(f"Total params in final remapped dict: {final_total_params:,}")
+            if original_total_params >= final_total_params:
+                print(f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model.")
+            else:
+                print(f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication.")
+            print("--- End of Conservation Check ---\n")
+
+            final_model_info = get_param_info(params)
+            compare_checkpoints(final_llm_info, final_model_info)
+            # ==========================================================
+            # ==========================================================
+
+            
+            # Now, with a clean `flat_llm`, we can perform the merge.
+            flat_model = flax.traverse_util.flatten_dict(params, sep='/')
+            merged = _merge_params(flat_llm, flat_model, missing_regex=".*")
+            
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            """ # Flatten model params once
             flat_model = flax.traverse_util.flatten_dict(params, sep='/')
             
             # ===== MERGE LLM PARAMS =====
@@ -372,8 +566,52 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             
             flat_llm[f'PaliGemma/img/mm_soft_embedding_norm/scale'] = remapped_params['embedder']['mm_soft_embedding_norm']['scale']
 
+            print("")
+            print_param_shapes(flat_llm)
+            print("")
+            print_param_shapes(flat_model)
+
+            # ==========================================================
+            # ===== DEBUGGING CHECKS START =============================
+            # ==========================================================
+
+            print("Debugging Checks:")
             
-            merged = _merge_params(flat_llm, flat_model, missing_regex=".*")  
+            # --- 1. COMPLETENESS CHECK: Ensure no weights were lost ---
+            # Get info from the original loaded checkpoint
+            original_info = get_param_info(loaded_params)
+            original_total_params = sum(p['size'] for p in original_info.values())
+            
+            # Get info from your final remapped dictionary
+            # Note: We use unflatten/flatten to handle the string keys in flat_llm consistently
+            final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
+            final_llm_info = get_param_info(final_llm_nested)
+            final_total_params = sum(p['size'] for p in final_llm_info.values())
+
+            print("\n--- Starting Parameter Conservation Check ---")
+            print(f"Total params in original checkpoint: {original_total_params:,}")
+            print(f"Total params in final remapped dict: {final_total_params:,}")
+            if original_total_params == final_total_params:
+                print("✅ SUCCESS: Total parameter count matches. No weights were lost.")
+            else:
+                print(f"❌ ERROR: Parameter count mismatch! Lost {original_total_params - final_total_params:,} parameters during remapping.")
+            print("--- End of Conservation Check ---\n")
+
+
+            # --- 2. COMPATIBILITY CHECK: Ensure names and shapes align with the final model ---
+            # `params` is your final_model structure
+            final_model_info = get_param_info(params)
+            
+            # The keys in flat_llm are strings, so we can use them directly here
+            remapped_checkpoint_info = get_param_info(final_llm_nested)
+            
+            compare_checkpoints(remapped_checkpoint_info, final_model_info)
+
+            # ==========================================================
+            # ===== DEBUGGING CHECKS END ===============================
+            # ==========================================================
+            
+            merged = _merge_params(flat_llm, flat_model, missing_regex=".*")   """
 
             
 
