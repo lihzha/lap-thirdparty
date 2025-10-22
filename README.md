@@ -60,15 +60,19 @@ The command will log training progress to the console and save checkpoints to th
 
 ## Running eval
 
+```bash
 uv run scripts/eval.py \
       pi_droid_cot_v4 \
       --exp-name=test \
       --eval-checkpoint-step=26500 \
       --num-eval-batches=1000 \
       --eval-mode=token_accuracy
+```
 
 ## Running VQA
+```bash
 uv run scripts/vqa.py policy:checkpoint --policy.config=paligemma2_vqa_v4 --policy.dir=None
+```
 
 ## New Features Summary
 
