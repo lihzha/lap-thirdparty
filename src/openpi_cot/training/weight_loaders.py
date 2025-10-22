@@ -369,8 +369,8 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             flat_llm[f'PaliGemma/llm/embedder/input_embedding'] = remapped_params['embedder']['input_embedding']
             flat_llm[f'PaliGemma/img/head/kernel'] = remapped_params['embedder']['mm_input_projection']['w']
 
-            # Ignore for now
-            #flat_llm[f'PaliGemma/img/head/bias'] = remapped_params['embedder']['mm_soft_embedding_norm']['scale']
+            
+            flat_llm[f'PaliGemma/img/mm_soft_embedding_norm/scale'] = remapped_params['embedder']['mm_soft_embedding_norm']['scale']
 
             
             merged = _merge_params(flat_llm, flat_model, missing_regex=".*")  

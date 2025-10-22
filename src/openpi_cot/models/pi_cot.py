@@ -22,6 +22,8 @@ from openpi_cot.models.gemma2 import get_config as get_gemma2_config
 from openpi_cot.models.gemma3 import get_config as get_gemma3_config
 import openpi_cot.models.pi_cot_config as _pi_cot_config
 
+import openpi_cot.models.siglip as _siglip_gemma3
+
 logger = logging.getLogger("openpi")
 
 
@@ -122,7 +124,7 @@ class PiCoT(_pi0.Pi0):
         if "gemma3" in config.paligemma_variant:
             # For Gemma3, use sinusoidal positional embeddings to avoid size mismatch
             img = nnx_bridge.ToNNX(
-                _siglip.Module(
+                _siglip_gemma3.Module(
                     num_classes=paligemma_config.width,
                     variant="So400m/14",
                     pool_type="none",
