@@ -358,68 +358,28 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             # ===== MERGE LLM PARAMS =====
             logger.info("Merging LLM parameters...")
             flat_llm = flax.traverse_util.flatten_dict(remapped_params, sep='/')
+            # Need to add 'PaliGemma/llm/' prefix to all keys to match Pi0 structure
+            flat_llm = {f'PaliGemma/llm/{k}': v for k, v in flat_llm.items()}
+
+
+            # Now add siglip and embedder under 'PaliGemma' namespace
+            flat_llm.update({f'PaliGemma/img/{k}': v for k, v in flax.traverse_util.flatten_dict(siglip_remapped or {}, sep='/').items()})
+
+            # Add input_embedding for vocab
+            flat_llm[f'PaliGemma/llm/embedder/input_embedding'] = remapped_params['embedder']['input_embedding']
+            flat_llm[f'PaliGemma/img/head/kernel'] = remapped_params['embedder']['mm_input_projection']['w']
+
+            # Ignore for now
+            #flat_llm[f'PaliGemma/img/head/bias'] = remapped_params['embedder']['mm_soft_embedding_norm']['scale']
+
             
-            logger.info("Gemma3 LLM Checkpoint Keys (first 20):")
-            for i, k in enumerate(sorted(flat_llm.keys())):
-                if i < 20:
-                    logger.info(f"  {k}")
-                else:
-                    logger.info(f"  ... and {len(flat_llm) - 20} more")
-                    break
-            
-            # Merge LLM weights - fills in missing action expert, LoRA, etc.
             merged = _merge_params(flat_llm, flat_model, missing_regex=".*")  
 
-            vlm_params = {
-                'Gemma3': {
-                    'llm': merged,
-                }
-            }
-
-            # Delete temporary variables to free memory
-            del flat_llm
-            del merged
-            del flat_model
-
             
-            # ===== MERGE VISION ENCODER PARAMS =====
-            if siglip_remapped is not None:
-                logger.info("Merging SigLiP vision encoder parameters...")
-                vlm_params['Gemma3']['img'] = siglip_remapped
-                
-            # Add embedder (contains input_embedding, mm_input_projection, mm_soft_embedding_norm)
-            if 'embedder' in remapped_params:
-                vlm_params['Gemma3']['mm_embedder'] = remapped_params['embedder']
-                logger.info("Added multimodal embedder to Gemma3 params")
-                # mm_embedder.input_embedding is for text input embedding (vocab size -> embedding dim)
-                # mm_embedder.mm_input_projection is for image patch projection (patch embedding dim -> model dim)
-                # mm_embedder.mm_soft_embedding_norm is the RMSNorm after multimodal input projection
 
         logger.info("Gemma3 Weights Loaded, Siglip not yet done to match pi0 model building")
-        return vlm_params
+        return merged
 
-@dataclasses.dataclass(frozen=True)
-class Gemma3WeightLoader(WeightLoader):
-    """Loads weights from the official Gemma3 checkpoint and converts them to the correct format.
-
-    This will overwrite existing weights with similar names while keeping all extra weights intact.
-    This allows us to support the action expert which is used by the Pi model.
-    """
-
-    params_path: str
-
-    def load_initial_params(self) -> at.Params:
-        # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
-        return restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
-
-
- 
-
-    def load(self, params: at.Params) -> at.Params:
-        # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
-        loaded_params = restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
-        # Add all missing LoRA weights.
-        return _merge_params(loaded_params, params, missing_regex=".*")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -455,7 +415,7 @@ class WeightLoaderChoice(WeightLoader):
             case "gemma3":
                 if not self.params_path:
                     raise ValueError("--weight-loader.params-path must be set when kind=gemma3")
-                return Gemma3WeightLoader(self.params_path)
+                return Gemma3ScanCompatibleWeightLoader(self.params_path)
             case "none":
                 return NoOpWeightLoader()
             case _:

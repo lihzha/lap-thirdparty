@@ -118,15 +118,31 @@ class PiCoT(_pi0.Pi0):
             )
         )
         llm.lazy_init(rngs=rngs, method="init", use_adarms=[False, True] if config.pi05 else [False, False])
-        img = nnx_bridge.ToNNX(
-            _siglip.Module(
-                num_classes=paligemma_config.width,
-                variant="So400m/14",
-                pool_type="none",
-                scan=True,
-                dtype_mm=config.dtype,
+        # Conditionally set the positional embedding type for the image model
+        if "gemma3" in config.paligemma_variant:
+            # For Gemma3, use sinusoidal positional embeddings to avoid size mismatch
+            img = nnx_bridge.ToNNX(
+                _siglip.Module(
+                    num_classes=paligemma_config.width,
+                    variant="So400m/14",
+                    pool_type="none",
+                    scan=True,
+                    dtype_mm=config.dtype,
+                    posemb="sincos2d", # needed for size-mismatch
+                )
             )
-        )
+        else:
+            # For other models, use the original default (learnable embeddings)
+            img = nnx_bridge.ToNNX(
+                _siglip.Module(
+                    num_classes=paligemma_config.width,
+                    variant="So400m/14",
+                    pool_type="none",
+                    scan=True,
+                    dtype_mm=config.dtype,
+                )
+            )
+
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
