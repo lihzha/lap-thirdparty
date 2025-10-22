@@ -23,3 +23,5 @@ logs/
 
 debug_vis/
 src/openpi_cot/ckpts
+gemma3-4b/
+tokenizer.model

@@ -15,7 +15,9 @@ mkdir -p logs
 
 export JAX_PLATFORMS=cuda
 
+cd /n/fs/robot-data/openpi-cot
+
 uv run --group cuda scripts/train.py pi05_tiger_finetune_local_low_mem \
-  --exp-name finetune_low_mem_64 \
+  --exp-name finetune_low_mem_64_add_norm \
   --fsdp-devices=4 \
   --batch-size=64

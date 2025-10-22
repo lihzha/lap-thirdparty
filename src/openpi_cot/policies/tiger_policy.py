@@ -64,12 +64,12 @@ class TigerInputs(transforms.DataTransformFn):
             inputs["actions"] = data["actions"]
 
         # # Pass the prompt (language instruction) to the model
-        if "prompt" in data:
-            inputs["prompt"] = data["prompt"]
-        elif "task" in data:
-            # Some datasets use "task" instead of "prompt"
-            inputs["prompt"] = data["task"]
-        # inputs["prompt"] = "pick up the tiger"
+        # if "prompt" in data:
+        #     inputs["prompt"] = data["prompt"]
+        # elif "task" in data:
+        #     # Some datasets use "task" instead of "prompt"
+        #     inputs["prompt"] = data["task"]
+        inputs["prompt"] = "pick up the tiger"
 
         return inputs
 
