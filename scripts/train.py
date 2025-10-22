@@ -342,6 +342,91 @@ class DatasetStatsTracker:
         return metrics
 
 
+class LocalDatasetInfoBuffer:
+    """Buffers local dataset info per step (without multihost gathering). Only gathers at log_interval."""
+
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+        # Accumulate local tokenized names, losses, and critical accs across steps
+        self.tokenized_names_buffer = []  # List of arrays, one per step
+        self.losses_buffer = []  # List of arrays, one per step
+        self.critical_accs_buffer = []  # List of arrays, one per step (may be empty)
+
+    def add_local_batch(
+        self,
+        tokenized_dataset_names: at.Array,
+        per_sample_losses: at.Array,
+        per_sample_critical_token_accuracy: at.Array | None = None,
+    ):
+        """Add local batch data (no multihost gathering here).
+
+        Args:
+            tokenized_dataset_names: Local tokenized dataset names
+            per_sample_losses: Local per-sample losses
+            per_sample_critical_token_accuracy: Local per-sample critical accuracies (optional)
+        """
+        # Convert to numpy and store
+        self.tokenized_names_buffer.append(np.asarray(training_utils.to_local_array(tokenized_dataset_names)))
+        self.losses_buffer.append(np.asarray(training_utils.to_local_array(per_sample_losses)))
+        if per_sample_critical_token_accuracy is not None:
+            self.critical_accs_buffer.append(
+                np.asarray(training_utils.to_local_array(per_sample_critical_token_accuracy))
+            )
+
+    def gather_and_update_stats(self, dataset_stats_tracker: DatasetStatsTracker) -> None:
+        """Gather buffered data from all hosts and update dataset statistics.
+
+        This should be called at log_interval to batch multihost communication.
+        """
+        if not self.tokenized_names_buffer:
+            return
+
+        # Concatenate all buffered local data
+        all_local_names = np.concatenate(self.tokenized_names_buffer, axis=0)
+        all_local_losses = np.concatenate(self.losses_buffer, axis=0)
+
+        # Multihost gather
+        process_count = jax.process_count()
+        if process_count > 1:
+            all_names = jax.experimental.multihost_utils.process_allgather(all_local_names)
+            all_losses = jax.experimental.multihost_utils.process_allgather(all_local_losses)
+            # Flatten: [num_processes, batch_per_process, seq_len] -> [total_batch, seq_len]
+            all_names = np.asarray(all_names).reshape(-1, all_local_names.shape[-1])
+            all_losses = np.asarray(all_losses).flatten()
+        else:
+            all_names = all_local_names
+            all_losses = all_local_losses
+
+        # Gather critical accuracies if available
+        all_critical_accs = None
+        if self.critical_accs_buffer:
+            all_local_critical_accs = np.concatenate(self.critical_accs_buffer, axis=0)
+            if process_count > 1:
+                all_critical_accs = jax.experimental.multihost_utils.process_allgather(all_local_critical_accs)
+                all_critical_accs = np.asarray(all_critical_accs).flatten()
+            else:
+                all_critical_accs = all_local_critical_accs
+
+        # Decode gathered tokenized names
+        decoded_names = []
+        for i in range(all_names.shape[0]):
+            try:
+                name = self.tokenizer.decode(all_names[i])
+                name = name.strip()
+                decoded_names.append(name)
+            except Exception as e:
+                logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
+                decoded_names.append("unknown")
+
+        # Update stats
+        dataset_stats_tracker.update(decoded_names, all_losses, all_critical_accs)
+
+        # Clear buffers
+        self.tokenized_names_buffer = []
+        self.losses_buffer = []
+        self.critical_accs_buffer = []
+
+
 def gather_dataset_info_multihost(
     tokenized_dataset_names: at.Array,
     per_sample_losses: at.Array,
@@ -853,6 +938,7 @@ def main(config: _config.TrainConfig):
     infos = []
     host_batch_cache = HostBatchCache()
     dataset_stats_tracker = DatasetStatsTracker()
+    dataset_info_buffer = LocalDatasetInfoBuffer(tok)
 
     for step in pbar:
         with sharding.set_mesh(mesh):
@@ -862,31 +948,17 @@ def main(config: _config.TrainConfig):
         if per_sample_loss is None:
             raise ValueError("Training step info missing per_sample_loss")
 
-        # Update dataset statistics tracker
+        # Buffer local dataset info (no multihost gathering at every step)
         if hasattr(batch[0], "tokenized_dataset_name"):
             try:
-                dataset_names, losses = gather_dataset_info_multihost(
+                per_sample_critical_token_accuracy = info.get("per_sample_critical_token_accuracy")
+                dataset_info_buffer.add_local_batch(
                     batch[0].tokenized_dataset_name,
                     per_sample_loss,
-                    tok,
+                    per_sample_critical_token_accuracy,
                 )
-
-                # Gather per-sample critical token accuracy if available
-                per_sample_critical_token_accuracy = info.get("per_sample_critical_token_accuracy")
-                critical_accs = None
-                if per_sample_critical_token_accuracy is not None:
-                    # Convert to local array and gather across hosts
-                    local_critical_accs = np.asarray(training_utils.to_local_array(per_sample_critical_token_accuracy))
-                    process_count = jax.process_count()
-                    if process_count > 1:
-                        all_critical_accs = jax.experimental.multihost_utils.process_allgather(local_critical_accs)
-                        critical_accs = np.asarray(all_critical_accs).flatten()
-                    else:
-                        critical_accs = local_critical_accs
-
-                dataset_stats_tracker.update(dataset_names, losses, critical_accs)
             except Exception as e:
-                logging.warning(f"Failed to update dataset stats at step {step}: {e}")
+                logging.warning(f"Failed to buffer dataset info at step {step}: {e}")
 
         # Update hard example tracker with per-sample losses from current batch
         # per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
@@ -910,6 +982,9 @@ def main(config: _config.TrainConfig):
         # )
 
         if step % config.log_interval == 0:
+            # Gather and update dataset stats from buffered local data (batched at log_interval)
+            dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
+
             # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
             reduce_overrides = {
