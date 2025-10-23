@@ -440,10 +440,12 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         for t in tokens:
             if t == TOKEN_PLACEHOLDER:
                 pieces.append("")  # Empty string for placeholders
-            elif t in (self.BEGIN_IMAGE_TOKEN, self.END_IMAGE_TOKEN, self.NEW_LINE_TOKEN):
-                pieces.append("")  # Empty string for special tokens
-            elif t < 0 or t >= self._tokenizer.vocab_size():
-                pieces.append("")  # Empty string for out-of-vocab tokens
+            elif self._tokenizer_type == "gemma3" and t in (
+                self.BEGIN_IMAGE_TOKEN,
+                self.END_IMAGE_TOKEN,
+                self.NEW_LINE_TOKEN,
+            ):
+                pieces.append("")  # Empty string for Gemma3 special tokens
             else:
                 pieces.append(self._tokenizer.id_to_piece(t))
 

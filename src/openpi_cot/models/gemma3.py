@@ -531,8 +531,6 @@ class Block(nn.Module):
                 out_normed.append(x)
             out = out_normed
 
-    
-
         # Second residual with gating
         xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, out, gates, strict=True)]
         xs = sharding.activation_sharding_constraint(xs)
