@@ -134,12 +134,8 @@ class PiCoT(_pi0.Pi0):
                     pool_type="none",
                     scan=True,
                     dtype_mm=config.dtype,
-<<<<<<< HEAD
-                    posemb="sincos2d",  # needed for size-mismatch
-=======
                     posemb="learn", # needed for size-mismatch
                     posemb_shape=(64, 64),  # assuming 896x896 images with 14x14 patches
->>>>>>> 7c15bb4 (fixing gemma3 weight loading with siglip fixes and openpi functions)
                 )
             )
             fake_obs = config.fake_obs()
