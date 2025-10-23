@@ -946,6 +946,7 @@ _CONFIGS = [
             language_action_dir="gs://pi0-cot/droid-base-lang-actions",
             droid_dataset_name="droid",
             droid_rlds_data_dir="gs://pi0-cot/OXE",
+            resize_resolution=(896, 896)
         ),
         fsdp_devices=1,
         batch_size=1,
