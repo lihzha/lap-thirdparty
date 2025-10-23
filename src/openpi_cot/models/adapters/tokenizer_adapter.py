@@ -395,6 +395,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         # For others: [BOS] + [text] + [reasoning] + [EOS]
         if self._tokenizer_type == "gemma3":
             image_placeholders = self._create_image_placeholders()
+            formatted_prompt = "<start_of_turn>user\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model"
             text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
             tokens = image_placeholders + text_tokens
         else:

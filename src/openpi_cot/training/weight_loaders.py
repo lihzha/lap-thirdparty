@@ -515,78 +515,8 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             # Now, with a clean `flat_llm`, we can perform the merge.
             flat_model = flax.traverse_util.flatten_dict(params, sep='/')
             merged = _merge_params(flat_llm, flat_model, missing_regex=".*")
+           
             
-
-            """ # Flatten model params once
-            flat_model = flax.traverse_util.flatten_dict(params, sep='/')
-            
-            # ===== MERGE LLM PARAMS =====
-            logger.info("Merging LLM parameters...")
-            flat_llm = flax.traverse_util.flatten_dict(remapped_params, sep='/')
-            # Need to add 'PaliGemma/llm/' prefix to all keys to match Pi0 structure
-            flat_llm = {f'PaliGemma/llm/{k}': v for k, v in flat_llm.items()}
-
-
-            # Now add siglip and embedder under 'PaliGemma' namespace
-            flat_llm.update({f'PaliGemma/img/{k}': v for k, v in flax.traverse_util.flatten_dict(siglip_remapped or {}, sep='/').items()})
-
-            # Add input_embedding for vocab
-            flat_llm[f'PaliGemma/llm/embedder/input_embedding'] = remapped_params['embedder']['input_embedding']
-            flat_llm[f'PaliGemma/img/head/kernel'] = remapped_params['embedder']['mm_input_projection']['w']
-
-            
-            flat_llm[f'PaliGemma/img/mm_soft_embedding_norm/scale'] = remapped_params['embedder']['mm_soft_embedding_norm']['scale']
-
-            print("")
-            print_param_shapes(flat_llm)
-            print("")
-            print_param_shapes(flat_model)
-
-            # ==========================================================
-            # ===== DEBUGGING CHECKS START =============================
-            # ==========================================================
-
-            print("Debugging Checks:")
-            
-            # --- 1. COMPLETENESS CHECK: Ensure no weights were lost ---
-            # Get info from the original loaded checkpoint
-            original_info = get_param_info(loaded_params)
-            original_total_params = sum(p['size'] for p in original_info.values())
-            
-            # Get info from your final remapped dictionary
-            # Note: We use unflatten/flatten to handle the string keys in flat_llm consistently
-            final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
-            final_llm_info = get_param_info(final_llm_nested)
-            final_total_params = sum(p['size'] for p in final_llm_info.values())
-
-            print("\n--- Starting Parameter Conservation Check ---")
-            print(f"Total params in original checkpoint: {original_total_params:,}")
-            print(f"Total params in final remapped dict: {final_total_params:,}")
-            if original_total_params == final_total_params:
-                print("✅ SUCCESS: Total parameter count matches. No weights were lost.")
-            else:
-                print(f"❌ ERROR: Parameter count mismatch! Lost {original_total_params - final_total_params:,} parameters during remapping.")
-            print("--- End of Conservation Check ---\n")
-
-
-            # --- 2. COMPATIBILITY CHECK: Ensure names and shapes align with the final model ---
-            # `params` is your final_model structure
-            final_model_info = get_param_info(params)
-            
-            # The keys in flat_llm are strings, so we can use them directly here
-            remapped_checkpoint_info = get_param_info(final_llm_nested)
-            
-            compare_checkpoints(remapped_checkpoint_info, final_model_info)
-
-            # ==========================================================
-            # ===== DEBUGGING CHECKS END ===============================
-            # ==========================================================
-            
-            merged = _merge_params(flat_llm, flat_model, missing_regex=".*")   """
-
-            
-
-        logger.info("Gemma3 Weights Loaded, Siglip not yet done to match pi0 model building")
         return merged
 
 class Gemma3WeightLoader(WeightLoader):
@@ -648,8 +578,6 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     """
     flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
-
-    breakpoint()
 
     # First, take all weights that are a subset of the reference weights.
     result = {}

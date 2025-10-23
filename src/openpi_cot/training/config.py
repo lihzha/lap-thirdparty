@@ -951,7 +951,7 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=1,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b"),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
     ),
     TrainConfig(
         name="gemma3_vqa_local",
