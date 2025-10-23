@@ -743,7 +743,7 @@ class PiCoT(_pi0.Pi0):
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
         observation = preprocess_observation(
-            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
+            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image, image_resolution=(896, 896)
         )
         # Inference: only use first frame
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation, num_frames=1)  # (B,Tp,D) + (B,Tp)
