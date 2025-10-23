@@ -204,6 +204,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "agibot_large_dataset": [("agibot_large_dataset", 1.0)],
     "sample_r1_lite": [("sample_r1_lite", 1.0)],
     "molmoact_dataset": [("molmoact_dataset", 1.0)],
+    "planning_dataset": [("planning_dataset", 1.0)],
 }
 
 

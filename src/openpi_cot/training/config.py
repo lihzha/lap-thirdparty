@@ -1005,7 +1005,7 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
-        name="pi05_planning_finetune_local",
+        name="pi05_planning_finetune_v4",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=180,
@@ -1019,14 +1019,14 @@ _CONFIGS = [
             repo_id="planning_dataset",
             asset_id="planning",
             dataset_type="planning",
-            rlds_data_dir=None,  # Will load from ~/tensorflow_datasets
+            rlds_data_dir="gs://pi0-cot/OXE",
         ),
         fsdp_devices=1,
         batch_size=4,
         num_train_steps=10000,
         save_interval=500,
         log_interval=50,
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint",
             params_path="gs://openpi-assets/checkpoints/pi05_base/params",

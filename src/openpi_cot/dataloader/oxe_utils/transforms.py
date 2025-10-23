@@ -1562,6 +1562,26 @@ def agibot_large_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]
     return trajectory
 
 
+def planning_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    # Compute movement actions with zero-padding (no truncation) for both arms
+    import tensorflow_graphics.geometry.transformation as tft
+    
+
+    trajectory["state"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :3],
+            tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
+            trajectory["observation"]["state"][:, 7:],
+        ),
+        axis=-1,
+    )
+
+    trajectory["action"] = trajectory["action"][:, :7]
+
+    return trajectory
+
+
+
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,
@@ -1656,4 +1676,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "sample_r1_lite": sample_r1_lite_dataset_transform,
     "agibot_large_dataset": agibot_large_dataset_transform,
     "molmoact_dataset": molmoact_dataset_transform,
+    "planning_dataset": planning_dataset_transform
 }

@@ -1360,15 +1360,6 @@ class PlanningDataset(_SingleOXECoTDataset):
     - Language: Fixed instruction per demo
     """
 
-    def build_dataset_builder(self, ds_name, data_dir):
-        """Build TFDS dataset builder for planning_dataset."""
-        # The planning dataset is built locally and stored in ~/tensorflow_datasets
-        # Override data_dir to use the default TFDS data directory
-        import os
-
-        tfds_data_dir = os.path.expanduser("~/tensorflow_datasets")
-        return tfds.builder("planning_dataset", data_dir=tfds_data_dir)
-
     def apply_restructure(self):
         """Restructure planning dataset to match expected format."""
 
