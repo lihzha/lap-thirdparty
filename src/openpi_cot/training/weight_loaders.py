@@ -477,7 +477,6 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             # --- Part B: Handle SigLIP Vision Encoder Weights ---
             if siglip_remapped:
                 flat_siglip = flax.traverse_util.flatten_dict(siglip_remapped, sep='/')
-                flat_siglip.pop('pos_embedding', None)
                 flat_llm.update({f'PaliGemma/img/{k}': v for k, v in flat_siglip.items()})
 
             
@@ -489,26 +488,26 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             # ==========================================================
             # ===== RUN DEBUGGING CHECKS ON OUR CLEANED PARAMS =========
             # ==========================================================
-            # logger.info("Running post-remapping validation checks...")
+            logger.info("Running post-remapping validation checks...")
             
-            # original_info = get_param_info(loaded_params)
-            # original_total_params = sum(p['size'] for p in original_info.values())
+            original_info = get_param_info(loaded_params)
+            original_total_params = sum(p['size'] for p in original_info.values())
             
-            # final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
-            # final_llm_info = get_param_info(final_llm_nested)
-            # final_total_params = sum(p['size'] for p in final_llm_info.values())
+            final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
+            final_llm_info = get_param_info(final_llm_nested)
+            final_total_params = sum(p['size'] for p in final_llm_info.values())
 
-            # print("\n--- Starting Parameter Conservation Check ---")
-            # print(f"Total params in original checkpoint: {original_total_params:,}")
-            # print(f"Total params in final remapped dict: {final_total_params:,}")
-            # if original_total_params >= final_total_params:
-            #     print(f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model.")
-            # else:
-            #     print(f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication.")
-            # print("--- End of Conservation Check ---\n")
+            print("\n--- Starting Parameter Conservation Check ---")
+            print(f"Total params in original checkpoint: {original_total_params:,}")
+            print(f"Total params in final remapped dict: {final_total_params:,}")
+            if original_total_params >= final_total_params:
+                print(f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model.")
+            else:
+                print(f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication.")
+            print("--- End of Conservation Check ---\n")
 
-            # final_model_info = get_param_info(params)
-            # compare_checkpoints(final_llm_info, final_model_info)
+            final_model_info = get_param_info(params)
+            compare_checkpoints(final_llm_info, final_model_info)
             # ==========================================================
             # ==========================================================
 
