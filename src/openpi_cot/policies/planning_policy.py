@@ -57,8 +57,8 @@ class PlanningInputs(upstream_transforms.DataTransformFn):
 
         inputs = {
             "state": data["observation"]["state"],
-            "image": dict(zip(IMAGE_KEYS, images, strict=True)),
-            "image_mask": dict(zip(IMAGE_KEYS, image_masks, strict=True)),
+            "image": dict(zip(IMAGE_KEYS, images[:len(IMAGE_KEYS)], strict=True)),
+            "image_mask": dict(zip(IMAGE_KEYS, image_masks[:len(IMAGE_KEYS)], strict=True)),
         }
 
         # Get language instruction
