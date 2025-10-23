@@ -259,6 +259,8 @@ class PiCoT(_pi0.Pi0):
             # Flatten: [b*t, h, w, c]
             image_flat = image.reshape(b * t, h, w, c)
             image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
+            if self.use_gemma3:
+                image_tokens = self.resize_to_256(image_tokens)
             # image_tokens: [b*t, num_patches, d]
 
             num_patches = image_tokens.shape[1]
@@ -283,6 +285,47 @@ class PiCoT(_pi0.Pi0):
         img_ar_mask = einops.repeat(img_ar_mask, "s -> b s", b=tokens.shape[0])
 
         return tokens, input_mask, img_ar_mask
+
+    def resize_to_256(
+        self, x: at.Float[at.Array, "b input_len d"]
+    ) -> at.Float[at.Array, "b 256 d"]:
+        """Resize image token sequence to 256 tokens using average pooling.
+
+        Args:
+            x: Image tokens with shape [b, input_len, d] where input_len is a perfect square
+
+        Returns:
+            Resized tokens with shape [b, 256, d]
+        """
+        output_length = 256
+        cur_length = x.shape[1]
+
+        if cur_length == output_length:
+            return x
+
+        cur_width = int(cur_length**0.5)
+        assert cur_width**2 == cur_length, f"Input length {cur_length} must be a perfect square"
+
+        output_width = int(output_length**0.5)  # 16
+        assert output_width**2 == output_length
+
+        assert cur_width % output_width == 0, f"Cannot evenly pool {cur_width}x{cur_width} to {output_width}x{output_width}"
+
+        window = cur_width // output_width
+
+        # Reshape to spatial grid
+        x = einops.rearrange(x, "b (h w) d -> b h w d", h=cur_width, w=cur_width)
+
+        # Average pool using einops
+        x = einops.reduce(
+            x,
+            "b (h wh) (w ww) d -> b h w d",
+            "mean",
+            wh=window,
+            ww=window
+        )
+
+        return einops.rearrange(x, "b h w d -> b (h w) d")
 
     def _embed_text(
         self, tokenized_text, text_mask, text_ar_mask
