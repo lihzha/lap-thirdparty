@@ -302,7 +302,7 @@ PROMPT_FORMAT_REGISTRY = {
 class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     # Gemma3 special tokens (only used when tokenizer_type == "gemma3")
     BEGIN_IMAGE_TOKEN = 255999
-    END_IMAGE_TOKEN = 262144
+    END_IMAGE_TOKEN = 256000
     NEW_LINE_TOKEN = 108
 
     def __init__(
@@ -435,11 +435,15 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         # Build critical token mask using format-specific checker
         # Only mark tokens within reasoning span (not in the prompt)
-        # Skip placeholder tokens (TOKEN_PLACEHOLDER) when building pieces
+        # Skip placeholder tokens and special tokens when building pieces
         pieces = []
         for t in tokens:
             if t == TOKEN_PLACEHOLDER:
                 pieces.append("")  # Empty string for placeholders
+            elif t in (self.BEGIN_IMAGE_TOKEN, self.END_IMAGE_TOKEN, self.NEW_LINE_TOKEN):
+                pieces.append("")  # Empty string for special tokens
+            elif t < 0 or t >= self._tokenizer.vocab_size():
+                pieces.append("")  # Empty string for out-of-vocab tokens
             else:
                 pieces.append(self._tokenizer.id_to_piece(t))
 
