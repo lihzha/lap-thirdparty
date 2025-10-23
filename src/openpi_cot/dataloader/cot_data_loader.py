@@ -49,8 +49,6 @@ def _create_rlds_dataset(
     if dataset_type == "oxe" or dataset_type == "combined":
         assert oxe_required, "data_mix is required"
         dataset_cls = OXECoTDatasets
-    if dataset_type == "planning":
-        dataset_cls = PlanningDataset
 
     if dataset_cls is None:
         return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)

@@ -1018,7 +1018,8 @@ _CONFIGS = [
         data=PlanningDataConfig(
             repo_id="planning_dataset",
             asset_id="planning",
-            dataset_type="planning",
+            dataset_type="combined",
+            data_mix="planning_dataset",
             rlds_data_dir="gs://pi0-cot/OXE",
         ),
         fsdp_devices=1,
