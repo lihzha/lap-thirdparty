@@ -21,7 +21,6 @@ from openpi_cot.models.adapters.model_adapter import preprocess_observation
 from openpi_cot.models.gemma2 import get_config as get_gemma2_config
 from openpi_cot.models.gemma3 import get_config as get_gemma3_config
 import openpi_cot.models.pi_cot_config as _pi_cot_config
-
 import openpi_cot.models.siglip as _siglip_gemma3
 
 logger = logging.getLogger("openpi")
@@ -80,7 +79,10 @@ def cross_entropy_loss(
 
 
 class PiCoT(_pi0.Pi0):
-    EOS_ID = 1  # TODO: hard-coded for PaliGemma
+    EOS_TOKEN = 1  # TODO: hard-coded for PaliGemma
+    BEGIN_IMAGE_TOKEN = 255999  # only for Gemma3
+    END_IMAGE_TOKEN = 262144  # only for Gemma3
+    NEW_LINE_TOKEN = 108  # only for Gemma3
 
     def __init__(self, config: _pi_cot_config.PiCoTConfig, rngs: nnx.Rngs):
         _model.BaseModel.__init__(self, config.action_dim, config.action_horizon, config.max_token_len)
@@ -96,6 +98,7 @@ class PiCoT(_pi0.Pi0):
         self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 1.0))
         # Backward compatibility flag used in a few places
         self.lang_action_only = not self.enable_action_training
+        self.use_gemma3 = False
         if "gemma2" in config.paligemma_variant:
             assert "gemma2" in config.action_expert_variant, "gemma2 must be used for both LLM and action expert"
             paligemma_config = get_gemma2_config(config.paligemma_variant)
@@ -106,6 +109,7 @@ class PiCoT(_pi0.Pi0):
             paligemma_config = get_gemma3_config(config.paligemma_variant)
             action_expert_config = get_gemma3_config(config.action_expert_variant)
             module = Gemma3ModuleWithDecode
+            self.use_gemma3 = True
         else:
             paligemma_config = get_gemma_config(config.paligemma_variant)
             action_expert_config = get_gemma_config(config.action_expert_variant)
@@ -130,7 +134,7 @@ class PiCoT(_pi0.Pi0):
                     pool_type="none",
                     scan=True,
                     dtype_mm=config.dtype,
-                    posemb="sincos2d", # needed for size-mismatch
+                    posemb="sincos2d",  # needed for size-mismatch
                 )
             )
         else:
@@ -159,6 +163,59 @@ class PiCoT(_pi0.Pi0):
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
+
+    def _extract_first_frame_embeddings(
+        self,
+        obs: CoTObservation | Observation,
+        full_image_embeddings: at.Float[at.Array, "b s emb"],
+        full_image_mask: at.Bool[at.Array, "b s"],
+        full_image_ar_mask: at.Bool[at.Array, "b s"],
+    ) -> tuple[
+        at.Float[at.Array, "b s_first emb"],
+        at.Bool[at.Array, "b s_first"],
+        at.Bool[at.Array, "b s_first"],
+    ]:
+        """Extract first-frame embeddings from full image embeddings.
+
+        Args:
+            obs: Observation containing images with shape [b, t, h, w, c]
+            full_image_embeddings: Embeddings from all frames [b, total_patches, emb]
+            full_image_mask: Mask for all frames
+            full_image_ar_mask: AR mask for all frames
+
+        Returns:
+            (first_frame_embeddings, first_frame_mask, first_frame_ar_mask)
+        """
+        # Calculate patches per frame (assume all images have same patch count)
+        # For 224x224 images with 14x14 patches, this is 256
+        first_image = next(iter(obs.images.values()))
+        _, t, h, w, c = first_image.shape
+        total_frames = sum(img.shape[1] for img in obs.images.values())
+        num_patches = full_image_embeddings.shape[1] // total_frames
+
+        # Extract first frame for each image key
+        first_frame_tokens = []
+        first_frame_masks = []
+        first_frame_ar_masks = []
+
+        offset = 0
+        for name in obs.images:
+            num_frames_in_image = obs.images[name].shape[1]
+
+            # Extract first frame for this image (first num_patches tokens)
+            first_frame_tokens.append(full_image_embeddings[:, offset : offset + num_patches])
+            first_frame_masks.append(full_image_mask[:, offset : offset + num_patches])
+            first_frame_ar_masks.append(full_image_ar_mask[:, offset : offset + num_patches])
+
+            # Move offset by all frames of this image
+            offset += num_frames_in_image * num_patches
+
+        # Concatenate across image keys
+        img_tokens_first = jnp.concatenate(first_frame_tokens, axis=1)
+        img_mask_first = jnp.concatenate(first_frame_masks, axis=1)
+        img_ar_mask_first = jnp.concatenate(first_frame_ar_masks, axis=1)
+
+        return img_tokens_first, img_mask_first, img_ar_mask_first
 
     def _embed_images(
         self, obs: CoTObservation | Observation, num_frames: int | None = None
@@ -197,17 +254,18 @@ class PiCoT(_pi0.Pi0):
             num_patches = image_tokens.shape[1]
             # Reshape: [b, t*num_patches, d]
             image_tokens = image_tokens.reshape(b, t * num_patches, -1)
+            total_seq_len = t * num_patches
 
             tokens.append(image_tokens)
             input_mask.append(
                 einops.repeat(
                     obs.image_masks[name],
                     "b -> b s",
-                    s=t * num_patches,
+                    s=total_seq_len,
                 )
             )
-            # All image tokens attend to each other
-            _img_ar_masks += [False] * (t * num_patches)
+            # All image tokens attend to each other (no autoregressive masking)
+            _img_ar_masks += [False] * total_seq_len
 
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
@@ -227,9 +285,64 @@ class PiCoT(_pi0.Pi0):
         text_tokens = self.PaliGemma.llm(tokenized_text, method="embed")
         return text_tokens, text_mask, text_ar_mask
 
+    def _replace_image_placeholders(
+        self,
+        token_embeddings: at.Float[at.Array, "b s emb"],
+        tokenized_sequence: at.Int[at.Array, "b s"],
+        image_embeddings: at.Float[at.Array, "b n_img*n_patches emb"],
+    ) -> at.Float[at.Array, "b s emb"]:
+        """Replace placeholder tokens (-2) with actual image embeddings.
+
+        Args:
+            token_embeddings: Embeddings from tokenized sequence (includes placeholder embeddings)
+            tokenized_sequence: Token IDs (includes -2 for placeholders)
+            image_embeddings: Actual image embeddings from SigLIP [b, n_img*n_patches, emb]
+
+        Returns:
+            Updated embeddings with placeholders replaced
+        """
+        # Find placeholder positions: where token_id == -2
+        is_placeholder = tokenized_sequence == -2  # [b, s]
+
+        # Count total placeholders per batch element (should be same across batch)
+        num_placeholders = jnp.sum(is_placeholder, axis=1)  # [b]
+
+        # Create indices for scattering image embeddings into placeholder positions
+        # For each batch element, we need to map placeholder positions to image embedding indices
+        b, s, emb = token_embeddings.shape
+        _, n_img_patches, _ = image_embeddings.shape
+
+        # Build a mapping: for each position in sequence, what image index does it correspond to?
+        # Cumulative sum of is_placeholder gives us the image token index for each placeholder
+        placeholder_indices = jnp.cumsum(is_placeholder, axis=1) - 1  # [b, s], -1 to make 0-indexed
+
+        # Clamp to valid range [0, n_img_patches)
+        placeholder_indices = jnp.clip(placeholder_indices, 0, n_img_patches - 1)
+
+        # Gather image embeddings according to placeholder indices
+        # For each position, if it's a placeholder, get the corresponding image embedding
+        # Otherwise, keep the original token embedding
+        batch_indices = jnp.arange(b)[:, None]  # [b, 1]
+        selected_image_embs = image_embeddings[batch_indices, placeholder_indices]  # [b, s, emb]
+
+        # Replace: where is_placeholder, use image embedding; otherwise use token embedding
+        result = jnp.where(
+            is_placeholder[..., None],  # [b, s, 1] for broadcasting
+            selected_image_embs,
+            token_embeddings,
+        )
+
+        return result
+
     @at.typecheck
     def embed_prefix(
-        self, obs: CoTObservation | Observation, num_frames: int | None = None
+        self,
+        obs: CoTObservation | Observation,
+        num_frames: int | None = None,
+        precomputed_img_embeddings: tuple[
+            at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, "b s"]
+        ]
+        | None = None,
     ) -> tuple[
         at.Float[at.Array, "b s emb"],
         at.Bool[at.Array, "b s"],
@@ -240,30 +353,57 @@ class PiCoT(_pi0.Pi0):
         Args:
             obs: Observation containing images and tokenized text
             num_frames: If specified, only use first num_frames of images. If None, use all frames.
+            precomputed_img_embeddings: Optional pre-computed image embeddings to avoid re-encoding.
+                                       Tuple of (img_tokens, img_mask, img_ar_mask).
 
         Returns:
             (prefix_tokens, prefix_mask, prefix_ar_mask)
         """
-        img_tokens, img_mask, img_ar_mask = self._embed_images(obs, num_frames)
-
-        # add language (aka tokenized inputs)
-        if obs.tokenized_prompt is not None:
+        # For Gemma3: tokenized_prompt already contains image placeholders
+        # For others: use old approach (concatenate image and text embeddings)
+        if self.use_gemma3 and obs.tokenized_prompt is not None:
+            # Embed the full tokenized sequence (including placeholders)
             text_tokens, text_mask, text_ar_mask = self._embed_text(
                 obs.tokenized_prompt,
                 obs.tokenized_prompt_mask,
                 obs.tokenized_langact_mask,
             )
 
-            if text_ar_mask is not None:
-                ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
+            # Get actual image embeddings from SigLIP (use precomputed if available)
+            if precomputed_img_embeddings is not None:
+                img_tokens, _, _ = precomputed_img_embeddings
             else:
-                text_ar_mask = jnp.array([False] * text_mask.shape[1])
-                text_ar_mask = einops.repeat(text_ar_mask, "s -> b s", b=img_ar_mask.shape[0])
-                ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
-            tokens = jnp.concatenate([img_tokens, text_tokens], axis=1)
-            input_mask = jnp.concatenate([img_mask, text_mask], axis=1)
+                img_tokens, _, _ = self._embed_images(obs, num_frames)
+
+            # Replace placeholder embeddings with actual image embeddings
+            tokens = self._replace_image_placeholders(text_tokens, obs.tokenized_prompt, img_tokens)
+            input_mask = text_mask
+            ar_mask = text_ar_mask if text_ar_mask is not None else jnp.zeros_like(text_mask, dtype=bool)
         else:
-            tokens, input_mask, ar_mask = img_tokens, img_mask, img_ar_mask
+            # Original approach: embed images and text separately, then concatenate
+            if precomputed_img_embeddings is not None:
+                img_tokens, img_mask, img_ar_mask = precomputed_img_embeddings
+            else:
+                img_tokens, img_mask, img_ar_mask = self._embed_images(obs, num_frames)
+
+            # add language (aka tokenized inputs)
+            if obs.tokenized_prompt is not None:
+                text_tokens, text_mask, text_ar_mask = self._embed_text(
+                    obs.tokenized_prompt,
+                    obs.tokenized_prompt_mask,
+                    obs.tokenized_langact_mask,
+                )
+
+                if text_ar_mask is not None:
+                    ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
+                else:
+                    text_ar_mask = jnp.array([False] * text_mask.shape[1])
+                    text_ar_mask = einops.repeat(text_ar_mask, "s -> b s", b=img_ar_mask.shape[0])
+                    ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
+                tokens = jnp.concatenate([img_tokens, text_tokens], axis=1)
+                input_mask = jnp.concatenate([img_mask, text_mask], axis=1)
+            else:
+                tokens, input_mask, ar_mask = img_tokens, img_mask, img_ar_mask
 
         return tokens, input_mask, ar_mask
 
@@ -282,53 +422,50 @@ class PiCoT(_pi0.Pi0):
             preprocess_rng, observation, train=train, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
         )
 
-        # Optimization: if prediction training is enabled, encode all frames once and reuse
-        if self.enable_prediction_training and observation.tokenized_prediction is not None:
-            # Encode all frames once
-            img_tokens_all, img_mask_all, img_ar_mask_all = self._embed_images(observation, num_frames=None)
+        # OPTIMIZATION: Always encode ALL images once (single PaliGemma.img pass)
+        # Then extract subsets as needed for different losses
+        img_tokens_all, img_mask_all, img_ar_mask_all = self._embed_images(observation, num_frames=None)
 
-            # Calculate num_patches: total tokens divided by total frames across all images
-            total_frames = sum(img.shape[1] for img in observation.images.values())
-            num_patches = img_tokens_all.shape[1] // total_frames
-
-            # Extract first frame tokens for each image
-            first_frame_tokens = []
-            first_frame_masks = []
-            first_frame_ar_masks = []
-
-            offset = 0
-            for name in observation.images:
-                num_frames_in_image = observation.images[name].shape[1]
-
-                # Extract first frame for this image
-                first_frame_tokens.append(img_tokens_all[:, offset : offset + num_patches])
-                first_frame_masks.append(img_mask_all[:, offset : offset + num_patches])
-                first_frame_ar_masks.append(img_ar_mask_all[:, offset : offset + num_patches])
-
-                # Move offset by all frames of this image
-                offset += num_frames_in_image * num_patches
-
-            img_tokens_first = jnp.concatenate(first_frame_tokens, axis=1)
-            img_mask_first = jnp.concatenate(first_frame_masks, axis=1)
-            img_ar_mask_first = jnp.concatenate(first_frame_ar_masks, axis=1)
-        else:
-            # Only encode first frame
-            img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
+        # Extract first-frame embeddings from full embeddings
+        img_tokens_first, img_mask_first, img_ar_mask_first = self._extract_first_frame_embeddings(
+            observation, img_tokens_all, img_mask_all, img_ar_mask_all
+        )
 
         # Build prefix for langact/action losses (first frame + regular text)
-        text_tokens, text_mask, text_ar_mask = self._embed_text(
-            observation.tokenized_prompt,
-            observation.tokenized_prompt_mask,
-            observation.tokenized_langact_mask,
+        # Pass precomputed first-frame embeddings to avoid re-encoding
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(
+            observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
         )
-        prefix_tokens = jnp.concatenate([img_tokens_first, text_tokens], axis=1)
-        prefix_mask = jnp.concatenate([img_mask_first, text_mask], axis=1)
-        if text_ar_mask is not None:
-            prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
-        else:
-            text_ar_mask = jnp.array([False] * text_mask.shape[1])
-            text_ar_mask = einops.repeat(text_ar_mask, "s -> b s", b=prefix_mask.shape[0])
-            prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
+
+        # If prediction training is enabled, also prepare prefix with all frames
+        if self.enable_prediction_training and observation.tokenized_prediction is not None:
+            # For Gemma3: tokenized_prediction should also contain placeholders for all frames
+            # For others: use the old approach
+            if self.use_gemma3:
+                # Embed the prediction tokenized sequence (including placeholders)
+                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
+                    observation.tokenized_prediction,
+                    observation.tokenized_prediction_mask,
+                    observation.tokenized_prediction_langact_mask,
+                )
+                # Replace placeholders with precomputed all-frame embeddings
+                prefix_tokens_pred = self._replace_image_placeholders(
+                    text_tokens_pred, observation.tokenized_prediction, img_tokens_all
+                )
+                prefix_mask_pred = text_mask_pred
+                prefix_ar_mask_pred = (
+                    text_ar_mask_pred if text_ar_mask_pred is not None else jnp.zeros_like(text_mask_pred, dtype=bool)
+                )
+            else:
+                # Original approach: concatenate precomputed all-frame embeddings with text
+                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
+                    observation.tokenized_prediction,
+                    observation.tokenized_prediction_mask,
+                    observation.tokenized_prediction_langact_mask,
+                )
+                prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
+                prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
+                prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
 
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
@@ -396,18 +533,7 @@ class PiCoT(_pi0.Pi0):
 
         # Prediction (cross-entropy) loss - independent of langact loss
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
-            # Reuse already-encoded image tokens (img_tokens_all was computed above)
-            # Create separate prefix for prediction: all frames + prediction text
-            text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
-                observation.tokenized_prediction,
-                observation.tokenized_prediction_mask,
-                observation.tokenized_prediction_langact_mask,
-            )
-            prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
-            prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
-            prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
-
-            # Use prediction-specific prefix
+            # Use prediction-specific prefix (already built above)
             pred_attn_mask = _pi0.make_attn_mask(prefix_mask_pred, prefix_ar_mask_pred)
             pred_positions = jnp.cumsum(prefix_mask_pred, axis=1) - 1
             (prefix_out_pred, _), _ = self.PaliGemma.llm(
@@ -466,8 +592,8 @@ class PiCoT(_pi0.Pi0):
         # Diffusion (actions) loss. TODO: no sample mask for actions! Sample mask may only make sense for langact because it is obtained from cot_policy.is_idle_language_action
         if self.enable_action_training:
             # For action training, text tokens should not use autoregressive masking
-            text_ar_mask = jnp.zeros_like(text_mask, dtype=bool)
-            prefix_ar_mask = jnp.concatenate([img_ar_mask_first, text_ar_mask], axis=1)
+            # Rebuild prefix_ar_mask with all False (no autoregressive masking)
+            prefix_ar_mask_action = jnp.zeros_like(prefix_mask, dtype=bool)
 
             batch_shape = actions.shape[:-2]
             noise = jax.random.normal(noise_rng, actions.shape)
@@ -479,7 +605,7 @@ class PiCoT(_pi0.Pi0):
             suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
 
             input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
-            ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=1)
+            ar_mask = jnp.concatenate([prefix_ar_mask_action, suffix_ar_mask], axis=1)
             attn_mask = _pi0.make_attn_mask(input_mask, ar_mask)
             positions = jnp.cumsum(input_mask, axis=1) - 1
 
@@ -492,8 +618,6 @@ class PiCoT(_pi0.Pi0):
             total_loss = total_loss + self.action_loss_weight * action_loss
 
         return total_loss, token_accuracy, critical_token_accuracy, metrics
-
-    
 
     @override
     def sample_actions(
@@ -609,7 +733,7 @@ class PiCoT(_pi0.Pi0):
         curr_id = jnp.argmax(self.PaliGemma.llm(curr_h, method="decode"), axis=-1)  # (B,1)
         curr_h = self.PaliGemma.llm(curr_id, method="embed")
         # Track which sequences have finished (emitted EOS) and keep them finished
-        finished = curr_id == self.EOS_ID
+        finished = curr_id == self.EOS_TOKEN
 
         # ───────────────── 3. Static KV cache aligned to tail ─────────────────
         nl, _, _, k, h = kv0[0].shape
@@ -667,8 +791,8 @@ class PiCoT(_pi0.Pi0):
             logits = self.PaliGemma.llm(next_h, method="decode")
             next_id_raw = jnp.argmax(logits, axis=-1)
             # Update finished mask and force EOS for finished sequences
-            finished = jnp.logical_or(finished, next_id_raw == self.EOS_ID)
-            eos_token = jnp.asarray(self.EOS_ID, dtype=next_id_raw.dtype)
+            finished = jnp.logical_or(finished, next_id_raw == self.EOS_TOKEN)
+            eos_token = jnp.asarray(self.EOS_TOKEN, dtype=next_id_raw.dtype)
             next_id = jnp.where(finished, eos_token, next_id_raw)
             next_h = self.PaliGemma.llm(next_id, method="embed")  # (batch, 1, D)
             # Keep hidden state stable for finished sequences

@@ -29,6 +29,8 @@ class CoTPolicy:
         # Make a batch and convert to jax.Array.
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
 
+        breakpoint()
+
         start_time = time.monotonic()
         self._rng, _ = jax.random.split(self._base._rng)  # noqa: SLF001
         logits, t = self._sample_reasoning(CoTObservation.from_dict(inputs))

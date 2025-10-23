@@ -22,6 +22,7 @@ from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_policy as libero_policy
+import openpi_cot.policies.planning_policy as planning_policy
 import openpi_cot.policies.tiger_policy as tiger_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
@@ -515,6 +516,71 @@ class TigerDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class PlanningDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
+    """
+    Config for training on planning dataset, using RLDS format loaded from TFDS.
+    """
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        cot_fields = CoTDataConfig.__dataclass_fields__.keys()
+        data = {k: getattr(self, k) for k in cot_fields}
+        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
+        asset_id = self.assets.asset_id or repo_id
+        data.update(
+            repo_id=repo_id,
+            asset_id=asset_id,
+            norm_stats=None,  # Note: Normalization will be handled on dataset level
+            use_quantile_norm=model_config.model_type != ModelType.PI0,
+        )
+        return CoTDataConfig(**data)
+
+    def _load_norm_stats(
+        self, assets_dir: epath.Path, asset_id: str | None
+    ) -> dict[str, upstream_transforms.NormStats] | None:
+        """Load normalization statistics if available."""
+        if asset_id is None:
+            return None
+        try:
+            data_assets_dir = str(assets_dir / asset_id)
+            norm_stats = _normalize_adapter.load(maybe_download(data_assets_dir))
+            logging.info(f"Loaded norm stats from {data_assets_dir}")
+            return norm_stats
+        except FileNotFoundError:
+            logging.warning(
+                f"Norm stats not found in {data_assets_dir}. "
+                f"Run 'python scripts/compute_norm_stats.py --config-name <config_name>' to compute them."
+            )
+        return None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        base_cfg = self.create_base_config(assets_dirs, model_config)
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                planning_policy.PlanningInputs(
+                    action_dim=model_config.action_dim,
+                    model_type=model_config.model_type,
+                )
+            ],
+            outputs=[planning_policy.PlanningOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory(
+            prediction_prompt=base_cfg.prediction_prompt,
+            prompt_format=model_config.prompt_format,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+        )(model_config)
+
+        return dataclasses.replace(
+            base_cfg,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig(upstream_config.TrainConfig):
     # Overide
     project_name: str = "openpi-cot"
@@ -908,7 +974,9 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=1,
         checkpoint_base_dir="/home/ajhancock/Desktop/openpi-cot/src/openpi_cot/ckpts/",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="/home/ajhancock/Desktop/openpi-cot/src/openpi_cot/ckpts/gemma3-4b-it"),
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="gemma3", params_path="/home/ajhancock/Desktop/openpi-cot/src/openpi_cot/ckpts/gemma3-4b-it"
+        ),
     ),
     TrainConfig(
         name="pi05_vqa_v4",
@@ -930,6 +998,34 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=1,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint",
+            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
+        ),
+    ),
+    TrainConfig(
+        name="pi05_planning_finetune_local",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
+            prompt_format="pi05",
+        ),
+        data=PlanningDataConfig(
+            repo_id="planning_dataset",
+            asset_id="planning",
+            dataset_type="planning",
+            rlds_data_dir=None,  # Will load from ~/tensorflow_datasets
+        ),
+        fsdp_devices=1,
+        batch_size=4,
+        num_train_steps=10000,
+        save_interval=500,
+        log_interval=50,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint",
             params_path="gs://openpi-assets/checkpoints/pi05_base/params",

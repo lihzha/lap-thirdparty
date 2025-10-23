@@ -12,6 +12,9 @@ import sentencepiece
 
 import openpi_cot.shared.download as download
 
+# Special token placeholder for image positions
+TOKEN_PLACEHOLDER = -2
+
 
 @dataclasses.dataclass
 class StateDiscretizationConfig:
@@ -297,6 +300,11 @@ PROMPT_FORMAT_REGISTRY = {
 
 
 class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
+    # Gemma3 special tokens (only used when tokenizer_type == "gemma3")
+    BEGIN_IMAGE_TOKEN = 255999
+    END_IMAGE_TOKEN = 262144
+    NEW_LINE_TOKEN = 108
+
     def __init__(
         self,
         max_len: int = 48,
@@ -312,6 +320,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         ]
         | PromptFormat = "pi05",
         tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma",
+        num_images: int = 2,
+        tokens_per_image: int = 256,
     ):
         # super().__init__(max_len)
         if tokenizer_type == "paligemma":
@@ -325,6 +335,9 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
                 self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
         self._max_len = max_len
         self._stop_token_id = self._tokenizer.eos_id()
+        self._tokenizer_type = tokenizer_type
+        self._num_images = num_images
+        self._tokens_per_image = tokens_per_image
 
         # Support both string and PromptFormat instance
         if isinstance(prompt_format, str):
@@ -335,6 +348,22 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             self._prompt_format = PROMPT_FORMAT_REGISTRY[prompt_format]
         else:
             self._prompt_format = prompt_format
+
+    def _create_image_placeholders(self) -> list[int]:
+        """Create placeholder token sequence for images with special tokens (Gemma3 only).
+
+        Format for each image: [NL, BEGIN_IMAGE, -2 x tokens_per_image, END_IMAGE, NL]
+        Returns the full sequence for all images.
+        """
+        if self._tokenizer_type != "gemma3":
+            return []
+
+        single_image_seq = (
+            [self.NEW_LINE_TOKEN, self.BEGIN_IMAGE_TOKEN]
+            + [TOKEN_PLACEHOLDER] * self._tokens_per_image
+            + [self.END_IMAGE_TOKEN, self.NEW_LINE_TOKEN]
+        )
+        return single_image_seq * self._num_images
 
     def tokenize_cot(
         self,
@@ -361,7 +390,15 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         # Tokenize
         pad_id = self._tokenizer.pad_id()
-        tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+
+        # For Gemma3: [image_placeholders] + [BOS] + [text] + [reasoning] + [EOS]
+        # For others: [BOS] + [text] + [reasoning] + [EOS]
+        if self._tokenizer_type == "gemma3":
+            image_placeholders = self._create_image_placeholders()
+            text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+            tokens = image_placeholders + text_tokens
+        else:
+            tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         reasoning_start = len(tokens)
         if reasoning is not None:
@@ -377,19 +414,19 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             tokens = tokens[: self._max_len]
             reasoning_end = min(reasoning_end, self._max_len)
 
-        attn_mask = np.zeros(self._max_len, dtype=bool)
-        reasoning_mask = np.zeros(self._max_len, dtype=bool)
-        numeric_mask = np.zeros(self._max_len, dtype=bool)
-
         # Left pad to max length for generation/training
         pad_count = self._max_len - len(tokens)
         if pad_count > 0:
             tokens = [pad_id] * pad_count + tokens
 
+        # Create masks
         attn_mask = np.zeros(self._max_len, dtype=bool)
         reasoning_mask = np.zeros(self._max_len, dtype=bool)
         numeric_mask = np.zeros(self._max_len, dtype=bool)
+
+        # Mark all non-pad positions as valid for attention
         attn_mask[pad_count:] = True
+
         # Shift reasoning indices by pad_count after left padding
         start_idx = max(0, min(self._max_len, reasoning_start + pad_count))
         end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
@@ -398,11 +435,19 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         # Build critical token mask using format-specific checker
         # Only mark tokens within reasoning span (not in the prompt)
-        pieces = [self._tokenizer.id_to_piece(t) for t in tokens]
+        # Skip placeholder tokens (TOKEN_PLACEHOLDER) when building pieces
+        pieces = []
+        for t in tokens:
+            if t == TOKEN_PLACEHOLDER:
+                pieces.append("")  # Empty string for placeholders
+            else:
+                pieces.append(self._tokenizer.id_to_piece(t))
+
         for i in range(start_idx, end_idx):
             if i < 0 or i >= len(pieces):
                 continue
-            if fmt.critical_token_checker(pieces[i]):
+            piece = pieces[i]
+            if piece and fmt.critical_token_checker(piece):
                 numeric_mask[i] = True
 
         return (
