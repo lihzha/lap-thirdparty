@@ -856,7 +856,6 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     log_mem("Before getting batch")
     batch = next(data_iter)
-    breakpoint()
     vis_batch(batch, tok=tok)
 
     log_mem("After getting batch")
