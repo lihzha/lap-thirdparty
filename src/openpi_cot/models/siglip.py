@@ -205,6 +205,8 @@ class _Module(nn.Module):
     # or "dots_with_no_batch_dims_saveable" for more speed (memory costly)
     remat_policy: str = "nothing_saveable"
     dtype_mm: str = "float32"
+    posemb_shape: tuple[int, int] | None = None  # 👈 Add this
+
 
     @nn.compact
     def __call__(self, image, *, train=False):
@@ -213,6 +215,8 @@ class _Module(nn.Module):
         # Kevin edit: do patch extraction and posemb in float32,
         # because I feel like it's a bit safer.
         image = jnp.asarray(image, jnp.float32)
+        # WE NEED TO MAKE THE IMAGE BE 896x896 FOR GEMMA3
+        #image = jax.image.resize(image, (896, 896), method='linear')
 
         # Patch extraction
         x = out["stem"] = nn.Conv(
@@ -227,8 +231,9 @@ class _Module(nn.Module):
         n, h, w, c = x.shape
         x = jnp.reshape(x, [n, h * w, c])
 
+        seqshape = self.posemb_shape or (h, w)
         # Add posemb before adding extra token.
-        x = out["with_posemb"] = x + get_posemb(self, self.posemb, (h, w), c, "pos_embedding", jnp.float32)
+        x = out["with_posemb"] = x + get_posemb(self, self.posemb, seqshape, c, "pos_embedding", jnp.float32)
 
         if self.pool_type == "tok":
             cls = self.param("cls", nn.initializers.zeros, (1, 1, c), x.dtype)
@@ -293,7 +298,7 @@ class _Module(nn.Module):
 
         if self.num_classes:
             kw = {"kernel_init": nn.initializers.zeros} if self.head_zeroinit else {}
-            head = nn.Dense(self.num_classes, dtype=self.dtype_mm, name="head", **kw)
+            head = nn.Dense(self.num_classes, dtype=self.dtype_mm, use_bias=False, name="head", **kw) # Gemma3 doesn't use bias
             x_2d = out["logits_2d"] = head(x_2d)
             x = out["logits"] = head(x)
 

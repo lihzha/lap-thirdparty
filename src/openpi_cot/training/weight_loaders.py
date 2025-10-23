@@ -357,9 +357,9 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             restore_type=np.ndarray
         )
 
-        print_param_shapes(loaded_params)
-        print("")
-        print_param_shapes(params)
+        #print_param_shapes(loaded_params)
+        #print("")
+        #print_param_shapes(params)
 
         # Do everything on CPU to avoid device memory issues during remapping
         with jax.default_device(jax.devices("cpu")[0]):
@@ -460,6 +460,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                 
                 # Map the bias, which is the missing parameter
                 if 'b' in mm_projection: # Check if bias exists
+                    print("Mapping mm_input_projection bias to PaliGemma/img/head/bias")
                     flat_llm['PaliGemma/img/head/bias'] = mm_projection['b'] # <-- NEW LINE
 
             # We previously discarded this, but now we know the correct destination name
@@ -488,26 +489,26 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             # ==========================================================
             # ===== RUN DEBUGGING CHECKS ON OUR CLEANED PARAMS =========
             # ==========================================================
-            logger.info("Running post-remapping validation checks...")
+            # logger.info("Running post-remapping validation checks...")
             
-            original_info = get_param_info(loaded_params)
-            original_total_params = sum(p['size'] for p in original_info.values())
+            # original_info = get_param_info(loaded_params)
+            # original_total_params = sum(p['size'] for p in original_info.values())
             
-            final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
-            final_llm_info = get_param_info(final_llm_nested)
-            final_total_params = sum(p['size'] for p in final_llm_info.values())
+            # final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
+            # final_llm_info = get_param_info(final_llm_nested)
+            # final_total_params = sum(p['size'] for p in final_llm_info.values())
 
-            print("\n--- Starting Parameter Conservation Check ---")
-            print(f"Total params in original checkpoint: {original_total_params:,}")
-            print(f"Total params in final remapped dict: {final_total_params:,}")
-            if original_total_params >= final_total_params:
-                print(f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model.")
-            else:
-                print(f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication.")
-            print("--- End of Conservation Check ---\n")
+            # print("\n--- Starting Parameter Conservation Check ---")
+            # print(f"Total params in original checkpoint: {original_total_params:,}")
+            # print(f"Total params in final remapped dict: {final_total_params:,}")
+            # if original_total_params >= final_total_params:
+            #     print(f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model.")
+            # else:
+            #     print(f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication.")
+            # print("--- End of Conservation Check ---\n")
 
-            final_model_info = get_param_info(params)
-            compare_checkpoints(final_llm_info, final_model_info)
+            # final_model_info = get_param_info(params)
+            # compare_checkpoints(final_llm_info, final_model_info)
             # ==========================================================
             # ==========================================================
 

@@ -134,9 +134,22 @@ class PiCoT(_pi0.Pi0):
                     pool_type="none",
                     scan=True,
                     dtype_mm=config.dtype,
+<<<<<<< HEAD
                     posemb="sincos2d",  # needed for size-mismatch
+=======
+                    posemb="learn", # needed for size-mismatch
+                    posemb_shape=(64, 64),  # assuming 896x896 images with 14x14 patches
+>>>>>>> 7c15bb4 (fixing gemma3 weight loading with siglip fixes and openpi functions)
                 )
             )
+            fake_obs = config.fake_obs()
+            fake_obs_image = next(iter(fake_obs.images.values()))
+            b, h, w, c = fake_obs_image.shape
+            # 2. Define the new 4D shape
+            new_shape = (b, 896, 896, c )
+            fake_image_resized = jax.image.resize(fake_obs_image, new_shape, method='linear')
+            # resize
+            img.lazy_init(fake_image_resized, train=False, rngs=rngs)
         else:
             # For other models, use the original default (learnable embeddings)
             img = nnx_bridge.ToNNX(
@@ -148,8 +161,9 @@ class PiCoT(_pi0.Pi0):
                     dtype_mm=config.dtype,
                 )
             )
+            img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
 
-        img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
+        #img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
         if config.pi05:
