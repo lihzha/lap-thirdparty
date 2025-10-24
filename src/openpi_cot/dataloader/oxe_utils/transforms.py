@@ -170,15 +170,30 @@ def axis_angle_to_r6(axis_angle: tf.Tensor) -> tf.Tensor:
     [r11, r12, r13, r21, r22, r23]
 
     Args:
-        axis_angle: Axis-angle tensor of shape (..., 3)
+        axis_angle: Axis-angle tensor of shape (..., 3) where the magnitude is the angle
+                    and the direction is the axis
 
     Returns:
         R6 representation of shape (..., 6) containing [r11, r12, r13, r21, r22, r23]
     """
     import tensorflow_graphics.geometry.transformation as tft
 
+    # Compute angle as the norm of the axis_angle vector
+    angle = tf.norm(axis_angle, axis=-1, keepdims=True)
+
+    # Compute axis as normalized axis_angle (handle zero angle case)
+    # When angle is zero, any axis works, so we use [1, 0, 0]
+    safe_angle = tf.where(angle < 1e-8, tf.ones_like(angle), angle)
+    axis = axis_angle / safe_angle
+
+    # For zero angles, use identity rotation (set axis to [1, 0, 0])
+    axis = tf.where(angle < 1e-8, tf.constant([1.0, 0.0, 0.0], dtype=axis.dtype), axis)
+
+    # Remove keepdims from angle for the API call
+    angle = tf.squeeze(angle, axis=-1)
+
     # Convert to rotation matrix (shape: ..., 3, 3)
-    rotation_matrix = tft.rotation_matrix_3d.from_axis_angle(axis_angle)
+    rotation_matrix = tft.rotation_matrix_3d.from_axis_angle(axis, angle)
 
     # Extract first two rows (6 elements): r11, r12, r13, r21, r22, r23
     r6 = tf.concat([rotation_matrix[..., 0, :], rotation_matrix[..., 1, :]], axis=-1)
