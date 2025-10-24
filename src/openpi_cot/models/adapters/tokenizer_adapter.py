@@ -400,18 +400,19 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             image_placeholders = self._create_image_placeholders()
             # formatted_prompt = "<start_of_turn>user\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model"
             text_tokens = (
-                self._tokenizer.encode("<start_of_image>", add_bos=True, add_eos=False)
+                self._tokenizer.encode("<start_of_turn>user\n<start_of_image>", add_bos=True, add_eos=False)
                 + image_placeholders
-                + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
+                + self._tokenizer.encode("<end_of_image>\n<start_of_image>")
                 + image_placeholders
                 + self._tokenizer.encode(
-                    "<end_of_image>\n" + formatted_prompt + "",
+                    "<end_of_image>\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model",
                     add_bos=False,
                     add_eos=False,
                 )
             )
+            tokens = text_tokens
             # text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
-            tokens = image_placeholders + text_tokens
+            # tokens = image_placeholders + text_tokens
         else:
             tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
