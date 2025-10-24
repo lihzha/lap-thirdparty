@@ -473,7 +473,6 @@ class PiCoT(_pi0.Pi0):
             input_mask, ar_mask = self._replace_placeholder_masks(
                 text_mask, text_ar_mask, obs.tokenized_prompt, img_mask, img_ar_mask
             )
-            breakpoint()
         else:
             # Original approach: embed images and text separately, then concatenate
             if precomputed_img_embeddings is not None:
