@@ -358,12 +358,15 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         if self._tokenizer_type != "gemma3":
             return []
 
-        single_image_seq = (
-            [self.NEW_LINE_TOKEN, self.BEGIN_IMAGE_TOKEN]
-            + [TOKEN_PLACEHOLDER] * self._tokens_per_image
-            + [self.END_IMAGE_TOKEN, self.NEW_LINE_TOKEN]
-        )
-        return single_image_seq * self._num_images
+        return [TOKEN_PLACEHOLDER] * self._tokens_per_image
+
+        # single_image_seq = (
+        #     [self.NEW_LINE_TOKEN, self.BEGIN_IMAGE_TOKEN]
+        #     + [TOKEN_PLACEHOLDER] * self._tokens_per_image
+        #     + [self.NEW_LINE_TOKEN]
+        #     # + [self.END_IMAGE_TOKEN, self.NEW_LINE_TOKEN]
+        # )
+        # return single_image_seq * self._num_images
 
     def tokenize_cot(
         self,
@@ -396,7 +399,16 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         if self._tokenizer_type == "gemma3":
             image_placeholders = self._create_image_placeholders()
             # formatted_prompt = "<start_of_turn>user\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model"
-            text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+            text_tokens = (
+                self._tokenizer.encode("<start_of_turn>user\n<start_of_image>", add_bos=True)
+                + image_placeholders
+                + self._tokenizer.encode("<end_of_image>\n<start_of_image>")
+                + image_placeholders
+                + self._tokenizer.encode(
+                    "<end_of_image>\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model", add_bos=False
+                )
+            )
+            # text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
             tokens = image_placeholders + text_tokens
         else:
             tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)

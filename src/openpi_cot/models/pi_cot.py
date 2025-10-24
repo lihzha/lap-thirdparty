@@ -98,7 +98,7 @@ class PiCoT(_pi0.Pi0):
         # Backward compatibility flag used in a few places
         self.lang_action_only = not self.enable_action_training
         self.use_gemma3 = False
-        self.EOS_ID = 1
+        self.EOS_TOKEN = 1
         if "gemma2" in config.paligemma_variant:
             assert "gemma2" in config.action_expert_variant, "gemma2 must be used for both LLM and action expert"
             paligemma_config = get_gemma2_config(config.paligemma_variant)
@@ -110,7 +110,7 @@ class PiCoT(_pi0.Pi0):
             action_expert_config = get_gemma3_config(config.action_expert_variant)
             module = Gemma3ModuleWithDecode
             self.use_gemma3 = True
-            self.EOS_ID = 106
+            self.EOS_TOKEN = 106
         else:
             paligemma_config = get_gemma_config(config.paligemma_variant)
             action_expert_config = get_gemma_config(config.action_expert_variant)
@@ -135,7 +135,7 @@ class PiCoT(_pi0.Pi0):
                     pool_type="none",
                     scan=True,
                     dtype_mm=config.dtype,
-                    posemb="learn", # needed for size-mismatch
+                    posemb="learn",  # needed for size-mismatch
                     posemb_shape=(64, 64),  # assuming 896x896 images with 14x14 patches
                 )
             )
@@ -143,8 +143,8 @@ class PiCoT(_pi0.Pi0):
             fake_obs_image = next(iter(fake_obs.images.values()))
             b, h, w, c = fake_obs_image.shape
             # 2. Define the new 4D shape
-            new_shape = (b, 896, 896, c )
-            fake_image_resized = jax.image.resize(fake_obs_image, new_shape, method='linear')
+            new_shape = (b, 896, 896, c)
+            fake_image_resized = jax.image.resize(fake_obs_image, new_shape, method="linear")
             # resize
             img.lazy_init(fake_image_resized, train=False, rngs=rngs)
         else:
@@ -160,7 +160,7 @@ class PiCoT(_pi0.Pi0):
             )
             img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
 
-        #img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
+        # img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
         if config.pi05:
@@ -287,9 +287,7 @@ class PiCoT(_pi0.Pi0):
 
         return tokens, input_mask, img_ar_mask
 
-    def resize_to_256(
-        self, x: at.Float[at.Array, "b input_len d"]
-    ) -> at.Float[at.Array, "b 256 d"]:
+    def resize_to_256(self, x: at.Float[at.Array, "b input_len d"]) -> at.Float[at.Array, "b 256 d"]:
         """Resize image token sequence to 256 tokens using average pooling.
 
         Args:
@@ -310,7 +308,9 @@ class PiCoT(_pi0.Pi0):
         output_width = int(output_length**0.5)  # 16
         assert output_width**2 == output_length
 
-        assert cur_width % output_width == 0, f"Cannot evenly pool {cur_width}x{cur_width} to {output_width}x{output_width}"
+        assert cur_width % output_width == 0, (
+            f"Cannot evenly pool {cur_width}x{cur_width} to {output_width}x{output_width}"
+        )
 
         window = cur_width // output_width
 
@@ -318,13 +318,7 @@ class PiCoT(_pi0.Pi0):
         x = einops.rearrange(x, "b (h w) d -> b h w d", h=cur_width, w=cur_width)
 
         # Average pool using einops
-        x = einops.reduce(
-            x,
-            "b (h wh) (w ww) d -> b h w d",
-            "mean",
-            wh=window,
-            ww=window
-        )
+        x = einops.reduce(x, "b (h wh) (w ww) d -> b h w d", "mean", wh=window, ww=window)
 
         return einops.rearrange(x, "b h w d -> b (h w) d")
 
@@ -744,7 +738,12 @@ class PiCoT(_pi0.Pi0):
     def _sample_reasoning_tokens(self, observation: CoTObservation):
         # ───────────────── 0. Shapes ─────────────────
         observation = preprocess_observation(
-            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image, image_resolution=(896, 896)
+            None,
+            observation,
+            train=False,
+            image_keys=self.image_keys,
+            aug_wrist_image=self.aug_wrist_image,
+            image_resolution=(896, 896),
         )
         # Inference: only use first frame
         p_tokens, p_mask0, p_ar_mask0 = self.embed_prefix(observation, num_frames=1)  # (B,Tp,D) + (B,Tp)
