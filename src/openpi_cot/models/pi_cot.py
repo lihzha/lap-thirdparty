@@ -79,7 +79,6 @@ def cross_entropy_loss(
 
 
 class PiCoT(_pi0.Pi0):
-    EOS_TOKEN = 1  # TODO: hard-coded for PaliGemma
     BEGIN_IMAGE_TOKEN = 255999  # only for Gemma3
     END_IMAGE_TOKEN = 262144  # only for Gemma3
     NEW_LINE_TOKEN = 108  # only for Gemma3
@@ -99,6 +98,7 @@ class PiCoT(_pi0.Pi0):
         # Backward compatibility flag used in a few places
         self.lang_action_only = not self.enable_action_training
         self.use_gemma3 = False
+        self.EOS_ID = 1
         if "gemma2" in config.paligemma_variant:
             assert "gemma2" in config.action_expert_variant, "gemma2 must be used for both LLM and action expert"
             paligemma_config = get_gemma2_config(config.paligemma_variant)
@@ -110,6 +110,7 @@ class PiCoT(_pi0.Pi0):
             action_expert_config = get_gemma3_config(config.action_expert_variant)
             module = Gemma3ModuleWithDecode
             self.use_gemma3 = True
+            self.EOS_ID = 106
         else:
             paligemma_config = get_gemma_config(config.paligemma_variant)
             action_expert_config = get_gemma_config(config.action_expert_variant)

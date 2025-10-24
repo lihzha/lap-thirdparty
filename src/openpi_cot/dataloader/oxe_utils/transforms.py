@@ -134,6 +134,58 @@ def compute_padded_movement_actions(eef_state: tf.Tensor) -> tf.Tensor:
     return padded_movement_actions
 
 
+def wxyz_to_r6(quaternion: tf.Tensor) -> tf.Tensor:
+    """
+    Converts quaternion (wxyz format) to r6 representation (first 6 elements of rotation matrix).
+
+    The r6 representation contains the first two rows of the 3x3 rotation matrix:
+    [r11, r12, r13, r21, r22, r23]
+
+    Args:
+        quaternion: Quaternion tensor of shape (..., 4) in [w, x, y, z] format
+
+    Returns:
+        R6 representation of shape (..., 6) containing [r11, r12, r13, r21, r22, r23]
+    """
+    import tensorflow_graphics.geometry.transformation as tft
+
+    # tensorflow_graphics expects quaternions in [x, y, z, w] format
+    # Convert from [w, x, y, z] to [x, y, z, w]
+    quat_xyzw = tf.concat([quaternion[..., 1:4], quaternion[..., 0:1]], axis=-1)
+
+    # Convert to rotation matrix (shape: ..., 3, 3)
+    rotation_matrix = tft.rotation_matrix_3d.from_quaternion(quat_xyzw)
+
+    # Extract first two rows (6 elements): r11, r12, r13, r21, r22, r23
+    r6 = tf.concat([rotation_matrix[..., 0, :], rotation_matrix[..., 1, :]], axis=-1)
+
+    return r6
+
+
+def axis_angle_to_r6(axis_angle: tf.Tensor) -> tf.Tensor:
+    """
+    Converts axis-angle representation to r6 representation (first 6 elements of rotation matrix).
+
+    The r6 representation contains the first two rows of the 3x3 rotation matrix:
+    [r11, r12, r13, r21, r22, r23]
+
+    Args:
+        axis_angle: Axis-angle tensor of shape (..., 3)
+
+    Returns:
+        R6 representation of shape (..., 6) containing [r11, r12, r13, r21, r22, r23]
+    """
+    import tensorflow_graphics.geometry.transformation as tft
+
+    # Convert to rotation matrix (shape: ..., 3, 3)
+    rotation_matrix = tft.rotation_matrix_3d.from_axis_angle(axis_angle)
+
+    # Extract first two rows (6 elements): r11, r12, r13, r21, r22, r23
+    r6 = tf.concat([rotation_matrix[..., 0, :], rotation_matrix[..., 1, :]], axis=-1)
+
+    return r6
+
+
 # === Bridge-V2 =>> Dataset-Specific Transform ===
 def rescale_bridge_action(action: tf.Tensor) -> tf.Tensor:
     """
@@ -1564,22 +1616,26 @@ def agibot_large_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]
 
 def planning_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # Compute movement actions with zero-padding (no truncation) for both arms
-    import tensorflow_graphics.geometry.transformation as tft
-    
 
     trajectory["state"] = tf.concat(
         (
             trajectory["observation"]["state"][:, :3],
-            tft.euler.from_quaternion(trajectory["observation"]["state"][:, 3:7]),
+            wxyz_to_r6(trajectory["observation"]["state"][:, 3:7]),
             trajectory["observation"]["state"][:, 7:],
         ),
         axis=-1,
     )
 
-    trajectory["action"] = trajectory["action"][:, :7]
+    trajectory["action"] = tf.concat(
+        (
+            trajectory["action"][:, 3:6],
+            axis_angle_to_r6(trajectory["action"][:, 6:9]),
+            trajectory["action"][:, 9:],
+        ),
+        axis=-1,
+    )
 
     return trajectory
-
 
 
 # === Registry ===
@@ -1676,5 +1732,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "sample_r1_lite": sample_r1_lite_dataset_transform,
     "agibot_large_dataset": agibot_large_dataset_transform,
     "molmoact_dataset": molmoact_dataset_transform,
-    "planning_dataset": planning_dataset_transform
+    "planning_dataset": planning_dataset_transform,
 }
