@@ -388,13 +388,13 @@ class PiCoT(_pi0.Pi0):
         obs: CoTObservation | Observation,
         num_frames: int | None = None,
         precomputed_img_embeddings: tuple[
-            at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, "b s"]
+            at.Float[at.Array, "b s_in emb"], at.Bool[at.Array, "b s_in"], at.Bool[at.Array, "b s_in"]
         ]
         | None = None,
     ) -> tuple[
-        at.Float[at.Array, "b s emb"],
-        at.Bool[at.Array, "b s"],
-        at.Bool[at.Array, "b s"],
+        at.Float[at.Array, "b s_out emb"],
+        at.Bool[at.Array, "b s_out"],
+        at.Bool[at.Array, "b s_out"],
     ]:
         """Embed images and text for the prefix.
 
