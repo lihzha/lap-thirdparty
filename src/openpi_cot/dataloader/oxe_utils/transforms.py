@@ -1630,7 +1630,7 @@ def agibot_large_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]
 def planning_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # Compute movement actions with zero-padding (no truncation) for both arms
 
-    trajectory["state"] = tf.concat(
+    trajectory["observation"]["state"] = tf.concat(
         (
             trajectory["observation"]["state"][:, :3],
             wxyz_to_r6(trajectory["observation"]["state"][:, 3:7]),
