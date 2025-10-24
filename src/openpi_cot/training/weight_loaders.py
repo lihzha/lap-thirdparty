@@ -1,3 +1,4 @@
+from collections import defaultdict
 import dataclasses
 import logging
 import pathlib
@@ -6,13 +7,14 @@ from typing import Literal, Protocol, runtime_checkable
 
 from flax import traverse_util
 import flax.traverse_util
+from flax.traverse_util import flatten_dict
+from flax.traverse_util import unflatten_dict
 import jax
 import jax.numpy as jnp
 import numpy as np
+import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import orbax.checkpoint as ocp
-from collections import defaultdict
-from flax.traverse_util import unflatten_dict, flatten_dict
 
 import openpi_cot.shared.download as download
 
@@ -85,20 +87,19 @@ class CheckpointWeightLoader(WeightLoader):
         else:
             params_source = str(download.maybe_download(params_path_str))
 
-        def get_all_keys(d, prefix=""):
-            keys = []
-            for k, v in d.items():
-                full_key = f"{prefix}.{k}" if prefix else k
-                keys.append(full_key)
-                if isinstance(v, dict):
-                    keys.extend(get_all_keys(v, prefix=full_key))
-            return keys
+        # def get_all_keys(d, prefix=""):
+        #     keys = []
+        #     for k, v in d.items():
+        #         full_key = f"{prefix}.{k}" if prefix else k
+        #         keys.append(full_key)
+        #         if isinstance(v, dict):
+        #             keys.extend(get_all_keys(v, prefix=full_key))
+        #     return keys
 
-        all_keys = get_all_keys(params)
-        print(all_keys)
+        # all_keys = get_all_keys(params)
+        # print(all_keys)
 
-        # loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
-        loaded_params = restore_params(params_source, restore_type=np.ndarray)
+        loaded_params = _model.restore_params(params_source, restore_type=np.ndarray)
         # Add all missing LoRA weights.
         return _merge_params(loaded_params, params, missing_regex=".*lora.*")
 
@@ -186,25 +187,27 @@ def restore_params(
         flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
     return traverse_util.unflatten_dict(flat_params)
 
-def print_param_shapes(d, path=''):
-  """
-  Recursively traverses a nested dictionary and prints the path and shape
-  of any value that has a 'shape' attribute.
 
-  Args:
-    d (dict): The dictionary to traverse.
-    path (str): The current key path (used for recursion).
-  """
-  for key, value in d.items():
-    # Append the current key to the path
-    new_path = f"{path}['{key}']"
+def print_param_shapes(d, path=""):
+    """
+    Recursively traverses a nested dictionary and prints the path and shape
+    of any value that has a 'shape' attribute.
 
-    if isinstance(value, dict):
-      # If the value is another dictionary, recurse deeper
-      print_param_shapes(value, new_path)
-    elif hasattr(value, 'shape'):
-      # If the value has a 'shape' attribute, print the path and shape
-      print(f"Param: {new_path} | Shape: {value.shape}")
+    Args:
+      d (dict): The dictionary to traverse.
+      path (str): The current key path (used for recursion).
+    """
+    for key, value in d.items():
+        # Append the current key to the path
+        new_path = f"{path}['{key}']"
+
+        if isinstance(value, dict):
+            # If the value is another dictionary, recurse deeper
+            print_param_shapes(value, new_path)
+        elif hasattr(value, "shape"):
+            # If the value has a 'shape' attribute, print the path and shape
+            print(f"Param: {new_path} | Shape: {value.shape}")
+
 
 def get_param_info(params: dict) -> dict:
     """
@@ -212,12 +215,13 @@ def get_param_info(params: dict) -> dict:
     mapping each parameter's path (as a string) to its shape and size.
     """
     # Using '/' as a separator is standard and simpler for set operations.
-    flat_params = flatten_dict(params, sep='/')
+    flat_params = flatten_dict(params, sep="/")
     info = {}
     for key, value in flat_params.items():
-        if hasattr(value, 'shape') and hasattr(value, 'size'):
-            info[key] = {'shape': value.shape, 'size': value.size}
+        if hasattr(value, "shape") and hasattr(value, "size"):
+            info[key] = {"shape": value.shape, "size": value.size}
     return info
+
 
 def compare_checkpoints(source_info: dict, target_info: dict):
     """
@@ -235,7 +239,9 @@ def compare_checkpoints(source_info: dict, target_info: dict):
     # Critical Error: Keys in our remapped checkpoint that DON'T exist in the model
     mismatched_keys = source_keys - target_keys
     if mismatched_keys:
-        print(f"\n❌ ERROR: Found {len(mismatched_keys)} keys in the remapped checkpoint that are NOT in the final model:")
+        print(
+            f"\n❌ ERROR: Found {len(mismatched_keys)} keys in the remapped checkpoint that are NOT in the final model:"
+        )
         for key in sorted(list(mismatched_keys)):
             print(f"  - {key}")
     else:
@@ -244,7 +250,9 @@ def compare_checkpoints(source_info: dict, target_info: dict):
     # Informational: Keys in the model that are NOT loaded from the checkpoint
     uninitialized_keys = target_keys - source_keys
     if uninitialized_keys:
-        print(f"\nℹ️ INFO: Found {len(uninitialized_keys)} keys in the final model that will NOT be loaded from the checkpoint (expected for new layers):")
+        print(
+            f"\nℹ️ INFO: Found {len(uninitialized_keys)} keys in the final model that will NOT be loaded from the checkpoint (expected for new layers):"
+        )
         for key in sorted(list(uninitialized_keys)):
             print(f"  - {key} (Shape: {target_info[key]['shape']})")
 
@@ -252,8 +260,8 @@ def compare_checkpoints(source_info: dict, target_info: dict):
     shape_mismatches = []
     common_keys = source_keys.intersection(target_keys)
     for key in common_keys:
-        source_shape = source_info[key]['shape']
-        target_shape = target_info[key]['shape']
+        source_shape = source_info[key]["shape"]
+        target_shape = target_info[key]["shape"]
         if source_shape != target_shape:
             shape_mismatches.append((key, source_shape, target_shape))
 
@@ -267,10 +275,11 @@ def compare_checkpoints(source_info: dict, target_info: dict):
 
     print("\n--- End of Checkpoint Comparison ---\n")
 
+
 @dataclasses.dataclass(frozen=True)
 class Gemma3ScanCompatibleWeightLoader(WeightLoader):
     """Loads and remaps Gemma3 weights to match Pi0's nn.scan naming conventions.
-    
+
     This loader:
     1. Loads raw Gemma3 checkpoint with per-layer naming (layer_0, layer_1, ...)
     2. Stacks per-layer weights into a single 'layers' array dimension
@@ -278,21 +287,21 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
     4. Extracts and remaps vision encoder (SigLiP) from per-layer to stacked format
     5. Extracts embedder to PaliGemma namespace
     """
-    
+
     params_path: str
 
     def _remap_siglip(self, siglip_params: dict) -> dict:
         """Remap SigLiP from encoderblock_0, encoderblock_1, ... to stacked encoderblock."""
-        siglip_encoder = siglip_params.get('siglip_encoder', {})
-        transformer = siglip_encoder.get('Transformer', {})
-        
+        siglip_encoder = siglip_params.get("siglip_encoder", {})
+        transformer = siglip_encoder.get("Transformer", {})
+
         # Pattern to match encoderblock_0, encoderblock_1, etc.
-        encoderblock_pattern = re.compile(r'encoderblock_(\d+)')
-        
+        encoderblock_pattern = re.compile(r"encoderblock_(\d+)")
+
         # Separate encoder blocks from other components
         encoder_blocks = {}
         other_components = {}
-        
+
         for key, value in transformer.items():
             m = encoderblock_pattern.match(key)
             if m:
@@ -300,66 +309,60 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                 encoder_blocks[layer_idx] = value
             else:
                 other_components[key] = value
-        
+
         # Stack encoder blocks
         if encoder_blocks:
             # Get the structure from first block
             num_layers = max(encoder_blocks.keys()) + 1
             first_block = encoder_blocks[0]
-            
+
             # Flatten each block and collect by subkey
             stacked_weights = defaultdict(list)
             for layer_idx in range(num_layers):
                 block = encoder_blocks[layer_idx]
-                flat_block = flax.traverse_util.flatten_dict(block, sep='/')
+                flat_block = flax.traverse_util.flatten_dict(block, sep="/")
                 for subkey, subval in flat_block.items():
                     stacked_weights[subkey].append((layer_idx, subval))
-            
+
             # Stack into single arrays
             stacked_block = {}
             for subkey, layer_values in stacked_weights.items():
                 layer_values.sort(key=lambda x: x[0])
                 arrays = [v for _, v in layer_values]
                 # Convert subkey string back to nested dict structure
-                stacked_block[tuple(subkey.split('/'))] = jnp.stack(arrays, axis=0)
-            
+                stacked_block[tuple(subkey.split("/"))] = jnp.stack(arrays, axis=0)
+
             # Unflatten the stacked block
             encoderblock_dict = flax.traverse_util.unflatten_dict(stacked_block)
-            
+
             # Reconstruct transformer with stacked encoderblock
-            new_transformer = {
-                'encoderblock': encoderblock_dict,
-                **other_components
-            }
+            new_transformer = {"encoderblock": encoderblock_dict, **other_components}
         else:
             new_transformer = other_components
-        
+
         # Reconstruct full structure
         result = {
-            'Transformer': new_transformer,
-            'embedding': siglip_params.get('siglip_encoder', {}).get('embedding', siglip_encoder.get('embedding', {})),
+            "Transformer": new_transformer,
+            "embedding": siglip_params.get("siglip_encoder", {}).get("embedding", siglip_encoder.get("embedding", {})),
         }
-        
+
         # Add head and pos_embedding if they exist at siglip_encoder level
-        if 'head' in siglip_encoder:
-            result['head'] = siglip_encoder['head']
-        if 'pos_embedding' in siglip_encoder:
-            result['pos_embedding'] = siglip_encoder['pos_embedding']
-            
+        if "head" in siglip_encoder:
+            result["head"] = siglip_encoder["head"]
+        if "pos_embedding" in siglip_encoder:
+            result["pos_embedding"] = siglip_encoder["pos_embedding"]
+
         return result
 
     def load(self, params: at.Params) -> at.Params:
         logger.info("Loading Gemma3 weights using Gemma3ScanCompatibleWeightLoader...")
-        
-        # Load raw checkpoint
-        loaded_params = restore_params(
-            download.maybe_download(self.params_path), 
-            restore_type=np.ndarray
-        )
 
-        #print_param_shapes(loaded_params)
-        #print("")
-        #print_param_shapes(params)
+        # Load raw checkpoint
+        loaded_params = restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+
+        # print_param_shapes(loaded_params)
+        # print("")
+        # print_param_shapes(params)
 
         # Do everything on CPU to avoid device memory issues during remapping
         with jax.default_device(jax.devices("cpu")[0]):
@@ -371,17 +374,17 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                     flat_dict[k] = v
                 # Otherwise split only once
                 elif isinstance(k, str):
-                    flat_dict[tuple(k.split('/'))] = v
+                    flat_dict[tuple(k.split("/"))] = v
                 else:
                     raise TypeError(f"Unexpected key type: {type(k)} for key {k}")
-            
+
             flat_original = flax.traverse_util.unflatten_dict(flat_dict)
 
             logger.info("Remapping checkpoint keys to match the nn.scan model structure...")
 
             # ===== TRANSFORMER (LLM) REMAPPING =====
-            transformer = flat_original.get('transformer', {})
-            layer_pattern = re.compile(r'layer_(\d+)')
+            transformer = flat_original.get("transformer", {})
+            layer_pattern = re.compile(r"layer_(\d+)")
 
             weights_to_stack = defaultdict(list)
             layerless = {}
@@ -391,7 +394,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                 m = layer_pattern.match(key)
                 if m:
                     layer_idx = int(m.group(1))
-                    for subkey, subval in flax.traverse_util.flatten_dict(value, sep='/').items():
+                    for subkey, subval in flax.traverse_util.flatten_dict(value, sep="/").items():
                         weights_to_stack[subkey].append((layer_idx, subval))
                 else:
                     layerless[key] = value  # e.g., final_norm, embedder, etc.
@@ -401,40 +404,40 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             for subkey, layer_values in weights_to_stack.items():
                 layer_values.sort(key=lambda x: x[0])
                 arrays = [v for _, v in layer_values]
-                flat_remapped[('layers',) + tuple(subkey.split('/'))] = jnp.stack(arrays, axis=0)
+                flat_remapped[("layers",) + tuple(subkey.split("/"))] = jnp.stack(arrays, axis=0)
 
             # Add layerless (non-layer) weights back
-            for key, value in flax.traverse_util.flatten_dict(layerless, sep='/').items():
-                flat_remapped[('transformer',) + tuple(key.split('/'))] = jnp.array(value)
+            for key, value in flax.traverse_util.flatten_dict(layerless, sep="/").items():
+                flat_remapped[("transformer",) + tuple(key.split("/"))] = jnp.array(value)
 
             # Rebuild final structure
             remapped_params = flax.traverse_util.unflatten_dict(flat_remapped)
 
             # Do final adjustments to naming
-            if 'final_norm' in remapped_params.get('transformer', {}):
-                remapped_params['final_norm'] = remapped_params['transformer'].pop('final_norm')
+            if "final_norm" in remapped_params.get("transformer", {}):
+                remapped_params["final_norm"] = remapped_params["transformer"].pop("final_norm")
 
-            if 'embedder' in remapped_params.get('transformer', {}):
-                remapped_params['embedder'] = remapped_params['transformer'].pop('embedder')
+            if "embedder" in remapped_params.get("transformer", {}):
+                remapped_params["embedder"] = remapped_params["transformer"].pop("embedder")
 
             # Change _key_norm -> k_rmsnorm and _query_norm -> q_rmsnorm
-            remapped_params['layers']['attn']['k_rmsnorm'] = remapped_params['layers']['attn'].pop('_key_norm')
-            remapped_params['layers']['attn']['q_rmsnorm'] = remapped_params['layers']['attn'].pop('_query_norm')
+            remapped_params["layers"]["attn"]["k_rmsnorm"] = remapped_params["layers"]["attn"].pop("_key_norm")
+            remapped_params["layers"]["attn"]["q_rmsnorm"] = remapped_params["layers"]["attn"].pop("_query_norm")
 
             # Fix Einsum in Gemma3
-            gating_dict = remapped_params['layers']['mlp'].pop('gating_einsum')
-            remapped_params['layers']['mlp']['Einsum_0'] = {}
-            remapped_params['layers']['mlp']['Einsum_0']['gating_einsum'] = gating_dict['w']   
+            gating_dict = remapped_params["layers"]["mlp"].pop("gating_einsum")
+            remapped_params["layers"]["mlp"]["Einsum_0"] = {}
+            remapped_params["layers"]["mlp"]["Einsum_0"]["gating_einsum"] = gating_dict["w"]
 
-            linear_dict = remapped_params['layers']['mlp'].pop('linear')
-            remapped_params['layers']['mlp']['Einsum_1'] = {}
-            remapped_params['layers']['mlp']['Einsum_1']['linear'] = linear_dict['w']
+            linear_dict = remapped_params["layers"]["mlp"].pop("linear")
+            remapped_params["layers"]["mlp"]["Einsum_1"] = {}
+            remapped_params["layers"]["mlp"]["Einsum_1"]["linear"] = linear_dict["w"]
 
             # ===== SIGLIP (VISION ENCODER) REMAPPING =====
             siglip_remapped = None
-            if 'SigLiPFromPatches_0' in flat_original:
+            if "SigLiPFromPatches_0" in flat_original:
                 logger.info("Remapping SigLiP vision encoder...")
-                siglip_remapped = self._remap_siglip(flat_original['SigLiPFromPatches_0'])
+                siglip_remapped = self._remap_siglip(flat_original["SigLiPFromPatches_0"])
 
             # ===== BUILD PALIGEMMA STRUCTURE =====
 
@@ -446,64 +449,67 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             # --- Part A: Handle Special Embedder Weights ---
             # We process these first by MOVING them out of the main `remapped_params` dict.
             # Using .pop() retrieves the value AND removes it, preventing duplication later.
-            embedder_params = remapped_params.get('embedder', {})
+            embedder_params = remapped_params.get("embedder", {})
 
-            if 'input_embedding' in embedder_params:
-                flat_llm['PaliGemma/llm/embedder/input_embedding'] = embedder_params.pop('input_embedding')
+            if "input_embedding" in embedder_params:
+                flat_llm["PaliGemma/llm/embedder/input_embedding"] = embedder_params.pop("input_embedding")
 
-            if 'mm_input_projection' in embedder_params:
+            if "mm_input_projection" in embedder_params:
                 # The debug output shows the final model needs this weight here:
-                mm_projection = embedder_params.pop('mm_input_projection') # <-- MODIFIED
+                mm_projection = embedder_params.pop("mm_input_projection")  # <-- MODIFIED
 
                 # Map the kernel
-                flat_llm['PaliGemma/img/head/kernel'] = mm_projection['w']
-                
+                flat_llm["PaliGemma/img/head/kernel"] = mm_projection["w"]
+
                 # Map the bias, which is the missing parameter
-                if 'b' in mm_projection: # Check if bias exists
+                if "b" in mm_projection:  # Check if bias exists
                     print("Mapping mm_input_projection bias to PaliGemma/img/head/bias")
-                    flat_llm['PaliGemma/img/head/bias'] = mm_projection['b'] # <-- NEW LINE
+                    flat_llm["PaliGemma/img/head/bias"] = mm_projection["b"]  # <-- NEW LINE
 
             # We previously discarded this, but now we know the correct destination name
-            if 'mm_soft_embedding_norm' in embedder_params:
-                flat_llm['PaliGemma/img/mm_soft_embedding_norm/scale'] = embedder_params.pop('mm_soft_embedding_norm')['scale'] # <-- MODIFIED
+            if "mm_soft_embedding_norm" in embedder_params:
+                flat_llm["PaliGemma/img/mm_soft_embedding_norm/scale"] = embedder_params.pop("mm_soft_embedding_norm")[
+                    "scale"
+                ]  # <-- MODIFIED
 
             # Now, put the modified (and smaller) embedder_params back, if anything is left.
             if embedder_params:
-                remapped_params['embedder'] = embedder_params
+                remapped_params["embedder"] = embedder_params
             else:
-                remapped_params.pop('embedder', None)
-
+                remapped_params.pop("embedder", None)
 
             # --- Part B: Handle SigLIP Vision Encoder Weights ---
             if siglip_remapped:
-                flat_siglip = flax.traverse_util.flatten_dict(siglip_remapped, sep='/')
-                flat_llm.update({f'PaliGemma/img/{k}': v for k, v in flat_siglip.items()})
+                flat_siglip = flax.traverse_util.flatten_dict(siglip_remapped, sep="/")
+                flat_llm.update({f"PaliGemma/img/{k}": v for k, v in flat_siglip.items()})
 
-            
             # --- Part C: Handle the Rest of the LLM Weights ---
-            flat_remaining_llm = flax.traverse_util.flatten_dict(remapped_params, sep='/')
-            flat_llm.update({f'PaliGemma/llm/{k}': v for k, v in flat_remaining_llm.items()})
-
+            flat_remaining_llm = flax.traverse_util.flatten_dict(remapped_params, sep="/")
+            flat_llm.update({f"PaliGemma/llm/{k}": v for k, v in flat_remaining_llm.items()})
 
             # ==========================================================
             # ===== RUN DEBUGGING CHECKS ON OUR CLEANED PARAMS =========
             # ==========================================================
             logger.info("Running post-remapping validation checks...")
-            
+
             original_info = get_param_info(loaded_params)
-            original_total_params = sum(p['size'] for p in original_info.values())
-            
-            final_llm_nested = unflatten_dict({tuple(k.split('/')): v for k, v in flat_llm.items()})
+            original_total_params = sum(p["size"] for p in original_info.values())
+
+            final_llm_nested = unflatten_dict({tuple(k.split("/")): v for k, v in flat_llm.items()})
             final_llm_info = get_param_info(final_llm_nested)
-            final_total_params = sum(p['size'] for p in final_llm_info.values())
+            final_total_params = sum(p["size"] for p in final_llm_info.values())
 
             print("\n--- Starting Parameter Conservation Check ---")
             print(f"Total params in original checkpoint: {original_total_params:,}")
             print(f"Total params in final remapped dict: {final_total_params:,}")
             if original_total_params >= final_total_params:
-                print(f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model.")
+                print(
+                    f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model."
+                )
             else:
-                print(f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication.")
+                print(
+                    f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication."
+                )
             print("--- End of Conservation Check ---\n")
 
             final_model_info = get_param_info(params)
@@ -511,16 +517,12 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             # ==========================================================
             # ==========================================================
 
-            
             # Now, with a clean `flat_llm`, we can perform the merge.
-            flat_model = flax.traverse_util.flatten_dict(params, sep='/')
+            flat_model = flax.traverse_util.flatten_dict(params, sep="/")
             merged = _merge_params(flat_llm, flat_model, missing_regex=".*")
-           
-            
+
         return merged
 
-class Gemma3WeightLoader(WeightLoader):
-    """Loads weights using official Gemma3 remapping strategy"""
 
 @dataclasses.dataclass(frozen=True)
 class WeightLoaderChoice(WeightLoader):
