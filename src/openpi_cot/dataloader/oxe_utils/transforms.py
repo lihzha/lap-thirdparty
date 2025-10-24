@@ -178,7 +178,7 @@ def axis_angle_to_r6(axis_angle: tf.Tensor) -> tf.Tensor:
     """
     import tensorflow_graphics.geometry.transformation as tft
 
-    # Compute angle as the norm of the axis_angle vector
+    # Compute angle as the norm of the axis_angle vector (shape: ..., 1)
     angle = tf.norm(axis_angle, axis=-1, keepdims=True)
 
     # Compute axis as normalized axis_angle (handle zero angle case)
@@ -189,10 +189,8 @@ def axis_angle_to_r6(axis_angle: tf.Tensor) -> tf.Tensor:
     # For zero angles, use identity rotation (set axis to [1, 0, 0])
     axis = tf.where(angle < 1e-8, tf.constant([1.0, 0.0, 0.0], dtype=axis.dtype), axis)
 
-    # Remove keepdims from angle for the API call
-    angle = tf.squeeze(angle, axis=-1)
-
     # Convert to rotation matrix (shape: ..., 3, 3)
+    # angle should have shape (..., 1) as required by the API
     rotation_matrix = tft.rotation_matrix_3d.from_axis_angle(axis, angle)
 
     # Extract first two rows (6 elements): r11, r12, r13, r21, r22, r23
