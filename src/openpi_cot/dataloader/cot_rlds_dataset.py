@@ -1355,7 +1355,7 @@ class PlanningDataset(_SingleOXECoTDataset):
 
     The planning dataset contains:
     - Images: base_image (84x84x3), wrist_image (84x84x3)
-    - State: 8D [arm_pos(3), arm_quat(4), gripper_pos(1)]
+    - State: 10D [arm_pos(3), arm_r6(6), gripper_pos(1)]
     - Actions: 10D action vector
     - Language: Fixed instruction per demo
     """
@@ -1365,6 +1365,8 @@ class PlanningDataset(_SingleOXECoTDataset):
 
         def restructure(traj):
             # Extract required fields
+            if self.standardize_fn is not None:
+                traj = self.standardize_fn(traj)
             traj_len = tf.shape(traj["action"])[0]
             old_obs = traj["observation"]
             new_obs = {}
@@ -1487,6 +1489,70 @@ class PlanningDataset(_SingleOXECoTDataset):
             return traj
 
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
+
+    def apply_traj_transforms(
+        self,
+        action_horizon: int,
+        summation_steps: int = 30,
+        action_key: str = "actions",
+        state_key: str = "state",
+    ):
+        """
+        Compare to original transforms, we omit the following:
+        - skip_unlabeled
+        - max_action
+        - max_proprio
+        - goal_relabeling
+        - drop_goal_or_instruction
+        - subsample_length
+        """
+        if not self.skip_normalization and not self.vis_dataset:
+            self.dataset = self.dataset.traj_map(
+                NormalizeActionAndProprio(
+                    norm_stats=self.dataset_statistics,
+                    normalization_type=self.action_proprio_normalization_type,
+                    action_key=action_key,
+                    state_key=state_key,
+                ),
+                self.num_parallel_calls,
+            )
+
+        def pad_action_state(traj):
+            # Pad actions to action_dim (only if not already padded)
+            action_last_dim = tf.shape(traj[action_key])[-1]
+            pad_amount_action = tf.maximum(0, self.action_dim - action_last_dim)
+            traj[action_key] = tf.pad(traj[action_key], [[0, 0], [0, pad_amount_action]])
+            # Ensure static shape is preserved
+            traj[action_key].set_shape([None, self.action_dim])
+
+            # Pad state to action_dim (only if not already padded)
+            state_last_dim = tf.shape(traj["observation"][state_key])[-1]
+            pad_amount_state = tf.maximum(0, self.action_dim - state_last_dim)
+            traj["observation"][state_key] = tf.pad(
+                traj["observation"][state_key],
+                [[0, 0], [0, pad_amount_state]],
+            )
+            # Ensure static shape is preserved
+            traj["observation"][state_key].set_shape([None, self.action_dim])
+            return traj
+
+        self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
+
+        def chunk_actions(traj):
+            """Splits episode into action chunks with proper zero-padding."""
+            traj_len = tf.shape(traj[action_key])[0]
+
+            # Use unified gather function with proper zero-padding
+            traj[action_key] = gather_with_padding(
+                data=traj[action_key],
+                sequence_length=traj_len,
+                window_size=action_horizon,
+            )
+            # Ensure static shape is preserved: [T, action_horizon, action_dim]
+            traj[action_key].set_shape([None, action_horizon, self.action_dim])
+            return traj
+
+        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
 
 class _SampleR1LiteCoTDataset(_SingleOXECoTDataset):
