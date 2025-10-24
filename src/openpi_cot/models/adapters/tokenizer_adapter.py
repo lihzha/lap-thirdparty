@@ -411,7 +411,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             #     )
             # )
             text_tokens = (
-                self._tokenizer.encode("\n<start_of_image>", add_bos=True, add_eos=False)
+                self._tokenizer.encode("\n<start_of_image>", add_bos=False, add_eos=False)
                 + image_placeholders
                 + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
                 + image_placeholders
