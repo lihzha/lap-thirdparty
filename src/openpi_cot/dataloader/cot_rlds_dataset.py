@@ -362,7 +362,7 @@ class _SingleCoTDataset:
 
         # If no cached stats, compute them first
         if cached_stats is None or self.config.force_recompute_stats:
-            logging.info(f"No cached statistics found for {dataset_name}. Computing statistics...")
+            logging.info(f"No cached statistics found for {dataset_name} or force recompute. Computing statistics...")
             # Build temporary dataset for stats computation
             self.dataset = self.build_dataset(self.builder)
             self.get_traj_identifier()
