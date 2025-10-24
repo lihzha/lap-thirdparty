@@ -93,7 +93,7 @@ class Args:
 
     # Wandb options
     wandb_enabled: bool = True
-    project_name: str = "openpi-cot-vqa"
+    project_name: str = "openpi-cot"
     exp_name: str | None = None
 
 
