@@ -34,7 +34,8 @@ class VQAInputs(CoTInputs):
             np.zeros_like(base_image),
         )
         image_masks = (
-            np.True_,
+            # np.True_,
+            np.False_,
             np.False_,
         )
         inputs = {
