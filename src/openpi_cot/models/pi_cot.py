@@ -382,6 +382,47 @@ class PiCoT(_pi0.Pi0):
 
         return result
 
+    def _replace_placeholder_masks(
+        self,
+        text_mask: at.Bool[at.Array, "b s"],
+        text_ar_mask: at.Bool[at.Array, "b s"],
+        tokenized_sequence: at.Int[at.Array, "b s"],
+        img_mask: at.Bool[at.Array, "b n_img"],
+        img_ar_mask: at.Bool[at.Array, "b n_img"],
+    ) -> tuple[at.Bool[at.Array, "b s"], at.Bool[at.Array, "b s"]]:
+        """Replace placeholder positions in text masks with actual image masks.
+
+        Args:
+            text_mask: Mask from tokenized sequence (includes placeholder positions)
+            text_ar_mask: AR mask from tokenized sequence (includes placeholder positions)
+            tokenized_sequence: Token IDs (includes -2 for placeholders)
+            img_mask: Actual image mask indicating which image tokens are valid
+            img_ar_mask: Actual image AR mask for autoregressive masking
+
+        Returns:
+            (updated_mask, updated_ar_mask) with placeholder positions replaced
+        """
+        # Find placeholder positions: where token_id == -2
+        is_placeholder = tokenized_sequence == -2  # [b, s]
+
+        b, s = text_mask.shape
+        _, n_img_patches = img_mask.shape
+
+        # Build a mapping: for each position in sequence, what image index does it correspond to?
+        placeholder_indices = jnp.cumsum(is_placeholder, axis=1) - 1  # [b, s], -1 to make 0-indexed
+        placeholder_indices = jnp.clip(placeholder_indices, 0, n_img_patches - 1)
+
+        # Gather image masks according to placeholder indices
+        batch_indices = jnp.arange(b)[:, None]  # [b, 1]
+        selected_img_mask = img_mask[batch_indices, placeholder_indices]  # [b, s]
+        selected_img_ar_mask = img_ar_mask[batch_indices, placeholder_indices]  # [b, s]
+
+        # Replace: where is_placeholder, use image mask; otherwise use text mask
+        updated_mask = jnp.where(is_placeholder, selected_img_mask, text_mask)
+        updated_ar_mask = jnp.where(is_placeholder, selected_img_ar_mask, text_ar_mask)
+
+        return updated_mask, updated_ar_mask
+
     @at.typecheck
     def embed_prefix(
         self,
@@ -417,16 +458,22 @@ class PiCoT(_pi0.Pi0):
                 obs.tokenized_langact_mask,
             )
 
-            # Get actual image embeddings from SigLIP (use precomputed if available)
+            # Get actual image embeddings and masks from SigLIP (use precomputed if available)
             if precomputed_img_embeddings is not None:
-                img_tokens, _, _ = precomputed_img_embeddings
+                img_tokens, img_mask, img_ar_mask = precomputed_img_embeddings
             else:
-                img_tokens, _, _ = self._embed_images(obs, num_frames)
+                img_tokens, img_mask, img_ar_mask = self._embed_images(obs, num_frames)
 
             # Replace placeholder embeddings with actual image embeddings
             tokens = self._replace_image_placeholders(text_tokens, obs.tokenized_prompt, img_tokens)
-            input_mask = text_mask
-            ar_mask = text_ar_mask if text_ar_mask is not None else jnp.zeros_like(text_mask, dtype=bool)
+
+            # Replace placeholder masks with actual image masks
+            if text_ar_mask is None:
+                text_ar_mask = jnp.zeros_like(text_mask, dtype=bool)
+            input_mask, ar_mask = self._replace_placeholder_masks(
+                text_mask, text_ar_mask, obs.tokenized_prompt, img_mask, img_ar_mask
+            )
+            breakpoint()
         else:
             # Original approach: embed images and text separately, then concatenate
             if precomputed_img_embeddings is not None:
@@ -500,9 +547,11 @@ class PiCoT(_pi0.Pi0):
                 prefix_tokens_pred = self._replace_image_placeholders(
                     text_tokens_pred, observation.tokenized_prediction, img_tokens_all
                 )
-                prefix_mask_pred = text_mask_pred
-                prefix_ar_mask_pred = (
-                    text_ar_mask_pred if text_ar_mask_pred is not None else jnp.zeros_like(text_mask_pred, dtype=bool)
+                # Replace placeholder masks with actual image masks
+                if text_ar_mask_pred is None:
+                    text_ar_mask_pred = jnp.zeros_like(text_mask_pred, dtype=bool)
+                prefix_mask_pred, prefix_ar_mask_pred = self._replace_placeholder_masks(
+                    text_mask_pred, text_ar_mask_pred, observation.tokenized_prediction, img_mask_all, img_ar_mask_all
                 )
             else:
                 # Original approach: concatenate precomputed all-frame embeddings with text

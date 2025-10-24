@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import openpi.policies.policy as _policy
-from openpi.shared import nnx_utils
 
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 
@@ -16,8 +15,8 @@ class CoTPolicy:
     def __init__(self, base: _policy.Policy, *, sample_kwargs: dict[str, Any] | None = None):
         self._base = base
         assert hasattr(base._model, "sample_reasoning"), "Model must have a sample_reasoning method"  # noqa: SLF001
-        self._sample_reasoning = nnx_utils.module_jit(base._model.sample_reasoning)
-        # self._sample_reasoning = base._model.sample_reasoning
+        # self._sample_reasoning = nnx_utils.module_jit(base._model.sample_reasoning)
+        self._sample_reasoning = base._model.sample_reasoning
 
     def __getattr__(self, name: str):
         return getattr(self._base, name)
