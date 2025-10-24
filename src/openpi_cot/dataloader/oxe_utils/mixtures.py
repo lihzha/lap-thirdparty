@@ -117,7 +117,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
         ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
-        ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes.
+        # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss to high.
         ### To be tested
         ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
@@ -158,7 +158,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
         ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
-        ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes.
+        # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss to high
         ### To be tested
         ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs

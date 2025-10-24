@@ -1878,7 +1878,6 @@ class OXECoTDatasets:
         Note: The statistics are padded to action_dim to match the padded tensors.
         """
         from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
-        from openpi_cot.shared.adapters.normalize_adapter import save
 
         # # Try to load cached global stats
         # try:
@@ -2041,10 +2040,10 @@ class OXECoTDatasets:
                 num_trajectories=sum(stats["state"].num_trajectories for stats in state_stats_subset.values()),
             )
 
-        # Save global stats
-        if jax.process_index() == 0:
-            save(save_dir, global_stats)
-            logging.info(f"Saved global normalization stats to {save_dir}")
+        # # Save global stats
+        # if jax.process_index() == 0:
+        #     save(save_dir, global_stats)
+        #     logging.info(f"Saved global normalization stats to {save_dir}")
 
         return global_stats
 
