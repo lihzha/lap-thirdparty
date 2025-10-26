@@ -261,6 +261,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             else data.get("dataset_name", "")
         )
         needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
+        breakpoint()
 
         for k in IMAGE_KEYS[1:]:
             if k in data["observation"]:
