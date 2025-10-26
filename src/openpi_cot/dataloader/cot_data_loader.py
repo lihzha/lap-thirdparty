@@ -137,12 +137,16 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         if self.persistent_iterator:
             # Use persistent iterator for checkpointing support
             dataset_iter = self.get_or_create_tf_iterator()
+            # TensorFlow iterator yields TF tensors, need to convert to numpy
+            def to_numpy(x):
+                if isinstance(x, tf.Tensor):
+                    return x.numpy()
+                return np.asarray(x) if hasattr(x, '__array__') else x
         else:
             # Regular behavior: create new iterator each time
+            # This already yields numpy arrays via as_numpy_iterator()
             dataset_iter = iter(self._dataset)
-
-        # Regular dataset iterator already yields numpy arrays
-        to_numpy = lambda x: x
+            to_numpy = lambda x: x
 
         for sample in dataset_iter:
             # Convert sample from TF tensors to numpy if needed

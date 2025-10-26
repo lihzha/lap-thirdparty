@@ -636,21 +636,41 @@ class PiCoT(_pi0.Pi0):
                 # For validation, store mean of per-sample accuracies
                 metrics["per_sample_critical_token_accuracy"] = jnp.mean(per_sample_critical_token_accuracy)
 
-            # Compute number token accuracy
+            # Compute number token accuracy (per-sample and scalar)
             if observation.number_token_mask is not None:
                 number_mask = observation.number_token_mask[:, 1:] * ex_mask
                 number_correct = correct * number_mask
+                # Per-sample: sum across token dimension
+                per_sample_number_correct = number_correct.sum(axis=-1)  # [batch]
+                per_sample_num_number = number_mask.sum(axis=-1)  # [batch]
+                per_sample_number_token_accuracy = per_sample_number_correct / jnp.maximum(per_sample_num_number, 1.0)
+                # Scalar (for backward compatibility)
                 num_number_tokens = jnp.maximum(number_mask.sum(), 1.0)
                 number_token_accuracy = number_correct.sum() / num_number_tokens
                 metrics["number_token_accuracy"] = number_token_accuracy
+                # Store per-sample accuracy in metrics
+                if train:
+                    metrics["per_sample_number_token_accuracy"] = per_sample_number_token_accuracy
+                else:
+                    metrics["per_sample_number_token_accuracy"] = jnp.mean(per_sample_number_token_accuracy)
 
-            # Compute direction token accuracy
+            # Compute direction token accuracy (per-sample and scalar)
             if observation.direction_token_mask is not None:
                 direction_mask = observation.direction_token_mask[:, 1:] * ex_mask
                 direction_correct = correct * direction_mask
+                # Per-sample: sum across token dimension
+                per_sample_direction_correct = direction_correct.sum(axis=-1)  # [batch]
+                per_sample_num_direction = direction_mask.sum(axis=-1)  # [batch]
+                per_sample_direction_token_accuracy = per_sample_direction_correct / jnp.maximum(per_sample_num_direction, 1.0)
+                # Scalar (for backward compatibility)
                 num_direction_tokens = jnp.maximum(direction_mask.sum(), 1.0)
                 direction_token_accuracy = direction_correct.sum() / num_direction_tokens
                 metrics["direction_token_accuracy"] = direction_token_accuracy
+                # Store per-sample accuracy in metrics
+                if train:
+                    metrics["per_sample_direction_token_accuracy"] = per_sample_direction_token_accuracy
+                else:
+                    metrics["per_sample_direction_token_accuracy"] = jnp.mean(per_sample_direction_token_accuracy)
 
         # Prediction (cross-entropy) loss - independent of langact loss
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
@@ -697,38 +717,68 @@ class PiCoT(_pi0.Pi0):
             pred_token_accuracy = masked_correct_pred.sum() / num_tokens_pred
             metrics["pred_token_accuracy"] = pred_token_accuracy
 
-            # Compute prediction critical token accuracy if available
+            # Compute prediction critical token accuracy if available (per-sample and scalar)
             if (
                 hasattr(observation, "prediction_crictical_token_mask")
                 and observation.prediction_crictical_token_mask is not None
             ):
                 critical_pred_mask = observation.prediction_crictical_token_mask[:, 1:] * ex_mask_pred
                 critical_correct_pred = correct_pred * critical_pred_mask
+                # Per-sample
+                per_sample_critical_correct_pred = critical_correct_pred.sum(axis=-1)  # [batch]
+                per_sample_num_critical_pred = critical_pred_mask.sum(axis=-1)  # [batch]
+                per_sample_pred_critical_token_accuracy = per_sample_critical_correct_pred / jnp.maximum(per_sample_num_critical_pred, 1.0)
+                # Scalar
                 num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)
                 pred_critical_token_accuracy = critical_correct_pred.sum() / num_critical_pred
                 metrics["pred_critical_token_accuracy"] = pred_critical_token_accuracy
+                # Store per-sample accuracy
+                if train:
+                    metrics["per_sample_pred_critical_token_accuracy"] = per_sample_pred_critical_token_accuracy
+                else:
+                    metrics["per_sample_pred_critical_token_accuracy"] = jnp.mean(per_sample_pred_critical_token_accuracy)
 
-            # Compute prediction number token accuracy if available
+            # Compute prediction number token accuracy if available (per-sample and scalar)
             if (
                 hasattr(observation, "prediction_number_token_mask")
                 and observation.prediction_number_token_mask is not None
             ):
                 number_pred_mask = observation.prediction_number_token_mask[:, 1:] * ex_mask_pred
                 number_correct_pred = correct_pred * number_pred_mask
+                # Per-sample
+                per_sample_number_correct_pred = number_correct_pred.sum(axis=-1)  # [batch]
+                per_sample_num_number_pred = number_pred_mask.sum(axis=-1)  # [batch]
+                per_sample_pred_number_token_accuracy = per_sample_number_correct_pred / jnp.maximum(per_sample_num_number_pred, 1.0)
+                # Scalar
                 num_number_pred = jnp.maximum(number_pred_mask.sum(), 1.0)
                 pred_number_token_accuracy = number_correct_pred.sum() / num_number_pred
                 metrics["pred_number_token_accuracy"] = pred_number_token_accuracy
+                # Store per-sample accuracy
+                if train:
+                    metrics["per_sample_pred_number_token_accuracy"] = per_sample_pred_number_token_accuracy
+                else:
+                    metrics["per_sample_pred_number_token_accuracy"] = jnp.mean(per_sample_pred_number_token_accuracy)
 
-            # Compute prediction direction token accuracy if available
+            # Compute prediction direction token accuracy if available (per-sample and scalar)
             if (
                 hasattr(observation, "prediction_direction_token_mask")
                 and observation.prediction_direction_token_mask is not None
             ):
                 direction_pred_mask = observation.prediction_direction_token_mask[:, 1:] * ex_mask_pred
                 direction_correct_pred = correct_pred * direction_pred_mask
+                # Per-sample
+                per_sample_direction_correct_pred = direction_correct_pred.sum(axis=-1)  # [batch]
+                per_sample_num_direction_pred = direction_pred_mask.sum(axis=-1)  # [batch]
+                per_sample_pred_direction_token_accuracy = per_sample_direction_correct_pred / jnp.maximum(per_sample_num_direction_pred, 1.0)
+                # Scalar
                 num_direction_pred = jnp.maximum(direction_pred_mask.sum(), 1.0)
                 pred_direction_token_accuracy = direction_correct_pred.sum() / num_direction_pred
                 metrics["pred_direction_token_accuracy"] = pred_direction_token_accuracy
+                # Store per-sample accuracy
+                if train:
+                    metrics["per_sample_pred_direction_token_accuracy"] = per_sample_pred_direction_token_accuracy
+                else:
+                    metrics["per_sample_pred_direction_token_accuracy"] = jnp.mean(per_sample_pred_direction_token_accuracy)
 
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
 
