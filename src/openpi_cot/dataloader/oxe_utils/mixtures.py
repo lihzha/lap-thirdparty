@@ -123,7 +123,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 4.0),
+        ("molmoact_dataset", 3.0),
         ### Bimanual
         # ("agibot_large_dataset", 0.2),
         # ("sample_r1_lite", 1.0),

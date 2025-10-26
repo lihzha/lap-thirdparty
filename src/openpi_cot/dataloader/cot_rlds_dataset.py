@@ -1027,19 +1027,19 @@ class DroidCoTDataset(_SingleCoTDataset):
 
         self.dataset = self.dataset.filter(_non_empty)
 
-        # def _id_ok(traj):
-        #     episode_id = traj["trajectory_id"][0]
-        #     if tf.equal(episode_id, self.spec.default_ep_value):
-        #         return tf.constant(value=False, dtype=tf.bool)
-        #     # Look up by episode_id (NOT episode_path). Using episode_path here would filter everything out.
-        #     lang = self.lang_table.lookup(episode_id)
-        #     default_lang_const = tf.constant(self.spec.default_lang_value, dtype=tf.string)
-        #     if tf.equal(lang, default_lang_const):
-        #         return tf.constant(value=False, dtype=tf.bool)
-        #     return tf.logical_and(
-        #         tf.not_equal(episode_id, self.spec.default_ep_value),
-        #         tf.not_equal(lang, default_lang_const),
-        #     )
+        def _id_ok(traj):
+            episode_id = traj["trajectory_id"][0]
+            if tf.equal(episode_id, self.spec.default_ep_value):
+                return tf.constant(value=False, dtype=tf.bool)
+            # Look up by episode_id (NOT episode_path). Using episode_path here would filter everything out.
+            lang = self.lang_table.lookup(episode_id)
+            default_lang_const = tf.constant(self.spec.default_lang_value, dtype=tf.string)
+            if tf.equal(lang, default_lang_const):
+                return tf.constant(value=False, dtype=tf.bool)
+            return tf.logical_and(
+                tf.not_equal(episode_id, self.spec.default_ep_value),
+                tf.not_equal(lang, default_lang_const),
+            )
 
         def _path_ok(traj):
             file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
@@ -1058,7 +1058,7 @@ class DroidCoTDataset(_SingleCoTDataset):
         self.dataset = self.dataset.filter(_path_ok)
         self.dataset = self.dataset.filter(_has_instruction)
         # if not self.use_json_actions:
-        # self.dataset = self.dataset.filter(_id_ok)
+        self.dataset = self.dataset.filter(_id_ok)
 
     def apply_repack_transforms(self):
         def _pop_keys(traj):
@@ -1100,8 +1100,8 @@ class DroidCoTDataset(_SingleCoTDataset):
             num_parallel_calls = int(total_threads * 0.3)
 
         if hash_tables is not None:
-            # self.cam_table = hash_tables.get("cam_table")
-            # self.lang_table = hash_tables.get("lang_table")
+            self.cam_table = hash_tables.get("cam_table")
+            self.lang_table = hash_tables.get("lang_table")
             self.ep_table = hash_tables.get("ep_table")
             self.instr_table = hash_tables.get("instr_table")
             self.filter_table = hash_tables.get("filter_table")
@@ -1118,15 +1118,15 @@ class DroidCoTDataset(_SingleCoTDataset):
             else:
                 raise ValueError(f"Unknown language action directory: {config.language_action_dir}")
 
-            # self.cam_table = self.build_cam_tables(metadata_path)
-            # self.lang_table = self.build_lang_action_table(config.language_action_dir)
+            self.cam_table = self.build_cam_tables(metadata_path)
+            self.lang_table = self.build_lang_action_table(config.language_action_dir)
             self.ep_table = self.build_lookup_table(metadata_path)
             self.instr_table = self.build_instr_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path)
             if standalone:
                 self.hash_tables = {
-                    # "cam_table": self.cam_table,
-                    # "lang_table": self.lang_table,
+                    "cam_table": self.cam_table,
+                    "lang_table": self.lang_table,
                     "ep_table": self.ep_table,
                     "instr_table": self.instr_table,
                     "filter_table": self.filter_table,
@@ -1615,8 +1615,8 @@ class OXECoTDatasets:
                     hash_tables=self.hash_tables,
                 )
                 self.hash_tables = {
-                    # "cam_table": ds.cam_table,
-                    # "lang_table": ds.lang_table,
+                    "cam_table": ds.cam_table,
+                    "lang_table": ds.lang_table,
                     "ep_table": ds.ep_table,
                     "instr_table": ds.instr_table,
                     "filter_table": ds.filter_table,
