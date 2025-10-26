@@ -692,17 +692,30 @@ class TrainingStepRunner:
             observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
-            per_sample_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
-                rng, observation, actions, train=True
+            (
+                per_sample_loss,
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
+            ) = model.compute_loss(rng, observation, actions, train=True)
+            return jnp.mean(per_sample_loss), (
+                per_sample_loss,
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
             )
-            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy, critical_token_accuracy, metrics)
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
-        (loss, (per_sample_loss, token_accuracy, critical_token_accuracy, loss_metrics)), grads = nnx.value_and_grad(
-            loss_fn, argnums=diff_state, has_aux=True
-        )(model, train_rng, observation, actions)
+        (
+            loss,
+            (per_sample_loss, token_accuracy, critical_token_accuracy, number_token_accuracy, direction_token_accuracy, loss_metrics),
+        ), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(model, train_rng, observation, actions)
 
         params = state.params.filter(self.config.trainable_filter)
         updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -737,6 +750,8 @@ class TrainingStepRunner:
             "param_norm": optax.global_norm(kernel_params),
             "token_accuracy": token_accuracy,
             "critical_token_accuracy": critical_token_accuracy,
+            "number_token_accuracy": number_token_accuracy,
+            "direction_token_accuracy": direction_token_accuracy,
         }
 
         # Add individual loss components from metrics
@@ -772,18 +787,39 @@ class ValidationStepRunner:
             observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
-            val_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
-                rng, observation, actions, train=False
+            (
+                val_loss,
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
+            ) = model.compute_loss(rng, observation, actions, train=False)
+            return (
+                jnp.mean(val_loss),
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
             )
-            return jnp.mean(val_loss), token_accuracy, critical_token_accuracy, metrics
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
-        loss, token_accuracy, critical_token_accuracy, val_metrics = loss_fn(model, eval_rng, observation, actions)
+        (
+            loss,
+            token_accuracy,
+            critical_token_accuracy,
+            number_token_accuracy,
+            direction_token_accuracy,
+            val_metrics,
+        ) = loss_fn(model, eval_rng, observation, actions)
         result = {
             "val_loss": loss,
             "val_token_accuracy": token_accuracy,
             "val_critical_token_accuracy": critical_token_accuracy,
+            "val_number_token_accuracy": number_token_accuracy,
+            "val_direction_token_accuracy": direction_token_accuracy,
         }
 
         # Add individual validation loss components from metrics

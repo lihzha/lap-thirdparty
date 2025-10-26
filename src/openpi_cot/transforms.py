@@ -60,15 +60,20 @@ class TokenizePromptAndReasoning(DataTransformFn):
             tokenized_dataset_name = np.asarray([pad_id] * self.dataset_name_pad_len, dtype=np.int32)
 
         # Tokenize regular reasoning
-        tokens, pad_mask, reasoning_mask, numeric_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
+        tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
+
+        # Combine number_mask and direction_mask for critical tokens
+        critical_mask = np.logical_or(numeric_mask, direction_mask)
 
         result = {
             **data,
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_langact_mask": reasoning_mask,
-            # Expose example-level mask so loaders/models can skip or mask (True = keep, False = idle)
-            "crictical_token_mask": numeric_mask,
+            # Critical tokens are both numbers AND directional indicators
+            "crictical_token_mask": critical_mask,
+            "number_token_mask": numeric_mask,
+            "direction_token_mask": direction_mask,
             "tokenized_dataset_name": tokenized_dataset_name,
         }
 
@@ -87,15 +92,20 @@ class TokenizePromptAndReasoning(DataTransformFn):
             # Skip empty prediction language actions
             if prediction_lang and prediction_lang.strip():
                 # Use prediction-specific tokenization
-                pred_tokens, pred_pad_mask, pred_reasoning_mask, pred_numeric_mask = self.tokenizer.tokenize_prediction(
+                pred_tokens, pred_pad_mask, pred_reasoning_mask, pred_numeric_mask, pred_direction_mask = self.tokenizer.tokenize_prediction(
                     prediction_prompt_str, prediction_lang
                 )
+
+                # Combine number_mask and direction_mask for prediction critical tokens
+                pred_critical_mask = np.logical_or(pred_numeric_mask, pred_direction_mask)
 
                 # Add prediction-specific fields
                 result["tokenized_prediction"] = pred_tokens
                 result["tokenized_prediction_mask"] = pred_pad_mask
                 result["tokenized_prediction_langact_mask"] = pred_reasoning_mask
-                result["prediction_crictical_token_mask"] = pred_numeric_mask
+                result["prediction_crictical_token_mask"] = pred_critical_mask
+                result["prediction_number_token_mask"] = pred_numeric_mask
+                result["prediction_direction_token_mask"] = pred_direction_mask
 
         return result
 

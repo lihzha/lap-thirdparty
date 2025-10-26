@@ -722,6 +722,18 @@ class _SingleCoTDataset:
                 return
             yield batch
 
+    def create_checkpointable_iterator(self):
+        """Create an iterator that can be checkpointed.
+
+        Returns:
+            A TensorFlow iterator that can be saved/restored using tf.train.Checkpoint.
+
+        Note:
+            This returns a TensorFlow iterator, not a numpy iterator. The caller should
+            use `next(iterator)` and convert to numpy arrays as needed.
+        """
+        return iter(self.dataset)
+
     def __len__(self):
         return self.dataset_statistics["state"].num_transitions
 

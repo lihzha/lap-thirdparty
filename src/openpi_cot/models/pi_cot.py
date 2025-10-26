@@ -509,7 +509,14 @@ class PiCoT(_pi0.Pi0):
         actions: _model.Actions,
         *,
         train: bool = False,
-    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, ""], at.Float[at.Array, ""], dict[str, at.Array]]:
+    ) -> tuple[
+        at.Float[at.Array, "*b ah"],
+        at.Float[at.Array, ""],
+        at.Float[at.Array, ""],
+        at.Float[at.Array, ""],
+        at.Float[at.Array, ""],
+        dict[str, at.Array],
+    ]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
         observation = preprocess_observation(
@@ -566,6 +573,8 @@ class PiCoT(_pi0.Pi0):
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
         critical_token_accuracy = jnp.array(0.0)
+        number_token_accuracy = jnp.array(0.0)
+        direction_token_accuracy = jnp.array(0.0)
 
         # Additional metrics to return
         metrics = {}
@@ -627,6 +636,22 @@ class PiCoT(_pi0.Pi0):
                 # For validation, store mean of per-sample accuracies
                 metrics["per_sample_critical_token_accuracy"] = jnp.mean(per_sample_critical_token_accuracy)
 
+            # Compute number token accuracy
+            if observation.number_token_mask is not None:
+                number_mask = observation.number_token_mask[:, 1:] * ex_mask
+                number_correct = correct * number_mask
+                num_number_tokens = jnp.maximum(number_mask.sum(), 1.0)
+                number_token_accuracy = number_correct.sum() / num_number_tokens
+                metrics["number_token_accuracy"] = number_token_accuracy
+
+            # Compute direction token accuracy
+            if observation.direction_token_mask is not None:
+                direction_mask = observation.direction_token_mask[:, 1:] * ex_mask
+                direction_correct = correct * direction_mask
+                num_direction_tokens = jnp.maximum(direction_mask.sum(), 1.0)
+                direction_token_accuracy = direction_correct.sum() / num_direction_tokens
+                metrics["direction_token_accuracy"] = direction_token_accuracy
+
         # Prediction (cross-entropy) loss - independent of langact loss
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
             # Use prediction-specific prefix (already built above)
@@ -674,14 +699,36 @@ class PiCoT(_pi0.Pi0):
 
             # Compute prediction critical token accuracy if available
             if (
-                hasattr(observation, "crictical_prediction_token_mask")
-                and observation.crictical_prediction_token_mask is not None
+                hasattr(observation, "prediction_crictical_token_mask")
+                and observation.prediction_crictical_token_mask is not None
             ):
-                critical_pred_mask = observation.crictical_prediction_token_mask[:, 1:] * ex_mask_pred
+                critical_pred_mask = observation.prediction_crictical_token_mask[:, 1:] * ex_mask_pred
                 critical_correct_pred = correct_pred * critical_pred_mask
                 num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)
                 pred_critical_token_accuracy = critical_correct_pred.sum() / num_critical_pred
                 metrics["pred_critical_token_accuracy"] = pred_critical_token_accuracy
+
+            # Compute prediction number token accuracy if available
+            if (
+                hasattr(observation, "prediction_number_token_mask")
+                and observation.prediction_number_token_mask is not None
+            ):
+                number_pred_mask = observation.prediction_number_token_mask[:, 1:] * ex_mask_pred
+                number_correct_pred = correct_pred * number_pred_mask
+                num_number_pred = jnp.maximum(number_pred_mask.sum(), 1.0)
+                pred_number_token_accuracy = number_correct_pred.sum() / num_number_pred
+                metrics["pred_number_token_accuracy"] = pred_number_token_accuracy
+
+            # Compute prediction direction token accuracy if available
+            if (
+                hasattr(observation, "prediction_direction_token_mask")
+                and observation.prediction_direction_token_mask is not None
+            ):
+                direction_pred_mask = observation.prediction_direction_token_mask[:, 1:] * ex_mask_pred
+                direction_correct_pred = correct_pred * direction_pred_mask
+                num_direction_pred = jnp.maximum(direction_pred_mask.sum(), 1.0)
+                pred_direction_token_accuracy = direction_correct_pred.sum() / num_direction_pred
+                metrics["pred_direction_token_accuracy"] = pred_direction_token_accuracy
 
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
 
@@ -713,7 +760,7 @@ class PiCoT(_pi0.Pi0):
             metrics["action_loss"] = action_loss
             total_loss = total_loss + self.action_loss_weight * action_loss
 
-        return total_loss, token_accuracy, critical_token_accuracy, metrics
+        return total_loss, token_accuracy, critical_token_accuracy, number_token_accuracy, direction_token_accuracy, metrics
 
     @override
     def sample_actions(
