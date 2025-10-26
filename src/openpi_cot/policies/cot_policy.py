@@ -260,6 +260,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             if isinstance(data.get("dataset_name"), bytes)
             else data.get("dataset_name", "")
         )
+        breakpoint()
         needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
 
         for k in IMAGE_KEYS[1:]:
