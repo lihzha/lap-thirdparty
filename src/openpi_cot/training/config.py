@@ -661,7 +661,7 @@ _CONFIGS = [
             action_expert_variant="gemma3_300m",
             prompt_format="pi05",
         ),
-        data=VQADataConfig(
+        data=RLDSCoTDataConfig(
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
