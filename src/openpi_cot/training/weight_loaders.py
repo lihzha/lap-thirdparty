@@ -317,18 +317,37 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             f"to {new_h}x{new_w} ({new_h*new_w} patches)"
         )
 
+        # Ensure input is a proper numpy array and preserve dtype
+        original_dtype = pos_emb.dtype
+        if not isinstance(pos_emb, np.ndarray):
+            pos_emb = np.asarray(pos_emb)
+
         # Reshape to 2D grid: [1, H*W, D] -> [1, H, W, D]
         pos_emb_2d = pos_emb.reshape(1, orig_h, orig_w, dim)
 
+        # Convert to JAX array for resizing
+        pos_emb_2d_jax = jnp.asarray(pos_emb_2d)
+
         # Use bicubic interpolation for high-quality resizing
-        pos_emb_resized = jax.image.resize(
-            pos_emb_2d,
+        pos_emb_resized_jax = jax.image.resize(
+            pos_emb_2d_jax,
             shape=(1, new_h, new_w, dim),
             method='bicubic'
         )
 
         # Reshape back to sequence: [1, H, W, D] -> [1, H*W, D]
-        return np.array(pos_emb_resized.reshape(1, new_h * new_w, dim))
+        pos_emb_reshaped = pos_emb_resized_jax.reshape(1, new_h * new_w, dim)
+
+        # Force conversion to plain numpy array in host memory
+        # First convert to numpy, then create a fresh copy to ensure it's not device-backed
+        result_raw = np.asarray(pos_emb_reshaped)
+        result = np.empty_like(result_raw, dtype=original_dtype)
+        np.copyto(result, result_raw)
+
+        # Verify it's a numpy array
+        assert isinstance(result, np.ndarray), f"Expected numpy array, got {type(result)}"
+
+        return result
 
     def _remap_siglip(self, siglip_params: dict, target_pos_emb_grid_size: tuple[int, int] | None = None) -> dict:
         """Remap SigLiP from encoderblock_0, encoderblock_1, ... to stacked encoderblock.
@@ -376,7 +395,8 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                 layer_values.sort(key=lambda x: x[0])
                 arrays = [v for _, v in layer_values]
                 # Convert subkey string back to nested dict structure
-                stacked_block[tuple(subkey.split("/"))] = jnp.stack(arrays, axis=0)
+                # Use np.stack to keep as numpy arrays (not JAX arrays)
+                stacked_block[tuple(subkey.split("/"))] = np.stack(arrays, axis=0)
 
             # Unflatten the stacked block
             encoderblock_dict = flax.traverse_util.unflatten_dict(stacked_block)
@@ -500,11 +520,13 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             for subkey, layer_values in weights_to_stack.items():
                 layer_values.sort(key=lambda x: x[0])
                 arrays = [v for _, v in layer_values]
-                flat_remapped[("layers",) + tuple(subkey.split("/"))] = jnp.stack(arrays, axis=0)
+                # Use np.stack to keep as numpy arrays (not JAX arrays)
+                flat_remapped[("layers",) + tuple(subkey.split("/"))] = np.stack(arrays, axis=0)
 
             # Add layerless (non-layer) weights back
             for key, value in flax.traverse_util.flatten_dict(layerless, sep="/").items():
-                flat_remapped[("transformer",) + tuple(key.split("/"))] = jnp.array(value)
+                # Use np.asarray to keep as numpy arrays (not JAX arrays)
+                flat_remapped[("transformer",) + tuple(key.split("/"))] = np.asarray(value)
 
             # Rebuild final structure
             remapped_params = flax.traverse_util.unflatten_dict(flat_remapped)
