@@ -137,7 +137,7 @@ class PiCoT(_pi0.Pi0):
                     dtype_mm=config.dtype,
                     posemb="learn",  # needed for size-mismatch
                     # posemb_shape=(64, 64),  # assuming 896x896 images with 14x14 patches
-                    posemb_shape=(16, 16)
+                    posemb_shape=(16, 16),
                 )
             )
             fake_obs = config.fake_obs()
@@ -259,7 +259,10 @@ class PiCoT(_pi0.Pi0):
                 t = num_frames
 
             # Flatten: [b*t, h, w, c]
-            image_flat = image.reshape(b * t, h, w, c)
+            if not self.use_gemma3:
+                image_flat = image.reshape(b * t, h, w, c)
+            else:
+                image_flat = image
             image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
             if self.use_gemma3:
                 image_tokens = self.resize_to_256(image_tokens)
@@ -662,7 +665,9 @@ class PiCoT(_pi0.Pi0):
                 # Per-sample: sum across token dimension
                 per_sample_direction_correct = direction_correct.sum(axis=-1)  # [batch]
                 per_sample_num_direction = direction_mask.sum(axis=-1)  # [batch]
-                per_sample_direction_token_accuracy = per_sample_direction_correct / jnp.maximum(per_sample_num_direction, 1.0)
+                per_sample_direction_token_accuracy = per_sample_direction_correct / jnp.maximum(
+                    per_sample_num_direction, 1.0
+                )
                 # Scalar (for backward compatibility)
                 num_direction_tokens = jnp.maximum(direction_mask.sum(), 1.0)
                 direction_token_accuracy = direction_correct.sum() / num_direction_tokens
@@ -728,7 +733,9 @@ class PiCoT(_pi0.Pi0):
                 # Per-sample
                 per_sample_critical_correct_pred = critical_correct_pred.sum(axis=-1)  # [batch]
                 per_sample_num_critical_pred = critical_pred_mask.sum(axis=-1)  # [batch]
-                per_sample_pred_critical_token_accuracy = per_sample_critical_correct_pred / jnp.maximum(per_sample_num_critical_pred, 1.0)
+                per_sample_pred_critical_token_accuracy = per_sample_critical_correct_pred / jnp.maximum(
+                    per_sample_num_critical_pred, 1.0
+                )
                 # Scalar
                 num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)
                 pred_critical_token_accuracy = critical_correct_pred.sum() / num_critical_pred
@@ -737,7 +744,9 @@ class PiCoT(_pi0.Pi0):
                 if train:
                     metrics["per_sample_pred_critical_token_accuracy"] = per_sample_pred_critical_token_accuracy
                 else:
-                    metrics["per_sample_pred_critical_token_accuracy"] = jnp.mean(per_sample_pred_critical_token_accuracy)
+                    metrics["per_sample_pred_critical_token_accuracy"] = jnp.mean(
+                        per_sample_pred_critical_token_accuracy
+                    )
 
             # Compute prediction number token accuracy if available (per-sample and scalar)
             if (
@@ -749,7 +758,9 @@ class PiCoT(_pi0.Pi0):
                 # Per-sample
                 per_sample_number_correct_pred = number_correct_pred.sum(axis=-1)  # [batch]
                 per_sample_num_number_pred = number_pred_mask.sum(axis=-1)  # [batch]
-                per_sample_pred_number_token_accuracy = per_sample_number_correct_pred / jnp.maximum(per_sample_num_number_pred, 1.0)
+                per_sample_pred_number_token_accuracy = per_sample_number_correct_pred / jnp.maximum(
+                    per_sample_num_number_pred, 1.0
+                )
                 # Scalar
                 num_number_pred = jnp.maximum(number_pred_mask.sum(), 1.0)
                 pred_number_token_accuracy = number_correct_pred.sum() / num_number_pred
@@ -770,7 +781,9 @@ class PiCoT(_pi0.Pi0):
                 # Per-sample
                 per_sample_direction_correct_pred = direction_correct_pred.sum(axis=-1)  # [batch]
                 per_sample_num_direction_pred = direction_pred_mask.sum(axis=-1)  # [batch]
-                per_sample_pred_direction_token_accuracy = per_sample_direction_correct_pred / jnp.maximum(per_sample_num_direction_pred, 1.0)
+                per_sample_pred_direction_token_accuracy = per_sample_direction_correct_pred / jnp.maximum(
+                    per_sample_num_direction_pred, 1.0
+                )
                 # Scalar
                 num_direction_pred = jnp.maximum(direction_pred_mask.sum(), 1.0)
                 pred_direction_token_accuracy = direction_correct_pred.sum() / num_direction_pred
@@ -779,7 +792,9 @@ class PiCoT(_pi0.Pi0):
                 if train:
                     metrics["per_sample_pred_direction_token_accuracy"] = per_sample_pred_direction_token_accuracy
                 else:
-                    metrics["per_sample_pred_direction_token_accuracy"] = jnp.mean(per_sample_pred_direction_token_accuracy)
+                    metrics["per_sample_pred_direction_token_accuracy"] = jnp.mean(
+                        per_sample_pred_direction_token_accuracy
+                    )
 
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
 
@@ -811,7 +826,14 @@ class PiCoT(_pi0.Pi0):
             metrics["action_loss"] = action_loss
             total_loss = total_loss + self.action_loss_weight * action_loss
 
-        return total_loss, token_accuracy, critical_token_accuracy, number_token_accuracy, direction_token_accuracy, metrics
+        return (
+            total_loss,
+            token_accuracy,
+            critical_token_accuracy,
+            number_token_accuracy,
+            direction_token_accuracy,
+            metrics,
+        )
 
     @override
     def sample_actions(
