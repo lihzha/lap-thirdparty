@@ -5,11 +5,15 @@ save/load functionality works correctly.
 """
 
 import logging
+import os
 from pathlib import Path
 import tempfile
+import time
 
+from etils import epath
 import jax
 import numpy as np
+import tensorflow as tf
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 import openpi_cot.training.config as _config
@@ -21,6 +25,64 @@ def setup_logging():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
+
+
+def get_gcs_test_path(bucket: str = None) -> str:
+    """Get GCS path for test checkpoints.
+
+    Args:
+        bucket: GCS bucket path (e.g., 'gs://my-bucket/test-checkpoints').
+                If None, reads from GCS_TEST_BUCKET environment variable.
+                If neither provided, raises an error.
+
+    Returns:
+        GCS path for test checkpoints with unique timestamp
+    """
+    if bucket is None:
+        bucket = os.environ.get('GCS_TEST_BUCKET')
+
+    if bucket is None:
+        raise ValueError(
+            "GCS bucket path not provided. Either pass bucket parameter or set GCS_TEST_BUCKET environment variable. "
+            "Example: export GCS_TEST_BUCKET='gs://my-bucket/test-checkpoints'"
+        )
+
+    # Ensure bucket starts with gs://
+    if not bucket.startswith('gs://'):
+        bucket = f'gs://{bucket}'
+
+    # Create unique path with timestamp to avoid conflicts
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    test_path = f"{bucket}/dataloader_test_{timestamp}"
+
+    return test_path
+
+
+def cleanup_gcs_path(gcs_path: str):
+    """Clean up GCS path after test.
+
+    Args:
+        gcs_path: GCS path to clean up
+    """
+    try:
+        if tf.io.gfile.exists(gcs_path):
+            logging.info(f"Cleaning up GCS path: {gcs_path}")
+            # Delete all files in the directory
+            files = tf.io.gfile.listdir(gcs_path)
+            for file in files:
+                file_path = f"{gcs_path}/{file}"
+                try:
+                    if tf.io.gfile.isdir(file_path):
+                        tf.io.gfile.rmtree(file_path)
+                    else:
+                        tf.io.gfile.remove(file_path)
+                except Exception as e:
+                    logging.warning(f"Failed to delete {file_path}: {e}")
+            # Delete the directory itself
+            tf.io.gfile.rmtree(gcs_path)
+            logging.info(f"✓ Cleaned up GCS path: {gcs_path}")
+    except Exception as e:
+        logging.warning(f"Failed to cleanup GCS path {gcs_path}: {e}")
 
 
 def create_test_dataloader(config, seed=42, persistent_iterator=True):
@@ -83,11 +145,12 @@ def collect_batch_ids(dataloader, num_batches=5):
     return batch_ids
 
 
-def test_save_and_load_dataloader(config_path: str = None):
+def test_save_and_load_dataloader(config_path: str = None, gcs_bucket: str = None):
     """Test saving and loading dataloader state.
 
     Args:
         config_path: Path to config file. If None, uses default config.
+        gcs_bucket: GCS bucket path for checkpoints. If None, reads from GCS_TEST_BUCKET env var.
     """
     setup_logging()
 
@@ -108,12 +171,17 @@ def test_save_and_load_dataloader(config_path: str = None):
 
     logging.info(f"Using config: {config.name if hasattr(config, 'name') else 'default'}")
 
-    # Create temporary directory for checkpoints
-    with tempfile.TemporaryDirectory() as tmpdir:
-        checkpoint_dir = Path(tmpdir) / "dataloader_checkpoint"
-        checkpoint_dir.mkdir(exist_ok=True)
-        logging.info(f"Checkpoint directory: {checkpoint_dir}")
+    # Create GCS path for checkpoints
+    try:
+        base_path = get_gcs_test_path(gcs_bucket)
+        checkpoint_dir = f"{base_path}/dataloader_checkpoint"
+        tf.io.gfile.makedirs(checkpoint_dir)
+        logging.info(f"Checkpoint directory (GCS): {checkpoint_dir}")
+    except Exception as e:
+        logging.error(f"Failed to create GCS checkpoint directory: {e}")
+        return False
 
+    try:
         # ========================================================================
         # Part 1: Create dataloader, iterate, and save checkpoint
         # ========================================================================
@@ -146,8 +214,8 @@ def test_save_and_load_dataloader(config_path: str = None):
             return False
 
         # Verify checkpoint files exist
-        checkpoint_files = list(checkpoint_dir.glob("ckpt*"))
-        logging.info(f"Checkpoint files created: {[f.name for f in checkpoint_files]}")
+        checkpoint_files = [f for f in tf.io.gfile.listdir(checkpoint_dir) if f.startswith("ckpt")]
+        logging.info(f"Checkpoint files created: {checkpoint_files}")
         assert len(checkpoint_files) > 0, "No checkpoint files were created"
 
         # ========================================================================
@@ -215,7 +283,7 @@ def test_save_and_load_dataloader(config_path: str = None):
 
         # Try to save - should raise ValueError
         try:
-            dataloader3.save_dataloader_state(str(checkpoint_dir / "should_fail"))
+            dataloader3.save_dataloader_state(f"{checkpoint_dir}/should_fail")
             logging.error("✗ Should have raised ValueError for non-persistent iterator")
             return False
         except ValueError as e:
@@ -248,6 +316,9 @@ def test_save_and_load_dataloader(config_path: str = None):
         logging.info("=" * 80)
 
         return True
+    finally:
+        # Clean up GCS checkpoint directory
+        cleanup_gcs_path(base_path)
 
 
 def test_multiple_save_load_cycles():

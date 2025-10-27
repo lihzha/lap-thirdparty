@@ -29,7 +29,6 @@ faulthandler.enable()
 DROID_CONTROL_FREQUENCY = 15
 
 
-
 @dataclasses.dataclass
 class Args:
     # Rollout parameters
@@ -180,11 +179,26 @@ def main(args: Args):
             break
 
 
+def quat_to_r6(q: np.ndarray) -> np.ndarray:
+    """
+    Convert quaternion (w, x, y, z) to the first 6 elements of rotation matrix:
+    [r11, r12, r13, r21, r22, r23].
+    """
+    assert q.shape[-1] == 4, "Input must be quaternion (w, x, y, z)"
+
+    q = q / np.linalg.norm(q)
+    quat_xyzw = np.roll(q, -1)  # scipy expects [x, y, z, w]
+    R_mat = R.from_quat(quat_xyzw).as_matrix()
+
+    r6 = np.concatenate([R_mat[0, :], R_mat[1, :]])  # first 2 rows
+    return r6
+
+
 def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
     base_image = cv2.imdecode(obs_dict["base_image"], cv2.IMREAD_COLOR)
     wrist_image = cv2.imdecode(obs_dict["wrist_image"], cv2.IMREAD_COLOR)
     # In addition to image observations, also capture the proprioceptive state
-    cartesian_position = np.concatenate([obs_dict["arm_pos"], obs_dict["arm_quat"]])
+    cartesian_position = np.concatenate([obs_dict["arm_pos"], quat_to_r6(obs_dict["arm_quat"])])
     gripper_position = np.array(obs_dict["gripper_pos"]).item()
 
     # if gripper_position > 0.5:

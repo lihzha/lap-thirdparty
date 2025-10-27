@@ -286,9 +286,49 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
     3. Remaps key names (_key_norm -> k_rmsnorm, gating_einsum -> Einsum_0, etc.)
     4. Extracts and remaps vision encoder (SigLiP) from per-layer to stacked format
     5. Extracts embedder to PaliGemma namespace
+    6. Optionally resizes SigLiP positional embeddings to match target patch count
     """
 
     params_path: str
+    target_pos_emb_grid_size: tuple[int, int] | None = None  # e.g., (16, 16) for 256 patches
+
+    def _resize_positional_embedding(
+        self,
+        pos_emb: np.ndarray,
+        original_grid_size: tuple[int, int],
+        target_grid_size: tuple[int, int]
+    ) -> np.ndarray:
+        """Resize 2D positional embeddings using bicubic interpolation.
+
+        Args:
+            pos_emb: Positional embedding array of shape [1, orig_h*orig_w, dim]
+            original_grid_size: (orig_h, orig_w) e.g., (64, 64) for 4096 patches
+            target_grid_size: (new_h, new_w) e.g., (16, 16) for 256 patches
+
+        Returns:
+            Resized positional embedding of shape [1, new_h*new_w, dim]
+        """
+        orig_h, orig_w = original_grid_size
+        new_h, new_w = target_grid_size
+        dim = pos_emb.shape[-1]
+
+        logger.info(
+            f"Resizing positional embeddings from {orig_h}x{orig_w} ({orig_h*orig_w} patches) "
+            f"to {new_h}x{new_w} ({new_h*new_w} patches)"
+        )
+
+        # Reshape to 2D grid: [1, H*W, D] -> [1, H, W, D]
+        pos_emb_2d = pos_emb.reshape(1, orig_h, orig_w, dim)
+
+        # Use bicubic interpolation for high-quality resizing
+        pos_emb_resized = jax.image.resize(
+            pos_emb_2d,
+            shape=(1, new_h, new_w, dim),
+            method='bicubic'
+        )
+
+        # Reshape back to sequence: [1, H, W, D] -> [1, H*W, D]
+        return np.array(pos_emb_resized.reshape(1, new_h * new_w, dim))
 
     def _remap_siglip(self, siglip_params: dict) -> dict:
         """Remap SigLiP from encoderblock_0, encoderblock_1, ... to stacked encoderblock."""
@@ -350,7 +390,35 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         if "head" in siglip_encoder:
             result["head"] = siglip_encoder["head"]
         if "pos_embedding" in siglip_encoder:
-            result["pos_embedding"] = siglip_encoder["pos_embedding"]
+            pos_emb = siglip_encoder["pos_embedding"]
+
+            # Resize positional embeddings if target grid size is specified
+            if self.target_pos_emb_grid_size is not None:
+                current_num_patches = pos_emb.shape[1]  # Shape is [1, num_patches, dim]
+                current_grid_size = int(np.sqrt(current_num_patches))
+
+                # Verify it's a square grid
+                if current_grid_size * current_grid_size != current_num_patches:
+                    logger.warning(
+                        f"Non-square positional embedding grid detected: {current_num_patches} patches. "
+                        f"Assuming grid size of {current_grid_size}x{current_grid_size}"
+                    )
+
+                target_h, target_w = self.target_pos_emb_grid_size
+
+                # Only resize if sizes differ
+                if current_grid_size != target_h or current_grid_size != target_w:
+                    pos_emb = self._resize_positional_embedding(
+                        pos_emb,
+                        (current_grid_size, current_grid_size),
+                        self.target_pos_emb_grid_size
+                    )
+                else:
+                    logger.info(
+                        f"Positional embedding already at target size: {target_h}x{target_w}"
+                    )
+
+            result["pos_embedding"] = pos_emb
 
         return result
 
@@ -534,13 +602,16 @@ class WeightLoaderChoice(WeightLoader):
 
       --weight-loader.kind=checkpoint --weight-loader.params-path=gs://...
       --weight-loader.kind=paligemma
+      --weight-loader.kind=gemma3 --weight-loader.target-pos-emb-grid-size='(16,16)'
       --weight-loader.kind=none
     """
 
     # Which loader to use.
     kind: Literal["none", "checkpoint", "paligemma", "paligemma2", "gemma3"] = "paligemma"
-    # Only used when kind == "checkpoint".
+    # Only used when kind == "checkpoint" or "paligemma2" or "gemma3".
     params_path: str | None = None
+    # Only used when kind == "gemma3" - target grid size for positional embeddings.
+    target_pos_emb_grid_size: tuple[int, int] | None = None
 
     def _resolve(self) -> WeightLoader:
         match self.kind:
@@ -557,7 +628,10 @@ class WeightLoaderChoice(WeightLoader):
             case "gemma3":
                 if not self.params_path:
                     raise ValueError("--weight-loader.params-path must be set when kind=gemma3")
-                return Gemma3ScanCompatibleWeightLoader(self.params_path)
+                return Gemma3ScanCompatibleWeightLoader(
+                    self.params_path,
+                    target_pos_emb_grid_size=self.target_pos_emb_grid_size
+                )
             case "none":
                 return NoOpWeightLoader()
             case _:
