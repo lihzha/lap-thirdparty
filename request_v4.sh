@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-TPU_NAME="pi3"
+TPU_NAME="pi0"
 ZONE="us-central2-b"
 TYPE="v4"
-TOPOLOGY="2x2x2"
+TOPOLOGY="2x2x1"
 VERSION="tpu-ubuntu2204-base"
 
 while true; do

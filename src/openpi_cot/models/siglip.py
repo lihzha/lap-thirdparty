@@ -17,6 +17,9 @@
 
 from collections.abc import Sequence
 
+import einops
+from sympy import Float
+
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -186,6 +189,45 @@ class MAPHead(nn.Module):
         x = x + MlpBlock(mlp_dim=self.mlp_dim, dtype=self.dtype_mm)(y)
         return x[:, 0]
 
+def patchify_images(
+    images: Float["B H W C"],
+    *,
+    patch_size: tuple[int, int],
+    padding: str = "VALID",
+    ) -> Float["B P D"]:
+    """Extract patches from images.
+
+    This function is a wrapper for jax.lax.conv_general_dilated_patches
+    to conform to the same interface as tf.image.extract_patches.
+    The function extracts patches of shape sizes from the input images in the same
+    manner as a convolution with kernel of shape sizes, stride equal to strides,
+    and the given padding scheme.
+    The patches are stacked in the channel dimension.
+
+    Args:
+        images: input batch of images of shape [B, H, W, C].
+        patch_size: size of extracted patches.
+        padding: padding algorithm to use.
+
+    Returns:
+        Tensor of shape [batch, num patches, patch_size * patch_size * C]
+    """
+    channels = images.shape[-1]
+    patches = jax.lax.conv_general_dilated_patches(
+        lhs=images,
+        filter_shape=patch_size,
+        window_strides=patch_size,
+        padding=padding,
+        rhs_dilation=[1, 1],
+        dimension_numbers=("NHWC", "OIHW", "NHWC"),
+        precision=jax.lax.Precision.HIGH,
+    )
+    patches = einops.rearrange(
+        patches, "b ph pw (c p) -> b (ph pw) (p c)", c=channels
+    )
+    return patches
+
+
 
 class _Module(nn.Module):
     """ViT model."""
@@ -211,6 +253,37 @@ class _Module(nn.Module):
     @nn.compact
     def __call__(self, image, *, train=False):
         out = {}
+
+        *batch_dims, _, _, _ = images.shape
+        images = einops.rearrange(images, "... h w c -> (...) h w c")
+
+
+        patches = patchify_images(
+            images,
+            patch_size=(14, 14),
+        )
+        patches = patches.reshape((*batch_dims,) + patches.shape[1:])
+
+        num_patches_one_side = (
+            224 // 14
+        )
+
+        flattened_images = einops.rearrange(
+        patches,
+        "b n (h w) c -> (b n) h w c",
+        h=num_patches_one_side,
+        w=num_patches_one_side,
+        c=3,
+        )
+        flattened_images = einops.rearrange(
+            flattened_images,
+            "b h w (p q c) -> b (h p) (w q) c",
+            h=num_patches_one_side,
+            w=num_patches_one_side,
+            p=14,
+            q=14,
+            c=3,
+        )
 
         # Kevin edit: do patch extraction and posemb in float32,
         # because I feel like it's a bit safer.

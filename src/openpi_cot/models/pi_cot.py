@@ -136,7 +136,8 @@ class PiCoT(_pi0.Pi0):
                     scan=True,
                     dtype_mm=config.dtype,
                     posemb="learn",  # needed for size-mismatch
-                    posemb_shape=(64, 64),  # assuming 896x896 images with 14x14 patches
+                    # posemb_shape=(64, 64),  # assuming 896x896 images with 14x14 patches
+                    posemb_shape=(16, 16)
                 )
             )
             fake_obs = config.fake_obs()
