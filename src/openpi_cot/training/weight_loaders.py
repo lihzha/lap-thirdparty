@@ -293,10 +293,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
     target_pos_emb_grid_size: tuple[int, int] | None = None  # e.g., (16, 16) for 256 patches
 
     def _resize_positional_embedding(
-        self,
-        pos_emb: np.ndarray,
-        original_grid_size: tuple[int, int],
-        target_grid_size: tuple[int, int]
+        self, pos_emb: np.ndarray, original_grid_size: tuple[int, int], target_grid_size: tuple[int, int]
     ) -> np.ndarray:
         """Resize 2D positional embeddings using bicubic interpolation.
 
@@ -313,8 +310,8 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         dim = pos_emb.shape[-1]
 
         logger.info(
-            f"Resizing positional embeddings from {orig_h}x{orig_w} ({orig_h*orig_w} patches) "
-            f"to {new_h}x{new_w} ({new_h*new_w} patches)"
+            f"Resizing positional embeddings from {orig_h}x{orig_w} ({orig_h * orig_w} patches) "
+            f"to {new_h}x{new_w} ({new_h * new_w} patches)"
         )
 
         # Ensure input is a proper numpy array and preserve dtype
@@ -329,11 +326,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         pos_emb_2d_jax = jnp.asarray(pos_emb_2d)
 
         # Use bicubic interpolation for high-quality resizing
-        pos_emb_resized_jax = jax.image.resize(
-            pos_emb_2d_jax,
-            shape=(1, new_h, new_w, dim),
-            method='bicubic'
-        )
+        pos_emb_resized_jax = jax.image.resize(pos_emb_2d_jax, shape=(1, new_h, new_w, dim), method="bicubic")
 
         # Reshape back to sequence: [1, H, W, D] -> [1, H*W, D]
         pos_emb_reshaped = pos_emb_resized_jax.reshape(1, new_h * new_w, dim)
@@ -435,14 +428,11 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                 # Only resize if sizes differ
                 if current_grid_size != target_h or current_grid_size != target_w:
                     pos_emb = self._resize_positional_embedding(
-                        pos_emb,
-                        (current_grid_size, current_grid_size),
-                        target_pos_emb_grid_size
+                        pos_emb, (current_grid_size, current_grid_size), target_pos_emb_grid_size
                     )
+                    logger.info(f"Positional embedding resized to: {target_h}x{target_w}")
                 else:
-                    logger.info(
-                        f"Positional embedding already at target size: {target_h}x{target_w}"
-                    )
+                    logger.info(f"Positional embedding already at target size: {target_h}x{target_w}")
 
             result["pos_embedding"] = pos_emb
 
@@ -467,9 +457,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                             f"{target_grid_size}x{target_grid_size} ({target_num_patches} patches)"
                         )
                     else:
-                        logger.warning(
-                            f"Could not auto-detect square grid size from {target_num_patches} patches"
-                        )
+                        logger.warning(f"Could not auto-detect square grid size from {target_num_patches} patches")
             except Exception as e:
                 logger.warning(f"Could not auto-detect target positional embedding size: {e}")
 
@@ -556,8 +544,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             if "SigLiPFromPatches_0" in flat_original:
                 logger.info("Remapping SigLiP vision encoder...")
                 siglip_remapped = self._remap_siglip(
-                    flat_original["SigLiPFromPatches_0"],
-                    target_pos_emb_grid_size=target_pos_emb_grid_size
+                    flat_original["SigLiPFromPatches_0"], target_pos_emb_grid_size=target_pos_emb_grid_size
                 )
 
             # ===== BUILD PALIGEMMA STRUCTURE =====
@@ -682,8 +669,7 @@ class WeightLoaderChoice(WeightLoader):
                 if not self.params_path:
                     raise ValueError("--weight-loader.params-path must be set when kind=gemma3")
                 return Gemma3ScanCompatibleWeightLoader(
-                    self.params_path,
-                    target_pos_emb_grid_size=self.target_pos_emb_grid_size
+                    self.params_path, target_pos_emb_grid_size=self.target_pos_emb_grid_size
                 )
             case "none":
                 return NoOpWeightLoader()
