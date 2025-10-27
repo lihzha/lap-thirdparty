@@ -2,6 +2,14 @@
 
 This test mimics the dataloader creation in train.py and verifies that
 save/load functionality works correctly.
+
+NOTE: This test saves checkpoints to Google Cloud Storage to avoid "no space left on device" errors.
+Set the GCS_TEST_BUCKET environment variable before running:
+    export GCS_TEST_BUCKET='gs://your-bucket/test-checkpoints'
+
+Example:
+    export GCS_TEST_BUCKET='gs://my-bucket/test-checkpoints'
+    python scripts/tests/test_dataloader_checkpoint.py --config-name=your_config
 """
 
 import logging
@@ -321,8 +329,12 @@ def test_save_and_load_dataloader(config_path: str = None, gcs_bucket: str = Non
         cleanup_gcs_path(base_path)
 
 
-def test_multiple_save_load_cycles():
-    """Test multiple save/load cycles to ensure robustness."""
+def test_multiple_save_load_cycles(gcs_bucket: str = None):
+    """Test multiple save/load cycles to ensure robustness.
+
+    Args:
+        gcs_bucket: GCS bucket path for checkpoints. If None, reads from GCS_TEST_BUCKET env var.
+    """
     setup_logging()
 
     logging.info("\n" + "=" * 80)
@@ -336,9 +348,17 @@ def test_multiple_save_load_cycles():
         logging.error("Failed to load config")
         return False
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        checkpoint_dir = Path(tmpdir) / "dataloader_checkpoint"
-        checkpoint_dir.mkdir(exist_ok=True)
+    # Create GCS path for checkpoints
+    try:
+        base_path = get_gcs_test_path(gcs_bucket)
+        checkpoint_dir = f"{base_path}/dataloader_checkpoint"
+        tf.io.gfile.makedirs(checkpoint_dir)
+        logging.info(f"Checkpoint directory (GCS): {checkpoint_dir}")
+    except Exception as e:
+        logging.error(f"Failed to create GCS checkpoint directory: {e}")
+        return False
+
+    try:
 
         dataloader = create_test_dataloader(config, seed=42, persistent_iterator=True)
 
@@ -371,11 +391,32 @@ def test_multiple_save_load_cycles():
 
         logging.info("\n✓ All cycles passed!")
         return True
+    finally:
+        # Clean up GCS checkpoint directory
+        cleanup_gcs_path(base_path)
 
 
 def main():
     """Main test function."""
     import sys
+
+    setup_logging()
+
+    # Check that GCS bucket is configured
+    gcs_bucket = os.environ.get('GCS_TEST_BUCKET')
+    if not gcs_bucket:
+        logging.error("=" * 80)
+        logging.error("ERROR: GCS_TEST_BUCKET environment variable not set")
+        logging.error("=" * 80)
+        logging.error("This test requires a GCS bucket to save checkpoints.")
+        logging.error("Set the GCS_TEST_BUCKET environment variable before running:")
+        logging.error("  export GCS_TEST_BUCKET='gs://your-bucket/test-checkpoints'")
+        logging.error("=" * 80)
+        sys.exit(1)
+
+    logging.info("=" * 80)
+    logging.info(f"Using GCS bucket: {gcs_bucket}")
+    logging.info("=" * 80)
 
     # Test 1: Basic save/load functionality
     logging.info("\n" + "=" * 80)
