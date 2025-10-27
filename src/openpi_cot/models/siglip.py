@@ -267,11 +267,11 @@ class _Module(nn.Module):
         )
 
         flattened_images = einops.rearrange(
-        patches,
-        "b n (h w) c -> (b n) h w c",
-        h=num_patches_one_side,
-        w=num_patches_one_side,
-        c=3,
+            patches,
+            "b n (h w) c -> (b n) h w c",
+            h=num_patches_one_side,
+            w=num_patches_one_side,
+            c=3,
         )
         flattened_images = einops.rearrange(
             flattened_images,

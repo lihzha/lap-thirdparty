@@ -144,7 +144,7 @@ class PiCoT(_pi0.Pi0):
             fake_obs_image = next(iter(fake_obs.images.values()))
             b, h, w, c = fake_obs_image.shape
             # 2. Define the new 4D shape
-            new_shape = (b, 224, 224, c)
+            new_shape = (b, 1, 224, 224, c)
             fake_image_resized = jax.image.resize(fake_obs_image, new_shape, method="linear")
             # resize
             img.lazy_init(fake_image_resized, train=False, rngs=rngs)
