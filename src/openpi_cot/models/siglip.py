@@ -18,8 +18,6 @@
 from collections.abc import Sequence
 
 import einops
-from sympy import Float
-
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
@@ -190,11 +188,11 @@ class MAPHead(nn.Module):
         return x[:, 0]
 
 def patchify_images(
-    images: Float["B H W C"],
+    images: jnp.ndarray,
     *,
     patch_size: tuple[int, int],
     padding: str = "VALID",
-    ) -> Float["B P D"]:
+    ) -> jnp.ndarray:
     """Extract patches from images.
 
     This function is a wrapper for jax.lax.conv_general_dilated_patches
