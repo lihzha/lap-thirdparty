@@ -330,8 +330,14 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         # Reshape back to sequence: [1, H, W, D] -> [1, H*W, D]
         return np.array(pos_emb_resized.reshape(1, new_h * new_w, dim))
 
-    def _remap_siglip(self, siglip_params: dict) -> dict:
-        """Remap SigLiP from encoderblock_0, encoderblock_1, ... to stacked encoderblock."""
+    def _remap_siglip(self, siglip_params: dict, target_pos_emb_grid_size: tuple[int, int] | None = None) -> dict:
+        """Remap SigLiP from encoderblock_0, encoderblock_1, ... to stacked encoderblock.
+
+        Args:
+            siglip_params: Raw SigLiP parameters from checkpoint
+            target_pos_emb_grid_size: Target grid size for positional embeddings (h, w).
+                                     If None, no resizing will be performed.
+        """
         siglip_encoder = siglip_params.get("siglip_encoder", {})
         transformer = siglip_encoder.get("Transformer", {})
 
@@ -393,7 +399,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             pos_emb = siglip_encoder["pos_embedding"]
 
             # Resize positional embeddings if target grid size is specified
-            if self.target_pos_emb_grid_size is not None:
+            if target_pos_emb_grid_size is not None:
                 current_num_patches = pos_emb.shape[1]  # Shape is [1, num_patches, dim]
                 current_grid_size = int(np.sqrt(current_num_patches))
 
@@ -404,14 +410,14 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
                         f"Assuming grid size of {current_grid_size}x{current_grid_size}"
                     )
 
-                target_h, target_w = self.target_pos_emb_grid_size
+                target_h, target_w = target_pos_emb_grid_size
 
                 # Only resize if sizes differ
                 if current_grid_size != target_h or current_grid_size != target_w:
                     pos_emb = self._resize_positional_embedding(
                         pos_emb,
                         (current_grid_size, current_grid_size),
-                        self.target_pos_emb_grid_size
+                        target_pos_emb_grid_size
                     )
                 else:
                     logger.info(
@@ -424,6 +430,28 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
 
     def load(self, params: at.Params) -> at.Params:
         logger.info("Loading Gemma3 weights using Gemma3ScanCompatibleWeightLoader...")
+
+        # Determine target positional embedding size from model params
+        target_pos_emb_grid_size = self.target_pos_emb_grid_size
+        if target_pos_emb_grid_size is None:
+            # Try to auto-detect from model params
+            try:
+                model_pos_emb_shape = params.get("PaliGemma", {}).get("img", {}).get("pos_embedding", None)
+                if model_pos_emb_shape is not None and hasattr(model_pos_emb_shape, "shape"):
+                    target_num_patches = model_pos_emb_shape.shape[1]
+                    target_grid_size = int(np.sqrt(target_num_patches))
+                    if target_grid_size * target_grid_size == target_num_patches:
+                        target_pos_emb_grid_size = (target_grid_size, target_grid_size)
+                        logger.info(
+                            f"Auto-detected target positional embedding grid size: "
+                            f"{target_grid_size}x{target_grid_size} ({target_num_patches} patches)"
+                        )
+                    else:
+                        logger.warning(
+                            f"Could not auto-detect square grid size from {target_num_patches} patches"
+                        )
+            except Exception as e:
+                logger.warning(f"Could not auto-detect target positional embedding size: {e}")
 
         # Load raw checkpoint
         loaded_params = restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
@@ -505,7 +533,10 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
             siglip_remapped = None
             if "SigLiPFromPatches_0" in flat_original:
                 logger.info("Remapping SigLiP vision encoder...")
-                siglip_remapped = self._remap_siglip(flat_original["SigLiPFromPatches_0"])
+                siglip_remapped = self._remap_siglip(
+                    flat_original["SigLiPFromPatches_0"],
+                    target_pos_emb_grid_size=target_pos_emb_grid_size
+                )
 
             # ===== BUILD PALIGEMMA STRUCTURE =====
 
