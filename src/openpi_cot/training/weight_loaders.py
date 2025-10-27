@@ -15,6 +15,7 @@ import numpy as np
 import openpi.models.model as _model
 import openpi.shared.array_typing as at
 import orbax.checkpoint as ocp
+from scipy import ndimage
 
 import openpi_cot.shared.download as download
 
@@ -322,20 +323,15 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         # Reshape to 2D grid: [1, H*W, D] -> [1, H, W, D]
         pos_emb_2d = pos_emb.reshape(1, orig_h, orig_w, dim)
 
-        # Convert to JAX array for resizing
-        pos_emb_2d_jax = jnp.asarray(pos_emb_2d)
+        # Use scipy.ndimage.zoom for bicubic interpolation (pure numpy, no device issues)
+        # Compute zoom factors for each dimension: [batch, height, width, channels]
+        zoom_factors = [1.0, new_h / orig_h, new_w / orig_w, 1.0]
 
-        # Use bicubic interpolation for high-quality resizing
-        pos_emb_resized_jax = jax.image.resize(pos_emb_2d_jax, shape=(1, new_h, new_w, dim), method="bicubic")
+        # order=3 gives bicubic interpolation
+        pos_emb_resized = ndimage.zoom(pos_emb_2d, zoom_factors, order=3, mode='reflect')
 
         # Reshape back to sequence: [1, H, W, D] -> [1, H*W, D]
-        pos_emb_reshaped = pos_emb_resized_jax.reshape(1, new_h * new_w, dim)
-
-        # Force conversion to plain numpy array in host memory
-        # First convert to numpy, then create a fresh copy to ensure it's not device-backed
-        result_raw = np.asarray(pos_emb_reshaped)
-        result = np.empty_like(result_raw, dtype=original_dtype)
-        np.copyto(result, result_raw)
+        result = pos_emb_resized.reshape(1, new_h * new_w, dim).astype(original_dtype)
 
         # Verify it's a numpy array
         assert isinstance(result, np.ndarray), f"Expected numpy array, got {type(result)}"
