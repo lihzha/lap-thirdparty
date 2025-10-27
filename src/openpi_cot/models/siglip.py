@@ -252,12 +252,12 @@ class _Module(nn.Module):
     def __call__(self, image, *, train=False):
         out = {}
 
-        *batch_dims, _, _, _ = images.shape
-        images = einops.rearrange(images, "... h w c -> (...) h w c")
+        *batch_dims, _, _, _ = image.shape
+        image = einops.rearrange(image, "... h w c -> (...) h w c")
 
 
         patches = patchify_images(
-            images,
+            image,
             patch_size=(14, 14),
         )
         patches = patches.reshape((*batch_dims,) + patches.shape[1:])
@@ -285,7 +285,7 @@ class _Module(nn.Module):
 
         # Kevin edit: do patch extraction and posemb in float32,
         # because I feel like it's a bit safer.
-        image = jnp.asarray(image, jnp.float32)
+        image = jnp.asarray(flattened_images, jnp.float32)
         # WE NEED TO MAKE THE IMAGE BE 896x896 FOR GEMMA3
         #image = jax.image.resize(image, (896, 896), method='linear')
 
