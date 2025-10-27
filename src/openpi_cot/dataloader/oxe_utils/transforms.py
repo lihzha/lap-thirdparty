@@ -1633,14 +1633,16 @@ def planning_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["state"] = tf.concat(
         (
             trajectory["observation"]["state"][:, :3],
-            wxyz_to_r6(trajectory["observation"]["state"][:, 3:7]),
-            trajectory["observation"]["state"][:, 7:],
+            trajectory["observation"]["state"][:, 3:6],
+            wxyz_to_r6(trajectory["observation"]["state"][:, 6:10]),
+            trajectory["observation"]["state"][:, 10:],
         ),
         axis=-1,
     )
 
     trajectory["action"] = tf.concat(
         (
+            trajectory["action"][:, :3],
             trajectory["action"][:, 3:6],
             axis_angle_to_r6(trajectory["action"][:, 6:9]),
             trajectory["action"][:, 9:],
