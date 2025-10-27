@@ -384,6 +384,7 @@ class CoTRLDSDataLoader:
 
         Args:
             checkpoint_dir: Directory to save the checkpoint files.
+                           Supports both local paths and GCS paths (gs://...).
 
         Returns:
             The checkpoint prefix path used for saving.
@@ -394,10 +395,13 @@ class CoTRLDSDataLoader:
             - Requires persistent_iterator=True when creating the dataloader
             - Limitations: Cannot checkpoint iterators with external state (e.g., tf.py_function)
             - Checkpoint files may be large due to buffering from shuffle/prefetch operations
+            - For GCS paths, ensure you have sufficient local temporary storage space
 
         Example:
             >>> loader.save_dataloader_state("./checkpoints/dataloader")
             './checkpoints/dataloader/ckpt-1'
+            >>> loader.save_dataloader_state("gs://my-bucket/checkpoints/dataloader")
+            'gs://my-bucket/checkpoints/dataloader/ckpt-1'
         """
         if not self._persistent_iterator:
             raise ValueError(
@@ -405,8 +409,9 @@ class CoTRLDSDataLoader:
                 "Please recreate the dataloader with this flag enabled."
             )
 
-        if not os.path.exists(checkpoint_dir):
-            os.makedirs(checkpoint_dir, exist_ok=True)
+        # Use tf.io.gfile for GCS compatibility
+        if not tf.io.gfile.exists(checkpoint_dir):
+            tf.io.gfile.makedirs(checkpoint_dir)
 
         # Get the persistent TensorFlow iterator from the dataset
         if self._iterator is None:
@@ -434,6 +439,7 @@ class CoTRLDSDataLoader:
 
         Args:
             checkpoint_dir: Directory containing the checkpoint files.
+                           Supports both local paths and GCS paths (gs://...).
 
         Returns:
             The number of batches that were seen when the checkpoint was saved.
@@ -450,6 +456,8 @@ class CoTRLDSDataLoader:
 
         Example:
             >>> batches_seen = loader.load_dataloader_state("./checkpoints/dataloader")
+            >>> print(f"Resuming from batch {batches_seen}")
+            >>> batches_seen = loader.load_dataloader_state("gs://my-bucket/checkpoints/dataloader")
             >>> print(f"Resuming from batch {batches_seen}")
         """
         if not self._persistent_iterator:

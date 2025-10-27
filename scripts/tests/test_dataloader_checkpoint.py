@@ -3,12 +3,21 @@
 This test mimics the dataloader creation in train.py and verifies that
 save/load functionality works correctly.
 
-NOTE: This test saves checkpoints to Google Cloud Storage to avoid "no space left on device" errors.
-Set the GCS_TEST_BUCKET environment variable before running:
+NOTE: This test saves checkpoints to Google Cloud Storage.
+      However, TensorFlow still needs local temporary storage for staging files.
+
+REQUIREMENTS:
+1. Set GCS_TEST_BUCKET environment variable:
     export GCS_TEST_BUCKET='gs://your-bucket/test-checkpoints'
+
+2. (Optional) If you get "no space left on device" errors, set TMPDIR to a location with more space:
+    export TMPDIR=/path/to/large/disk/tmp
+    # Or mount a larger tmpfs:
+    # sudo mount -o remount,size=20G /tmp
 
 Example:
     export GCS_TEST_BUCKET='gs://my-bucket/test-checkpoints'
+    export TMPDIR=/mnt/large-disk/tmp  # Optional, only if you have disk space issues
     python scripts/tests/test_dataloader_checkpoint.py --config-name=your_config
 """
 
@@ -25,6 +34,40 @@ import tensorflow as tf
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 import openpi_cot.training.config as _config
+
+
+def configure_tensorflow_temp_dir():
+    """Configure TensorFlow to use a temporary directory with sufficient space.
+
+    TensorFlow needs local temporary storage even when saving to GCS.
+    This function checks if TMPDIR is set and provides helpful error messages.
+    """
+    tmpdir = os.environ.get('TMPDIR', tempfile.gettempdir())
+
+    # Check available space in temp directory
+    try:
+        import shutil
+        stat = shutil.disk_usage(tmpdir)
+        available_gb = stat.free / (1024**3)
+
+        logging.info(f"Using temporary directory: {tmpdir}")
+        logging.info(f"Available space: {available_gb:.2f} GB")
+
+        if available_gb < 5:
+            logging.warning("=" * 80)
+            logging.warning("WARNING: Low disk space in temporary directory!")
+            logging.warning(f"Only {available_gb:.2f} GB available in {tmpdir}")
+            logging.warning("TensorFlow needs local temp space even when saving to GCS.")
+            logging.warning("If you encounter 'no space left' errors, try:")
+            logging.warning("  1. Set TMPDIR to a location with more space:")
+            logging.warning("     export TMPDIR=/path/to/large/disk/tmp")
+            logging.warning("  2. Or mount a larger tmpfs:")
+            logging.warning("     sudo mount -o remount,size=20G /tmp")
+            logging.warning("=" * 80)
+    except Exception as e:
+        logging.warning(f"Could not check disk space: {e}")
+
+    return tmpdir
 
 
 def setup_logging():
@@ -416,6 +459,13 @@ def main():
 
     logging.info("=" * 80)
     logging.info(f"Using GCS bucket: {gcs_bucket}")
+    logging.info("=" * 80)
+
+    # Configure TensorFlow temporary directory
+    logging.info("\n" + "=" * 80)
+    logging.info("Checking TensorFlow Temporary Directory Configuration")
+    logging.info("=" * 80)
+    tmpdir = configure_tensorflow_temp_dir()
     logging.info("=" * 80)
 
     # Test 1: Basic save/load functionality
