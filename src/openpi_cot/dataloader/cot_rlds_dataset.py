@@ -152,6 +152,7 @@ def prepare_batched_dataset(
     primary_image_key,
     wrist_image_key,
     wrist_image_right_key=None,
+    checkpointable=False,
 ):
     if (not want_val) and shuffle and max_samples is None:
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
@@ -167,11 +168,18 @@ def prepare_batched_dataset(
     dataset = dataset.frame_map(decode_fn, tf.data.AUTOTUNE)
 
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    try:
-        dataset = dataset.prefetch_to_device(2)
-    except Exception:
+
+    # Only apply non-checkpointable operations if not in checkpointable mode
+    if not checkpointable:
+        try:
+            dataset = dataset.prefetch_to_device(2)
+        except Exception:
+            dataset = dataset.prefetch(2)
+        dataset = dataset.with_ram_budget(1)
+    else:
+        # Use standard prefetch for checkpointable mode
         dataset = dataset.prefetch(2)
-    dataset = dataset.with_ram_budget(1)
+
     return dataset
 
 
@@ -417,6 +425,23 @@ class _SingleCoTDataset:
         self.apply_frame_filters()
 
         if standalone:
+            # Store parameters needed for creating checkpointable dataset
+            self._prepare_batched_params = {
+                "want_val": self.want_val,
+                "shuffle": shuffle,
+                "shuffle_buffer_size": config.shuffle_buffer_size,
+                "seed": seed,
+                "max_samples": max_samples,
+                "batch_size": batch_size,
+                "resize_resolution": config.resize_resolution,
+                "primary_image_key": self.spec.primary_image_key,
+                "wrist_image_key": self.spec.wrist_image_key,
+                "wrist_image_right_key": self.spec.wrist_image_right_key,
+            }
+
+            # Store the pre-batched dataset for creating checkpointable versions
+            self._pre_batched_dataset = self.dataset
+
             # Apply common shuffling/take/cache behavior
             self.dataset = prepare_batched_dataset(
                 dataset=self.dataset,
@@ -725,13 +750,25 @@ class _SingleCoTDataset:
     def create_checkpointable_iterator(self):
         """Create an iterator that can be checkpointed.
 
+        This creates a version of the dataset without device-specific operations
+        (like prefetch_to_device and with_ram_budget) that cannot be serialized.
+
         Returns:
             A TensorFlow iterator that can be saved/restored using tf.train.Checkpoint.
 
         Note:
-            This returns a TensorFlow iterator, not a numpy iterator. The caller should
-            use `next(iterator)` and convert to numpy arrays as needed.
+            This iterator will be slightly slower than the normal iterator because
+            it doesn't use device-specific optimizations, but it can be checkpointed.
         """
+        # If standalone mode with stored params, create checkpointable version
+        if hasattr(self, '_pre_batched_dataset') and hasattr(self, '_prepare_batched_params'):
+            checkpointable_dataset = prepare_batched_dataset(
+                dataset=self._pre_batched_dataset,
+                checkpointable=True,
+                **self._prepare_batched_params,
+            )
+            return iter(checkpointable_dataset)
+        # Fallback to regular dataset (non-standalone mode)
         return iter(self.dataset)
 
     def __len__(self):
@@ -1924,6 +1961,23 @@ class OXECoTDatasets:
             self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
             self.global_statistics = None
 
+        # Store parameters needed for creating checkpointable dataset
+        self._prepare_batched_params = {
+            "want_val": want_val,
+            "shuffle": shuffle,
+            "shuffle_buffer_size": config.shuffle_buffer_size,
+            "seed": seed,
+            "max_samples": max_samples,
+            "batch_size": batch_size,
+            "resize_resolution": config.resize_resolution,
+            "primary_image_key": self.spec.primary_image_key,
+            "wrist_image_key": self.spec.wrist_image_key,
+            "wrist_image_right_key": self.spec.wrist_image_right_key,
+        }
+
+        # Store the pre-batched dataset for creating checkpointable versions
+        self._pre_batched_dataset = self.dataset
+
         self.dataset = prepare_batched_dataset(
             dataset=self.dataset,
             want_val=want_val,
@@ -2134,6 +2188,27 @@ class OXECoTDatasets:
                 logging.info("StopIteration")
                 return
             yield batch
+
+    def create_checkpointable_iterator(self):
+        """Create an iterator that can be checkpointed.
+
+        This creates a version of the dataset without device-specific operations
+        (like prefetch_to_device and with_ram_budget) that cannot be serialized.
+
+        Returns:
+            A TensorFlow iterator that can be saved/restored using tf.train.Checkpoint.
+
+        Note:
+            This iterator will be slightly slower than the normal iterator because
+            it doesn't use device-specific optimizations, but it can be checkpointed.
+        """
+        # Create a checkpointable version of the dataset
+        checkpointable_dataset = prepare_batched_dataset(
+            dataset=self._pre_batched_dataset,
+            checkpointable=True,
+            **self._prepare_batched_params,
+        )
+        return iter(checkpointable_dataset)
 
     def __len__(self):
         return self.dataset_length
