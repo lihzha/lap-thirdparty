@@ -77,7 +77,7 @@ class Config:
     param_dtype: str = "bfloat16"  # parameter storage dtype
 
 
-Variant = Literal["gemma2_300m", "gemma2_2b"]
+Variant = Literal["gemma2_300m", "gemma2_2b", "gemma2_9b", "gemma2_27b", "gemma2_2b_lora"]
 
 
 def get_config(variant: Variant) -> Config:
