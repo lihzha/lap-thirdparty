@@ -33,11 +33,28 @@ import openpi_cot.training.config as _config
 
 
 def setup_logging():
-    """Setup basic logging for the test."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+    """Custom logging format for better readability."""
+    level_mapping = {
+        "DEBUG": "D",
+        "INFO": "I",
+        "WARNING": "W",
+        "ERROR": "E",
+        "CRITICAL": "C",
+    }
+
+    class CustomFormatter(logging.Formatter):
+        def format(self, record):
+            record.levelname = level_mapping.get(record.levelname, record.levelname)
+            return super().format(record)
+
+    formatter = CustomFormatter(
+        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)",
+        datefmt="%H:%M:%S",
     )
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.handlers[0].setFormatter(formatter)
 
 
 def get_gcs_test_path(bucket: str = None) -> str:
