@@ -450,7 +450,7 @@ class _SingleCoTDataset:
         dataset = dl.DLataset.from_rlds(
             builder,
             split="all",
-            shuffle=bool(self.want_val),  # shuffle at file/shard level for first-level randomness
+            shuffle=bool(not self.want_val),  # shuffle at file/shard level for first-level randomness
             num_parallel_reads=self.num_parallel_reads,
         )
         dataset = dataset.shard(jax.process_count(), jax.process_index())

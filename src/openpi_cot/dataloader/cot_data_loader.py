@@ -428,7 +428,7 @@ class CoTRLDSDataLoader:
         self._checkpoint = tf.train.Checkpoint(step=step, iterator=self._iterator)
 
         # Save the checkpoint
-        checkpoint_prefix = os.path.join(checkpoint_dir, "ckpt")
+        checkpoint_prefix = tf.io.gfile.join(checkpoint_dir, "ckpt")
         save_path = self._checkpoint.save(checkpoint_prefix)
         logging.info(f"Saved dataloader state to {save_path} (batch {self._seen_batches})")
 
