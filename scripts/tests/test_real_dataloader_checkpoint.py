@@ -16,7 +16,23 @@ REQUIREMENTS:
 
 Example:
     export GCS_TEST_BUCKET='gs://my-bucket/test-checkpoints'
+
+    # Using default config (pi_combined_cot_v4)
     python scripts/tests/test_real_dataloader_checkpoint.py
+
+    # Specify a different config
+    python scripts/tests/test_real_dataloader_checkpoint.py \
+        --config-name pi_droid_cot_v4
+
+    # With test parameter overrides
+    python scripts/tests/test_real_dataloader_checkpoint.py \
+        --config-name pi_combined_cot_v4 \
+        --test-buffer-size 5000 \
+        --test-batch-size 8
+
+    # Specify GCS bucket via command line
+    python scripts/tests/test_real_dataloader_checkpoint.py \
+        --gcs-bucket 'gs://my-bucket/test-checkpoints'
 
 TEST PARAMETERS:
 - Shuffle buffer: 1,000 samples (reduced from production 250,000 for testing)
@@ -30,18 +46,21 @@ import logging
 import os
 import pathlib
 import shutil
+import sys
 import time
 from typing import Any
 
 import jax
 import numpy as np
 import tensorflow as tf
+import tyro
 
 # Import the actual dataloader
 from openpi_cot.dataloader import cot_data_loader
 from openpi_cot.dataloader.helpers import ActionEncoding, StateEncoding
 from openpi_cot.models.pi_cot_config import PiCoTConfig
 from openpi_cot.training.config import CoTDataConfig, RLDSCoTDataConfig, TrainConfig
+import openpi_cot.training.config as _config
 
 
 def setup_logging():
@@ -101,61 +120,6 @@ def cleanup_gcs_path(gcs_path: str):
         logging.warning(f"Failed to cleanup GCS path {gcs_path}: {e}")
 
 
-def create_test_config(
-    shuffle_buffer_size: int = 1000,
-    batch_size: int = 4,
-    data_dir: str = "gs://pi0-cot/OXE",
-) -> TrainConfig:
-    """Create a minimal test configuration.
-
-    Args:
-        shuffle_buffer_size: Size of shuffle buffer (default 1000 for testing)
-        batch_size: Batch size for training
-        data_dir: Path to dataset directory
-
-    Returns:
-        TrainConfig instance configured for testing
-    """
-    # Create minimal model config
-    model_config = PiCoTConfig(
-        action_horizon=10,
-        action_dim=32,  # Padded action dimension
-        max_token_len=180,
-        pi05=True,
-        discrete_state_input=True,
-        enable_prediction_training=False,
-    )
-
-    # Create minimal data config with small buffer
-    data_config = RLDSCoTDataConfig(
-        repo_id="combined",
-        asset_id="combined",
-        dataset_type="oxe",
-        rlds_data_dir=data_dir,
-        data_mix="oxe_magic_soup_plus_minus_aloha_sim",  # Small mix for testing
-        shuffle_buffer_size=shuffle_buffer_size,
-        max_samples=None,  # Use all available data
-        state_encoding=StateEncoding.POS_EULER,
-        action_encoding=ActionEncoding.EEF_POS,
-        resize_resolution=(224, 224),
-        use_wrist_image=False,  # Disable to reduce memory
-        wrist_image_dropout_prob=0.0,
-    )
-
-    # Create train config
-    config = TrainConfig(
-        name="test_checkpoint",
-        model=model_config,
-        data=data_config,
-        batch_size=batch_size,
-        fsdp_devices=1,
-        checkpoint_base_dir="/tmp/test_checkpoints",
-        assets_base_dir="/tmp/test_assets",
-    )
-
-    return config
-
-
 def collect_batch_ids(dataloader, num_batches: int = 5) -> list[Any]:
     """Collect batch identifiers to track position in dataset.
 
@@ -185,18 +149,14 @@ def collect_batch_ids(dataloader, num_batches: int = 5) -> list[Any]:
 
 
 def test_save_and_load_real_dataloader(
-    gcs_bucket: str = None,
-    test_buffer_size: int = 1000,
-    batch_size: int = 4,
-    data_dir: str = "gs://pi0-cot/OXE",
-):
+    config: TrainConfig,
+    gcs_bucket: str | None = None,
+) -> bool:
     """Test saving and loading real dataloader state.
 
     Args:
-        gcs_bucket: GCS bucket path for checkpoints
-        test_buffer_size: Shuffle buffer size for testing (default 1000)
-        batch_size: Batch size for training
-        data_dir: Path to dataset directory
+        config: Training configuration (with test-specific modifications)
+        gcs_bucket: GCS bucket path for checkpoints (reads from env if None)
 
     Returns:
         True if test passes, False otherwise
@@ -206,6 +166,16 @@ def test_save_and_load_real_dataloader(
     logging.info("=" * 80)
     logging.info("Testing Real DataLoader Checkpoint Save/Load Functionality")
     logging.info("=" * 80)
+
+    # Extract parameters from config
+    test_buffer_size = config.data.shuffle_buffer_size
+    batch_size = config.batch_size
+    data_dir = config.data.rlds_data_dir
+
+    logging.info(f"Config: {config.name}")
+    logging.info(f"Dataset type: {config.data.dataset_type}")
+    logging.info(f"Data mix: {getattr(config.data, 'data_mix', 'N/A')}")
+    logging.info(f"Data directory: {data_dir}")
 
     # Calculate estimated checkpoint size
     sample_size_kb = 1500  # Realistic estimate for 224x224 images
@@ -256,14 +226,6 @@ def test_save_and_load_real_dataloader(
         logging.info("\n" + "=" * 80)
         logging.info("Part 1: Create real dataloader and save checkpoint")
         logging.info("=" * 80)
-
-        # Create config
-        logging.info("Creating test configuration...")
-        config = create_test_config(
-            shuffle_buffer_size=test_buffer_size,
-            batch_size=batch_size,
-            data_dir=data_dir,
-        )
 
         # Initialize JAX if not already initialized (required for create_data_loader)
         logging.info("Initializing JAX...")
@@ -432,22 +394,23 @@ def test_save_and_load_real_dataloader(
         # Clean up GCS checkpoint directory
         cleanup_gcs_path(base_path)
 
-
-def main():
-    """Main test function."""
-    import sys
+def main(config: _config.TrainConfig):
+    """Main test function with command-line argument parsing."""
+    # Parse command-line arguments using tyro
 
     setup_logging()
+
 
     # Check that GCS bucket is configured
     gcs_bucket = os.environ.get('GCS_TEST_BUCKET')
     if not gcs_bucket:
         logging.error("=" * 80)
-        logging.error("ERROR: GCS_TEST_BUCKET environment variable not set")
+        logging.error("ERROR: GCS_TEST_BUCKET not configured")
         logging.error("=" * 80)
         logging.error("This test requires a GCS bucket to save checkpoints.")
-        logging.error("Set the GCS_TEST_BUCKET environment variable before running:")
-        logging.error("  export GCS_TEST_BUCKET='gs://your-bucket/test-checkpoints'")
+        logging.error("Set either:")
+        logging.error("  1. Environment variable: export GCS_TEST_BUCKET='gs://your-bucket/test-checkpoints'")
+        logging.error("  2. Command line flag: --gcs-bucket 'gs://your-bucket/test-checkpoints'")
         logging.error("=" * 80)
         sys.exit(1)
 
@@ -462,14 +425,13 @@ def main():
     logging.info("This test uses the actual production dataloader:")
     logging.info("  - OXECoTDatasets from dataset_mixer.py")
     logging.info("  - CoTRLDSDataLoader from cot_data_loader.py")
-    logging.info("  - Shuffle buffer: 1,000 (reduced from production 250k)")
-    logging.info("  - Batch size: 4")
+    logging.info(f"  - Shuffle buffer: {config.data.shuffle_buffer_size:,} (reduced from production 250k)")
+    logging.info(f"  - Batch size: {config.batch_size}")
     logging.info("=" * 80)
 
     success = test_save_and_load_real_dataloader(
+        config=config,
         gcs_bucket=gcs_bucket,
-        test_buffer_size=1000,
-        batch_size=4,
     )
 
     if not success:
@@ -481,6 +443,5 @@ def main():
     logging.info("=" * 80)
     sys.exit(0)
 
-
 if __name__ == "__main__":
-    main()
+    main(_config.cli())
