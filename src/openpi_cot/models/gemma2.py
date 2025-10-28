@@ -144,7 +144,7 @@ def get_config(variant: Variant) -> Config:
             final_logits_softcap=30.0,
             attn_logits_softcap=50.0,
             post_norms=True,
-            lora_configs=({"attn": lora.LoRAConfig(rank=16, alpha=16.0), "ffn": lora.LoRAConfig(rank=16, alpha=16.0)},),
+            lora_configs={"attn": lora.LoRAConfig(rank=16, alpha=16.0), "ffn": lora.LoRAConfig(rank=16, alpha=16.0)},
         )
 
     raise ValueError(f"Unknown variant: {variant}")
