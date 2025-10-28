@@ -533,8 +533,6 @@ class PiCoT(_pi0.Pi0):
             observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
         )
 
-        breakpoint()
-
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
         critical_token_accuracy = jnp.array(0.0)
