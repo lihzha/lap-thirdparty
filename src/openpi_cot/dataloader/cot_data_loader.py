@@ -11,8 +11,8 @@ import openpi.training.data_loader as up  # upstream module
 import openpi.transforms as up_tf
 import tensorflow as tf
 
-from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTDataset
-from openpi_cot.dataloader.cot_rlds_dataset import OXECoTDatasets
+from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
+from openpi_cot.dataloader.dataset_mixer import OXECoTDatasets
 from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
