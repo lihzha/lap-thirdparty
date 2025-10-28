@@ -1,19 +1,31 @@
-"""Test dataloader state checkpointing with SMALL shuffle buffer.
+"""Test dataloader state checkpointing with REALISTIC data dimensions.
 
 THE PROBLEM: Default shuffle_buffer_size is 250,000-400,000 samples.
-Each sample has images + state + actions ≈ 100KB-1MB per sample.
-Shuffle buffer alone = 25-400 GB in memory!
+Each sample has images + state + actions ≈ 1.5 MB per sample.
+Shuffle buffer alone = 375+ GB in memory!
 TensorFlow checkpoint saves the ENTIRE shuffle buffer → massive disk usage.
 
-THE SOLUTION: Use a tiny shuffle buffer (100-1000 samples) for testing.
+THE SOLUTION: Use a reduced shuffle buffer (1,000-5,000 samples) for testing.
+This test uses realistic data dimensions (224x224 images, seq_len=10) to simulate
+production scenarios while keeping checkpoint size manageable (~3 GB).
 
 REQUIREMENTS:
 1. Set GCS_TEST_BUCKET environment variable:
     export GCS_TEST_BUCKET='gs://your-bucket/test-checkpoints'
 
+2. Ensure sufficient disk space in temp directory (~5 GB free recommended):
+    export TMPDIR=/path/to/large/disk/tmp  # Optional: if /tmp has limited space
+
 Example:
     export GCS_TEST_BUCKET='gs://my-bucket/test-checkpoints'
     python scripts/tests/test_dataloader_checkpoint_small_buffer.py
+
+REALISTIC TEST PARAMETERS:
+- Image size: 224x224 (standard for vision models)
+- Sequence length: 10 frames
+- Shuffle buffer: 1,000 samples (vs 250,000 in production)
+- Batch size: 16
+- Estimated checkpoint size: ~3 GB (vs ~375 GB for production)
 """
 
 import logging
@@ -61,15 +73,22 @@ class DummyObservation:
 
 @dataclass
 class DummyConfig:
-    """Dummy config for testing."""
-    shuffle_buffer_size: int = 100
-    batch_size: int = 8  # Reduced from 32
-    num_samples: int = 1000
-    seq_len: int = 2  # Reduced from 10
+    """Dummy config for testing.
+
+    These values simulate realistic production scenarios:
+    - Image size: 224x224 (standard for vision models)
+    - Sequence length: 10 (typical trajectory length)
+    - Batch size: 16 (common training batch size)
+    - Shuffle buffer: 1000-5000 (reduced from production 250k for testing)
+    """
+    shuffle_buffer_size: int = 1000
+    batch_size: int = 16
+    num_samples: int = 5000  # Enough samples to fill shuffle buffer multiple times
+    seq_len: int = 10
     state_dim: int = 7
     action_dim: int = 7
-    image_height: int = 224  # Reduced from 224
-    image_width: int = 224  # Reduced from 224
+    image_height: int = 224
+    image_width: int = 224
 
 
 class DummyDataLoader:
@@ -268,13 +287,15 @@ def cleanup_gcs_path(gcs_path: str):
         logging.warning(f"Failed to cleanup GCS path {gcs_path}: {e}")
 
 
-def estimate_checkpoint_size(shuffle_buffer_size: int, batch_size: int = 8, sample_size_kb: int = 500):
+def estimate_checkpoint_size(shuffle_buffer_size: int, batch_size: int = 16, sample_size_kb: int = 1500):
     """Estimate checkpoint size based on shuffle buffer size.
 
     Args:
         shuffle_buffer_size: Size of shuffle buffer
         batch_size: Batch size
-        sample_size_kb: Estimated size per sample in KB (default 500 for production with 224x224 images)
+        sample_size_kb: Estimated size per sample in KB
+            - Production (seq=10, 224x224 images): ~1500 KB/sample
+            - Small test (seq=2, 32x32 images): ~12 KB/sample
 
     Returns:
         Estimated size in GB
@@ -291,11 +312,22 @@ def estimate_checkpoint_size(shuffle_buffer_size: int, batch_size: int = 8, samp
     return total_with_overhead
 
 
-def create_test_dataloader(shuffle_buffer_size: int = 100, seed: int = 42, persistent_iterator: bool = True):
-    """Create a dummy dataloader for testing."""
+def create_test_dataloader(shuffle_buffer_size: int = 1000, seed: int = 42, persistent_iterator: bool = True):
+    """Create a dummy dataloader for testing.
+
+    Args:
+        shuffle_buffer_size: Size of shuffle buffer (default 1000 for realistic testing)
+        seed: Random seed
+        persistent_iterator: Whether to use persistent iterator
+
+    Returns:
+        DummyDataLoader instance
+    """
     config = DummyConfig(shuffle_buffer_size=shuffle_buffer_size)
 
     logging.info(f"Creating dataloader with shuffle_buffer_size={shuffle_buffer_size}, persistent_iterator={persistent_iterator}")
+    logging.info(f"Data shape: {config.num_samples} samples, seq_len={config.seq_len}, images={config.image_height}x{config.image_width}")
+
     data_loader = DummyDataLoader(
         config,
         seed=seed,
@@ -324,46 +356,49 @@ def collect_batch_ids(dataloader, num_batches=5):
     return batch_ids
 
 
-def test_save_and_load_dataloader(gcs_bucket: str = None, test_buffer_size: int = 100):
-    """Test saving and loading dataloader state with small buffer.
+def test_save_and_load_dataloader(gcs_bucket: str = None, test_buffer_size: int = 1000):
+    """Test saving and loading dataloader state with realistic buffer size.
 
     Args:
         gcs_bucket: GCS bucket path for checkpoints.
-        test_buffer_size: Shuffle buffer size for testing (default 100)
+        test_buffer_size: Shuffle buffer size for testing (default 1000 for realistic testing)
     """
     setup_logging()
 
     logging.info("=" * 80)
     logging.info("Testing DataLoader Checkpoint Save/Load Functionality")
-    logging.info("WITH SMALL SHUFFLE BUFFER FOR TESTING")
+    logging.info("WITH REALISTIC DATA DIMENSIONS")
     logging.info("=" * 80)
 
-    # Calculate sample sizes
-    # Production: seq_len=10, images=(224,224,3) → ~1500 KB per sample
-    # Test: seq_len=2, images=(32,32,3) → ~12 KB per sample
-    production_sample_kb = 500  # Conservative estimate for production
-    test_sample_kb = 12  # Estimate for test dummy data (2 * 32 * 32 * 3 + state/action)
+    # Calculate sample sizes based on actual data dimensions
+    # Realistic: seq_len=10, images=(224,224,3) → ~1500 KB per sample
+    # Each sample = 10 frames * 224 * 224 * 3 bytes + state/action ≈ 1.5 MB
+    test_sample_kb = 1500  # Realistic estimate for 224x224 images, seq_len=10
 
     # Show original checkpoint size estimate (with typical production buffer size)
     original_buffer_size = 250000
-    original_size_gb = estimate_checkpoint_size(original_buffer_size, batch_size=32, sample_size_kb=production_sample_kb)
+    original_size_gb = estimate_checkpoint_size(original_buffer_size, batch_size=32, sample_size_kb=test_sample_kb)
     logging.info(f"\n{'=' * 80}")
     logging.info(f"TYPICAL PRODUCTION CONFIG:")
     logging.info(f"  Buffer size: {original_buffer_size:,}")
-    logging.info(f"  Sample size: ~{production_sample_kb} KB (224x224 images)")
+    logging.info(f"  Batch size: 32")
+    logging.info(f"  Sample size: ~{test_sample_kb} KB (seq=10, 224x224 images)")
     logging.info(f"  Estimated checkpoint: {original_size_gb:.1f} GB")
     logging.info(f"This is why you're getting 'no space left on device'!")
     logging.info(f"{'=' * 80}")
 
-    # Show new checkpoint size estimate
-    new_size_gb = estimate_checkpoint_size(test_buffer_size, batch_size=8, sample_size_kb=test_sample_kb)
+    # Show test checkpoint size estimate
+    new_size_gb = estimate_checkpoint_size(test_buffer_size, batch_size=16, sample_size_kb=test_sample_kb)
     logging.info(f"\n{'=' * 80}")
-    logging.info(f"TEST CONFIG:")
+    logging.info(f"TEST CONFIG (REALISTIC DIMENSIONS):")
     logging.info(f"  Buffer size: {test_buffer_size:,}")
-    logging.info(f"  Sample size: ~{test_sample_kb} KB (32x32 images)")
-    logging.info(f"  Estimated checkpoint: {new_size_gb:.3f} GB")
-    logging.info(f"Reduction: {original_size_gb:.1f} GB → {new_size_gb:.3f} GB ({original_size_gb/new_size_gb:.0f}x smaller)")
+    logging.info(f"  Batch size: 16")
+    logging.info(f"  Sample size: ~{test_sample_kb} KB (seq=10, 224x224 images)")
+    logging.info(f"  Estimated checkpoint: {new_size_gb:.2f} GB")
+    logging.info(f"Reduction: {original_size_gb:.1f} GB → {new_size_gb:.2f} GB ({original_size_gb/new_size_gb:.0f}x smaller)")
     logging.info(f"{'=' * 80}")
+    logging.info(f"\n⚠️  NOTE: This test uses realistic data dimensions!")
+    logging.info(f"  Ensure you have at least {new_size_gb * 1.5:.1f} GB free space in your temp directory.")
 
     # Create GCS path for checkpoints
     try:
@@ -519,13 +554,15 @@ def test_save_and_load_dataloader(gcs_bucket: str = None, test_buffer_size: int 
         logging.info("\n" + "=" * 80)
         logging.info("IMPORTANT NOTE FOR PRODUCTION:")
         logging.info("=" * 80)
-        logging.info(f"This test uses shuffle_buffer_size={test_buffer_size} for testing.")
+        logging.info(f"This test uses shuffle_buffer_size={test_buffer_size:,} (realistic dimensions).")
         logging.info(f"Typical production configs use shuffle_buffer_size={original_buffer_size:,}")
         logging.info("")
         logging.info("For production checkpointing:")
-        logging.info("  - Checkpoint size will be ~100-500GB with default buffer size")
+        logging.info(f"  - This test checkpoint: ~{new_size_gb:.1f} GB")
+        logging.info(f"  - Full production checkpoint: ~{original_size_gb:.0f} GB")
         logging.info("  - You need a disk/bucket with sufficient space")
-        logging.info("  - Consider reducing shuffle_buffer_size if you need frequent checkpointing")
+        logging.info("  - Consider reducing shuffle_buffer_size for frequent checkpointing")
+        logging.info(f"  - Current test proves checkpoint works with {test_buffer_size:,} buffer")
         logging.info("=" * 80)
 
         return True
@@ -558,9 +595,15 @@ def main():
 
     # Run test
     logging.info("\n" + "=" * 80)
-    logging.info("TEST: DataLoader Checkpoint with Small Buffer")
+    logging.info("TEST: DataLoader Checkpoint with Realistic Dimensions")
     logging.info("=" * 80)
-    success = test_save_and_load_dataloader(test_buffer_size=1)
+    logging.info("This test uses realistic data dimensions to simulate production:")
+    logging.info("  - Image size: 224x224 (standard for vision models)")
+    logging.info("  - Sequence length: 10 (typical trajectory)")
+    logging.info("  - Shuffle buffer: 1000 (reduced from production 250k)")
+    logging.info("  - Batch size: 16 (common training size)")
+    logging.info("=" * 80)
+    success = test_save_and_load_dataloader(test_buffer_size=1000)
 
     if not success:
         logging.error("TEST FAILED")
