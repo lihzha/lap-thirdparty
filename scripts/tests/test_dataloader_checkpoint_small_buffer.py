@@ -18,6 +18,7 @@ Example:
 
 import logging
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from typing import Tuple
@@ -62,12 +63,13 @@ class DummyObservation:
 class DummyConfig:
     """Dummy config for testing."""
     shuffle_buffer_size: int = 100
-    batch_size: int = 32
+    batch_size: int = 8  # Reduced from 32
     num_samples: int = 1000
+    seq_len: int = 2  # Reduced from 10
     state_dim: int = 7
     action_dim: int = 7
-    image_height: int = 224
-    image_width: int = 224
+    image_height: int = 32  # Reduced from 224
+    image_width: int = 32  # Reduced from 224
 
 
 class DummyDataLoader:
@@ -91,16 +93,16 @@ class DummyDataLoader:
             rng = np.random.RandomState(self.seed)
             for i in range(self.config.num_samples):
                 # Generate state (seq_len, state_dim)
-                state = rng.randn(10, self.config.state_dim).astype(np.float32)
+                state = rng.randn(self.config.seq_len, self.config.state_dim).astype(np.float32)
 
                 # Generate images (seq_len, height, width, 3)
                 images = rng.randint(0, 255,
-                    size=(10, self.config.image_height, self.config.image_width, 3),
+                    size=(self.config.seq_len, self.config.image_height, self.config.image_width, 3),
                     dtype=np.uint8
                 )
 
                 # Generate actions (seq_len, action_dim)
-                actions = rng.randn(10, self.config.action_dim).astype(np.float32)
+                actions = rng.randn(self.config.seq_len, self.config.action_dim).astype(np.float32)
 
                 yield {
                     'state': state,
@@ -112,9 +114,9 @@ class DummyDataLoader:
         dataset = tf.data.Dataset.from_generator(
             generator,
             output_signature={
-                'state': tf.TensorSpec(shape=(10, self.config.state_dim), dtype=tf.float32),
-                'images': tf.TensorSpec(shape=(10, self.config.image_height, self.config.image_width, 3), dtype=tf.uint8),
-                'actions': tf.TensorSpec(shape=(10, self.config.action_dim), dtype=tf.float32)
+                'state': tf.TensorSpec(shape=(self.config.seq_len, self.config.state_dim), dtype=tf.float32),
+                'images': tf.TensorSpec(shape=(self.config.seq_len, self.config.image_height, self.config.image_width, 3), dtype=tf.uint8),
+                'actions': tf.TensorSpec(shape=(self.config.seq_len, self.config.action_dim), dtype=tf.float32)
             }
         )
 
@@ -248,20 +250,17 @@ def cleanup_gcs_path(gcs_path: str):
         logging.warning(f"Failed to cleanup GCS path {gcs_path}: {e}")
 
 
-def estimate_checkpoint_size(shuffle_buffer_size: int, batch_size: int = 32):
+def estimate_checkpoint_size(shuffle_buffer_size: int, batch_size: int = 8, sample_size_kb: int = 500):
     """Estimate checkpoint size based on shuffle buffer size.
 
     Args:
         shuffle_buffer_size: Size of shuffle buffer
         batch_size: Batch size
+        sample_size_kb: Estimated size per sample in KB (default 500 for production with 224x224 images)
 
     Returns:
         Estimated size in GB
     """
-    # Rough estimate: each sample is ~500KB (with images)
-    # This is conservative - could be smaller or larger
-    sample_size_kb = 500
-
     # Buffer size in GB
     buffer_size_gb = (shuffle_buffer_size * sample_size_kb) / (1024 * 1024)
 
@@ -321,21 +320,31 @@ def test_save_and_load_dataloader(gcs_bucket: str = None, test_buffer_size: int 
     logging.info("WITH SMALL SHUFFLE BUFFER FOR TESTING")
     logging.info("=" * 80)
 
+    # Calculate sample sizes
+    # Production: seq_len=10, images=(224,224,3) → ~1500 KB per sample
+    # Test: seq_len=2, images=(32,32,3) → ~12 KB per sample
+    production_sample_kb = 500  # Conservative estimate for production
+    test_sample_kb = 12  # Estimate for test dummy data (2 * 32 * 32 * 3 + state/action)
+
     # Show original checkpoint size estimate (with typical production buffer size)
     original_buffer_size = 250000
-    original_size_gb = estimate_checkpoint_size(original_buffer_size)
+    original_size_gb = estimate_checkpoint_size(original_buffer_size, batch_size=32, sample_size_kb=production_sample_kb)
     logging.info(f"\n{'=' * 80}")
-    logging.info(f"TYPICAL PRODUCTION BUFFER SIZE: {original_buffer_size:,}")
-    logging.info(f"ESTIMATED CHECKPOINT SIZE: {original_size_gb:.1f} GB")
+    logging.info(f"TYPICAL PRODUCTION CONFIG:")
+    logging.info(f"  Buffer size: {original_buffer_size:,}")
+    logging.info(f"  Sample size: ~{production_sample_kb} KB (224x224 images)")
+    logging.info(f"  Estimated checkpoint: {original_size_gb:.1f} GB")
     logging.info(f"This is why you're getting 'no space left on device'!")
     logging.info(f"{'=' * 80}")
 
     # Show new checkpoint size estimate
-    new_size_gb = estimate_checkpoint_size(test_buffer_size)
+    new_size_gb = estimate_checkpoint_size(test_buffer_size, batch_size=8, sample_size_kb=test_sample_kb)
     logging.info(f"\n{'=' * 80}")
-    logging.info(f"TEST BUFFER SIZE: {test_buffer_size:,}")
-    logging.info(f"ESTIMATED CHECKPOINT SIZE: {new_size_gb:.2f} GB")
-    logging.info(f"Reduction: {original_size_gb:.1f} GB → {new_size_gb:.2f} GB ({original_size_gb/new_size_gb:.0f}x smaller)")
+    logging.info(f"TEST CONFIG:")
+    logging.info(f"  Buffer size: {test_buffer_size:,}")
+    logging.info(f"  Sample size: ~{test_sample_kb} KB (32x32 images)")
+    logging.info(f"  Estimated checkpoint: {new_size_gb:.3f} GB")
+    logging.info(f"Reduction: {original_size_gb:.1f} GB → {new_size_gb:.3f} GB ({original_size_gb/new_size_gb:.0f}x smaller)")
     logging.info(f"{'=' * 80}")
 
     # Create GCS path for checkpoints
@@ -372,15 +381,41 @@ def test_save_and_load_dataloader(gcs_bucket: str = None, test_buffer_size: int 
         # Save checkpoint
         logging.info(f"\nSaving dataloader state to {checkpoint_dir}...")
         logging.info("(This should now be MUCH smaller and faster)")
+
+        # Check local temp directory space
+        tmpdir = os.environ.get('TMPDIR', '/tmp')
+        try:
+            disk_usage = shutil.disk_usage(tmpdir)
+            free_gb = disk_usage.free / (1024**3)
+            logging.info(f"Local temp directory: {tmpdir}")
+            logging.info(f"Free space in temp directory: {free_gb:.2f} GB")
+            if free_gb < new_size_gb:
+                logging.warning(f"⚠️  WARNING: Free space ({free_gb:.2f} GB) may be insufficient for checkpoint ({new_size_gb:.3f} GB)")
+        except Exception as e:
+            logging.warning(f"Could not check disk space: {e}")
+
         try:
             save_path = dataloader1.save_dataloader_state(checkpoint_dir)
             logging.info(f"✓ Successfully saved checkpoint to: {save_path}")
         except Exception as e:
-            logging.error(f"✗ Failed to save checkpoint: {e}")
-            logging.error(f"\nIf you still get 'no space left', try:")
-            logging.error(f"  1. Reduce test_buffer_size even more (currently {test_buffer_size})")
-            logging.error(f"  2. Set TMPDIR to a larger disk:")
-            logging.error(f"     export TMPDIR=/mnt/large-disk/tmp")
+            error_msg = str(e)
+            logging.error(f"✗ Failed to save checkpoint: {error_msg}")
+
+            if "Could not append to the internal temporary file" in error_msg or "No space left" in error_msg:
+                logging.error(f"\n{'=' * 80}")
+                logging.error("DISK SPACE ERROR DETECTED")
+                logging.error(f"{'=' * 80}")
+                logging.error("TensorFlow needs local disk space for temporary files before uploading to GCS.")
+                logging.error(f"\nCurrent temp directory: {tmpdir}")
+                logging.error(f"Free space: {free_gb:.2f} GB")
+                logging.error(f"Estimated need: {new_size_gb:.3f} GB")
+                logging.error(f"\nSOLUTIONS:")
+                logging.error(f"  1. Set TMPDIR to a directory with more space:")
+                logging.error(f"     export TMPDIR=/path/to/large/disk/tmp")
+                logging.error(f"     mkdir -p $TMPDIR")
+                logging.error(f"  2. Reduce test_buffer_size even more (currently {test_buffer_size})")
+                logging.error(f"  3. Clean up temp directory: rm -rf {tmpdir}/*")
+                logging.error(f"{'=' * 80}")
             return False
 
         # Verify checkpoint files exist
