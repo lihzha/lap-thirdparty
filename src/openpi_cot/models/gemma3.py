@@ -221,6 +221,7 @@ class Einsum(nn.Module):
     weight_name: str = "w"
     initializer: nn.initializers.Initializer = nn.initializers.normal()
     dtype: jnp.dtype | None = None
+    param_dtype: jnp.dtype = jnp.bfloat16
     lora_config: "lora.LoRAConfig" = None
 
     @nn.compact
@@ -238,7 +239,7 @@ class Einsum(nn.Module):
             self.weight_name,
             self.initializer,
             self.shape,
-            self.dtype if self.dtype is not None else None,
+            self.param_dtype,
         )
         return jnp.einsum(eqn, x, w)
 
