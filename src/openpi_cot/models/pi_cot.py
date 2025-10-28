@@ -136,18 +136,12 @@ class PiCoT(_pi0.Pi0):
                     scan=True,
                     dtype_mm=config.dtype,
                     posemb="learn",  # needed for size-mismatch
-                    # posemb_shape=(64, 64),  # assuming 896x896 images with 14x14 patches
                     posemb_shape=(16, 16),
                 )
             )
             fake_obs = config.fake_obs()
             fake_obs_image = next(iter(fake_obs.images.values()))
-            b, h, w, c = fake_obs_image.shape
-            # 2. Define the new 4D shape
-            new_shape = (b, 1, 224, 224, c)
-            fake_image_resized = jax.image.resize(fake_obs_image[:, None], new_shape, method="linear")
-            # resize
-            img.lazy_init(fake_image_resized, train=False, rngs=rngs)
+            img.lazy_init(fake_obs_image[:, None], train=False, rngs=rngs)
         else:
             # For other models, use the original default (learnable embeddings)
             img = nnx_bridge.ToNNX(
@@ -259,13 +253,10 @@ class PiCoT(_pi0.Pi0):
                 t = num_frames
 
             # Flatten: [b*t, h, w, c]
-            if not self.use_gemma3:
-                image_flat = image.reshape(b * t, h, w, c)
-            else:
-                image_flat = image
+            image_flat = image.reshape(b * t, h, w, c) if not self.use_gemma3 else image
             image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
-            if self.use_gemma3:
-                image_tokens = self.resize_to_256(image_tokens)
+            # if self.use_gemma3:
+            #     image_tokens = self.resize_to_256(image_tokens)
             # image_tokens: [b*t, num_patches, d]
 
             num_patches = image_tokens.shape[1]
@@ -291,40 +282,40 @@ class PiCoT(_pi0.Pi0):
 
         return tokens, input_mask, img_ar_mask
 
-    def resize_to_256(self, x: at.Float[at.Array, "b input_len d"]) -> at.Float[at.Array, "b 256 d"]:
-        """Resize image token sequence to 256 tokens using average pooling.
+    # def resize_to_256(self, x: at.Float[at.Array, "b input_len d"]) -> at.Float[at.Array, "b 256 d"]:
+    #     """Resize image token sequence to 256 tokens using average pooling.
 
-        Args:
-            x: Image tokens with shape [b, input_len, d] where input_len is a perfect square
+    #     Args:
+    #         x: Image tokens with shape [b, input_len, d] where input_len is a perfect square
 
-        Returns:
-            Resized tokens with shape [b, 256, d]
-        """
-        output_length = 256
-        cur_length = x.shape[1]
+    #     Returns:
+    #         Resized tokens with shape [b, 256, d]
+    #     """
+    #     output_length = 256
+    #     cur_length = x.shape[1]
 
-        if cur_length == output_length:
-            return x
+    #     if cur_length == output_length:
+    #         return x
 
-        cur_width = int(cur_length**0.5)
-        assert cur_width**2 == cur_length, f"Input length {cur_length} must be a perfect square"
+    #     cur_width = int(cur_length**0.5)
+    #     assert cur_width**2 == cur_length, f"Input length {cur_length} must be a perfect square"
 
-        output_width = int(output_length**0.5)  # 16
-        assert output_width**2 == output_length
+    #     output_width = int(output_length**0.5)  # 16
+    #     assert output_width**2 == output_length
 
-        assert cur_width % output_width == 0, (
-            f"Cannot evenly pool {cur_width}x{cur_width} to {output_width}x{output_width}"
-        )
+    #     assert cur_width % output_width == 0, (
+    #         f"Cannot evenly pool {cur_width}x{cur_width} to {output_width}x{output_width}"
+    #     )
 
-        window = cur_width // output_width
+    #     window = cur_width // output_width
 
-        # Reshape to spatial grid
-        x = einops.rearrange(x, "b (h w) d -> b h w d", h=cur_width, w=cur_width)
+    #     # Reshape to spatial grid
+    #     x = einops.rearrange(x, "b (h w) d -> b h w d", h=cur_width, w=cur_width)
 
-        # Average pool using einops
-        x = einops.reduce(x, "b (h wh) (w ww) d -> b h w d", "mean", wh=window, ww=window)
+    #     # Average pool using einops
+    #     x = einops.reduce(x, "b (h wh) (w ww) d -> b h w d", "mean", wh=window, ww=window)
 
-        return einops.rearrange(x, "b h w d -> b (h w) d")
+    #     return einops.rearrange(x, "b h w d -> b (h w) d")
 
     def _embed_text(
         self, tokenized_text, text_mask, text_ar_mask
@@ -542,38 +533,6 @@ class PiCoT(_pi0.Pi0):
             observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
         )
 
-        # If prediction training is enabled, also prepare prefix with all frames
-        if self.enable_prediction_training and observation.tokenized_prediction is not None:
-            # For Gemma3: tokenized_prediction should also contain placeholders for all frames
-            # For others: use the old approach
-            if self.use_gemma3:
-                # Embed the prediction tokenized sequence (including placeholders)
-                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
-                    observation.tokenized_prediction,
-                    observation.tokenized_prediction_mask,
-                    observation.tokenized_prediction_langact_mask,
-                )
-                # Replace placeholders with precomputed all-frame embeddings
-                prefix_tokens_pred = self._replace_image_placeholders(
-                    text_tokens_pred, observation.tokenized_prediction, img_tokens_all
-                )
-                # Replace placeholder masks with actual image masks
-                if text_ar_mask_pred is None:
-                    text_ar_mask_pred = jnp.zeros_like(text_mask_pred, dtype=bool)
-                prefix_mask_pred, prefix_ar_mask_pred = self._replace_placeholder_masks(
-                    text_mask_pred, text_ar_mask_pred, observation.tokenized_prediction, img_mask_all, img_ar_mask_all
-                )
-            else:
-                # Original approach: concatenate precomputed all-frame embeddings with text
-                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
-                    observation.tokenized_prediction,
-                    observation.tokenized_prediction_mask,
-                    observation.tokenized_prediction_langact_mask,
-                )
-                prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
-                prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
-                prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
-
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
         critical_token_accuracy = jnp.array(0.0)
@@ -686,6 +645,35 @@ class PiCoT(_pi0.Pi0):
 
         # Prediction (cross-entropy) loss - independent of langact loss
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
+            # For Gemma3: tokenized_prediction should also contain placeholders for all frames
+            # For others: use the old approach
+            if self.use_gemma3:
+                # Embed the prediction tokenized sequence (including placeholders)
+                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
+                    observation.tokenized_prediction,
+                    observation.tokenized_prediction_mask,
+                    observation.tokenized_prediction_langact_mask,
+                )
+                # Replace placeholders with precomputed all-frame embeddings
+                prefix_tokens_pred = self._replace_image_placeholders(
+                    text_tokens_pred, observation.tokenized_prediction, img_tokens_all
+                )
+                # Replace placeholder masks with actual image masks
+                if text_ar_mask_pred is None:
+                    text_ar_mask_pred = jnp.zeros_like(text_mask_pred, dtype=bool)
+                prefix_mask_pred, prefix_ar_mask_pred = self._replace_placeholder_masks(
+                    text_mask_pred, text_ar_mask_pred, observation.tokenized_prediction, img_mask_all, img_ar_mask_all
+                )
+            else:
+                # Original approach: concatenate precomputed all-frame embeddings with text
+                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
+                    observation.tokenized_prediction,
+                    observation.tokenized_prediction_mask,
+                    observation.tokenized_prediction_langact_mask,
+                )
+                prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
+                prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
+                prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
             # Use prediction-specific prefix (already built above)
             pred_attn_mask = _pi0.make_attn_mask(prefix_mask_pred, prefix_ar_mask_pred)
             pred_positions = jnp.cumsum(prefix_mask_pred, axis=1) - 1
