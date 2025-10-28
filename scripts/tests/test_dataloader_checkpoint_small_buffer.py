@@ -405,7 +405,7 @@ def main():
     logging.info("\n" + "=" * 80)
     logging.info("TEST: DataLoader Checkpoint with Small Buffer")
     logging.info("=" * 80)
-    success = test_save_and_load_dataloader(test_buffer_size=100)
+    success = test_save_and_load_dataloader(test_buffer_size=1)
 
     if not success:
         logging.error("TEST FAILED")
