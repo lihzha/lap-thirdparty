@@ -49,7 +49,7 @@ def setup_logging():
 
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    logger.handlers[0].setFormatter(formatter)
+    # logger.handlers[0].setFormatter(formatter)
 
 
 @dataclass
