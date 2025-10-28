@@ -53,14 +53,12 @@ import openpi.models.lora as lora
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 
-from openpi_cot.models.gemma_common import (
-    Einsum as CommonEinsum,
-    RMSNorm as CommonRMSNorm,
-    FeedForward as CommonFeedForward,
-    Embedder as CommonEmbedder,
-    _name,
-    _gated_residual,
-)
+from openpi_cot.models.gemma_common import Einsum as CommonEinsum
+from openpi_cot.models.gemma_common import Embedder as CommonEmbedder
+from openpi_cot.models.gemma_common import FeedForward as CommonFeedForward
+from openpi_cot.models.gemma_common import RMSNorm as CommonRMSNorm
+from openpi_cot.models.gemma_common import _gated_residual
+from openpi_cot.models.gemma_common import _name
 
 
 @dataclasses.dataclass
@@ -134,6 +132,19 @@ def get_config(variant: Variant) -> Config:
             final_logits_softcap=30.0,
             attn_logits_softcap=50.0,
             post_norms=True,
+        )
+    if variant == "gemma2_2b_lora":
+        return Config(
+            width=2304,
+            depth=26,
+            mlp_dim=9216,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
+            final_logits_softcap=30.0,
+            attn_logits_softcap=50.0,
+            post_norms=True,
+            lora_configs=({"attn": lora.LoRAConfig(rank=16, alpha=16.0), "ffn": lora.LoRAConfig(rank=16, alpha=16.0)},),
         )
 
     raise ValueError(f"Unknown variant: {variant}")
