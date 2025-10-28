@@ -81,9 +81,9 @@ class DummyConfig:
     - Batch size: 16 (common training batch size)
     - Shuffle buffer: 1000-5000 (reduced from production 250k for testing)
     """
-    shuffle_buffer_size: int = 1000
+    shuffle_buffer_size: int = 50000
     batch_size: int = 16
-    num_samples: int = 5000  # Enough samples to fill shuffle buffer multiple times
+    num_samples: int = 10000  # Enough samples to fill shuffle buffer multiple times
     seq_len: int = 10
     state_dim: int = 7
     action_dim: int = 7
