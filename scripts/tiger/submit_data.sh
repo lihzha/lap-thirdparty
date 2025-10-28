@@ -15,5 +15,7 @@ mkdir -p logs
 # Force CPU to avoid grabbing GPUs accidentally
 export JAX_PLATFORMS=cpu
 
+cd /n/fs/robot-data/openpi-cot
+
 uv run scripts/tiger/convert_tiger_data_to_lerobot.py --data_dir all_data/data_tiger/demos
 uv run scripts/compute_norm_stats.py --config-name pi05_tiger_finetune_local

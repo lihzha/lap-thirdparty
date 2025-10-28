@@ -97,9 +97,11 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     ],
     "oxe_pi_magic_soup_with_other_states_with_bimanual": [
         ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
+        ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
         ("bc_z", 1.0),
         ("droid", 1.0),
         ("fractal20220817_data", 1.0),
+        ("bridge_v2_oxe", 2.0),
         ("bridge_v2_oxe", 2.0),
         ("taco_play", 1.0),
         (
@@ -117,13 +119,13 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
         ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
-        # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss high
+        # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss to high.
         ### To be tested
         ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 3.0),
+        ("molmoact_dataset", 4.0),
         ### Bimanual
         # ("agibot_large_dataset", 0.2),
         # ("sample_r1_lite", 1.0),
@@ -158,7 +160,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
         ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
-        # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss high
+        # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss to high
         ### To be tested
         ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
@@ -204,6 +206,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "agibot_large_dataset": [("agibot_large_dataset", 1.0)],
     "sample_r1_lite": [("sample_r1_lite", 1.0)],
     "molmoact_dataset": [("molmoact_dataset", 1.0)],
+    "planning_dataset": [("planning_dataset", 1.0)],
 }
 
 

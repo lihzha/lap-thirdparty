@@ -362,7 +362,7 @@ class _SingleCoTDataset:
 
         # If no cached stats, compute them first
         if cached_stats is None or self.config.force_recompute_stats:
-            logging.info(f"No cached statistics found for {dataset_name}. Computing statistics...")
+            logging.info(f"No cached statistics found for {dataset_name} or force recompute. Computing statistics...")
             # Build temporary dataset for stats computation
             self.dataset = self.build_dataset(self.builder)
             self.get_traj_identifier()
@@ -722,6 +722,18 @@ class _SingleCoTDataset:
                 return
             yield batch
 
+    def create_checkpointable_iterator(self):
+        """Create an iterator that can be checkpointed.
+
+        Returns:
+            A TensorFlow iterator that can be saved/restored using tf.train.Checkpoint.
+
+        Note:
+            This returns a TensorFlow iterator, not a numpy iterator. The caller should
+            use `next(iterator)` and convert to numpy arrays as needed.
+        """
+        return iter(self.dataset)
+
     def __len__(self):
         return self.dataset_statistics["state"].num_transitions
 
@@ -1027,19 +1039,19 @@ class DroidCoTDataset(_SingleCoTDataset):
 
         self.dataset = self.dataset.filter(_non_empty)
 
-        def _id_ok(traj):
-            episode_id = traj["trajectory_id"][0]
-            if tf.equal(episode_id, self.spec.default_ep_value):
-                return tf.constant(value=False, dtype=tf.bool)
-            # Look up by episode_id (NOT episode_path). Using episode_path here would filter everything out.
-            lang = self.lang_table.lookup(episode_id)
-            default_lang_const = tf.constant(self.spec.default_lang_value, dtype=tf.string)
-            if tf.equal(lang, default_lang_const):
-                return tf.constant(value=False, dtype=tf.bool)
-            return tf.logical_and(
-                tf.not_equal(episode_id, self.spec.default_ep_value),
-                tf.not_equal(lang, default_lang_const),
-            )
+        # def _id_ok(traj):
+        #     episode_id = traj["trajectory_id"][0]
+        #     if tf.equal(episode_id, self.spec.default_ep_value):
+        #         return tf.constant(value=False, dtype=tf.bool)
+        #     # Look up by episode_id (NOT episode_path). Using episode_path here would filter everything out.
+        #     lang = self.lang_table.lookup(episode_id)
+        #     default_lang_const = tf.constant(self.spec.default_lang_value, dtype=tf.string)
+        #     if tf.equal(lang, default_lang_const):
+        #         return tf.constant(value=False, dtype=tf.bool)
+        #     return tf.logical_and(
+        #         tf.not_equal(episode_id, self.spec.default_ep_value),
+        #         tf.not_equal(lang, default_lang_const),
+        #     )
 
         def _path_ok(traj):
             file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
@@ -1100,8 +1112,8 @@ class DroidCoTDataset(_SingleCoTDataset):
             num_parallel_calls = int(total_threads * 0.3)
 
         if hash_tables is not None:
-            self.cam_table = hash_tables.get("cam_table")
-            self.lang_table = hash_tables.get("lang_table")
+            # self.cam_table = hash_tables.get("cam_table")
+            # self.lang_table = hash_tables.get("lang_table")
             self.ep_table = hash_tables.get("ep_table")
             self.instr_table = hash_tables.get("instr_table")
             self.filter_table = hash_tables.get("filter_table")
@@ -1118,15 +1130,15 @@ class DroidCoTDataset(_SingleCoTDataset):
             else:
                 raise ValueError(f"Unknown language action directory: {config.language_action_dir}")
 
-            self.cam_table = self.build_cam_tables(metadata_path)
-            self.lang_table = self.build_lang_action_table(config.language_action_dir)
+            # self.cam_table = self.build_cam_tables(metadata_path)
+            # self.lang_table = self.build_lang_action_table(config.language_action_dir)
             self.ep_table = self.build_lookup_table(metadata_path)
             self.instr_table = self.build_instr_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path)
             if standalone:
                 self.hash_tables = {
-                    "cam_table": self.cam_table,
-                    "lang_table": self.lang_table,
+                    # "cam_table": self.cam_table,
+                    # "lang_table": self.lang_table,
                     "ep_table": self.ep_table,
                     "instr_table": self.instr_table,
                     "filter_table": self.filter_table,
@@ -1348,6 +1360,211 @@ class _DobbeCoTDataset(_SingleOXECoTDataset):
 
         logging.info(f"Applying action range filter for dobbe: min={min_allowed}, max={max_allowed}")
         self.dataset = self.dataset.filter(_action_within_bounds)
+
+
+class PlanningDataset(_SingleOXECoTDataset):
+    """Dataset for planning tasks loaded from HDF5 via TFDS.
+
+    The planning dataset contains:
+    - Images: base_image (84x84x3), wrist_image (84x84x3)
+    - State: 10D [arm_pos(3), arm_r6(6), gripper_pos(1)]
+    - Actions: 10D action vector
+    - Language: Fixed instruction per demo
+    """
+
+    def apply_restructure(self):
+        """Restructure planning dataset to match expected format."""
+
+        def restructure(traj):
+            # Extract required fields
+            if self.standardize_fn is not None:
+                traj = self.standardize_fn(traj)
+            traj_len = tf.shape(traj["action"])[0]
+            old_obs = traj["observation"]
+            new_obs = {}
+
+            # Map image keys from planning dataset format to expected format
+            # planning dataset uses: base_image, wrist_image
+            # expected format: base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb
+            new_obs[self.spec.primary_image_key] = old_obs.get("base_image", tf.repeat("", traj_len))
+            new_obs[self.spec.wrist_image_key] = old_obs.get("wrist_image", tf.repeat("", traj_len))
+            # Planning dataset doesn't have right wrist camera
+            new_obs[self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
+
+            # State is already in the correct format (8D)
+            new_obs["state"] = tf.cast(old_obs["state"], tf.float32)
+
+            # Actions are 10D in planning dataset
+            actions = tf.cast(traj["action"], tf.float32)
+
+            # Get language instruction
+            language_instruction = traj.get("language_instruction", tf.constant("", dtype=tf.string))
+
+            # Build trajectory ID from episode metadata
+            file_path = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("file_path", "")
+            demo_name = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("demo_name", "")
+
+            if isinstance(file_path, tf.Tensor) and tf.rank(file_path) > 0:
+                file_path = file_path[0]
+            if isinstance(demo_name, tf.Tensor) and tf.rank(demo_name) > 0:
+                demo_name = demo_name[0]
+
+            # Create trajectory ID
+            trajectory_id = tf.strings.join(
+                [tf.constant("planning_", dtype=tf.string), tf.strings.as_string(demo_name)]
+            )
+
+            # Determine state type (planning uses EEF pose representation)
+            state_type_str = "eef_pose"
+
+            return {
+                "observation": new_obs,
+                "language_instruction": language_instruction,
+                "actions": actions,
+                "dataset_name": tf.repeat("planning_dataset", traj_len),
+                "trajectory_id": tf.repeat(trajectory_id, traj_len),
+                "raw_action": actions,
+                "control_frequency": tf.fill([traj_len], tf.cast(10, tf.int32)),  # Default 10 Hz
+                "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # Planning is single-arm
+                "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
+            }
+
+        self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
+
+    def get_traj_identifier(self):
+        """Get trajectory identifier from episode metadata."""
+
+        def _get_traj_identifier(traj):
+            # Apply standardization function if provided
+            if self.standardize_fn is not None:
+                traj = self.standardize_fn(traj)
+
+            traj_len = tf.shape(traj["action"])[0]
+
+            # Use episode metadata to create trajectory ID
+            file_path = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("file_path", "")
+            demo_name = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("demo_name", "")
+
+            if isinstance(file_path, tf.Tensor) and tf.rank(file_path) > 0:
+                file_path = file_path[0]
+            if isinstance(demo_name, tf.Tensor) and tf.rank(demo_name) > 0:
+                demo_name = demo_name[0]
+
+            # Create unique trajectory ID
+            trajectory_id = tf.strings.join(
+                [tf.constant("planning_", dtype=tf.string), tf.strings.as_string(demo_name)]
+            )
+
+            traj["trajectory_id"] = tf.repeat(trajectory_id, traj_len)
+            return traj
+
+        self.dataset = self.dataset.traj_map(_get_traj_identifier, self.num_parallel_calls)
+
+    def apply_traj_filters(self, action_key):
+        """Apply trajectory-level filters for planning dataset."""
+
+        def is_nonzero_length(traj):
+            return tf.shape(traj[action_key])[0] > 0
+
+        def has_any_instruction(traj):
+            instr = traj.get("language_instruction", tf.constant("", dtype=tf.string))
+            if tf.rank(instr) > 0:
+                instr = tf.reshape(instr, [-1])
+                instr = tf.strings.strip(instr)
+                return tf.reduce_any(tf.strings.length(instr) > 0)
+            return tf.strings.length(tf.strings.strip(instr)) > 0
+
+        self.dataset = self.dataset.filter(is_nonzero_length)
+        self.dataset = self.dataset.filter(has_any_instruction)
+
+    def apply_frame_filters(self):
+        """Apply frame-level filters for planning dataset."""
+
+        # Drop frames with empty/whitespace-only prompts
+        def _non_empty_prompt(frame: dict) -> tf.Tensor:
+            p = tf.strings.strip(frame["prompt"])  # scalar tf.string after flatten
+            return tf.strings.length(p) > 0
+
+        self.dataset = self.dataset.filter(_non_empty_prompt)
+
+    def apply_repack_transforms(self):
+        """Repack trajectory data for planning dataset."""
+
+        def _pop_and_rename_keys(traj):
+            # Remove trajectory_id as it's no longer needed
+            traj.pop("trajectory_id", None)
+            # Rename language_instruction to prompt
+            traj["prompt"] = traj.get("language_instruction", tf.constant("", dtype=tf.string))
+            traj.pop("language_instruction", None)
+            # Remove raw_action
+            traj.pop("raw_action", None)
+            return traj
+
+        self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
+
+    def apply_traj_transforms(
+        self,
+        action_horizon: int,
+        summation_steps: int = 30,
+        action_key: str = "actions",
+        state_key: str = "state",
+    ):
+        """
+        Compare to original transforms, we omit the following:
+        - skip_unlabeled
+        - max_action
+        - max_proprio
+        - goal_relabeling
+        - drop_goal_or_instruction
+        - subsample_length
+        """
+        if not self.skip_normalization and not self.vis_dataset:
+            self.dataset = self.dataset.traj_map(
+                NormalizeActionAndProprio(
+                    norm_stats=self.dataset_statistics,
+                    normalization_type=self.action_proprio_normalization_type,
+                    action_key=action_key,
+                    state_key=state_key,
+                ),
+                self.num_parallel_calls,
+            )
+
+        def pad_action_state(traj):
+            # Pad actions to action_dim (only if not already padded)
+            action_last_dim = tf.shape(traj[action_key])[-1]
+            pad_amount_action = tf.maximum(0, self.action_dim - action_last_dim)
+            traj[action_key] = tf.pad(traj[action_key], [[0, 0], [0, pad_amount_action]])
+            # Ensure static shape is preserved
+            traj[action_key].set_shape([None, self.action_dim])
+
+            # Pad state to action_dim (only if not already padded)
+            state_last_dim = tf.shape(traj["observation"][state_key])[-1]
+            pad_amount_state = tf.maximum(0, self.action_dim - state_last_dim)
+            traj["observation"][state_key] = tf.pad(
+                traj["observation"][state_key],
+                [[0, 0], [0, pad_amount_state]],
+            )
+            # Ensure static shape is preserved
+            traj["observation"][state_key].set_shape([None, self.action_dim])
+            return traj
+
+        self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
+
+        def chunk_actions(traj):
+            """Splits episode into action chunks with proper zero-padding."""
+            traj_len = tf.shape(traj[action_key])[0]
+
+            # Use unified gather function with proper zero-padding
+            traj[action_key] = gather_with_padding(
+                data=traj[action_key],
+                sequence_length=traj_len,
+                window_size=action_horizon,
+            )
+            # Ensure static shape is preserved: [T, action_horizon, action_dim]
+            traj[action_key].set_shape([None, action_horizon, self.action_dim])
+            return traj
+
+        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
 
 class _SampleR1LiteCoTDataset(_SingleOXECoTDataset):
@@ -1615,8 +1832,8 @@ class OXECoTDatasets:
                     hash_tables=self.hash_tables,
                 )
                 self.hash_tables = {
-                    "cam_table": ds.cam_table,
-                    "lang_table": ds.lang_table,
+                    # "cam_table": ds.cam_table,
+                    # "lang_table": ds.lang_table,
                     "ep_table": ds.ep_table,
                     "instr_table": ds.instr_table,
                     "filter_table": ds.filter_table,
@@ -1739,7 +1956,6 @@ class OXECoTDatasets:
         Note: The statistics are padded to action_dim to match the padded tensors.
         """
         from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
-        from openpi_cot.shared.adapters.normalize_adapter import save
 
         # # Try to load cached global stats
         # try:
@@ -1902,10 +2118,10 @@ class OXECoTDatasets:
                 num_trajectories=sum(stats["state"].num_trajectories for stats in state_stats_subset.values()),
             )
 
-        # Save global stats
-        if jax.process_index() == 0:
-            save(save_dir, global_stats)
-            logging.info(f"Saved global normalization stats to {save_dir}")
+        # # Save global stats
+        # if jax.process_index() == 0:
+        #     save(save_dir, global_stats)
+        #     logging.info(f"Saved global normalization stats to {save_dir}")
 
         return global_stats
 

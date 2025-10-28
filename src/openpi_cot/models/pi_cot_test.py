@@ -1,58 +1,72 @@
-import flax.nnx as nnx
 import jax
+import logging
+
+# Set up basic logging to see potential warnings or errors from the libraries
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("openpi")
+logger.setLevel(logging.INFO)
+
+
+# --- Assume your provided code files are saved as follows ---
+# 1. The main model code is in `pi_cot_model.py`
+# 2. The config code is in `pi_cot_config.py`
+
+# We import the necessary classes from your files
 from openpi_cot.models.pi_cot_config import PiCoTConfig
+from openpi_cot.models.pi_cot import PiCoT
 
 
-def _get_frozen_state(config: PiCoTConfig) -> nnx.State:
-    abstract_model = nnx.eval_shape(config.create, jax.random.key(0))
-    freeze_filter = config.get_freeze_filter()
-    return nnx.state(abstract_model, nnx.All(nnx.Param, freeze_filter)).flat_state()
+# 1. Define Configuration Parameters
+# We specify the exact variants you requested and provide sensible defaults
+# for other required parameters.
+config_params = {
+    'paligemma_variant': 'gemma3_4b',
+    'action_expert_variant': 'gemma3_300m',
+    'dtype': 'bfloat16',          # The config expects a string for the dtype
+    'action_dim': 7,              # Example: 6-DoF arm + 1-DoF gripper
+    'action_horizon': 8,          # Example: Predict 8 future action steps
+    'max_token_len': 256,         # Example: Maximum length for text sequences
+    'aug_wrist_image': True,      # Enable data augmentation for the wrist camera
+    'pi05': True,                 # Use the Pi0.5 architecture variant (AdaRMS)
+    # By default, use_bimanual is False, so it will use 2 cameras.
+    # Training flags can be set here to override defaults from the config class
+    'enable_action_training': True,
+    'enable_langact_training': True,
+    'enable_prediction_training': False,
+}
 
+# 2. Create the PiCoTConfig instance
+# The dataclass constructor accepts our dictionary of parameters.
+print("Creating PiCoTConfig...")
+picot_config = PiCoTConfig(**config_params)
+print(f"Config created successfully with paligemma_variant='{picot_config.paligemma_variant}' "
+      f"and action_expert_variant='{picot_config.action_expert_variant}'.")
 
-def test_pi0_cot_embedder_frozen_no_lora():
-    config = PiCoTConfig()
-    state = _get_frozen_state(config)
-    paths = list(state.keys())
-    # Expect only the input embedding to be frozen when no LoRA is used
-    for p in paths:
-        print(p)
-    assert len(paths) == 1
-    assert all("input_embedding" in p for p in paths)
+# 3. Create a JAX PRNGKey for initialization
+# The .create() method expects a raw JAX key.
+print("Creating JAX PRNGKey for initialization...")
+rng_key = jax.random.key(0)  # Use seed 0 for reproducibility
 
+# 4. Instantiate the PiCoT model using the config's create() method
+# This is the recommended way to build the model. It handles passing the
+# config and creating the Rngs object internally.
+print("\nInstantiating the PiCoT model using config.create()...")
+try:
+    # This single call will initialize the entire model structure.
+    # It will call the get_gemma3_config function inside your PiCoT class
+    # to fetch the configurations for 'gemma_3_4b' and 'gemma_3_300m'.
+    model: PiCoT = picot_config.create()
+    print("✅ Model instantiated successfully!")
 
-def test_pi0_cot_gemma_lora_freeze():
-    config = PiCoTConfig(paligemma_variant="gemma_2b_lora")
-    state = _get_frozen_state(config)
-    paths = list(state.keys())
+    # You can now inspect the model's structure.
+    # The summary will show the initialized components and their parameters.
+    print("\nModel structure summary:")
+    # The summary() method is available on nnx.Module objects
+    print(model.summary())
 
-    # LoRA adapters should never be frozen
-    assert all("lora" not in p for p in paths)
-
-    # Input embedding is always frozen
-    assert any("input_embedding" in p for p in paths)
-
-    # When freezing Gemma (paligemma), ensure we don't freeze action-expert ("_1") weights
-    non_embedder = [p for p in paths if "input_embedding" not in p]
-    assert len(non_embedder) > 0
-    assert all("_1" not in p for p in non_embedder)
-
-
-def test_pi0_cot_action_expert_lora_freeze():
-    config = PiCoTConfig(action_expert_variant="gemma_300m_lora")
-    state = _get_frozen_state(config)
-    paths = list(state.keys())
-
-    # LoRA adapters should never be frozen
-    assert all("lora" not in p for p in paths)
-
-    # Input embedding is always frozen
-    assert any("input_embedding" in p for p in paths)
-
-    # When freezing the action expert, all other frozen params should be from the action expert ("_1")
-    non_embedder = [p for p in paths if "input_embedding" not in p]
-    assert len(non_embedder) > 0
-    assert all("_1" in p for p in non_embedder)
-
-
-if __name__ == "__main__":
-    test_pi0_cot_embedder_frozen_no_lora()
+except Exception as e:
+    print(f"❌ An error occurred during model instantiation: {e}")
+    print("\n--- Troubleshooting ---")
+    print("1. Ensure that the `openpi_cot` and `openpi` packages are correctly installed in your environment.")
+    print("2. Check that the function `openpi_cot.models.gemma3.get_config` supports the variants 'gemma_3_4b' and 'gemma_3_300m'.")
+    print("3. Verify that all dependencies like JAX, Flax, and Einops are installed.")

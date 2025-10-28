@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover - optional at runtime
 from openpi.policies import policy as _policy
 from tqdm import tqdm
 import tyro
+import wandb
 
 import openpi_cot.policies.adapters.policy_config_adapter as _policy_config
 from openpi_cot.training import config as _config
@@ -89,6 +90,11 @@ class Args:
 
     # DROID dataloader options (used when env == EnvMode.DROID)
     droid_max_examples: int = 100
+
+    # Wandb options
+    wandb_enabled: bool = True
+    project_name: str = "openpi-cot"
+    exp_name: str | None = None
 
 
 # Default checkpoints that should be used for each environment.
@@ -199,8 +205,8 @@ def _iter_droid_request_data(
                 )
             return arr
 
-        base_img = to_np(base_img_t)
-        wrist_img = to_np(wrist_img_t)
+        base_img = to_np(base_img_t)[None]
+        wrist_img = to_np(wrist_img_t)[None]
 
         # State
         cartesian_pos = to_np(step["observation"]["cartesian_position"], to_uint8=False)
@@ -214,9 +220,28 @@ def _iter_droid_request_data(
                 "state": np.concatenate([cartesian_pos, grip_obs]),
             },
         }
-        # req["prompt"] = prompt
-        req["prompt"] = step["language_instruction"]
+        req["prompt"] = prompt
+        # req["prompt"] = step["language_instruction"].decode()
         yield req
+
+
+def init_wandb(args: Args, *, enabled: bool = True):
+    """Initialize wandb for VQA logging."""
+    if not enabled:
+        wandb.init(mode="disabled")
+        return
+
+    # Only initialize wandb in the main process
+    if jax.process_index() != 0:
+        wandb.init(mode="disabled")
+        return
+
+    exp_name = args.exp_name or f"vqa_{args.policy.config if isinstance(args.policy, Checkpoint) else args.env.value}"
+    wandb.init(
+        name=exp_name,
+        config=dataclasses.asdict(args),
+        project=args.project_name,
+    )
 
 
 def main(args: Args) -> None:
@@ -227,6 +252,9 @@ def main(args: Args) -> None:
     if tfds is None:
         raise ImportError("Please install tensorflow_datasets to use the DROID dataloader.")
 
+    # Initialize wandb
+    init_wandb(args, enabled=args.wandb_enabled)
+
     prompt = args.default_prompt or "what is in the image?"
     for idx, req in enumerate(
         tqdm(
@@ -236,9 +264,41 @@ def main(args: Args) -> None:
         )
     ):
         outputs = policy.vqa_infer(req)
-        print({"request_keys": list(req.keys()), "prompt": req["prompt"], "text": outputs.get("reasoning")})
+        reasoning_text = outputs.get("reasoning", "")
+
+        # Print outputs (keep existing behavior)
+        print({"request_keys": list(req.keys()), "prompt": req["prompt"], "text": reasoning_text})
+
+        # Log to wandb
+        if args.wandb_enabled and jax.process_index() == 0:
+            log_dict = {}
+
+            # Log images
+            obs = req.get("observation", {})
+            if "exterior_image_1_left" in obs:
+                # Image is in shape [1, H, W, C], extract and convert to uint8
+                img = obs["exterior_image_1_left"][0]  # Remove batch dimension
+                if img.dtype != np.uint8:
+                    # Assuming images are normalized, convert to [0, 255]
+                    img = (np.clip(img, 0, 255)).astype(np.uint8)
+                log_dict["exterior_image"] = wandb.Image(img, caption=f"Sample {idx}")
+
+            if "wrist_image_left" in obs:
+                img = obs["wrist_image_left"][0]  # Remove batch dimension
+                if img.dtype != np.uint8:
+                    img = (np.clip(img, 0, 255)).astype(np.uint8)
+                log_dict["wrist_image"] = wandb.Image(img, caption=f"Sample {idx}")
+
+            # Log prompt and reasoning
+            log_dict["prompt"] = req.get("prompt", "")
+            log_dict["reasoning"] = reasoning_text
+            log_dict["sample_idx"] = idx
+
+            wandb.log(log_dict, step=idx)
+
         if idx + 1 >= args.droid_max_examples:
             break
+        breakpoint()
 
 
 if __name__ == "__main__":

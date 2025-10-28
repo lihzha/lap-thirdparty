@@ -22,6 +22,7 @@ from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_policy as libero_policy
+import openpi_cot.policies.planning_policy as planning_policy
 import openpi_cot.policies.tiger_policy as tiger_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
@@ -181,6 +182,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
         "schema_compact_bimanual_with_rotation",
     ] = "schema_compact"
     prediction_prompt: str = "What is the robot's movement between two frames?"
+    tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -193,6 +195,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
+                            tokenizer_type=self.tokenizer_type,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         prediction_prompt=self.prediction_prompt,
@@ -203,6 +206,8 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     DetokenizeReasoning(
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
+                            prompt_format=self.prompt_format,
+                            tokenizer_type=self.tokenizer_type,
                         )
                     )
                 ],
@@ -225,6 +230,7 @@ class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
         "schema_compact_bimanual_with_rotation",
     ] = "schema_compact"
     prediction_prompt: str = "What is the robot's movement between two frames?"
+    tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -237,6 +243,7 @@ class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
                         PaligemmaCoTTokenizer(
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
+                            tokenizer_type=self.tokenizer_type,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         prediction_prompt=self.prediction_prompt,
@@ -329,6 +336,7 @@ class RLDSCoTDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         model_transforms = ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_prompt=base_cfg.prediction_prompt,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
@@ -362,6 +370,7 @@ class VQADataConfig(RLDSCoTDataConfig):
         model_transforms = ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_prompt=base_cfg.prediction_prompt,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
@@ -430,6 +439,7 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
         model_transforms = ModelTransformFactory(
             prediction_prompt=base_cfg.prediction_prompt,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
@@ -494,6 +504,72 @@ class TigerDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
         model_transforms = TigerModelTransformFactory(
             prediction_prompt=base_cfg.prediction_prompt,
             prompt_format=model_config.prompt_format,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+        )(model_config)
+
+        return dataclasses.replace(
+            base_cfg,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class PlanningDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
+    """
+    Config for training on planning dataset, using RLDS format loaded from TFDS.
+    """
+
+    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        cot_fields = CoTDataConfig.__dataclass_fields__.keys()
+        data = {k: getattr(self, k) for k in cot_fields}
+        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
+        asset_id = self.assets.asset_id or repo_id
+        data.update(
+            repo_id=repo_id,
+            asset_id=asset_id,
+            norm_stats=None,  # Note: Normalization will be handled on dataset level
+            use_quantile_norm=model_config.model_type != ModelType.PI0,
+        )
+        return CoTDataConfig(**data)
+
+    def _load_norm_stats(
+        self, assets_dir: epath.Path, asset_id: str | None
+    ) -> dict[str, upstream_transforms.NormStats] | None:
+        """Load normalization statistics if available."""
+        if asset_id is None:
+            return None
+        try:
+            data_assets_dir = str(assets_dir / asset_id)
+            norm_stats = _normalize_adapter.load(maybe_download(data_assets_dir))
+            logging.info(f"Loaded norm stats from {data_assets_dir}")
+            return norm_stats
+        except FileNotFoundError:
+            logging.warning(
+                f"Norm stats not found in {data_assets_dir}. "
+                f"Run 'python scripts/compute_norm_stats.py --config-name <config_name>' to compute them."
+            )
+        return None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
+        base_cfg = self.create_base_config(assets_dirs, model_config)
+
+        data_transforms = upstream_transforms.Group(
+            inputs=[
+                planning_policy.PlanningInputs(
+                    action_dim=model_config.action_dim,
+                    model_type=model_config.model_type,
+                )
+            ],
+            outputs=[planning_policy.PlanningOutputs()],
+        )
+
+        model_transforms = ModelTransformFactory(
+            prediction_prompt=base_cfg.prediction_prompt,
+            prompt_format=model_config.prompt_format,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
         return dataclasses.replace(
@@ -571,6 +647,33 @@ _CONFIGS = [
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
         ),
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        save_interval=500,
+        keep_period=10000,
+        resume=True,
+    ),
+    TrainConfig(
+        name="gemma3_combined_cot_v4",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=800,
+            paligemma_variant="gemma3_4b",
+            action_expert_variant="gemma3_300m",
+            prompt_format="pi05",
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            droid_dataset_name="droid",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
+            shuffle_buffer_size=400_000,
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
         save_interval=500,
         keep_period=10000,
         resume=True,
@@ -769,6 +872,11 @@ _CONFIGS = [
             asset_id="tiger",
             dataset_type="droid",  # Use droid type for compatibility
             rlds_data_dir=None,  # LeRobot dataset will be loaded from HF_LEROBOT_HOME
+            assets=upstream_config.AssetsConfig(
+                # Important: reuse the original DROID norm stats during fine-tuning!
+                assets_dir="/n/fs/robot-data/openpi-cot/assets/pi05_tiger_finetune_local/your_hf_username",
+                asset_id="tiger_demos",
+            ),
         ),
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint",
@@ -814,6 +922,141 @@ _CONFIGS = [
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="paligemma2", params_path="/n/fs/robot-data/openpi-cot/paligemma2-3b-mix-224.b16.npz"
+        ),
+    ),
+    TrainConfig(
+        name="paligemma2_vqa_v4",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=600,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+            prompt_format="vqa",
+        ),
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="gs://pi0-cot/OXE",
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="paligemma2", params_path="gs://pi0-cot/cache/paligemma2-3b-pt-224.b16.npz"
+        ),
+    ),
+    TrainConfig(
+        name="gemma3_vqa_v4",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=800,
+            paligemma_variant="gemma3_4b",
+            action_expert_variant="gemma3_300m",
+            prompt_format="vqa",
+        ),
+        # batch_size=256,
+        # weight_loader=weight_loaders.WeightLoaderChoice(
+        #     kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+        # ),
+        # checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="gs://pi0-cot/OXE",
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
+    ),
+    TrainConfig(
+        name="gemma3_vqa_local",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=600,
+            paligemma_variant="gemma3_4b",
+            action_expert_variant="gemma3_300m",
+            prompt_format="vqa",
+        ),
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="gs://pi0-cot/OXE",
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="/home/ajhancock/Desktop/openpi-cot/src/openpi_cot/ckpts/",
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="gemma3", params_path="/home/ajhancock/Desktop/openpi-cot/src/openpi_cot/ckpts/gemma3-4b-it"
+        ),
+    ),
+    TrainConfig(
+        name="pi05_vqa_v4",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=600,
+            prompt_format="vqa",
+        ),
+        data=VQADataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            rlds_data_dir="gs://pi0-cot/OXE",
+            language_action_dir="gs://pi0-cot/droid-base-lang-actions",
+            droid_dataset_name="droid",
+            droid_rlds_data_dir="gs://pi0-cot/OXE",
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint",
+            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
+        ),
+    ),
+    TrainConfig(
+        name="pi05_planning_finetune_v4",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
+            prompt_format="pi05",
+        ),
+        data=PlanningDataConfig(
+            repo_id="planning_dataset",
+            asset_id="planning",
+            dataset_type="combined",
+            data_mix="planning_dataset",
+            rlds_data_dir="gs://pi0-cot/OXE",
+        ),
+        fsdp_devices=1,
+        batch_size=4,
+        num_train_steps=100000,
+        save_interval=2500,
+        log_interval=100,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint",
+            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
         ),
     ),
     *upstream_config._CONFIGS,  # noqa: SLF001

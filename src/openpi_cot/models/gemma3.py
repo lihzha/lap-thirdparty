@@ -446,6 +446,8 @@ class Block(nn.Module):
     configs: Sequence[Config]
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
+    use_post_attn_norm: bool = True  # new in gemma2 and gemma3
+    use_post_ffw_norm: bool = True  # new in gemma2 and gemma3
 
     @nn.compact
     def __call__(
@@ -477,6 +479,15 @@ class Block(nn.Module):
 
         post_attn = jax.tree.map(lambda x: drop(x, deterministic), post_attn)
         post_attn = sharding.activation_sharding_constraint(post_attn)
+
+        # Apply post attention to first expert only if configured
+        if self.use_post_attn_norm:
+            post_attn_normed = []
+            for i, x in enumerate(post_attn):
+                if x is not None and i == 0:
+                    x, _ = RMSNorm(name="post_attention_norm")(x, None)  # noqa: PLW2901
+                post_attn_normed.append(x)
+            post_attn = post_attn_normed
 
         # First residual with gating
         xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, post_attn, gates, strict=True)]
@@ -511,8 +522,17 @@ class Block(nn.Module):
         ffn_outs = sharding.activation_sharding_constraint(ffn_outs)
         ffn_outs = jax.tree.map(lambda x: drop(x, deterministic), ffn_outs)
 
+        # Apply post_ffw_norm only to the first expert if post_norms is enabled
+        if self.use_post_ffw_norm:
+            out_normed = []
+            for i, x in enumerate(ffn_outs):
+                if x is not None and i == 0:
+                    x, _ = RMSNorm(name="post_ffw_norm")(x, None)  # noqa: PLW2901
+                out_normed.append(x)
+            out = out_normed
+
         # Second residual with gating
-        xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, ffn_outs, gates, strict=True)]
+        xs = [_gated_residual(x, y, gate) for x, y, gate in zip(xs, out, gates, strict=True)]
         xs = sharding.activation_sharding_constraint(xs)
 
         return xs, kv_cache
@@ -556,12 +576,15 @@ class Module(nn.Module):
                 nn.broadcast,  # positions
                 nn.broadcast,  # attn_mask
                 nn.broadcast,  # adarms_cond
+                nn.broadcast,  # deterministic
             ),
             length=self.configs[0].num_layers,
         )(
             configs=self.configs,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
+            use_post_attn_norm=self.configs[0].use_post_attn_norm,
+            use_post_ffw_norm=self.configs[0].use_post_ffw_norm,
         )
 
         self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
@@ -586,7 +609,7 @@ class Module(nn.Module):
         if adarms_cond is None:
             adarms_cond = [None] * len(self.configs)
 
-        embedded, kv_cache = self.layers(embedded, kv_cache, positions, mask, adarms_cond, deterministic=deterministic)
+        embedded, kv_cache = self.layers(embedded, kv_cache, positions, mask, adarms_cond, deterministic)
 
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 

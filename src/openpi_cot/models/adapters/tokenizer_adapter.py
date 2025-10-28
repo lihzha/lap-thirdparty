@@ -1,11 +1,19 @@
 from collections.abc import Callable
 import dataclasses
 import logging
+import os
 import re
 from typing import Literal
 
+from etils import epath  # optional, but handy
 import numpy as np
 from openpi.models import tokenizer as _tokenizer
+import sentencepiece
+
+import openpi_cot.shared.download as download
+
+# Special token placeholder for image positions
+TOKEN_PLACEHOLDER = -2
 
 
 @dataclasses.dataclass
@@ -18,31 +26,41 @@ class StateDiscretizationConfig:
     range_max: float = 1.0
 
 
-def _is_critical_directional(piece: str) -> bool:
-    """Check if token contains digits or directional words (for natural language formats)."""
-    # Check for digits
-    if re.search(r"[0-9]", piece):
-        return True
-    # Check for directional words (case-insensitive)
+def _is_number(piece: str) -> bool:
+    """Check if token contains digits."""
+    return bool(re.search(r"[0-9]", piece))
+
+
+def _is_direction_natural(piece: str) -> bool:
+    """Check if token contains directional words (for natural language formats)."""
     piece_lower = piece.lower()
     directional_words = ["right", "left", "forward", "up", "down", "back"]
     return any(word in piece_lower for word in directional_words)
 
 
+def _is_direction_schema(piece: str) -> bool:
+    """Check if token contains +/- symbols (for schema-based formats)."""
+    return "+" in piece or "-" in piece
+
+
+def _is_direction_none(piece: str) -> bool:
+    """No direction tokens."""
+    return False
+
+
+def _is_critical_directional(piece: str) -> bool:
+    """Check if token contains digits or directional words (for natural language formats)."""
+    return _is_number(piece) or _is_direction_natural(piece)
+
+
 def _is_critical_schema(piece: str) -> bool:
     """Check if token contains digits or +/- symbols (for schema-based formats)."""
-    # Check for digits
-    if re.search(r"[0-9]", piece):
-        return True
-    # Check for +/- symbols
-    if "+" in piece or "-" in piece:
-        return True
-    return False
+    return _is_number(piece) or _is_direction_schema(piece)
 
 
 def _is_critical_default(piece: str) -> bool:
     """Default critical token checker - only digits."""
-    return bool(re.search(r"[0-9]", piece))
+    return _is_number(piece)
 
 
 @dataclasses.dataclass
@@ -77,6 +95,8 @@ class PromptFormat:
     separator: str = ""
     # Function to determine if a token piece is critical for this format
     critical_token_checker: Callable[[str], bool] = _is_critical_default
+    # Function to determine if a token piece contains direction information
+    direction_token_checker: Callable[[str], bool] = _is_direction_none
 
     @property
     def include_state(self) -> bool:
@@ -176,6 +196,7 @@ PI05_PROMPT_FORMAT = PromptFormat(
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=", ",
     critical_token_checker=_is_critical_directional,
+    direction_token_checker=_is_direction_natural,
 )
 
 PI0_PROMPT_FORMAT = PromptFormat(
@@ -185,6 +206,7 @@ PI0_PROMPT_FORMAT = PromptFormat(
     ],
     state_config=None,
     separator="",
+    direction_token_checker=_is_direction_none,
 )
 
 VQA_PROMPT_FORMAT = PromptFormat(
@@ -194,6 +216,7 @@ VQA_PROMPT_FORMAT = PromptFormat(
     ],
     state_config=None,
     separator="",
+    direction_token_checker=_is_direction_none,
 )
 
 COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
@@ -207,6 +230,7 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=", ",
     critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
 )
 
 SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
@@ -228,6 +252,7 @@ SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     # separator="\n",
     separator=". ",
     critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
 )
 
 SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
@@ -244,6 +269,7 @@ SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=". ",
     critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
 )
 
 SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT = PromptFormat(
@@ -260,6 +286,7 @@ SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT = PromptFormat(
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=". ",
     critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
 )
 
 SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
@@ -276,6 +303,7 @@ SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
     state_config=StateDiscretizationConfig(bins=256, min_dim=7),
     separator=". ",
     critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
 )
 
 # Registry for easy lookup
@@ -292,6 +320,11 @@ PROMPT_FORMAT_REGISTRY = {
 
 
 class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
+    # Gemma3 special tokens (only used when tokenizer_type == "gemma3")
+    BEGIN_IMAGE_TOKEN = 255999
+    END_IMAGE_TOKEN = 256000
+    NEW_LINE_TOKEN = 108
+
     def __init__(
         self,
         max_len: int = 48,
@@ -306,9 +339,25 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             "schema_compact_bimanual_with_rotation",
         ]
         | PromptFormat = "pi05",
+        tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma",
+        num_images: int = 2,
+        tokens_per_image: int = 256,
     ):
-        super().__init__(max_len)
+        # super().__init__(max_len)
+        if tokenizer_type == "paligemma":
+            path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
+            with path.open("rb") as f:
+                self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
+        else:
+            cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
+            path = epath.Path(cache_dir + "/gemma3-tokenizer.model")
+            with path.open("rb") as f:
+                self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
+        self._max_len = max_len
         self._stop_token_id = self._tokenizer.eos_id()
+        self._tokenizer_type = tokenizer_type
+        self._num_images = num_images
+        self._tokens_per_image = tokens_per_image
 
         # Support both string and PromptFormat instance
         if isinstance(prompt_format, str):
@@ -320,6 +369,25 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         else:
             self._prompt_format = prompt_format
 
+    def _create_image_placeholders(self) -> list[int]:
+        """Create placeholder token sequence for images with special tokens (Gemma3 only).
+
+        Format for each image: [NL, BEGIN_IMAGE, -2 x tokens_per_image, END_IMAGE, NL]
+        Returns the full sequence for all images.
+        """
+        if self._tokenizer_type != "gemma3":
+            return []
+
+        return [TOKEN_PLACEHOLDER] * self._tokens_per_image
+
+        # single_image_seq = (
+        #     [self.NEW_LINE_TOKEN, self.BEGIN_IMAGE_TOKEN]
+        #     + [TOKEN_PLACEHOLDER] * self._tokens_per_image
+        #     + [self.NEW_LINE_TOKEN]
+        #     # + [self.END_IMAGE_TOKEN, self.NEW_LINE_TOKEN]
+        # )
+        # return single_image_seq * self._num_images
+
     def tokenize_cot(
         self,
         prompt: str,
@@ -327,7 +395,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         state: np.ndarray | None = None,
         state_type: str | None = None,
         prompt_format: PromptFormat | str | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Resolve prompt format
         if prompt_format is None:
             fmt = self._prompt_format
@@ -345,7 +413,39 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         # Tokenize
         pad_id = self._tokenizer.pad_id()
-        tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+
+        # For Gemma3: [image_placeholders] + [BOS] + [text] + [reasoning] + [EOS]
+        # For others: [BOS] + [text] + [reasoning] + [EOS]
+        if self._tokenizer_type == "gemma3":
+            image_placeholders = self._create_image_placeholders()
+            # formatted_prompt = "<start_of_turn>user\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model"
+            text_tokens = (
+                self._tokenizer.encode("<start_of_turn>user\n<start_of_image>", add_bos=True, add_eos=False)
+                + image_placeholders
+                + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
+                + image_placeholders
+                + self._tokenizer.encode(
+                    "<end_of_image>\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model",
+                    add_bos=False,
+                    add_eos=False,
+                )
+            )
+            # text_tokens = (
+            #     self._tokenizer.encode("\n<start_of_image>", add_bos=False, add_eos=False)
+            #     + image_placeholders
+            #     + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
+            #     + image_placeholders
+            #     + self._tokenizer.encode(
+            #         "<end_of_image>\n" + formatted_prompt + "",
+            #         add_bos=False,
+            #         add_eos=False,
+            #     )
+            # )
+            tokens = text_tokens
+            # text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+            # tokens = image_placeholders + text_tokens
+        else:
+            tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         reasoning_start = len(tokens)
         if reasoning is not None:
@@ -361,46 +461,79 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             tokens = tokens[: self._max_len]
             reasoning_end = min(reasoning_end, self._max_len)
 
-        attn_mask = np.zeros(self._max_len, dtype=bool)
-        reasoning_mask = np.zeros(self._max_len, dtype=bool)
-        numeric_mask = np.zeros(self._max_len, dtype=bool)
-
         # Left pad to max length for generation/training
         pad_count = self._max_len - len(tokens)
         if pad_count > 0:
             tokens = [pad_id] * pad_count + tokens
 
+        # Create masks
         attn_mask = np.zeros(self._max_len, dtype=bool)
         reasoning_mask = np.zeros(self._max_len, dtype=bool)
-        numeric_mask = np.zeros(self._max_len, dtype=bool)
+        number_mask = np.zeros(self._max_len, dtype=bool)
+        direction_mask = np.zeros(self._max_len, dtype=bool)
+
+        # Mark all non-pad positions as valid for attention
         attn_mask[pad_count:] = True
+
         # Shift reasoning indices by pad_count after left padding
         start_idx = max(0, min(self._max_len, reasoning_start + pad_count))
         end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
         if end_idx > start_idx:
             reasoning_mask[start_idx:end_idx] = True
 
-        # Build critical token mask using format-specific checker
+        # Build number and direction masks using format-specific checkers
         # Only mark tokens within reasoning span (not in the prompt)
-        pieces = [self._tokenizer.id_to_piece(t) for t in tokens]
+        # Skip placeholder tokens and special tokens when building pieces
+        pieces = []
+        for t in tokens:
+            if t == TOKEN_PLACEHOLDER:
+                pieces.append("")  # Empty string for placeholders
+            elif self._tokenizer_type == "gemma3" and t in (
+                self.BEGIN_IMAGE_TOKEN,
+                self.END_IMAGE_TOKEN,
+                self.NEW_LINE_TOKEN,
+            ):
+                pieces.append("")  # Empty string for Gemma3 special tokens
+            else:
+                pieces.append(self._tokenizer.id_to_piece(t))
+
         for i in range(start_idx, end_idx):
             if i < 0 or i >= len(pieces):
                 continue
-            if fmt.critical_token_checker(pieces[i]):
-                numeric_mask[i] = True
+            piece = pieces[i]
+            if piece:
+                if _is_number(piece):
+                    number_mask[i] = True
+                if fmt.direction_token_checker(piece):
+                    direction_mask[i] = True
 
         return (
             np.asarray(tokens, dtype=np.int32),
             attn_mask,
             reasoning_mask,
-            numeric_mask,
+            number_mask,
+            direction_mask,
         )
 
     def decode(self, tokens: np.ndarray) -> str:
-        """Decode tokens back to a string."""
+        """Decode tokens back to a string, skipping special tokens and placeholders."""
         if not isinstance(tokens, list):
             tokens = tokens.tolist()
-        return self._tokenizer.decode(tokens).strip()
+
+        # Filter out placeholder tokens and special tokens
+        filtered_tokens = []
+        for t in tokens:
+            if t == TOKEN_PLACEHOLDER:
+                continue  # Skip placeholder tokens
+            if self._tokenizer_type == "gemma3" and t in (
+                self.BEGIN_IMAGE_TOKEN,
+                self.END_IMAGE_TOKEN,
+                self.NEW_LINE_TOKEN,
+            ):
+                continue  # Skip Gemma3 special tokens
+            filtered_tokens.append(t)
+
+        return self._tokenizer.decode(filtered_tokens).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
@@ -408,7 +541,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
     def tokenize_prediction(
         self, prediction_prompt: str, prediction_language: str
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Tokenize for prediction task.
 
         Uses the prediction language action as the reasoning to be predicted.

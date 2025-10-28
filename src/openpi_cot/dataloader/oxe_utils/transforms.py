@@ -134,6 +134,71 @@ def compute_padded_movement_actions(eef_state: tf.Tensor) -> tf.Tensor:
     return padded_movement_actions
 
 
+def wxyz_to_r6(quaternion: tf.Tensor) -> tf.Tensor:
+    """
+    Converts quaternion (wxyz format) to r6 representation (first 6 elements of rotation matrix).
+
+    The r6 representation contains the first two rows of the 3x3 rotation matrix:
+    [r11, r12, r13, r21, r22, r23]
+
+    Args:
+        quaternion: Quaternion tensor of shape (..., 4) in [w, x, y, z] format
+
+    Returns:
+        R6 representation of shape (..., 6) containing [r11, r12, r13, r21, r22, r23]
+    """
+    import tensorflow_graphics.geometry.transformation as tft
+
+    # tensorflow_graphics expects quaternions in [x, y, z, w] format
+    # Convert from [w, x, y, z] to [x, y, z, w]
+    quat_xyzw = tf.concat([quaternion[..., 1:4], quaternion[..., 0:1]], axis=-1)
+
+    # Convert to rotation matrix (shape: ..., 3, 3)
+    rotation_matrix = tft.rotation_matrix_3d.from_quaternion(quat_xyzw)
+
+    # Extract first two rows (6 elements): r11, r12, r13, r21, r22, r23
+    r6 = tf.concat([rotation_matrix[..., 0, :], rotation_matrix[..., 1, :]], axis=-1)
+
+    return r6
+
+
+def axis_angle_to_r6(axis_angle: tf.Tensor) -> tf.Tensor:
+    """
+    Converts axis-angle representation to r6 representation (first 6 elements of rotation matrix).
+
+    The r6 representation contains the first two rows of the 3x3 rotation matrix:
+    [r11, r12, r13, r21, r22, r23]
+
+    Args:
+        axis_angle: Axis-angle tensor of shape (..., 3) where the magnitude is the angle
+                    and the direction is the axis
+
+    Returns:
+        R6 representation of shape (..., 6) containing [r11, r12, r13, r21, r22, r23]
+    """
+    import tensorflow_graphics.geometry.transformation as tft
+
+    # Compute angle as the norm of the axis_angle vector (shape: ..., 1)
+    angle = tf.norm(axis_angle, axis=-1, keepdims=True)
+
+    # Compute axis as normalized axis_angle (handle zero angle case)
+    # When angle is zero, any axis works, so we use [1, 0, 0]
+    safe_angle = tf.where(angle < 1e-8, tf.ones_like(angle), angle)
+    axis = axis_angle / safe_angle
+
+    # For zero angles, use identity rotation (set axis to [1, 0, 0])
+    axis = tf.where(angle < 1e-8, tf.constant([1.0, 0.0, 0.0], dtype=axis.dtype), axis)
+
+    # Convert to rotation matrix (shape: ..., 3, 3)
+    # angle should have shape (..., 1) as required by the API
+    rotation_matrix = tft.rotation_matrix_3d.from_axis_angle(axis, angle)
+
+    # Extract first two rows (6 elements): r11, r12, r13, r21, r22, r23
+    r6 = tf.concat([rotation_matrix[..., 0, :], rotation_matrix[..., 1, :]], axis=-1)
+
+    return r6
+
+
 # === Bridge-V2 =>> Dataset-Specific Transform ===
 def rescale_bridge_action(action: tf.Tensor) -> tf.Tensor:
     """
@@ -1562,6 +1627,32 @@ def agibot_large_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]
     return trajectory
 
 
+def planning_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    # Compute movement actions with zero-padding (no truncation) for both arms
+
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :3],
+            trajectory["observation"]["state"][:, 3:6],
+            wxyz_to_r6(trajectory["observation"]["state"][:, 6:10]),
+            trajectory["observation"]["state"][:, 10:],
+        ),
+        axis=-1,
+    )
+
+    trajectory["action"] = tf.concat(
+        (
+            trajectory["action"][:, :3],
+            trajectory["action"][:, 3:6],
+            axis_angle_to_r6(trajectory["action"][:, 6:9]),
+            trajectory["action"][:, 9:],
+        ),
+        axis=-1,
+    )
+
+    return trajectory
+
+
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,
@@ -1656,4 +1747,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "sample_r1_lite": sample_r1_lite_dataset_transform,
     "agibot_large_dataset": agibot_large_dataset_transform,
     "molmoact_dataset": molmoact_dataset_transform,
+    "planning_dataset": planning_dataset_transform,
 }

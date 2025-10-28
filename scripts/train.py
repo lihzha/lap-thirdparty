@@ -12,6 +12,7 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
 import matplotlib
+
 matplotlib.use("Agg")  # Use non-interactive backend for remote environments
 import matplotlib.pyplot as plt
 import numpy as np
@@ -306,29 +307,48 @@ class HostBatchCache:
 
 
 class DatasetStatsTracker:
-    """Tracks per-dataset loss, critical token accuracy, and example counts across training."""
+    """Tracks per-dataset loss, critical/number/direction token accuracy, and example counts across training."""
 
     def __init__(self):
-        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "total_critical_acc": float, "count": int}}
+        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "total_critical_acc": float, "total_number_acc": float, "total_direction_acc": float, "count": int}}
 
-    def update(self, dataset_names: list[str], losses: np.ndarray, critical_token_accuracies: np.ndarray | None = None):
+    def update(
+        self,
+        dataset_names: list[str],
+        losses: np.ndarray,
+        critical_token_accuracies: np.ndarray | None = None,
+        number_token_accuracies: np.ndarray | None = None,
+        direction_token_accuracies: np.ndarray | None = None,
+    ):
         """Update statistics with new batch data.
 
         Args:
             dataset_names: List of dataset names for each sample
             losses: Array of per-sample losses
             critical_token_accuracies: Array of per-sample critical token accuracies (optional)
+            number_token_accuracies: Array of per-sample number token accuracies (optional)
+            direction_token_accuracies: Array of per-sample direction token accuracies (optional)
         """
         for idx, name in enumerate(dataset_names):
             if name not in self.dataset_stats:
-                self.dataset_stats[name] = {"total_loss": 0.0, "total_critical_acc": 0.0, "count": 0}
+                self.dataset_stats[name] = {
+                    "total_loss": 0.0,
+                    "total_critical_acc": 0.0,
+                    "total_number_acc": 0.0,
+                    "total_direction_acc": 0.0,
+                    "count": 0,
+                }
             self.dataset_stats[name]["total_loss"] += float(losses[idx])
             if critical_token_accuracies is not None:
                 self.dataset_stats[name]["total_critical_acc"] += float(critical_token_accuracies[idx])
+            if number_token_accuracies is not None:
+                self.dataset_stats[name]["total_number_acc"] += float(number_token_accuracies[idx])
+            if direction_token_accuracies is not None:
+                self.dataset_stats[name]["total_direction_acc"] += float(direction_token_accuracies[idx])
             self.dataset_stats[name]["count"] += 1
 
     def get_metrics(self) -> dict[str, float]:
-        """Get current average losses, critical token accuracies, and counts for all datasets."""
+        """Get current average losses, critical/number/direction token accuracies, and counts for all datasets."""
         metrics = {}
         for dataset_name, stats in self.dataset_stats.items():
             if stats["count"] > 0:
@@ -339,6 +359,14 @@ class DatasetStatsTracker:
                 if stats["total_critical_acc"] > 0:
                     avg_critical_acc = stats["total_critical_acc"] / stats["count"]
                     metrics[f"dataset/{dataset_name}/avg_critical_token_acc"] = avg_critical_acc
+                # Add average number token accuracy if we have it
+                if stats["total_number_acc"] > 0:
+                    avg_number_acc = stats["total_number_acc"] / stats["count"]
+                    metrics[f"dataset/{dataset_name}/avg_number_token_acc"] = avg_number_acc
+                # Add average direction token accuracy if we have it
+                if stats["total_direction_acc"] > 0:
+                    avg_direction_acc = stats["total_direction_acc"] / stats["count"]
+                    metrics[f"dataset/{dataset_name}/avg_direction_token_acc"] = avg_direction_acc
         return metrics
 
 
@@ -347,16 +375,20 @@ class LocalDatasetInfoBuffer:
 
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
-        # Accumulate local tokenized names, losses, and critical accs across steps
+        # Accumulate local tokenized names, losses, and critical/number/direction accs across steps
         self.tokenized_names_buffer = []  # List of arrays, one per step
         self.losses_buffer = []  # List of arrays, one per step
         self.critical_accs_buffer = []  # List of arrays, one per step (may be empty)
+        self.number_accs_buffer = []  # List of arrays, one per step (may be empty)
+        self.direction_accs_buffer = []  # List of arrays, one per step (may be empty)
 
     def add_local_batch(
         self,
         tokenized_dataset_names: at.Array,
         per_sample_losses: at.Array,
         per_sample_critical_token_accuracy: at.Array | None = None,
+        per_sample_number_token_accuracy: at.Array | None = None,
+        per_sample_direction_token_accuracy: at.Array | None = None,
     ):
         """Add local batch data (no multihost gathering here).
 
@@ -364,6 +396,8 @@ class LocalDatasetInfoBuffer:
             tokenized_dataset_names: Local tokenized dataset names
             per_sample_losses: Local per-sample losses
             per_sample_critical_token_accuracy: Local per-sample critical accuracies (optional)
+            per_sample_number_token_accuracy: Local per-sample number accuracies (optional)
+            per_sample_direction_token_accuracy: Local per-sample direction accuracies (optional)
         """
         # Convert to numpy and store
         self.tokenized_names_buffer.append(np.asarray(training_utils.to_local_array(tokenized_dataset_names)))
@@ -371,6 +405,12 @@ class LocalDatasetInfoBuffer:
         if per_sample_critical_token_accuracy is not None:
             self.critical_accs_buffer.append(
                 np.asarray(training_utils.to_local_array(per_sample_critical_token_accuracy))
+            )
+        if per_sample_number_token_accuracy is not None:
+            self.number_accs_buffer.append(np.asarray(training_utils.to_local_array(per_sample_number_token_accuracy)))
+        if per_sample_direction_token_accuracy is not None:
+            self.direction_accs_buffer.append(
+                np.asarray(training_utils.to_local_array(per_sample_direction_token_accuracy))
             )
 
     def gather_and_update_stats(self, dataset_stats_tracker: DatasetStatsTracker) -> None:
@@ -407,6 +447,26 @@ class LocalDatasetInfoBuffer:
             else:
                 all_critical_accs = all_local_critical_accs
 
+        # Gather number accuracies if available
+        all_number_accs = None
+        if self.number_accs_buffer:
+            all_local_number_accs = np.concatenate(self.number_accs_buffer, axis=0)
+            if process_count > 1:
+                all_number_accs = jax.experimental.multihost_utils.process_allgather(all_local_number_accs)
+                all_number_accs = np.asarray(all_number_accs).flatten()
+            else:
+                all_number_accs = all_local_number_accs
+
+        # Gather direction accuracies if available
+        all_direction_accs = None
+        if self.direction_accs_buffer:
+            all_local_direction_accs = np.concatenate(self.direction_accs_buffer, axis=0)
+            if process_count > 1:
+                all_direction_accs = jax.experimental.multihost_utils.process_allgather(all_local_direction_accs)
+                all_direction_accs = np.asarray(all_direction_accs).flatten()
+            else:
+                all_direction_accs = all_local_direction_accs
+
         # Decode gathered tokenized names
         decoded_names = []
         for i in range(all_names.shape[0]):
@@ -419,12 +479,14 @@ class LocalDatasetInfoBuffer:
                 decoded_names.append("unknown")
 
         # Update stats
-        dataset_stats_tracker.update(decoded_names, all_losses, all_critical_accs)
+        dataset_stats_tracker.update(decoded_names, all_losses, all_critical_accs, all_number_accs, all_direction_accs)
 
         # Clear buffers
         self.tokenized_names_buffer = []
         self.losses_buffer = []
         self.critical_accs_buffer = []
+        self.number_accs_buffer = []
+        self.direction_accs_buffer = []
 
 
 def gather_dataset_info_multihost(
@@ -450,14 +512,14 @@ def gather_dataset_info_multihost(
     process_count = jax.process_count()
     if process_count > 1:
         # Gather numeric arrays using JAX (works fine with int/float dtypes)
-        all_dataset_names_tokens = jax.experimental.multihost_utils.process_allgather(
-            local_dataset_names_tokens
-        )
+        all_dataset_names_tokens = jax.experimental.multihost_utils.process_allgather(local_dataset_names_tokens)
         all_losses = jax.experimental.multihost_utils.process_allgather(local_losses)
 
         # Flatten: shape goes from [num_processes, batch_per_process, seq_len] to [total_batch, seq_len]
         # For losses: [num_processes, batch_per_process] to [total_batch]
-        all_dataset_names_tokens = np.asarray(all_dataset_names_tokens).reshape(-1, local_dataset_names_tokens.shape[-1])
+        all_dataset_names_tokens = np.asarray(all_dataset_names_tokens).reshape(
+            -1, local_dataset_names_tokens.shape[-1]
+        )
         all_losses = np.asarray(all_losses).flatten()
     else:
         all_dataset_names_tokens = local_dataset_names_tokens
@@ -482,10 +544,10 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
     """Create bar plots for dataset statistics.
 
     Args:
-        dataset_stats: Dictionary mapping dataset names to {"total_loss": float, "total_critical_acc": float, "count": int}
+        dataset_stats: Dictionary mapping dataset names to {"total_loss": float, "total_critical_acc": float, "total_number_acc": float, "total_direction_acc": float, "count": int}
 
     Returns:
-        Dictionary with 'counts', 'avg_loss', and 'avg_critical_token_acc' matplotlib figures
+        Dictionary with 'counts', 'avg_loss', 'avg_critical_token_acc', 'avg_number_token_acc', 'avg_direction_token_acc' matplotlib figures
     """
     if not dataset_stats:
         return {}
@@ -494,14 +556,24 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
     dataset_names = list(dataset_stats.keys())
     counts = [dataset_stats[name]["count"] for name in dataset_names]
     avg_losses = [
-        dataset_stats[name]["total_loss"] / dataset_stats[name]["count"]
-        if dataset_stats[name]["count"] > 0
-        else 0.0
+        dataset_stats[name]["total_loss"] / dataset_stats[name]["count"] if dataset_stats[name]["count"] > 0 else 0.0
         for name in dataset_names
     ]
     avg_critical_accs = [
         dataset_stats[name]["total_critical_acc"] / dataset_stats[name]["count"]
         if dataset_stats[name]["count"] > 0 and dataset_stats[name]["total_critical_acc"] > 0
+        else 0.0
+        for name in dataset_names
+    ]
+    avg_number_accs = [
+        dataset_stats[name]["total_number_acc"] / dataset_stats[name]["count"]
+        if dataset_stats[name]["count"] > 0 and dataset_stats[name]["total_number_acc"] > 0
+        else 0.0
+        for name in dataset_names
+    ]
+    avg_direction_accs = [
+        dataset_stats[name]["total_direction_acc"] / dataset_stats[name]["count"]
+        if dataset_stats[name]["count"] > 0 and dataset_stats[name]["total_direction_acc"] > 0
         else 0.0
         for name in dataset_names
     ]
@@ -512,6 +584,8 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
     counts_sorted = [counts[i] for i in sorted_indices]
     avg_losses_sorted = [avg_losses[i] for i in sorted_indices]
     avg_critical_accs_sorted = [avg_critical_accs[i] for i in sorted_indices]
+    avg_number_accs_sorted = [avg_number_accs[i] for i in sorted_indices]
+    avg_direction_accs_sorted = [avg_direction_accs[i] for i in sorted_indices]
 
     plots = {}
 
@@ -591,6 +665,60 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
 
         plt.tight_layout()
         plots["avg_critical_token_acc"] = fig_acc
+
+    # Create average number token accuracy bar plot (if data is available)
+    if any(acc > 0 for acc in avg_number_accs_sorted):
+        fig_num_acc, ax_num_acc = plt.subplots(figsize=(12, 6))
+        bars_num_acc = ax_num_acc.bar(range(len(dataset_names_sorted)), avg_number_accs_sorted, color="skyblue")
+        ax_num_acc.set_xlabel("Dataset", fontsize=12)
+        ax_num_acc.set_ylabel("Average Number Token Accuracy", fontsize=12)
+        ax_num_acc.set_title("Dataset Average Number Token Accuracy", fontsize=14, fontweight="bold")
+        ax_num_acc.set_xticks(range(len(dataset_names_sorted)))
+        ax_num_acc.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+        ax_num_acc.grid(axis="y", alpha=0.3)
+        ax_num_acc.set_ylim([0, 1])  # Accuracy should be between 0 and 1
+
+        # Add value labels on top of bars
+        for i, (bar, acc) in enumerate(zip(bars_num_acc, avg_number_accs_sorted)):
+            height = bar.get_height()
+            ax_num_acc.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{acc:.4f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+
+        plt.tight_layout()
+        plots["avg_number_token_acc"] = fig_num_acc
+
+    # Create average direction token accuracy bar plot (if data is available)
+    if any(acc > 0 for acc in avg_direction_accs_sorted):
+        fig_dir_acc, ax_dir_acc = plt.subplots(figsize=(12, 6))
+        bars_dir_acc = ax_dir_acc.bar(range(len(dataset_names_sorted)), avg_direction_accs_sorted, color="lightcoral")
+        ax_dir_acc.set_xlabel("Dataset", fontsize=12)
+        ax_dir_acc.set_ylabel("Average Direction Token Accuracy", fontsize=12)
+        ax_dir_acc.set_title("Dataset Average Direction Token Accuracy", fontsize=14, fontweight="bold")
+        ax_dir_acc.set_xticks(range(len(dataset_names_sorted)))
+        ax_dir_acc.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+        ax_dir_acc.grid(axis="y", alpha=0.3)
+        ax_dir_acc.set_ylim([0, 1])  # Accuracy should be between 0 and 1
+
+        # Add value labels on top of bars
+        for i, (bar, acc) in enumerate(zip(bars_dir_acc, avg_direction_accs_sorted)):
+            height = bar.get_height()
+            ax_dir_acc.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{acc:.4f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+
+        plt.tight_layout()
+        plots["avg_direction_token_acc"] = fig_dir_acc
 
     return plots
 
@@ -692,17 +820,40 @@ class TrainingStepRunner:
             observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
-            per_sample_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
-                rng, observation, actions, train=True
+            (
+                per_sample_loss,
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
+            ) = model.compute_loss(rng, observation, actions, train=True)
+            return jnp.mean(per_sample_loss), (
+                per_sample_loss,
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
             )
-            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy, critical_token_accuracy, metrics)
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
-        (loss, (per_sample_loss, token_accuracy, critical_token_accuracy, loss_metrics)), grads = nnx.value_and_grad(
-            loss_fn, argnums=diff_state, has_aux=True
-        )(model, train_rng, observation, actions)
+        (
+            (
+                loss,
+                (
+                    per_sample_loss,
+                    token_accuracy,
+                    critical_token_accuracy,
+                    number_token_accuracy,
+                    direction_token_accuracy,
+                    loss_metrics,
+                ),
+            ),
+            grads,
+        ) = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(model, train_rng, observation, actions)
 
         params = state.params.filter(self.config.trainable_filter)
         updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -737,6 +888,8 @@ class TrainingStepRunner:
             "param_norm": optax.global_norm(kernel_params),
             "token_accuracy": token_accuracy,
             "critical_token_accuracy": critical_token_accuracy,
+            "number_token_accuracy": number_token_accuracy,
+            "direction_token_accuracy": direction_token_accuracy,
         }
 
         # Add individual loss components from metrics
@@ -772,18 +925,39 @@ class ValidationStepRunner:
             observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
-            val_loss, token_accuracy, critical_token_accuracy, metrics = model.compute_loss(
-                rng, observation, actions, train=False
+            (
+                val_loss,
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
+            ) = model.compute_loss(rng, observation, actions, train=False)
+            return (
+                jnp.mean(val_loss),
+                token_accuracy,
+                critical_token_accuracy,
+                number_token_accuracy,
+                direction_token_accuracy,
+                metrics,
             )
-            return jnp.mean(val_loss), token_accuracy, critical_token_accuracy, metrics
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
-        loss, token_accuracy, critical_token_accuracy, val_metrics = loss_fn(model, eval_rng, observation, actions)
+        (
+            loss,
+            token_accuracy,
+            critical_token_accuracy,
+            number_token_accuracy,
+            direction_token_accuracy,
+            val_metrics,
+        ) = loss_fn(model, eval_rng, observation, actions)
         result = {
             "val_loss": loss,
             "val_token_accuracy": token_accuracy,
             "val_critical_token_accuracy": critical_token_accuracy,
+            "val_number_token_accuracy": number_token_accuracy,
+            "val_direction_token_accuracy": direction_token_accuracy,
         }
 
         # Add individual validation loss components from metrics
@@ -856,7 +1030,7 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     log_mem("Before getting batch")
     batch = next(data_iter)
-    # vis_batch(batch, tok=tok)
+    vis_batch(batch, tok=tok)
 
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
@@ -949,15 +1123,21 @@ def main(config: _config.TrainConfig):
             raise ValueError("Training step info missing per_sample_loss")
 
         # Buffer local dataset info (no multihost gathering at every step)
+        # Buffer local dataset info (no multihost gathering at every step)
         if hasattr(batch[0], "tokenized_dataset_name"):
             try:
                 per_sample_critical_token_accuracy = info.get("per_sample_critical_token_accuracy")
+                per_sample_number_token_accuracy = info.get("per_sample_number_token_accuracy")
+                per_sample_direction_token_accuracy = info.get("per_sample_direction_token_accuracy")
                 dataset_info_buffer.add_local_batch(
                     batch[0].tokenized_dataset_name,
                     per_sample_loss,
                     per_sample_critical_token_accuracy,
+                    per_sample_number_token_accuracy,
+                    per_sample_direction_token_accuracy,
                 )
             except Exception as e:
+                logging.warning(f"Failed to buffer dataset info at step {step}: {e}")
                 logging.warning(f"Failed to buffer dataset info at step {step}: {e}")
 
         # Update hard example tracker with per-sample losses from current batch
@@ -982,6 +1162,9 @@ def main(config: _config.TrainConfig):
         # )
 
         if step % config.log_interval == 0:
+            # Gather and update dataset stats from buffered local data (batched at log_interval)
+            dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
+
             # Gather and update dataset stats from buffered local data (batched at log_interval)
             dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
 
@@ -1021,13 +1204,29 @@ def main(config: _config.TrainConfig):
                         }
                         # Add critical token accuracy plot if available
                         if "avg_critical_token_acc" in plots:
-                            log_dict["dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(plots["avg_critical_token_acc"])
+                            log_dict["dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(
+                                plots["avg_critical_token_acc"]
+                            )
+                        # Add number token accuracy plot if available
+                        if "avg_number_token_acc" in plots:
+                            log_dict["dataset_stats/avg_number_token_acc_plot"] = wandb.Image(
+                                plots["avg_number_token_acc"]
+                            )
+                        # Add direction token accuracy plot if available
+                        if "avg_direction_token_acc" in plots:
+                            log_dict["dataset_stats/avg_direction_token_acc_plot"] = wandb.Image(
+                                plots["avg_direction_token_acc"]
+                            )
                         wandb.log(log_dict, step=step)
                         # Close figures to prevent memory leaks
                         plt.close(plots["counts"])
                         plt.close(plots["avg_loss"])
                         if "avg_critical_token_acc" in plots:
                             plt.close(plots["avg_critical_token_acc"])
+                        if "avg_number_token_acc" in plots:
+                            plt.close(plots["avg_number_token_acc"])
+                        if "avg_direction_token_acc" in plots:
+                            plt.close(plots["avg_direction_token_acc"])
 
                 if config.model.enable_langact_training:
                     host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
