@@ -87,38 +87,56 @@ class DummyDataLoader:
         self._create_dataset()
 
     def _create_dataset(self):
-        """Create a TensorFlow dataset with dummy data."""
-        def generator():
-            """Generate dummy samples."""
-            rng = np.random.RandomState(self.seed)
-            for i in range(self.config.num_samples):
-                # Generate state (seq_len, state_dim)
-                state = rng.randn(self.config.seq_len, self.config.state_dim).astype(np.float32)
+        """Create a TensorFlow dataset with dummy data using checkpointable operations.
 
-                # Generate images (seq_len, height, width, 3)
-                images = rng.randint(0, 255,
-                    size=(self.config.seq_len, self.config.image_height, self.config.image_width, 3),
-                    dtype=np.uint8
-                )
+        Note: We pre-generate all data in memory and use from_tensor_slices because:
+        1. Dataset.from_generator does NOT support checkpointing
+        2. from_tensor_slices creates a checkpointable dataset
+        3. With small test data (32x32 images), memory usage is minimal (~12 MB)
+        """
+        # Pre-generate all dummy data as numpy arrays
+        rng = np.random.RandomState(self.seed)
 
-                # Generate actions (seq_len, action_dim)
-                actions = rng.randn(self.config.seq_len, self.config.action_dim).astype(np.float32)
+        logging.info(f"Generating {self.config.num_samples} dummy samples in memory...")
 
-                yield {
-                    'state': state,
-                    'images': images,
-                    'actions': actions
-                }
+        # Generate states (num_samples, seq_len, state_dim)
+        states = rng.randn(
+            self.config.num_samples,
+            self.config.seq_len,
+            self.config.state_dim
+        ).astype(np.float32)
 
-        # Create dataset
-        dataset = tf.data.Dataset.from_generator(
-            generator,
-            output_signature={
-                'state': tf.TensorSpec(shape=(self.config.seq_len, self.config.state_dim), dtype=tf.float32),
-                'images': tf.TensorSpec(shape=(self.config.seq_len, self.config.image_height, self.config.image_width, 3), dtype=tf.uint8),
-                'actions': tf.TensorSpec(shape=(self.config.seq_len, self.config.action_dim), dtype=tf.float32)
-            }
+        # Generate images (num_samples, seq_len, height, width, 3)
+        images = rng.randint(
+            0, 255,
+            size=(
+                self.config.num_samples,
+                self.config.seq_len,
+                self.config.image_height,
+                self.config.image_width,
+                3
+            ),
+            dtype=np.uint8
         )
+
+        # Generate actions (num_samples, seq_len, action_dim)
+        actions = rng.randn(
+            self.config.num_samples,
+            self.config.seq_len,
+            self.config.action_dim
+        ).astype(np.float32)
+
+        # Calculate memory usage
+        total_mb = (states.nbytes + images.nbytes + actions.nbytes) / (1024**2)
+        logging.info(f"Generated data size: {total_mb:.2f} MB")
+
+        # Create dataset from tensor slices (this is checkpointable!)
+        dataset = tf.data.Dataset.from_tensor_slices({
+            'state': states,
+            'images': images,
+            'actions': actions
+        })
+        logging.info("✓ Created checkpointable dataset using from_tensor_slices")
 
         # Repeat, shuffle, and batch
         dataset = dataset.repeat()
