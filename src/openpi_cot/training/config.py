@@ -23,7 +23,6 @@ import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_policy as libero_policy
 import openpi_cot.policies.planning_policy as planning_policy
-import openpi_cot.policies.tiger_policy as tiger_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
@@ -216,7 +215,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
 
 
 @dataclasses.dataclass(frozen=True)
-class TigerModelTransformFactory(upstream_config.ModelTransformFactory):
+class PlanningModelTransformFactory(upstream_config.ModelTransformFactory):
     """Creates model transforms for standard pi0 models."""
 
     prompt_format: Literal[
@@ -452,70 +451,6 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
-class TigerDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
-    """
-    Config for training on Tiger demos, using LeRobot format.
-    """
-
-    def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        cot_fields = CoTDataConfig.__dataclass_fields__.keys()
-        data = {k: getattr(self, k) for k in cot_fields}
-        repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
-        asset_id = self.assets.asset_id or repo_id
-        data.update(
-            repo_id=repo_id,
-            asset_id=asset_id,
-            norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
-            use_quantile_norm=model_config.model_type != ModelType.PI0,
-        )
-        return CoTDataConfig(**data)
-
-    def _load_norm_stats(
-        self, assets_dir: epath.Path, asset_id: str | None
-    ) -> dict[str, upstream_transforms.NormStats] | None:
-        """Load normalization statistics if available."""
-        if asset_id is None:
-            return None
-        try:
-            data_assets_dir = str(assets_dir / asset_id)
-            norm_stats = _normalize_adapter.load(maybe_download(data_assets_dir))
-            logging.info(f"Loaded norm stats from {data_assets_dir}")
-            return norm_stats
-        except FileNotFoundError:
-            logging.warning(
-                f"Norm stats not found in {data_assets_dir}. "
-                f"Run 'python scripts/compute_norm_stats.py --config-name <config_name>' to compute them."
-            )
-        return None
-
-    @override
-    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> CoTDataConfig:
-        base_cfg = self.create_base_config(assets_dirs, model_config)
-
-        data_transforms = upstream_transforms.Group(
-            inputs=[
-                tiger_policy.TigerInputs(
-                    model_type=model_config.model_type,
-                )
-            ],
-            outputs=[tiger_policy.TigerOutputs()],
-        )
-
-        model_transforms = TigerModelTransformFactory(
-            prediction_prompt=base_cfg.prediction_prompt,
-            prompt_format=model_config.prompt_format,
-            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
-        )(model_config)
-
-        return dataclasses.replace(
-            base_cfg,
-            data_transforms=data_transforms,
-            model_transforms=model_transforms,
-            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
-        )
-
-
-@dataclasses.dataclass(frozen=True)
 class PlanningDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
     """
     Config for training on planning dataset, using RLDS format loaded from TFDS.
@@ -566,7 +501,7 @@ class PlanningDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
             outputs=[planning_policy.PlanningOutputs()],
         )
 
-        model_transforms = ModelTransformFactory(
+        model_transforms = PlanningModelTransformFactory(
             prediction_prompt=base_cfg.prediction_prompt,
             prompt_format=model_config.prompt_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
@@ -824,79 +759,6 @@ _CONFIGS = [
             asset_id="droid",
             dataset_type="droid",
         ),
-    ),
-    TrainConfig(
-        name="pi05_tiger_finetune_local",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            enable_langact_training=False,
-            prompt_format="pi05",
-        ),
-        data=TigerDataConfig(
-            repo_id="your_hf_username/tiger_demos",
-            asset_id="tiger",
-            dataset_type="droid",  # Use droid type for compatibility
-            rlds_data_dir=None,  # LeRobot dataset will be loaded from HF_LEROBOT_HOME
-        ),
-        fsdp_devices=1,
-        batch_size=4,
-        num_train_steps=10000,
-        save_interval=500,
-        log_interval=50,
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint",
-            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
-        ),
-    ),
-    TrainConfig(
-        name="pi05_tiger_finetune_local_low_mem",
-        # Here is an example of loading a pi0 model for LoRA fine-tuning.
-        model=pi_cot_config.PiCoTConfig(
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            enable_langact_training=False,
-            prompt_format="pi05",
-        ),
-        data=TigerDataConfig(
-            repo_id="your_hf_username/tiger_demos",
-            asset_id="tiger",
-            dataset_type="droid",  # Use droid type for compatibility
-            rlds_data_dir=None,  # LeRobot dataset will be loaded from HF_LEROBOT_HOME
-            assets=upstream_config.AssetsConfig(
-                # Important: reuse the original DROID norm stats during fine-tuning!
-                assets_dir="/n/fs/robot-data/openpi-cot/assets/pi05_tiger_finetune_local/your_hf_username",
-                asset_id="tiger_demos",
-            ),
-        ),
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint",
-            params_path="gs://openpi-assets/checkpoints/pi05_base/params",
-        ),
-        num_train_steps=30_000,
-        # The freeze filter defines which parameters should be frozen during training.
-        # We have a convenience function in the model config that returns the default freeze filter
-        # for the given model config for LoRA finetuning. Just make sure it matches the model config
-        # you chose above.
-        freeze_filter=pi_cot_config.PiCoTConfig(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
-        ).get_freeze_filter(),
-        # Turn off EMA for LoRA finetuning.
-        ema_decay=None,
-        fsdp_devices=4,
-        batch_size=32,
-        save_interval=1000,
-        log_interval=100,
-        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
     ),
     TrainConfig(
         name="paligemma2_vqa",

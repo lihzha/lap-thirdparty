@@ -8,6 +8,7 @@ import dataclasses
 
 import numpy as np
 from openpi import transforms as upstream_transforms
+from scipy.spatial.transform import Rotation as R
 
 from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
@@ -57,8 +58,8 @@ class PlanningInputs(upstream_transforms.DataTransformFn):
 
         inputs = {
             "state": data["observation"]["state"],
-            "image": dict(zip(IMAGE_KEYS, images[:len(IMAGE_KEYS)], strict=True)),
-            "image_mask": dict(zip(IMAGE_KEYS, image_masks[:len(IMAGE_KEYS)], strict=True)),
+            "image": dict(zip(IMAGE_KEYS, images[: len(IMAGE_KEYS)], strict=True)),
+            "image_mask": dict(zip(IMAGE_KEYS, image_masks[: len(IMAGE_KEYS)], strict=True)),
         }
 
         # Get language instruction
@@ -119,9 +120,47 @@ class PlanningOutputs(upstream_transforms.DataTransformFn):
         output = {}
 
         if "actions" in data:
-            output["actions"] = data["actions"]
+            actions = data["actions"]
+            output["actions"] = np.concatenate(
+                [actions[..., :3], rot6_to_quat(actions[..., 3:9]), actions[..., 9:10]], axis=-1
+            )
 
         if "reasoning" in data:
             output["reasoning"] = data["reasoning"]
 
         return output
+
+
+def rot6_to_quat(r6: np.ndarray) -> np.ndarray:
+    """
+    Convert the first 6 elements of a rotation matrix (r11..r23)
+    into a quaternion (w, x, y, z) using SciPy.
+
+    Args:
+        r6 (np.ndarray): Array of shape (6,), representing
+            [r11, r12, r13, r21, r22, r23].
+            The missing third row is reconstructed as a cross product
+            to ensure a right-handed orthonormal frame.
+
+    Returns:
+        np.ndarray: Quaternion in (w, x, y, z) format.
+    """
+    assert r6.shape[-1] == 6, "Input must have 6 elements"
+
+    # reconstruct first 2 rows
+    r1 = np.array([r6[0], r6[1], r6[2]])
+    r2 = np.array([r6[3], r6[4], r6[5]])
+    r3 = np.cross(r1, r2)
+    R_mat = np.stack([r1, r2, r3], axis=0)
+
+    # ensure R is orthonormal
+    U, _, Vt = np.linalg.svd(R_mat)
+    R_mat = U @ Vt
+
+    # convert to quaternion (SciPy gives [x, y, z, w])
+    quat_xyzw = R.from_matrix(R_mat).as_quat()
+
+    # reorder to (w, x, y, z)
+    quat_wxyz = np.roll(quat_xyzw, 1)
+
+    return quat_wxyz / np.linalg.norm(quat_wxyz)
