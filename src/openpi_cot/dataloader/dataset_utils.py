@@ -101,11 +101,11 @@ def prepare_batched_dataset(
     # Apply standard pipeline operations
     if (not want_val) and shuffle and max_samples is None:
         # Use smaller shuffle buffer for checkpointable mode to reduce checkpoint size
-        actual_shuffle_size = min(shuffle_buffer_size, 10) if checkpointable else shuffle_buffer_size
-        if checkpointable:
-            import logging
-            logging.info(f"Checkpointable mode: reducing shuffle buffer from {shuffle_buffer_size} to {actual_shuffle_size}")
-        dataset = dataset.repeat().shuffle(actual_shuffle_size, seed=seed)
+        # actual_shuffle_size = min(shuffle_buffer_size, 10) if checkpointable else shuffle_buffer_size
+        # if checkpointable:
+        #     import logging
+        #     logging.info(f"Checkpointable mode: reducing shuffle buffer from {shuffle_buffer_size} to {actual_shuffle_size}")
+        dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
     if max_samples is not None:
         dataset = dataset.take(int(max_samples)).cache().repeat()
 
@@ -116,7 +116,8 @@ def prepare_batched_dataset(
         resize_to=resize_resolution,
     )
     # Use minimal parallelism in checkpointable mode to reduce buffering
-    num_parallel_calls = 1 if checkpointable else tf.data.AUTOTUNE
+    # num_parallel_calls = 1 if checkpointable else tf.data.AUTOTUNE
+    num_parallel_calls = tf.data.AUTOTUNE
     dataset = dataset.frame_map(decode_fn, num_parallel_calls)
 
     dataset = dataset.batch(batch_size, drop_remainder=True)
