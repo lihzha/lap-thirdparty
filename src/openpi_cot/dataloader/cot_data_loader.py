@@ -423,12 +423,14 @@ class CoTRLDSDataLoader:
                     "Please ensure you're using IterableTransformedDataset with persistent_iterator=True."
                 )
 
+        logging.info(f"Creating checkpoint with iterator and batch counter...")
         # Create checkpoint with iterator and batch counter
         step = tf.Variable(self._seen_batches, dtype=tf.int64, name="batch_counter")
         self._checkpoint = tf.train.Checkpoint(step=step, iterator=self._iterator)
 
         # Save the checkpoint
         checkpoint_prefix = tf.io.gfile.join(checkpoint_dir, "ckpt")
+        logging.info(f"Saving checkpoint to {checkpoint_prefix}...")
         save_path = self._checkpoint.save(checkpoint_prefix)
         logging.info(f"Saved dataloader state to {save_path} (batch {self._seen_batches})")
 
