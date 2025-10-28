@@ -68,8 +68,8 @@ class DummyConfig:
     seq_len: int = 2  # Reduced from 10
     state_dim: int = 7
     action_dim: int = 7
-    image_height: int = 32  # Reduced from 224
-    image_width: int = 32  # Reduced from 224
+    image_height: int = 224  # Reduced from 224
+    image_width: int = 224  # Reduced from 224
 
 
 class DummyDataLoader:
