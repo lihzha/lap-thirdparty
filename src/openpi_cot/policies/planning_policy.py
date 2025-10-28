@@ -130,37 +130,45 @@ class PlanningOutputs(upstream_transforms.DataTransformFn):
 
         return output
 
-
 def rot6_to_quat(r6: np.ndarray) -> np.ndarray:
     """
-    Convert the first 6 elements of a rotation matrix (r11..r23)
-    into a quaternion (w, x, y, z) using SciPy.
+    Convert 6D rotation representations into quaternions (w, x, y, z).
+    Supports both single input (6,) and batched input (B, 6).
 
     Args:
-        r6 (np.ndarray): Array of shape (6,), representing
+        r6 (np.ndarray): Array of shape (..., 6), representing
             [r11, r12, r13, r21, r22, r23].
             The missing third row is reconstructed as a cross product
             to ensure a right-handed orthonormal frame.
 
     Returns:
-        np.ndarray: Quaternion in (w, x, y, z) format.
+        np.ndarray: Quaternion(s) in (w, x, y, z) format.
+            Shape: (..., 4)
     """
-    assert r6.shape[-1] == 6, "Input must have 6 elements"
+    r6 = np.asarray(r6)
+    assert r6.shape[-1] == 6, "Input must have 6 elements in the last dimension"
 
-    # reconstruct first 2 rows
-    r1 = np.array([r6[0], r6[1], r6[2]])
-    r2 = np.array([r6[3], r6[4], r6[5]])
-    r3 = np.cross(r1, r2)
-    R_mat = np.stack([r1, r2, r3], axis=0)
+    # Split into r1, r2
+    r1 = r6[..., 0:3]
+    r2 = r6[..., 3:6]
+    r3 = np.cross(r1, r2, axis=-1)
+    R_mat = np.stack([r1, r2, r3], axis=-2)  # (..., 3, 3)
 
-    # ensure R is orthonormal
+    # Orthonormalize using SVD
     U, _, Vt = np.linalg.svd(R_mat)
-    R_mat = U @ Vt
+    R_mat = np.matmul(U, Vt)
 
-    # convert to quaternion (SciPy gives [x, y, z, w])
-    quat_xyzw = R.from_matrix(R_mat).as_quat()
+    # Convert to quaternions (SciPy returns [x, y, z, w])
+    quat_xyzw = R.from_matrix(R_mat.reshape(-1, 3, 3)).as_quat()
+    quat_xyzw = quat_xyzw.reshape(R_mat.shape[:-2] + (4,))
 
-    # reorder to (w, x, y, z)
-    quat_wxyz = np.roll(quat_xyzw, 1)
+    # Reorder to (w, x, y, z)
+    # quat_wxyz = np.concatenate(
+    #     [quat_xyzw[..., 3:4], quat_xyzw[..., 0:3]], axis=-1
+    # )
 
-    return quat_wxyz / np.linalg.norm(quat_wxyz)
+    # Normalize
+    quat_wxyz = quat_xyzw
+    quat_wxyz /= np.linalg.norm(quat_wxyz, axis=-1, keepdims=True)
+
+    return quat_wxyz

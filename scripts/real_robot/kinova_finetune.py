@@ -82,7 +82,8 @@ def main(args: Args):
     policy_client = websocket_client_policy.WebsocketClientPolicy(args.remote_host, args.remote_port)
 
     while True:
-        instruction = input("Enter instruction: ")
+        # instruction = input("Enter instruction: ")
+        instruction = "pick the green block and place it forward by 0.5m."
 
         # Prepare to save video of rollout
         bar = tqdm.tqdm(range(args.max_timesteps))
@@ -90,7 +91,7 @@ def main(args: Args):
         # Maintain a small open-loop action chunk predicted from the latest policy call
         actions_from_chunk_completed = 0
         pred_action_chunk = None
-        CHUNK_STEPS = 1
+        CHUNK_STEPS = 6
         replay_images = []
         for t_step in bar:
             start_time = time.time()
@@ -115,9 +116,11 @@ def main(args: Args):
                     actions_from_chunk_completed = 0
 
                     request_data = {
-                        "image": image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
-                        "wrist_image": image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
+                        "observation":{
+                        IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
+                        IMAGE_KEYS[1]: image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
                         "state": curr_obs["observation/state"],
+                        },
                         "prompt": instruction,
                         "batch_size": None,
                     }
@@ -128,7 +131,7 @@ def main(args: Args):
                         # Get response from policy server (may contain actions and/or reasoning)
                         st = time.time()
                         response = policy_client.infer(request_data)
-                        breakpoint()
+                        # breakpoint()
 
                         # Extract actions from response (either pre-parsed or parse from reasoning)
                         if "actions" in response and response["actions"] is not None:
@@ -139,7 +142,7 @@ def main(args: Args):
                         et = time.time()
                         print(f"Time taken for inference: {et - st}")
 
-                replay_images.append(curr_obs["observation/image"][0])
+                replay_images.append(curr_obs["observation/image"])
                 # Select current action to execute from chunk
                 action = pred_action_chunk[actions_from_chunk_completed]
                 actions_from_chunk_completed += 1
@@ -187,9 +190,11 @@ def quat_to_r6(q: np.ndarray) -> np.ndarray:
 
     q = q / np.linalg.norm(q)
     quat_xyzw = np.roll(q, -1)  # scipy expects [x, y, z, w]
+    # print(quat_xyzw)
     R_mat = R.from_quat(quat_xyzw).as_matrix()
 
     r6 = np.concatenate([R_mat[0, :], R_mat[1, :]])  # first 2 rows
+    # r6 = np.random.rand(*r6.shape)
     return r6
 
 
@@ -197,7 +202,9 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
     base_image = cv2.imdecode(obs_dict["base_image"], cv2.IMREAD_COLOR)
     wrist_image = cv2.imdecode(obs_dict["wrist_image"], cv2.IMREAD_COLOR)
     # In addition to image observations, also capture the proprioceptive state
-    state = np.concatenate([obs_dict["base_pose"], obs_dict["arm_pos"], quat_to_r6(obs_dict["arm_quat"]), np.array(obs_dict["gripper_pos"]).item()[None]])
+    # obs_dict["base_pose"][2] = np.random.rand(*obs_dict["base_pose"].shape)[2]
+    # print(obs_dict["base_pose"] )
+    state = np.concatenate([obs_dict["base_pose"], obs_dict["arm_pos"], quat_to_r6(obs_dict["arm_quat"]), np.array(obs_dict["gripper_pos"])])
     # if gripper_position > 0.5:
     #     gripper_position = 1.0
     # else:
