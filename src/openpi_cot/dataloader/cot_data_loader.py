@@ -13,7 +13,6 @@ import tensorflow as tf
 
 from openpi_cot.dataloader.cot_rlds_dataset import DroidCoTDataset
 from openpi_cot.dataloader.cot_rlds_dataset import OXECoTDatasets
-from openpi_cot.dataloader.cot_rlds_dataset import PlanningDataset
 from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
@@ -137,11 +136,12 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
         if self.persistent_iterator:
             # Use persistent iterator for checkpointing support
             dataset_iter = self.get_or_create_tf_iterator()
+
             # TensorFlow iterator yields TF tensors, need to convert to numpy
             def to_numpy(x):
                 if isinstance(x, tf.Tensor):
                     return x.numpy()
-                return np.asarray(x) if hasattr(x, '__array__') else x
+                return np.asarray(x) if hasattr(x, "__array__") else x
         else:
             # Regular behavior: create new iterator each time
             # This already yields numpy arrays via as_numpy_iterator()

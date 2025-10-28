@@ -624,8 +624,14 @@ class PiCoT(_pi0.Pi0):
             token_accuracy = masked_correct.sum() / num_tokens
 
             # Compute critical token accuracy (per-sample and scalar)
+            # Compute critical token accuracy (per-sample and scalar)
             critical_token_mask = observation.crictical_token_mask[:, 1:] * ex_mask
             critical_correct = correct * critical_token_mask
+            # Per-sample: sum across token dimension
+            per_sample_critical_correct = critical_correct.sum(axis=-1)  # [batch]
+            per_sample_num_critical = critical_token_mask.sum(axis=-1)  # [batch]
+            per_sample_critical_token_accuracy = per_sample_critical_correct / jnp.maximum(per_sample_num_critical, 1.0)
+            # Scalar (for backward compatibility)
             # Per-sample: sum across token dimension
             per_sample_critical_correct = critical_correct.sum(axis=-1)  # [batch]
             per_sample_num_critical = critical_token_mask.sum(axis=-1)  # [batch]
