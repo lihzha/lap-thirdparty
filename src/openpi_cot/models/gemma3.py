@@ -153,7 +153,7 @@ class Embedder(CommonEmbedder):
     Inherits from common implementation. param_dtype can be overridden per instance.
     """
 
-    param_dtype: str | None = "float32"
+    param_dtype: str | None = "bfloat16"
 
 
 @at.typecheck
@@ -163,7 +163,7 @@ class RMSNorm(CommonRMSNorm):
     Inherits from common implementation. param_dtype can be overridden per instance.
     """
 
-    param_dtype: str | None = "float32"
+    param_dtype: str | None = "bfloat16"
 
 
 # ============================================================================
