@@ -583,26 +583,20 @@ class PiCoT(_pi0.Pi0):
             token_accuracy = masked_correct.sum() / num_tokens
 
             # Compute critical token accuracy (per-sample and scalar)
-            # Compute critical token accuracy (per-sample and scalar)
             critical_token_mask = observation.crictical_token_mask[:, 1:] * ex_mask
             critical_correct = correct * critical_token_mask
             # Per-sample: sum across token dimension
             per_sample_critical_correct = critical_correct.sum(axis=-1)  # [batch]
             per_sample_num_critical = critical_token_mask.sum(axis=-1)  # [batch]
             per_sample_critical_token_accuracy = per_sample_critical_correct / jnp.maximum(per_sample_num_critical, 1.0)
-            # Scalar (for backward compatibility)
-            # Per-sample: sum across token dimension
-            per_sample_critical_correct = critical_correct.sum(axis=-1)  # [batch]
-            per_sample_num_critical = critical_token_mask.sum(axis=-1)  # [batch]
-            per_sample_critical_token_accuracy = per_sample_critical_correct / jnp.maximum(per_sample_num_critical, 1.0)
-            # Scalar (for backward compatibility)
+            # Scalar (for backward compatibility - micro-averaged)
             num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
             critical_token_accuracy = critical_correct.sum() / num_critical_tokens
-            # Store per-sample accuracy in metrics only during training (avoid stacking issues during validation)
-            if train:
-                metrics["per_sample_critical_token_accuracy"] = per_sample_critical_token_accuracy
-            else:
-                # For validation, store mean of per-sample accuracies
+            # Store per-sample counts for micro-averaging (always store, needed for per-dataset tracking)
+            metrics["per_sample_critical_correct"] = per_sample_critical_correct
+            metrics["per_sample_critical_total"] = per_sample_num_critical
+            # Store per-sample accuracy for validation logging
+            if not train:
                 metrics["per_sample_critical_token_accuracy"] = jnp.mean(per_sample_critical_token_accuracy)
 
             # Compute number token accuracy (per-sample and scalar)
@@ -613,14 +607,15 @@ class PiCoT(_pi0.Pi0):
                 per_sample_number_correct = number_correct.sum(axis=-1)  # [batch]
                 per_sample_num_number = number_mask.sum(axis=-1)  # [batch]
                 per_sample_number_token_accuracy = per_sample_number_correct / jnp.maximum(per_sample_num_number, 1.0)
-                # Scalar (for backward compatibility)
+                # Scalar (for backward compatibility - micro-averaged)
                 num_number_tokens = jnp.maximum(number_mask.sum(), 1.0)
                 number_token_accuracy = number_correct.sum() / num_number_tokens
                 metrics["number_token_accuracy"] = number_token_accuracy
-                # Store per-sample accuracy in metrics
-                if train:
-                    metrics["per_sample_number_token_accuracy"] = per_sample_number_token_accuracy
-                else:
+                # Store per-sample counts for micro-averaging
+                metrics["per_sample_number_correct"] = per_sample_number_correct
+                metrics["per_sample_number_total"] = per_sample_num_number
+                # Store per-sample accuracy for validation logging
+                if not train:
                     metrics["per_sample_number_token_accuracy"] = jnp.mean(per_sample_number_token_accuracy)
 
             # Compute direction token accuracy (per-sample and scalar)
@@ -633,14 +628,15 @@ class PiCoT(_pi0.Pi0):
                 per_sample_direction_token_accuracy = per_sample_direction_correct / jnp.maximum(
                     per_sample_num_direction, 1.0
                 )
-                # Scalar (for backward compatibility)
+                # Scalar (for backward compatibility - micro-averaged)
                 num_direction_tokens = jnp.maximum(direction_mask.sum(), 1.0)
                 direction_token_accuracy = direction_correct.sum() / num_direction_tokens
                 metrics["direction_token_accuracy"] = direction_token_accuracy
-                # Store per-sample accuracy in metrics
-                if train:
-                    metrics["per_sample_direction_token_accuracy"] = per_sample_direction_token_accuracy
-                else:
+                # Store per-sample counts for micro-averaging
+                metrics["per_sample_direction_correct"] = per_sample_direction_correct
+                metrics["per_sample_direction_total"] = per_sample_num_direction
+                # Store per-sample accuracy for validation logging
+                if not train:
                     metrics["per_sample_direction_token_accuracy"] = jnp.mean(per_sample_direction_token_accuracy)
 
         # Prediction (cross-entropy) loss - independent of langact loss

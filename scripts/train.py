@@ -307,66 +307,88 @@ class HostBatchCache:
 
 
 class DatasetStatsTracker:
-    """Tracks per-dataset loss, critical/number/direction token accuracy, and example counts across training."""
+    """Tracks per-dataset loss, critical/number/direction token accuracy (micro-averaged), and example counts across training."""
 
     def __init__(self):
-        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "total_critical_acc": float, "total_number_acc": float, "total_direction_acc": float, "count": int}}
+        # Use micro-averaging: track total correct tokens and total tokens per dataset
+        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "count": int,
+                                 #  "critical_correct": int, "critical_total": int,
+                                 #  "number_correct": int, "number_total": int,
+                                 #  "direction_correct": int, "direction_total": int}}
 
     def update(
         self,
         dataset_names: list[str],
         losses: np.ndarray,
-        critical_token_accuracies: np.ndarray | None = None,
-        number_token_accuracies: np.ndarray | None = None,
-        direction_token_accuracies: np.ndarray | None = None,
+        critical_token_data: tuple[np.ndarray, np.ndarray] | None = None,
+        number_token_data: tuple[np.ndarray, np.ndarray] | None = None,
+        direction_token_data: tuple[np.ndarray, np.ndarray] | None = None,
     ):
-        """Update statistics with new batch data.
+        """Update statistics with new batch data using micro-averaging.
 
         Args:
             dataset_names: List of dataset names for each sample
             losses: Array of per-sample losses
-            critical_token_accuracies: Array of per-sample critical token accuracies (optional)
-            number_token_accuracies: Array of per-sample number token accuracies (optional)
-            direction_token_accuracies: Array of per-sample direction token accuracies (optional)
+            critical_token_data: Tuple of (correct_counts, total_counts) for critical tokens (optional)
+            number_token_data: Tuple of (correct_counts, total_counts) for number tokens (optional)
+            direction_token_data: Tuple of (correct_counts, total_counts) for direction tokens (optional)
         """
         for idx, name in enumerate(dataset_names):
             if name not in self.dataset_stats:
                 self.dataset_stats[name] = {
                     "total_loss": 0.0,
-                    "total_critical_acc": 0.0,
-                    "total_number_acc": 0.0,
-                    "total_direction_acc": 0.0,
                     "count": 0,
+                    "critical_correct": 0,
+                    "critical_total": 0,
+                    "number_correct": 0,
+                    "number_total": 0,
+                    "direction_correct": 0,
+                    "direction_total": 0,
                 }
             self.dataset_stats[name]["total_loss"] += float(losses[idx])
-            if critical_token_accuracies is not None:
-                self.dataset_stats[name]["total_critical_acc"] += float(critical_token_accuracies[idx])
-            if number_token_accuracies is not None:
-                self.dataset_stats[name]["total_number_acc"] += float(number_token_accuracies[idx])
-            if direction_token_accuracies is not None:
-                self.dataset_stats[name]["total_direction_acc"] += float(direction_token_accuracies[idx])
             self.dataset_stats[name]["count"] += 1
 
+            # Micro-averaging: accumulate token-level counts
+            if critical_token_data is not None:
+                correct_counts, total_counts = critical_token_data
+                self.dataset_stats[name]["critical_correct"] += int(correct_counts[idx])
+                self.dataset_stats[name]["critical_total"] += int(total_counts[idx])
+            if number_token_data is not None:
+                correct_counts, total_counts = number_token_data
+                self.dataset_stats[name]["number_correct"] += int(correct_counts[idx])
+                self.dataset_stats[name]["number_total"] += int(total_counts[idx])
+            if direction_token_data is not None:
+                correct_counts, total_counts = direction_token_data
+                self.dataset_stats[name]["direction_correct"] += int(correct_counts[idx])
+                self.dataset_stats[name]["direction_total"] += int(total_counts[idx])
+
     def get_metrics(self) -> dict[str, float]:
-        """Get current average losses, critical/number/direction token accuracies, and counts for all datasets."""
+        """Get current average losses and micro-averaged token accuracies for all datasets."""
         metrics = {}
         for dataset_name, stats in self.dataset_stats.items():
             if stats["count"] > 0:
+                # Loss (macro-averaged per sample)
                 avg_loss = stats["total_loss"] / stats["count"]
                 metrics[f"dataset/{dataset_name}/avg_loss"] = avg_loss
                 metrics[f"dataset/{dataset_name}/count"] = stats["count"]
-                # Add average critical token accuracy if we have it
-                if stats["total_critical_acc"] > 0:
-                    avg_critical_acc = stats["total_critical_acc"] / stats["count"]
+
+                # Micro-averaged critical token accuracy
+                if stats["critical_total"] > 0:
+                    avg_critical_acc = stats["critical_correct"] / stats["critical_total"]
                     metrics[f"dataset/{dataset_name}/avg_critical_token_acc"] = avg_critical_acc
-                # Add average number token accuracy if we have it
-                if stats["total_number_acc"] > 0:
-                    avg_number_acc = stats["total_number_acc"] / stats["count"]
+                    metrics[f"dataset/{dataset_name}/critical_token_count"] = stats["critical_total"]
+
+                # Micro-averaged number token accuracy
+                if stats["number_total"] > 0:
+                    avg_number_acc = stats["number_correct"] / stats["number_total"]
                     metrics[f"dataset/{dataset_name}/avg_number_token_acc"] = avg_number_acc
-                # Add average direction token accuracy if we have it
-                if stats["total_direction_acc"] > 0:
-                    avg_direction_acc = stats["total_direction_acc"] / stats["count"]
+                    metrics[f"dataset/{dataset_name}/number_token_count"] = stats["number_total"]
+
+                # Micro-averaged direction token accuracy
+                if stats["direction_total"] > 0:
+                    avg_direction_acc = stats["direction_correct"] / stats["direction_total"]
                     metrics[f"dataset/{dataset_name}/avg_direction_token_acc"] = avg_direction_acc
+                    metrics[f"dataset/{dataset_name}/direction_token_count"] = stats["direction_total"]
         return metrics
 
 
@@ -375,43 +397,51 @@ class LocalDatasetInfoBuffer:
 
     def __init__(self, tokenizer):
         self.tokenizer = tokenizer
-        # Accumulate local tokenized names, losses, and critical/number/direction accs across steps
+        # Accumulate local tokenized names, losses, and token-level counts across steps
         self.tokenized_names_buffer = []  # List of arrays, one per step
         self.losses_buffer = []  # List of arrays, one per step
-        self.critical_accs_buffer = []  # List of arrays, one per step (may be empty)
-        self.number_accs_buffer = []  # List of arrays, one per step (may be empty)
-        self.direction_accs_buffer = []  # List of arrays, one per step (may be empty)
+        # For micro-averaging: buffer (correct_count, total_count) tuples
+        self.critical_correct_buffer = []  # List of arrays, one per step (may be empty)
+        self.critical_total_buffer = []  # List of arrays, one per step (may be empty)
+        self.number_correct_buffer = []  # List of arrays, one per step (may be empty)
+        self.number_total_buffer = []  # List of arrays, one per step (may be empty)
+        self.direction_correct_buffer = []  # List of arrays, one per step (may be empty)
+        self.direction_total_buffer = []  # List of arrays, one per step (may be empty)
 
     def add_local_batch(
         self,
         tokenized_dataset_names: at.Array,
         per_sample_losses: at.Array,
-        per_sample_critical_token_accuracy: at.Array | None = None,
-        per_sample_number_token_accuracy: at.Array | None = None,
-        per_sample_direction_token_accuracy: at.Array | None = None,
+        per_sample_critical_token_data: tuple[at.Array, at.Array] | None = None,
+        per_sample_number_token_data: tuple[at.Array, at.Array] | None = None,
+        per_sample_direction_token_data: tuple[at.Array, at.Array] | None = None,
     ):
         """Add local batch data (no multihost gathering here).
 
         Args:
             tokenized_dataset_names: Local tokenized dataset names
             per_sample_losses: Local per-sample losses
-            per_sample_critical_token_accuracy: Local per-sample critical accuracies (optional)
-            per_sample_number_token_accuracy: Local per-sample number accuracies (optional)
-            per_sample_direction_token_accuracy: Local per-sample direction accuracies (optional)
+            per_sample_critical_token_data: Tuple of (correct_counts, total_counts) for critical tokens (optional)
+            per_sample_number_token_data: Tuple of (correct_counts, total_counts) for number tokens (optional)
+            per_sample_direction_token_data: Tuple of (correct_counts, total_counts) for direction tokens (optional)
         """
         # Convert to numpy and store
         self.tokenized_names_buffer.append(np.asarray(training_utils.to_local_array(tokenized_dataset_names)))
         self.losses_buffer.append(np.asarray(training_utils.to_local_array(per_sample_losses)))
-        if per_sample_critical_token_accuracy is not None:
-            self.critical_accs_buffer.append(
-                np.asarray(training_utils.to_local_array(per_sample_critical_token_accuracy))
-            )
-        if per_sample_number_token_accuracy is not None:
-            self.number_accs_buffer.append(np.asarray(training_utils.to_local_array(per_sample_number_token_accuracy)))
-        if per_sample_direction_token_accuracy is not None:
-            self.direction_accs_buffer.append(
-                np.asarray(training_utils.to_local_array(per_sample_direction_token_accuracy))
-            )
+
+        # Buffer token-level counts for micro-averaging
+        if per_sample_critical_token_data is not None:
+            correct_counts, total_counts = per_sample_critical_token_data
+            self.critical_correct_buffer.append(np.asarray(training_utils.to_local_array(correct_counts)))
+            self.critical_total_buffer.append(np.asarray(training_utils.to_local_array(total_counts)))
+        if per_sample_number_token_data is not None:
+            correct_counts, total_counts = per_sample_number_token_data
+            self.number_correct_buffer.append(np.asarray(training_utils.to_local_array(correct_counts)))
+            self.number_total_buffer.append(np.asarray(training_utils.to_local_array(total_counts)))
+        if per_sample_direction_token_data is not None:
+            correct_counts, total_counts = per_sample_direction_token_data
+            self.direction_correct_buffer.append(np.asarray(training_utils.to_local_array(correct_counts)))
+            self.direction_total_buffer.append(np.asarray(training_utils.to_local_array(total_counts)))
 
     def gather_and_update_stats(self, dataset_stats_tracker: DatasetStatsTracker) -> None:
         """Gather buffered data from all hosts and update dataset statistics.
@@ -437,35 +467,50 @@ class LocalDatasetInfoBuffer:
             all_names = all_local_names
             all_losses = all_local_losses
 
-        # Gather critical accuracies if available
-        all_critical_accs = None
-        if self.critical_accs_buffer:
-            all_local_critical_accs = np.concatenate(self.critical_accs_buffer, axis=0)
+        # Gather critical token counts if available
+        all_critical_data = None
+        if self.critical_correct_buffer and self.critical_total_buffer:
+            all_local_critical_correct = np.concatenate(self.critical_correct_buffer, axis=0)
+            all_local_critical_total = np.concatenate(self.critical_total_buffer, axis=0)
             if process_count > 1:
-                all_critical_accs = jax.experimental.multihost_utils.process_allgather(all_local_critical_accs)
-                all_critical_accs = np.asarray(all_critical_accs).flatten()
+                all_critical_correct = jax.experimental.multihost_utils.process_allgather(all_local_critical_correct)
+                all_critical_total = jax.experimental.multihost_utils.process_allgather(all_local_critical_total)
+                all_critical_correct = np.asarray(all_critical_correct).flatten()
+                all_critical_total = np.asarray(all_critical_total).flatten()
             else:
-                all_critical_accs = all_local_critical_accs
+                all_critical_correct = all_local_critical_correct
+                all_critical_total = all_local_critical_total
+            all_critical_data = (all_critical_correct, all_critical_total)
 
-        # Gather number accuracies if available
-        all_number_accs = None
-        if self.number_accs_buffer:
-            all_local_number_accs = np.concatenate(self.number_accs_buffer, axis=0)
+        # Gather number token counts if available
+        all_number_data = None
+        if self.number_correct_buffer and self.number_total_buffer:
+            all_local_number_correct = np.concatenate(self.number_correct_buffer, axis=0)
+            all_local_number_total = np.concatenate(self.number_total_buffer, axis=0)
             if process_count > 1:
-                all_number_accs = jax.experimental.multihost_utils.process_allgather(all_local_number_accs)
-                all_number_accs = np.asarray(all_number_accs).flatten()
+                all_number_correct = jax.experimental.multihost_utils.process_allgather(all_local_number_correct)
+                all_number_total = jax.experimental.multihost_utils.process_allgather(all_local_number_total)
+                all_number_correct = np.asarray(all_number_correct).flatten()
+                all_number_total = np.asarray(all_number_total).flatten()
             else:
-                all_number_accs = all_local_number_accs
+                all_number_correct = all_local_number_correct
+                all_number_total = all_local_number_total
+            all_number_data = (all_number_correct, all_number_total)
 
-        # Gather direction accuracies if available
-        all_direction_accs = None
-        if self.direction_accs_buffer:
-            all_local_direction_accs = np.concatenate(self.direction_accs_buffer, axis=0)
+        # Gather direction token counts if available
+        all_direction_data = None
+        if self.direction_correct_buffer and self.direction_total_buffer:
+            all_local_direction_correct = np.concatenate(self.direction_correct_buffer, axis=0)
+            all_local_direction_total = np.concatenate(self.direction_total_buffer, axis=0)
             if process_count > 1:
-                all_direction_accs = jax.experimental.multihost_utils.process_allgather(all_local_direction_accs)
-                all_direction_accs = np.asarray(all_direction_accs).flatten()
+                all_direction_correct = jax.experimental.multihost_utils.process_allgather(all_local_direction_correct)
+                all_direction_total = jax.experimental.multihost_utils.process_allgather(all_local_direction_total)
+                all_direction_correct = np.asarray(all_direction_correct).flatten()
+                all_direction_total = np.asarray(all_direction_total).flatten()
             else:
-                all_direction_accs = all_local_direction_accs
+                all_direction_correct = all_local_direction_correct
+                all_direction_total = all_local_direction_total
+            all_direction_data = (all_direction_correct, all_direction_total)
 
         # Decode gathered tokenized names
         decoded_names = []
@@ -478,15 +523,18 @@ class LocalDatasetInfoBuffer:
                 logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
                 decoded_names.append("unknown")
 
-        # Update stats
-        dataset_stats_tracker.update(decoded_names, all_losses, all_critical_accs, all_number_accs, all_direction_accs)
+        # Update stats with token-level data
+        dataset_stats_tracker.update(decoded_names, all_losses, all_critical_data, all_number_data, all_direction_data)
 
         # Clear buffers
         self.tokenized_names_buffer = []
         self.losses_buffer = []
-        self.critical_accs_buffer = []
-        self.number_accs_buffer = []
-        self.direction_accs_buffer = []
+        self.critical_correct_buffer = []
+        self.critical_total_buffer = []
+        self.number_correct_buffer = []
+        self.number_total_buffer = []
+        self.direction_correct_buffer = []
+        self.direction_total_buffer = []
 
 
 def gather_dataset_info_multihost(
@@ -544,7 +592,12 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
     """Create bar plots for dataset statistics.
 
     Args:
-        dataset_stats: Dictionary mapping dataset names to {"total_loss": float, "total_critical_acc": float, "total_number_acc": float, "total_direction_acc": float, "count": int}
+        dataset_stats: Dictionary mapping dataset names to {
+            "total_loss": float, "count": int,
+            "critical_correct": int, "critical_total": int,
+            "number_correct": int, "number_total": int,
+            "direction_correct": int, "direction_total": int
+        }
 
     Returns:
         Dictionary with 'counts', 'avg_loss', 'avg_critical_token_acc', 'avg_number_token_acc', 'avg_direction_token_acc' matplotlib figures
@@ -559,21 +612,22 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
         dataset_stats[name]["total_loss"] / dataset_stats[name]["count"] if dataset_stats[name]["count"] > 0 else 0.0
         for name in dataset_names
     ]
+    # Micro-averaged accuracies: correct_tokens / total_tokens
     avg_critical_accs = [
-        dataset_stats[name]["total_critical_acc"] / dataset_stats[name]["count"]
-        if dataset_stats[name]["count"] > 0 and dataset_stats[name]["total_critical_acc"] > 0
+        dataset_stats[name]["critical_correct"] / dataset_stats[name]["critical_total"]
+        if dataset_stats[name]["critical_total"] > 0
         else 0.0
         for name in dataset_names
     ]
     avg_number_accs = [
-        dataset_stats[name]["total_number_acc"] / dataset_stats[name]["count"]
-        if dataset_stats[name]["count"] > 0 and dataset_stats[name]["total_number_acc"] > 0
+        dataset_stats[name]["number_correct"] / dataset_stats[name]["number_total"]
+        if dataset_stats[name]["number_total"] > 0
         else 0.0
         for name in dataset_names
     ]
     avg_direction_accs = [
-        dataset_stats[name]["total_direction_acc"] / dataset_stats[name]["count"]
-        if dataset_stats[name]["count"] > 0 and dataset_stats[name]["total_direction_acc"] > 0
+        dataset_stats[name]["direction_correct"] / dataset_stats[name]["direction_total"]
+        if dataset_stats[name]["direction_total"] > 0
         else 0.0
         for name in dataset_names
     ]
@@ -1123,21 +1177,29 @@ def main(config: _config.TrainConfig):
             raise ValueError("Training step info missing per_sample_loss")
 
         # Buffer local dataset info (no multihost gathering at every step)
-        # Buffer local dataset info (no multihost gathering at every step)
         if hasattr(batch[0], "tokenized_dataset_name"):
             try:
-                per_sample_critical_token_accuracy = info.get("per_sample_critical_token_accuracy")
-                per_sample_number_token_accuracy = info.get("per_sample_number_token_accuracy")
-                per_sample_direction_token_accuracy = info.get("per_sample_direction_token_accuracy")
+                # Extract per-sample token counts for micro-averaging
+                critical_data = None
+                if "per_sample_critical_correct" in info and "per_sample_critical_total" in info:
+                    critical_data = (info["per_sample_critical_correct"], info["per_sample_critical_total"])
+
+                number_data = None
+                if "per_sample_number_correct" in info and "per_sample_number_total" in info:
+                    number_data = (info["per_sample_number_correct"], info["per_sample_number_total"])
+
+                direction_data = None
+                if "per_sample_direction_correct" in info and "per_sample_direction_total" in info:
+                    direction_data = (info["per_sample_direction_correct"], info["per_sample_direction_total"])
+
                 dataset_info_buffer.add_local_batch(
                     batch[0].tokenized_dataset_name,
                     per_sample_loss,
-                    per_sample_critical_token_accuracy,
-                    per_sample_number_token_accuracy,
-                    per_sample_direction_token_accuracy,
+                    critical_data,
+                    number_data,
+                    direction_data,
                 )
             except Exception as e:
-                logging.warning(f"Failed to buffer dataset info at step {step}: {e}")
                 logging.warning(f"Failed to buffer dataset info at step {step}: {e}")
 
         # Update hard example tracker with per-sample losses from current batch
