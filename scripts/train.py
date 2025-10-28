@@ -1080,15 +1080,7 @@ def main(config: _config.TrainConfig):
     #     resize_hw=(128, 128),
     # )
 
-    # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
-    data_iter = iter(data_loader)
-    log_mem("Before getting batch")
-    batch = next(data_iter)
-    vis_batch(batch, tok=tok)
-
-    log_mem("After getting batch")
-    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
-    sharding.log_batch_sharding(batch)
+    log_mem("Before init train state")
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
@@ -1099,8 +1091,20 @@ def main(config: _config.TrainConfig):
     sharding.log_param_sharding_planned(train_state_sharding)
     sharding.log_param_sharding_actual(train_state.params)
 
+    # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
     if resuming:
         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+        logging.info("Restored checkpoint - dataloader iterator will resume from checkpointed position")
+
+    # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
+    data_iter = iter(data_loader)
+    log_mem("Before getting batch")
+    batch = next(data_iter)
+    vis_batch(batch, tok=tok)
+
+    log_mem("After getting batch")
+    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
+    sharding.log_batch_sharding(batch)
 
     train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
@@ -1334,10 +1338,12 @@ def main(config: _config.TrainConfig):
                 for _ in val_pbar:
                     val_batch = next(val_iter)
                     val_info = pval_step(train_rng, train_state, val_batch)
-                    val_infos.append(val_info)
+                    # Convert to local array to avoid multi-host array issues during stacking
+                    val_info_local = jax.device_get(val_info)
+                    val_infos.append(val_info_local)
 
                 stacked_val = common_utils.stack_forest(val_infos)
-                reduced_val = jax.device_get(jax.tree.map(jnp.mean, stacked_val))
+                reduced_val = jax.tree.map(jnp.mean, stacked_val)
                 val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val.items())
                 val_pbar.write(f"Step {step} (val): {val_info_str}")
                 if jax.process_index() == 0:

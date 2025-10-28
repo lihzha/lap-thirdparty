@@ -221,6 +221,24 @@ def save_state(
                 elif jax.process_index() == 0:
                     logging.info("Data loader does not support norm stats checkpointing (non-RLDS dataset)")
 
+                # Save dataloader state (iterator position and batch counter)
+                # This allows resuming training from the exact same data position
+                if hasattr(data_loader, "save_dataloader_state"):
+                    try:
+                        dataloader_dir = str(directory / "dataloader")
+                        save_path = data_loader.save_dataloader_state(dataloader_dir)
+                        if jax.process_index() == 0:
+                            batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
+                            logging.info(
+                                f"Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
+                            )
+                    except Exception as e:
+                        if jax.process_index() == 0:
+                            logging.warning(f"Failed to save dataloader state: {e}")
+                            logging.warning("Training will continue but dataloader state will not be checkpointed")
+                elif jax.process_index() == 0:
+                    logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
+
             # Split params that can be used for inference into a separate item.
             with at.disable_typechecking():
                 train_state, params = _split_params(state)
@@ -282,8 +300,17 @@ def restore_state(
     data_loader: _data_loader.DataLoader,
     step: int | None = None,
 ) -> training_utils.TrainState:
-    # del data_loader
+    """Restore training state and dataloader state from checkpoint.
 
+    Args:
+        checkpoint_manager: The checkpoint manager
+        state: Training state template to restore into
+        data_loader: Data loader to restore iterator state
+        step: Specific checkpoint step to restore (None = latest)
+
+    Returns:
+        Restored training state
+    """
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.
         train_state, params = _split_params(state)
@@ -294,6 +321,36 @@ def restore_state(
                 "params": {"params": params},
             },
         )
+
+    # Restore dataloader state if available
+    if hasattr(data_loader, "load_dataloader_state"):
+        try:
+            # Determine which step to restore from
+            if step is None:
+                step = checkpoint_manager.latest_step()
+
+            # Construct dataloader checkpoint directory
+            checkpoint_dir = _extract_directory(checkpoint_manager)
+            dataloader_dir = str(epath.Path(checkpoint_dir) / str(step) / "dataloader")
+
+            # Check if dataloader checkpoint exists
+            if tf.io.gfile.exists(dataloader_dir):
+                batches_seen = data_loader.load_dataloader_state(dataloader_dir)
+                if jax.process_index() == 0:
+                    logging.info(
+                        f"Restored dataloader state | batches_seen={batches_seen} | step={step} | location={dataloader_dir}"
+                    )
+            elif jax.process_index() == 0:
+                logging.warning(
+                    f"Dataloader checkpoint not found at {dataloader_dir}. "
+                    "Dataloader will start from beginning of dataset."
+                )
+        except Exception as e:
+            if jax.process_index() == 0:
+                logging.warning(f"Failed to restore dataloader state: {e}")
+                logging.warning("Training will continue but dataloader will start from beginning")
+    elif jax.process_index() == 0:
+        logging.info("Data loader does not support state restoration (persistent_iterator not enabled)")
 
     return _merge_params(restored["train_state"], restored["params"])
 

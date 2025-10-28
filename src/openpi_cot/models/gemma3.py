@@ -215,13 +215,15 @@ def apply_rope(
 
 
 class Einsum(nn.Module):
-    """Einsum layer for parameterized tensor multiplication."""
+    """Einsum layer for parameterized tensor multiplication.
+
+    For Gemma3, parameters default to bfloat16 to ensure proper sharding.
+    """
 
     shape: tuple[int, ...]
     weight_name: str = "w"
     initializer: nn.initializers.Initializer = nn.initializers.normal()
     dtype: jnp.dtype | None = None
-    param_dtype: jnp.dtype = jnp.bfloat16
     lora_config: "lora.LoRAConfig" = None
 
     @nn.compact
@@ -235,11 +237,14 @@ class Einsum(nn.Module):
                 lora_config=self.lora_config,
             )(eqn, x)
             return w
+        # Default to bfloat16 for Gemma3 to avoid sharding mismatches
+        # (float32 params > 4MB get sharded, but bfloat16 params < 4MB stay replicated)
+        param_dtype = self.dtype if self.dtype is not None else jnp.bfloat16
         w = self.param(
             self.weight_name,
             self.initializer,
             self.shape,
-            self.param_dtype,
+            param_dtype,
         )
         return jnp.einsum(eqn, x, w)
 
