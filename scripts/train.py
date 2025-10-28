@@ -12,6 +12,7 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
 import matplotlib
+
 matplotlib.use("Agg")  # Use non-interactive backend for remote environments
 import matplotlib.pyplot as plt
 import numpy as np
@@ -329,7 +330,6 @@ class DatasetStatsTracker:
             direction_token_accuracies: Array of per-sample direction token accuracies (optional)
         """
         for idx, name in enumerate(dataset_names):
-        for idx, name in enumerate(dataset_names):
             if name not in self.dataset_stats:
                 self.dataset_stats[name] = {
                     "total_loss": 0.0,
@@ -407,9 +407,7 @@ class LocalDatasetInfoBuffer:
                 np.asarray(training_utils.to_local_array(per_sample_critical_token_accuracy))
             )
         if per_sample_number_token_accuracy is not None:
-            self.number_accs_buffer.append(
-                np.asarray(training_utils.to_local_array(per_sample_number_token_accuracy))
-            )
+            self.number_accs_buffer.append(np.asarray(training_utils.to_local_array(per_sample_number_token_accuracy)))
         if per_sample_direction_token_accuracy is not None:
             self.direction_accs_buffer.append(
                 np.asarray(training_utils.to_local_array(per_sample_direction_token_accuracy))
@@ -514,14 +512,14 @@ def gather_dataset_info_multihost(
     process_count = jax.process_count()
     if process_count > 1:
         # Gather numeric arrays using JAX (works fine with int/float dtypes)
-        all_dataset_names_tokens = jax.experimental.multihost_utils.process_allgather(
-            local_dataset_names_tokens
-        )
+        all_dataset_names_tokens = jax.experimental.multihost_utils.process_allgather(local_dataset_names_tokens)
         all_losses = jax.experimental.multihost_utils.process_allgather(local_losses)
 
         # Flatten: shape goes from [num_processes, batch_per_process, seq_len] to [total_batch, seq_len]
         # For losses: [num_processes, batch_per_process] to [total_batch]
-        all_dataset_names_tokens = np.asarray(all_dataset_names_tokens).reshape(-1, local_dataset_names_tokens.shape[-1])
+        all_dataset_names_tokens = np.asarray(all_dataset_names_tokens).reshape(
+            -1, local_dataset_names_tokens.shape[-1]
+        )
         all_losses = np.asarray(all_losses).flatten()
     else:
         all_dataset_names_tokens = local_dataset_names_tokens
@@ -558,9 +556,7 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
     dataset_names = list(dataset_stats.keys())
     counts = [dataset_stats[name]["count"] for name in dataset_names]
     avg_losses = [
-        dataset_stats[name]["total_loss"] / dataset_stats[name]["count"]
-        if dataset_stats[name]["count"] > 0
-        else 0.0
+        dataset_stats[name]["total_loss"] / dataset_stats[name]["count"] if dataset_stats[name]["count"] > 0 else 0.0
         for name in dataset_names
     ]
     avg_critical_accs = [
@@ -845,9 +841,19 @@ class TrainingStepRunner:
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
         (
-            loss,
-            (per_sample_loss, token_accuracy, critical_token_accuracy, number_token_accuracy, direction_token_accuracy, loss_metrics),
-        ), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(model, train_rng, observation, actions)
+            (
+                loss,
+                (
+                    per_sample_loss,
+                    token_accuracy,
+                    critical_token_accuracy,
+                    number_token_accuracy,
+                    direction_token_accuracy,
+                    loss_metrics,
+                ),
+            ),
+            grads,
+        ) = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(model, train_rng, observation, actions)
 
         params = state.params.filter(self.config.trainable_filter)
         updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -1198,13 +1204,19 @@ def main(config: _config.TrainConfig):
                         }
                         # Add critical token accuracy plot if available
                         if "avg_critical_token_acc" in plots:
-                            log_dict["dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(plots["avg_critical_token_acc"])
+                            log_dict["dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(
+                                plots["avg_critical_token_acc"]
+                            )
                         # Add number token accuracy plot if available
                         if "avg_number_token_acc" in plots:
-                            log_dict["dataset_stats/avg_number_token_acc_plot"] = wandb.Image(plots["avg_number_token_acc"])
+                            log_dict["dataset_stats/avg_number_token_acc_plot"] = wandb.Image(
+                                plots["avg_number_token_acc"]
+                            )
                         # Add direction token accuracy plot if available
                         if "avg_direction_token_acc" in plots:
-                            log_dict["dataset_stats/avg_direction_token_acc_plot"] = wandb.Image(plots["avg_direction_token_acc"])
+                            log_dict["dataset_stats/avg_direction_token_acc_plot"] = wandb.Image(
+                                plots["avg_direction_token_acc"]
+                            )
                         wandb.log(log_dict, step=step)
                         # Close figures to prevent memory leaks
                         plt.close(plots["counts"])
@@ -1223,17 +1235,6 @@ def main(config: _config.TrainConfig):
                         host_batch_local,
                         tok,
                         local_batch_size=local_size,
-                        dataset_log_tracker=dataset_log_tracker,
-                    )
-
-                    # Log dataset logging statistics periodically
-                    if step % (config.log_interval * 10) == 0:
-                        log_stats = dataset_log_tracker.get_stats()
-                        if log_stats:
-                            logging.info(f"Dataset logging counts: {log_stats}")
-                            # Log to wandb as well
-                            wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
-                            wandb.log(wandb_log_stats, step=step)
                         dataset_log_tracker=dataset_log_tracker,
                     )
 
