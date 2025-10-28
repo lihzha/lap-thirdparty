@@ -122,7 +122,7 @@ class PlanningOutputs(upstream_transforms.DataTransformFn):
         if "actions" in data:
             actions = data["actions"]
             output["actions"] = np.concatenate(
-                [actions[..., :3], rot6_to_quat(actions[..., 3:9]), actions[..., 9:10]], axis=-1
+                [actions[..., :6], rot6_to_quat(actions[..., 6:12]), actions[..., 12:13]], axis=-1
             )
 
         if "reasoning" in data:

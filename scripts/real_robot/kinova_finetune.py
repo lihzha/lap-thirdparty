@@ -117,8 +117,6 @@ def main(args: Args):
                     request_data = {
                         "image": image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
                         "wrist_image": image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
-                        "cartesian_position": curr_obs["observation/cartesian_position"],
-                        "gripper_position": curr_obs["observation/gripper_position"],
                         "state": curr_obs["observation/state"],
                         "prompt": instruction,
                         "batch_size": None,
@@ -152,12 +150,13 @@ def main(args: Args):
                 # else:
                 #     action = np.concatenate([action[:-1], np.zeros((1,))])
 
+                assert len(action) == 11, f"Expected action of length 11, got {len(action)}"
                 rep = {
                     "action": {
-                        "base_pose": obs["base_pose"],
-                        "arm_pos": action[:3],
-                        "arm_quat": action[3:7],
-                        "gripper_pos": action[-1:],
+                        "base_pose": action[:3],
+                        "arm_pos": action[3:6],
+                        "arm_quat": action[6:10],
+                        "gripper_pos": action[10:11],
                     }
                 }
                 socket.send_pyobj(rep)
@@ -198,9 +197,7 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
     base_image = cv2.imdecode(obs_dict["base_image"], cv2.IMREAD_COLOR)
     wrist_image = cv2.imdecode(obs_dict["wrist_image"], cv2.IMREAD_COLOR)
     # In addition to image observations, also capture the proprioceptive state
-    cartesian_position = np.concatenate([obs_dict["arm_pos"], quat_to_r6(obs_dict["arm_quat"])])
-    gripper_position = np.array(obs_dict["gripper_pos"]).item()
-
+    state = np.concatenate([obs_dict["base_pose"], obs_dict["arm_pos"], quat_to_r6(obs_dict["arm_quat"]), np.array(obs_dict["gripper_pos"]).item()[None]])
     # if gripper_position > 0.5:
     #     gripper_position = 1.0
     # else:
@@ -209,9 +206,7 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
     return {
         "observation/image": base_image,
         "observation/wrist_image": wrist_image,
-        "observation/cartesian_position": cartesian_position,
-        "observation/gripper_position": np.array(gripper_position).reshape((-1, 1)),
-        "observation/state": np.concatenate([cartesian_position, np.array(gripper_position)[None]]),
+        "observation/state": state,
     }
 
 
