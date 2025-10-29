@@ -187,7 +187,7 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
 
 
-class _DobbeCoTDataset(_SingleOXECoTDataset):
+class DobbeCoTDataset(_SingleOXECoTDataset):
     """Custom dataset for dobbe with action range filtering."""
 
     def apply_traj_filters(self, action_key):
@@ -225,136 +225,6 @@ class PlanningDataset(_SingleOXECoTDataset):
     - Actions: 10D action vector
     - Language: Fixed instruction per demo
     """
-
-    def apply_restructure(self):
-        """Restructure planning dataset to match expected format."""
-
-        def restructure(traj):
-            # Extract required fields
-            if self.standardize_fn is not None:
-                traj = self.standardize_fn(traj)
-            traj_len = tf.shape(traj["action"])[0]
-            old_obs = traj["observation"]
-            new_obs = {}
-
-            # Map image keys from planning dataset format to expected format
-            # planning dataset uses: base_image, wrist_image
-            # expected format: base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb
-            new_obs[self.spec.primary_image_key] = old_obs.get("base_image", tf.repeat("", traj_len))
-            new_obs[self.spec.wrist_image_key] = old_obs.get("wrist_image", tf.repeat("", traj_len))
-            # Planning dataset doesn't have right wrist camera
-            new_obs[self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
-
-            # State is already in the correct format (8D)
-            new_obs["state"] = tf.cast(old_obs["state"], tf.float32)
-
-            # Actions are 10D in planning dataset
-            actions = tf.cast(traj["action"], tf.float32)
-
-            # Get language instruction
-            language_instruction = traj.get("language_instruction", tf.constant("", dtype=tf.string))
-
-            # Build trajectory ID from episode metadata
-            file_path = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("file_path", "")
-            demo_name = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("demo_name", "")
-
-            if isinstance(file_path, tf.Tensor) and tf.rank(file_path) > 0:
-                file_path = file_path[0]
-            if isinstance(demo_name, tf.Tensor) and tf.rank(demo_name) > 0:
-                demo_name = demo_name[0]
-
-            # Create trajectory ID
-            trajectory_id = tf.strings.join(
-                [tf.constant("planning_", dtype=tf.string), tf.strings.as_string(demo_name)]
-            )
-
-            # Determine state type (planning uses EEF pose representation)
-            state_type_str = "eef_pose"
-
-            return {
-                "observation": new_obs,
-                "language_instruction": language_instruction,
-                "actions": actions,
-                "dataset_name": tf.repeat("planning_dataset", traj_len),
-                "trajectory_id": tf.repeat(trajectory_id, traj_len),
-                "raw_action": actions,
-                "control_frequency": tf.fill([traj_len], tf.cast(10, tf.int32)),  # Default 10 Hz
-                "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # Planning is single-arm
-                "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
-            }
-
-        self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
-
-    def get_traj_identifier(self):
-        """Get trajectory identifier from episode metadata."""
-
-        def _get_traj_identifier(traj):
-            # Apply standardization function if provided
-            if self.standardize_fn is not None:
-                traj = self.standardize_fn(traj)
-
-            traj_len = tf.shape(traj["action"])[0]
-
-            # Use episode metadata to create trajectory ID
-            file_path = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("file_path", "")
-            demo_name = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("demo_name", "")
-
-            if isinstance(file_path, tf.Tensor) and tf.rank(file_path) > 0:
-                file_path = file_path[0]
-            if isinstance(demo_name, tf.Tensor) and tf.rank(demo_name) > 0:
-                demo_name = demo_name[0]
-
-            # Create unique trajectory ID
-            trajectory_id = tf.strings.join(
-                [tf.constant("planning_", dtype=tf.string), tf.strings.as_string(demo_name)]
-            )
-
-            traj["trajectory_id"] = tf.repeat(trajectory_id, traj_len)
-            return traj
-
-        self.dataset = self.dataset.traj_map(_get_traj_identifier, self.num_parallel_calls)
-
-    def apply_traj_filters(self, action_key):
-        """Apply trajectory-level filters for planning dataset."""
-
-        def is_nonzero_length(traj):
-            return tf.shape(traj[action_key])[0] > 0
-
-        def has_any_instruction(traj):
-            instr = traj.get("language_instruction", tf.constant("", dtype=tf.string))
-            if tf.rank(instr) > 0:
-                instr = tf.reshape(instr, [-1])
-                instr = tf.strings.strip(instr)
-                return tf.reduce_any(tf.strings.length(instr) > 0)
-            return tf.strings.length(tf.strings.strip(instr)) > 0
-
-        self.dataset = self.dataset.filter(is_nonzero_length)
-        self.dataset = self.dataset.filter(has_any_instruction)
-
-    def apply_frame_filters(self):
-        """Apply frame-level filters for planning dataset."""
-
-        # Drop frames with empty/whitespace-only prompts
-        def _non_empty_prompt(frame: dict) -> tf.Tensor:
-            p = tf.strings.strip(frame["prompt"])  # scalar tf.string after flatten
-            return tf.strings.length(p) > 0
-
-        self.dataset = self.dataset.filter(_non_empty_prompt)
-
-    def apply_repack_transforms(self):
-        """Repack trajectory data for planning dataset."""
-
-        def _pop_and_rename_keys(traj):
-            # Remove trajectory_id as it's no longer needed
-            traj.pop("trajectory_id", None)
-            # Rename language_instruction to prompt
-            traj["prompt"] = traj.get("language_instruction", tf.constant("", dtype=tf.string))
-            traj.pop("language_instruction", None)
-            # Remove raw_action
-            traj.pop("raw_action", None)
-            return traj
-
-        self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
 
     def apply_traj_transforms(
         self,
@@ -421,7 +291,7 @@ class PlanningDataset(_SingleOXECoTDataset):
         self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
 
-class _LiberoCoTDataset(_SingleOXECoTDataset):
+class LiberoCoTDataset(_SingleOXECoTDataset):
     """Custom dataset for LIBERO with EEF state observations."""
 
     def apply_restructure(self):
@@ -519,7 +389,7 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
         # self.dataset = self.dataset.filter(_non_empty_prompt)
 
 
-class _SampleR1LiteCoTDataset(_SingleOXECoTDataset):
+class SampleR1LiteCoTDataset(_SingleOXECoTDataset):
     """Custom dataset for sample_r1_lite with EEF pose lookup table."""
 
     def __init__(

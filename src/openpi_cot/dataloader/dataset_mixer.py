@@ -8,11 +8,17 @@ import dlimp as dl
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset, dataset_size
+from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
-from openpi_cot.dataloader.helpers import NormalizationType, state_encoding_to_type
-from openpi_cot.dataloader.oxe_datasets import _DobbeCoTDataset, _LiberoCoTDataset, _SampleR1LiteCoTDataset, _SingleOXECoTDataset
-from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads, pprint_data_mixture
+from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.helpers import state_encoding_to_type
+from openpi_cot.dataloader.oxe_datasets import DobbeCoTDataset
+from openpi_cot.dataloader.oxe_datasets import LiberoCoTDataset
+from openpi_cot.dataloader.oxe_datasets import PlanningDataset
+from openpi_cot.dataloader.oxe_datasets import SampleR1LiteCoTDataset
+from openpi_cot.dataloader.oxe_datasets import _SingleOXECoTDataset
+from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
+from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
 from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
 from openpi_cot.transforms import NormalizeActionAndProprio
@@ -110,17 +116,22 @@ class OXECoTDatasets:
                     "filter_table": ds.filter_table,
                 }
             elif dataset_name == "sample_r1_lite":
-                ds = _SampleR1LiteCoTDataset(
+                ds = SampleR1LiteCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
             elif dataset_name == "dobbe":
-                ds = _DobbeCoTDataset(
+                ds = DobbeCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
             elif dataset_name.startswith("libero"):
-                ds = _LiberoCoTDataset(
+                ds = LiberoCoTDataset(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name.startswith("planning"):
+                ds = PlanningDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
@@ -449,7 +460,7 @@ class OXECoTDatasets:
         )
         # Return iterator from underlying TensorFlow dataset, not dlimp wrapper
         # This ensures compatibility with TensorFlow's checkpoint mechanism
-        if hasattr(checkpointable_dataset, 'dataset'):
+        if hasattr(checkpointable_dataset, "dataset"):
             return iter(checkpointable_dataset.dataset)
         return iter(checkpointable_dataset)
 

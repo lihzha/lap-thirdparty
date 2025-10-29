@@ -13,36 +13,31 @@ All classes and functions are re-exported here for backward compatibility.
 """
 
 # Re-export specifications
-from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
-
-# Re-export image utilities
-from openpi_cot.dataloader.image_utils import make_decode_images_fn
-
-# Re-export dataset utilities
-from openpi_cot.dataloader.dataset_utils import (
-    dataset_size,
-    gather_with_padding,
-    prepare_batched_dataset,
-    print_memory_usage,
-)
-
 # Re-export base dataset class
 from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
+
+# Re-export dataset mixer
+from openpi_cot.dataloader.dataset_mixer import OXECoTDatasets
+
+# Re-export dataset utilities
+from openpi_cot.dataloader.dataset_utils import dataset_size
+from openpi_cot.dataloader.dataset_utils import gather_with_padding
+from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
+from openpi_cot.dataloader.dataset_utils import print_memory_usage
 
 # Re-export DROID dataset
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 
-# Re-export OXE datasets
-from openpi_cot.dataloader.oxe_datasets import (
-    _DobbeCoTDataset,
-    _LiberoCoTDataset,
-    _SampleR1LiteCoTDataset,
-    _SingleOXECoTDataset,
-    PlanningDataset,
-)
+# Re-export image utilities
+from openpi_cot.dataloader.image_utils import make_decode_images_fn
 
-# Re-export dataset mixer
-from openpi_cot.dataloader.dataset_mixer import OXECoTDatasets
+# Re-export OXE datasets
+from openpi_cot.dataloader.oxe_datasets import DobbeCoTDataset
+from openpi_cot.dataloader.oxe_datasets import LiberoCoTDataset
+from openpi_cot.dataloader.oxe_datasets import PlanningDataset
+from openpi_cot.dataloader.oxe_datasets import SampleR1LiteCoTDataset
+from openpi_cot.dataloader.oxe_datasets import _SingleOXECoTDataset
+from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
 
 # Define public API
 __all__ = [
@@ -61,10 +56,10 @@ __all__ = [
     "DroidCoTDataset",
     # OXE datasets
     "_SingleOXECoTDataset",
-    "_DobbeCoTDataset",
-    "_LiberoCoTDataset",
+    "DobbeCoTDataset",
+    "LiberoCoTDataset",
     "PlanningDataset",
-    "_SampleR1LiteCoTDataset",
+    "SampleR1LiteCoTDataset",
     # Dataset mixer
     "OXECoTDatasets",
 ]
