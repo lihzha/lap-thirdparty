@@ -1547,8 +1547,11 @@ def libero_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ],
         axis=1,
     )
-    trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
-    trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -2:]  # 2D gripper state
+
+    trajectory["observation"]["state"] = tf.concat(
+        [trajectory["observation"]["state"][:, :6], trajectory["observation"]["state"][:, -1:]],
+        axis=1,
+    )
     return trajectory
 
 

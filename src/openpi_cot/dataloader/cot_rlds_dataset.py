@@ -35,6 +35,7 @@ from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 # Re-export OXE datasets
 from openpi_cot.dataloader.oxe_datasets import (
     _DobbeCoTDataset,
+    _LiberoCoTDataset,
     _SampleR1LiteCoTDataset,
     _SingleOXECoTDataset,
     PlanningDataset,
@@ -61,6 +62,7 @@ __all__ = [
     # OXE datasets
     "_SingleOXECoTDataset",
     "_DobbeCoTDataset",
+    "_LiberoCoTDataset",
     "PlanningDataset",
     "_SampleR1LiteCoTDataset",
     # Dataset mixer

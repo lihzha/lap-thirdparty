@@ -423,6 +423,7 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
             inputs=[
                 libero_policy.LiberoInputs(
                     model_type=model_config.model_type,
+                    action_dim=model_config.action_dim,
                 )
             ],
             outputs=[libero_policy.LiberoOutputs()],
@@ -747,18 +748,63 @@ _CONFIGS = [
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma2", params_path="tbd"),
     ),
     TrainConfig(
-        name="pi05_libero_eval",
+        name="pi05_libero_finetune_v4",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=180,
             pi05=True,
             discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
         ),
         data=LiberoDataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
+            repo_id="libero_10_no_noops",
+            asset_id="libero",
+            dataset_type="oxe",
+            data_mix="libero_10_no_noops",
+            rlds_data_dir="gs://pi0-cot/OXE/libero_10_no_noops",  # Update this path
+            language_action_config_name="compact",
+            decoding_schema="compact",
         ),
+        fsdp_devices=1,
+        batch_size=32,
+        num_train_steps=50000,
+        save_interval=1000,
+        log_interval=100,
+        keep_period=5000,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",  # Update this path
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint",
+            params_path="gs://pi0-cot/checkpoints/pi_combined_cot_v4/oxe_no_galaxea_v4_fixed/30000",
+        ),
+    ),
+    TrainConfig(
+        name="pi05_libero_finetune_local",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=True,
+        ),
+        data=LiberoDataConfig(
+            repo_id="libero_10_no_noops",
+            asset_id="libero",
+            dataset_type="oxe",
+            data_mix="libero_10_no_noops",
+            rlds_data_dir="/n/fs/robot-data/libero/tfds",
+            language_action_config_name="compact",
+            decoding_schema="compact",
+        ),
+        fsdp_devices=1,
+        batch_size=8,
+        num_train_steps=50000,
+        save_interval=1000,
+        log_interval=100,
+        keep_period=5000,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
     ),
     TrainConfig(
         name="paligemma2_vqa",

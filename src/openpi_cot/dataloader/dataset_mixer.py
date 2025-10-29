@@ -11,7 +11,7 @@ import tensorflow as tf
 from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 from openpi_cot.dataloader.helpers import NormalizationType, state_encoding_to_type
-from openpi_cot.dataloader.oxe_datasets import _DobbeCoTDataset, _SampleR1LiteCoTDataset, _SingleOXECoTDataset
+from openpi_cot.dataloader.oxe_datasets import _DobbeCoTDataset, _LiberoCoTDataset, _SampleR1LiteCoTDataset, _SingleOXECoTDataset
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads, pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
 from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
@@ -116,6 +116,11 @@ class OXECoTDatasets:
                 )
             elif dataset_name == "dobbe":
                 ds = _DobbeCoTDataset(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name.startswith("libero"):
+                ds = _LiberoCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )

@@ -288,6 +288,7 @@ class LiberoInputs(transforms.DataTransformFn):
     # Determines which model will be used.
     # Do not change this for your own dataset.
     model_type: ExtendedModelType
+    action_dim: int = 32
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
@@ -321,6 +322,10 @@ class LiberoInputs(transforms.DataTransformFn):
         # stored in "prompt"; the output dict always needs to have the key "prompt").
         if "prompt" in data:
             inputs["prompt"] = data["prompt"]
+
+        # Pass language_actions during training for CoT supervision
+        if "language_actions" in data:
+            inputs["language_actions"] = data["language_actions"]
 
         return inputs
 
