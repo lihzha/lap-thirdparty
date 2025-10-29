@@ -765,8 +765,8 @@ _CONFIGS = [
             dataset_type="oxe",
             data_mix="libero_10_no_noops",
             rlds_data_dir="gs://pi0-cot/OXE",  # Update this path
-            language_action_config_name="compact",
-            decoding_schema="compact",
+            language_action_config_name="default",
+            decoding_schema="default",
         ),
         fsdp_devices=1,
         batch_size=32,

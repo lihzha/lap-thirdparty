@@ -7,8 +7,11 @@ import numpy as np
 import tensorflow as tf
 
 from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
-from openpi_cot.dataloader.dataset_utils import gather_with_padding, print_memory_usage
-from openpi_cot.dataloader.helpers import NormalizationType, convert_action_encoding, state_encoding_to_type
+from openpi_cot.dataloader.dataset_utils import gather_with_padding
+from openpi_cot.dataloader.dataset_utils import print_memory_usage
+from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.helpers import convert_action_encoding
+from openpi_cot.dataloader.helpers import state_encoding_to_type
 from openpi_cot.transforms import NormalizeActionAndProprio
 
 if TYPE_CHECKING:
@@ -456,9 +459,7 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
                 file_path = file_path[0]
 
             # Create trajectory ID
-            trajectory_id = tf.strings.join(
-                [tf.constant("libero_", dtype=tf.string), tf.strings.as_string(file_path)]
-            )
+            trajectory_id = tf.strings.join([tf.constant("libero_", dtype=tf.string), tf.strings.as_string(file_path)])
 
             # Determine state type (LIBERO uses EEF pose representation)
             state_type_str = state_encoding_to_type(self.state_encoding)
@@ -494,41 +495,12 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
                 file_path = file_path[0]
 
             # Create unique trajectory ID
-            trajectory_id = tf.strings.join(
-                [tf.constant("libero_", dtype=tf.string), tf.strings.as_string(file_path)]
-            )
+            trajectory_id = tf.strings.join([tf.constant("libero_", dtype=tf.string), tf.strings.as_string(file_path)])
 
             traj["trajectory_id"] = tf.repeat(trajectory_id, traj_len)
             return traj
 
         self.dataset = self.dataset.traj_map(_get_traj_identifier, self.num_parallel_calls)
-
-    def apply_traj_filters(self, action_key):
-        """Apply trajectory-level filters for LIBERO dataset."""
-
-        def is_nonzero_length(traj):
-            return tf.shape(traj[action_key])[0] > 0
-
-        def has_any_instruction(traj):
-            instr = traj.get("language_instruction", tf.constant("", dtype=tf.string))
-            if tf.rank(instr) > 0:
-                instr = tf.reshape(instr, [-1])
-                instr = tf.strings.strip(instr)
-                return tf.reduce_any(tf.strings.length(instr) > 0)
-            return tf.strings.length(tf.strings.strip(instr)) > 0
-
-        self.dataset = self.dataset.filter(is_nonzero_length)
-        self.dataset = self.dataset.filter(has_any_instruction)
-
-    def apply_frame_filters(self):
-        """Apply frame-level filters for LIBERO dataset."""
-
-        # Drop frames with empty/whitespace-only prompts
-        def _non_empty_prompt(frame: dict) -> tf.Tensor:
-            p = tf.strings.strip(frame["prompt"])  # scalar tf.string after flatten
-            return tf.strings.length(p) > 0
-
-        self.dataset = self.dataset.filter(_non_empty_prompt)
 
     def apply_repack_transforms(self):
         """Repack trajectory data for LIBERO dataset."""
