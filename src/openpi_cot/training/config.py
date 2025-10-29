@@ -559,185 +559,161 @@ class TrainingSchedule:
             )
 
 
-def build_langact_prediction_schedule(
-    *,
-    num_train_steps: int = 100_000,
-    langact_weight: float = 1.0,
-    prediction_weight: float = 0.2,
-    prediction_prob: float = 0.2,
-    enable_prediction_training: bool = False,
-) -> TrainingSchedule:
-    """Build training schedule with language action and prediction losses.
+@dataclasses.dataclass(frozen=True)
+class TrainingScheduleChoice:
+    """Choice of pre-specified training schedule configuration.
 
-    This schedule enables both language action and prediction training from the start,
-    with configurable loss weights and stochastic masking.
+    Similar to WeightLoaderChoice, this provides common training schedules
+    that can be selected via command line or programmatically.
+
+    Available schedules:
+    - lang_act_only: Only language action training
+    - lang_act_and_pred: Language action + prediction training (weight=0.2, prob=0.2)
+    - raw_act_only: Only raw action training
+
+    Example:
+        # From command line:
+        python -m openpi_cot.training.train --config pi_droid_cot_v4 \\
+            --training_schedule_choice.kind lang_act_and_pred
+
+        # From Python:
+        schedule = TrainingScheduleChoice(kind="lang_act_and_pred").build()
+    """
+
+    kind: Literal["lang_act_only", "lang_act_and_pred", "raw_act_only"] = "lang_act_only"
+
+    # Optional overrides for schedule parameters
+    langact_weight: float = 1.0
+    prediction_weight: float = 0.2
+    prediction_prob: float = 0.2
+    action_weight: float = 1.0
+
+    def build(self) -> TrainingSchedule:
+        """Build the training schedule based on the selected kind."""
+        if self.kind == "lang_act_only":
+            return TrainingSchedule(
+                stages=(
+                    TrainingStage(
+                        start_step=0,
+                        end_step=None,
+                        enable_langact_training=True,
+                        enable_action_training=False,
+                        enable_prediction_training=False,
+                        language_loss_weight=self.langact_weight,
+                        action_loss_weight=1.0,
+                        prediction_loss_weight=1.0,
+                        langact_prob=1.0,
+                        action_prob=1.0,
+                        prediction_prob=1.0,
+                    ),
+                )
+            )
+        elif self.kind == "lang_act_and_pred":
+            return TrainingSchedule(
+                stages=(
+                    TrainingStage(
+                        start_step=0,
+                        end_step=None,
+                        enable_langact_training=True,
+                        enable_action_training=False,
+                        enable_prediction_training=True,
+                        language_loss_weight=self.langact_weight,
+                        action_loss_weight=1.0,
+                        prediction_loss_weight=self.prediction_weight,
+                        langact_prob=1.0,
+                        action_prob=1.0,
+                        prediction_prob=self.prediction_prob,
+                    ),
+                )
+            )
+        elif self.kind == "raw_act_only":
+            return TrainingSchedule(
+                stages=(
+                    TrainingStage(
+                        start_step=0,
+                        end_step=None,
+                        enable_langact_training=False,
+                        enable_action_training=True,
+                        enable_prediction_training=False,
+                        language_loss_weight=1.0,
+                        action_loss_weight=self.action_weight,
+                        prediction_loss_weight=1.0,
+                        langact_prob=1.0,
+                        action_prob=1.0,
+                        prediction_prob=1.0,
+                    ),
+                )
+            )
+        else:
+            raise ValueError(f"Unknown schedule kind: {self.kind}")
+
+
+def create_multi_device_configs(
+    base_name: str,
+    devices: list[str],
+    model: _model.BaseModelConfig,
+    data_config_class: type[upstream_config.DataConfigFactory],
+    data_config_kwargs: dict,
+    **train_config_kwargs,
+) -> list["TrainConfig"]:
+    """Create multiple TrainConfig instances for different devices.
+
+    This replaces the ConfigBuilder pattern with a simpler functional approach
+    that directly creates configs with device-specific settings.
 
     Args:
-        num_train_steps: Total number of training steps
-        langact_weight: Weight for language action loss (default: 1.0)
-        prediction_weight: Weight for prediction loss (default: 0.2)
-        prediction_prob: Probability of computing prediction loss per sample (default: 0.2)
+        base_name: Base name for configs (device suffix will be added)
+        devices: List of device names from DEVICE_CONFIGS
+        model: Model configuration
+        data_config_class: Data config factory class
+        data_config_kwargs: Arguments for data config (device paths auto-filled)
+        **train_config_kwargs: Additional TrainConfig arguments
 
     Returns:
-        TrainingSchedule configured with the specified parameters
+        List of TrainConfig instances, one per device
 
     Example:
-        # From Python code:
-        schedule = build_langact_prediction_schedule(num_train_steps=50000)
-        config = TrainConfig(..., training_schedule=schedule)
-
-        # From command line:
-        python -m openpi_cot.training.train \\
-            --config pi_droid_cot_v4 \\
-            --training_schedule "$(python -c 'from openpi_cot.training.config import build_langact_prediction_schedule; print(build_langact_prediction_schedule())')"
-    """
-    return TrainingSchedule(
-        stages=(
-            TrainingStage(
-                start_step=0,
-                end_step=None,  # Until end of training
-                enable_langact_training=True,
-                enable_action_training=False,
-                enable_prediction_training=enable_prediction_training,
-                language_loss_weight=langact_weight,
-                action_loss_weight=1.0,  # Not used when enable_action_training=False
-                prediction_loss_weight=prediction_weight,
-                langact_prob=1.0,  # Always compute language action loss
-                action_prob=1.0,
-                prediction_prob=prediction_prob,  # Stochastically compute prediction loss
-            ),
+        configs = create_multi_device_configs(
+            base_name="pi_droid_cot",
+            devices=["v4", "v5", "v6", "local"],
+            model=build_picot_model(),
+            data_config_class=RLDSCoTDataConfig,
+            data_config_kwargs={"repo_id": "droid", "dataset_type": "droid"},
+            weight_loader=WeightLoaderChoice(kind="paligemma"),
         )
-    )
-
-
-class ConfigBuilder:
-    """Builder for creating TrainConfig with device-specific overrides.
-
-    Enables programmatic generation of configs across multiple devices while
-    avoiding repetitive configuration code.
-
-    Example:
-        # Generate configs for multiple devices
-        configs = (ConfigBuilder("pi_droid_cot")
-            .with_model(build_picot_model())
-            .with_data(RLDSCoTDataConfig, repo_id="droid", dataset_type="droid")
-            .build_for_devices(["v4", "v5", "v6", "local"]))
     """
+    configs = []
+    for device in devices:
+        if device not in DEVICE_CONFIGS:
+            raise ValueError(f"Unknown device '{device}'. Available: {list(DEVICE_CONFIGS.keys())}")
 
-    def __init__(self, base_name: str):
-        """Initialize builder with a base config name.
+        device_cfg = DEVICE_CONFIGS[device]
+        config_name = f"{base_name}_{device}"
 
-        Args:
-            base_name: Base name for the config (device suffix will be added)
-        """
-        self.base_name = base_name
-        self._model_config = None
-        self._data_config_class = None
-        self._data_config_kwargs = {}
-        self._train_config_kwargs = {}
+        # Build data config kwargs with device-specific paths
+        data_kwargs = {**data_config_kwargs}
+        if "rlds_data_dir" not in data_kwargs:
+            data_kwargs["rlds_data_dir"] = device_cfg.rlds_data_dir
+        if "language_action_dir" not in data_kwargs:
+            data_kwargs["language_action_dir"] = device_cfg.get_language_action_dir()
 
-    def with_model(self, model_config: _model.BaseModelConfig) -> "ConfigBuilder":
-        """Set model configuration."""
-        self._model_config = model_config
-        return self
-
-    def with_data(
-        self,
-        data_config_class: type[upstream_config.DataConfigFactory],
-        **kwargs,
-    ) -> "ConfigBuilder":
-        """Set data configuration class and its parameters.
-
-        Args:
-            data_config_class: Class to instantiate for data config
-            **kwargs: Parameters to pass to data config constructor
-        """
-        self._data_config_class = data_config_class
-        self._data_config_kwargs = kwargs
-        return self
-
-    def with_training(self, **kwargs) -> "ConfigBuilder":
-        """Set additional training config parameters.
-
-        Args:
-            **kwargs: Parameters to pass to TrainConfig constructor
-        """
-        self._train_config_kwargs.update(kwargs)
-        return self
-
-    def build(self, name: str | None = None, **overrides) -> "TrainConfig":
-        """Build a single TrainConfig.
-
-        Args:
-            name: Optional name override (defaults to base_name)
-            **overrides: Additional TrainConfig parameters to override
-
-        Returns:
-            Configured TrainConfig instance
-        """
-        config_name = name or self.base_name
-
-        # Merge all train config parameters
-        train_params = {
+        # Build train config with device-specific settings
+        train_kwargs = {
             "name": config_name,
-            **self._train_config_kwargs,
-            **overrides,
+            "model": model,
+            "data": data_config_class(**data_kwargs),
+            "fsdp_devices": device_cfg.fsdp_devices,
+            "checkpoint_base_dir": device_cfg.checkpoint_base_dir,
+            **train_config_kwargs,
         }
 
-        # Add model if specified
-        if self._model_config is not None:
-            train_params["model"] = self._model_config
+        # Set batch_size from device default if not specified
+        if "batch_size" not in train_config_kwargs:
+            train_kwargs["batch_size"] = device_cfg.default_batch_size
 
-        # Add data config if specified
-        if self._data_config_class is not None:
-            train_params["data"] = self._data_config_class(**self._data_config_kwargs)
+        configs.append(TrainConfig(**train_kwargs))
 
-        return TrainConfig(**train_params)
-
-    def build_for_devices(self, devices: list[str]) -> list["TrainConfig"]:
-        """Generate config variants for multiple devices.
-
-        Args:
-            devices: List of device names (must exist in DEVICE_CONFIGS)
-
-        Returns:
-            List of TrainConfig instances, one per device
-        """
-        configs = []
-        for device in devices:
-            if device not in DEVICE_CONFIGS:
-                raise ValueError(f"Unknown device '{device}'. Available devices: {list(DEVICE_CONFIGS.keys())}")
-
-            device_cfg = DEVICE_CONFIGS[device]
-            config_name = f"{self.base_name}_{device}"
-
-            # Build data config kwargs with device-specific paths
-            data_kwargs = {**self._data_config_kwargs}
-            if "rlds_data_dir" not in data_kwargs:
-                data_kwargs["rlds_data_dir"] = device_cfg.rlds_data_dir
-            if "language_action_dir" not in data_kwargs:
-                data_kwargs["language_action_dir"] = device_cfg.get_language_action_dir()
-
-            # Build train config with device-specific settings
-            train_overrides = {
-                "fsdp_devices": device_cfg.fsdp_devices,
-                "checkpoint_base_dir": device_cfg.checkpoint_base_dir,
-            }
-
-            # Set batch_size from device default if not explicitly specified
-            if "batch_size" not in self._train_config_kwargs:
-                train_overrides["batch_size"] = device_cfg.default_batch_size
-
-            # Create a builder copy with device-specific data config
-            device_builder = ConfigBuilder(self.base_name)
-            device_builder._model_config = self._model_config
-            device_builder._data_config_class = self._data_config_class
-            device_builder._data_config_kwargs = data_kwargs
-            device_builder._train_config_kwargs = {**self._train_config_kwargs, **train_overrides}
-
-            configs.append(device_builder.build(name=config_name))
-
-        return configs
+    return configs
 
 
 @dataclasses.dataclass(frozen=True)
@@ -767,16 +743,15 @@ class TrainConfig(upstream_config.TrainConfig):
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = None
     eval_mode: Literal["token_accuracy", "rollout", "both"] = "token_accuracy"
-    # Multi-stage training
-    training_schedule: TrainingSchedule | None = (
-        build_langact_prediction_schedule(
-            num_train_steps=100_000,
-            langact_weight=1.0,
-            prediction_weight=0.0,
-            prediction_prob=0.2,
-            enable_prediction_training=False,
-        ),
+    # Multi-stage training schedule choice
+    training_schedule_choice: TrainingScheduleChoice = dataclasses.field(
+        default_factory=TrainingScheduleChoice
     )
+
+    @property
+    def training_schedule(self) -> TrainingSchedule:
+        """Build training schedule from the choice configuration."""
+        return self.training_schedule_choice.build()
 
     @property
     @override
@@ -796,100 +771,91 @@ class TrainConfig(upstream_config.TrainConfig):
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
     # Multi-device configs: Generated programmatically for v4, v5, v6, local
-    *ConfigBuilder("pi_droid_cot")
-    .with_model(build_picot_model())
-    .with_data(
-        RLDSCoTDataConfig,
-        repo_id="droid",
-        asset_id="droid",
-        dataset_type="droid",
-        droid_dataset_name="droid",
-    )
-    .with_training(
+    *create_multi_device_configs(
+        base_name="pi_droid_cot",
+        devices=["v4", "v5", "v6", "local"],
+        model=build_picot_model(),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "droid",
+            "asset_id": "droid",
+            "dataset_type": "droid",
+            "droid_dataset_name": "droid",
+        },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-    )
-    .build_for_devices(["v4", "v5", "v6", "local"]),
+    ),
     # Combined dataset configs for v4, v6, v6europe
-    *ConfigBuilder("pi_combined_cot")
-    .with_model(build_picot_model())
-    .with_data(
-        RLDSCoTDataConfig,
-        repo_id="combined",
-        asset_id="combined",
-        dataset_type="combined",
-        droid_dataset_name="droid",
-        data_mix="oxe_pi_magic_soup_with_other_states_with_bimanual",
-        shuffle_buffer_size=400_000,
-    )
-    .with_training(
+    *create_multi_device_configs(
+        base_name="pi_combined_cot",
+        devices=["v6", "v6europe", "v4", "local"],
+        model=build_picot_model(),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "shuffle_buffer_size": 400_000,
+        },
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
         ),
         save_interval=500,
         keep_period=5000,
         resume=True,
-    )
-    .build_for_devices(["v6", "v6europe", "v4", "local"]),
+    ),
     # Gemma3 configs
-    ConfigBuilder("gemma3_combined_cot")
-    .with_model(
-        pi_cot_config.PiCoTConfig(
+    TrainConfig(
+        name="gemma3_combined_cot_v4",
+        model=pi_cot_config.PiCoTConfig(
             pi05=True,
             discrete_state_input=False,
             max_token_len=600,
             paligemma_variant="gemma3_4b",
             action_expert_variant="gemma3_300m",
             prompt_format="pi05",
-        )
-    )
-    .with_data(
-        RLDSCoTDataConfig,
-        repo_id="combined",
-        asset_id="combined",
-        dataset_type="combined",
-        droid_dataset_name="droid",
-        shuffle_buffer_size=400_000,
-        rlds_data_dir="gs://pi0-cot/OXE",
-    )
-    .with_training(
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            droid_dataset_name="droid",
+            shuffle_buffer_size=400_000,
+            rlds_data_dir="gs://pi0-cot/OXE",
+        ),
         fsdp_devices=1,
         batch_size=1,
         weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
         save_interval=500,
         keep_period=10000,
         resume=True,
-    )
-    .build(name="gemma3_combined_cot_v4", checkpoint_base_dir="gs://pi0-cot/checkpoints"),
-    ConfigBuilder("gemma3_droid_cot_lora")
-    .with_model(
-        pi_cot_config.PiCoTConfig(
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",
+    ),
+    TrainConfig(
+        name="gemma3_droid_cot_lora_v5",
+        model=pi_cot_config.PiCoTConfig(
             pi05=True,
             discrete_state_input=False,
             max_token_len=600,
             paligemma_variant="gemma3_4b_lora",
             action_expert_variant="gemma3_300m",
             prompt_format="pi05",
-        )
-    )
-    .with_data(
-        RLDSCoTDataConfig,
-        repo_id="droid",
-        asset_id="droid",
-        dataset_type="droid",
-        droid_dataset_name="droid",
-        shuffle_buffer_size=400_000,
-        rlds_data_dir="gs://v5_central1_a/OXE",
-        language_action_dir="gs://v5_central1_a/droid-base-lang-actions",
-    )
-    .with_training(
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            droid_dataset_name="droid",
+            shuffle_buffer_size=400_000,
+            rlds_data_dir="gs://v5_central1_a/OXE",
+            language_action_dir="gs://v5_central1_a/droid-base-lang-actions",
+        ),
         fsdp_devices=1,
         batch_size=1,
         save_interval=500,
         keep_period=10000,
         resume=True,
-    )
-    .build(
-        name="gemma3_droid_cot_lora_v5",
         checkpoint_base_dir="gs://v5_central1_a/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="gemma3", params_path="gs://v5_central1_a/cache/gemma3-4b-it"
