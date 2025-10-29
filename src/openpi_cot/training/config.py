@@ -615,6 +615,33 @@ _CONFIGS = [
         resume=True,
     ),
     TrainConfig(
+        name="gemma3_droid_cot_lora_v5",
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=False,
+            max_token_len=800,
+            paligemma_variant="gemma3_4b_lora",
+            action_expert_variant="gemma3_300m",
+            prompt_format="pi05",
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            droid_dataset_name="droid",
+            rlds_data_dir="gs://v5_central1_a/OXE",
+            language_action_dir="gs://v5_central1_a/droid-base-lang-actions",
+            shuffle_buffer_size=400_000,
+        ),
+        fsdp_devices=1,
+        batch_size=1,
+        checkpoint_base_dir="gs://v5_central1_a/checkpoints",
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://v5_central1_a/cache/gemma3-4b-it"),
+        save_interval=500,
+        keep_period=10000,
+        resume=True,
+    ),
+    TrainConfig(
         name="pi_combined_cot_v6",
         data=RLDSCoTDataConfig(
             repo_id="combined",
@@ -771,9 +798,9 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=32,
         num_train_steps=50000,
-        save_interval=1000,
+        save_interval=500,
         log_interval=100,
-        keep_period=5000,
+        keep_period=500,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",  # Update this path
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint",

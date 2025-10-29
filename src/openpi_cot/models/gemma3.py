@@ -138,6 +138,24 @@ def get_config(variant: Variant) -> Config:
             attn_logits_soft_cap=None,
             attn_type=AttentionType.GLOBAL,
         )
+    if variant == "gemma3_4b_lora":
+        return Config(
+            width=2560,
+            hidden_dim=2560 * 8 // 2,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
+            vocab_size=GEMMA3_VOCAB_SIZE,
+            num_layers=34,
+            sliding_window_size=1024,
+            use_qk_norm=True,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            transpose_gating_einsum=True,
+            attn_logits_soft_cap=None,
+            attn_type=AttentionType.GLOBAL,
+            lora_configs={"attn": lora.LoRAConfig(rank=16, alpha=16.0), "ffn": lora.LoRAConfig(rank=16, alpha=16.0)},
+        )
     raise ValueError(f"Unknown variant: {variant}")
 
 
