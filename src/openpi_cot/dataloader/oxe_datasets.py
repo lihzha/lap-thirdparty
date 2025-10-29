@@ -290,6 +290,31 @@ class PlanningDataset(_SingleOXECoTDataset):
 
         self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
+        def expand_image_dim(traj):
+            """Add prediction frame pairs and corresponding language actions.
+
+            Derives prediction language actions from raw_action (same as language_actions),
+            padded to summation_steps for consistency.
+            """
+            # Backward compatibility: add time dimension with single frame
+            traj["observation"][self.spec.primary_image_key] = tf.expand_dims(
+                traj["observation"][self.spec.primary_image_key], axis=1
+            )  # [T, 1, H, W, C]
+
+            traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                traj["observation"][self.spec.wrist_image_key], axis=1
+            )  # [T, 1, H, W, C]
+
+            # Handle right wrist (for all datasets - bimanual and non-bimanual)
+            if self.spec.wrist_image_right_key in traj["observation"]:
+                traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                    traj["observation"][self.spec.wrist_image_right_key], axis=1
+                )  # [T, 1, H, W, C]
+
+            return traj
+
+        self.dataset = self.dataset.traj_map(expand_image_dim, self.num_parallel_calls)
+
 
 class LiberoCoTDataset(_SingleOXECoTDataset):
     """Custom dataset for LIBERO with EEF state observations."""
