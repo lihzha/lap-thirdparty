@@ -194,15 +194,16 @@ def save_state(
                 # Save the normalization stats from the dataset.
                 # For OXE datasets with global normalization, this saves global statistics.
                 # For DROID or OXE without global normalization, this saves per-dataset statistics.
-                data_config = data_loader.data_config()
-                if hasattr(data_loader, "get_norm_stats_for_checkpoint"):
-                    norm_stats, stats_type = data_loader.get_norm_stats_for_checkpoint()
-                    if norm_stats is not None:
-                        save_dir = str(directory / data_config.asset_id)
-                        _normalize_adapter.save(save_dir, norm_stats)
+                # Only process 0 saves normalization stats (same across all processes, no need to duplicate)
+                if jax.process_index() == 0:
+                    data_config = data_loader.data_config()
+                    if hasattr(data_loader, "get_norm_stats_for_checkpoint"):
+                        norm_stats, stats_type = data_loader.get_norm_stats_for_checkpoint()
+                        if norm_stats is not None:
+                            save_dir = str(directory / data_config.asset_id)
+                            _normalize_adapter.save(save_dir, norm_stats)
 
-                        # Log detailed information about saved statistics
-                        if jax.process_index() == 0:
+                            # Log detailed information about saved statistics
                             stats_keys = list(norm_stats.keys())
                             logging.info(
                                 f"Saved {stats_type} normalization statistics | keys={stats_keys} | location={save_dir}"
@@ -216,28 +217,40 @@ def save_state(
                                         f"num_transitions={getattr(stat, 'num_transitions', 'N/A')}, "
                                         f"num_trajectories={getattr(stat, 'num_trajectories', 'N/A')}"
                                     )
-                    elif jax.process_index() == 0:
-                        logging.warning("No normalization statistics available to save with checkpoint")
-                elif jax.process_index() == 0:
-                    logging.info("Data loader does not support norm stats checkpointing (non-RLDS dataset)")
+                        else:
+                            logging.warning("No normalization statistics available to save with checkpoint")
+                    else:
+                        logging.info("Data loader does not support norm stats checkpointing (non-RLDS dataset)")
 
                 # Save dataloader state (iterator position and batch counter)
                 # This allows resuming training from the exact same data position
+                # Saved to: {checkpoint_dir}/{step}/assets/dataloader_process_{process_index}/
+                # - Same path structure as model checkpoint
+                # - Same frequency as model checkpoint (save_interval)
+                # - Automatically deleted with old checkpoints (keep_period)
+                #
+                # Multi-host behavior:
+                # - Dataset is sharded per-host: dataset.shard(jax.process_count(), jax.process_index())
+                # - Each host has a DIFFERENT iterator seeing different data shards
+                # - Each host MUST save its own checkpoint to restore correctly
+                # - All hosts save in parallel to their own subdirectories
                 if hasattr(data_loader, "save_dataloader_state"):
                     try:
-                        dataloader_dir = str(directory / "dataloader")
+                        # directory is {checkpoint_dir}/{step}/assets/
+                        # Each process saves to its own subdirectory
+                        process_idx = jax.process_index()
+                        dataloader_dir = str(directory / f"dataloader_process_{process_idx}")
                         save_path = data_loader.save_dataloader_state(dataloader_dir)
-                        if jax.process_index() == 0:
-                            batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
-                            logging.info(
-                                f"Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
-                            )
+                        batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
+                        logging.info(
+                            f"[Process {process_idx}] Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
+                        )
                     except Exception as e:
-                        if jax.process_index() == 0:
-                            logging.warning(f"Failed to save dataloader state: {e}")
-                            logging.warning("Training will continue but dataloader state will not be checkpointed")
-                elif jax.process_index() == 0:
-                    logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
+                        logging.warning(f"[Process {jax.process_index()}] Failed to save dataloader state: {e}")
+                        logging.warning("Training will continue but dataloader state will not be checkpointed")
+                else:
+                    if jax.process_index() == 0:
+                        logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
 
             # Split params that can be used for inference into a separate item.
             with at.disable_typechecking():
@@ -248,6 +261,11 @@ def save_state(
                 "params": {"params": params},
             }
             manager_to_use.save(step, items)
+
+            # Multi-host barrier: Ensure all hosts wait for checkpoint save to complete
+            # This is critical when process 0 saves dataloader state - other hosts must wait
+            if jax.process_count() > 1:
+                jax.experimental.multihost_utils.sync_global_devices("checkpoint_save_complete")
 
             duration = time.perf_counter() - start_time
             logging.info(
@@ -323,32 +341,41 @@ def restore_state(
         )
 
     # Restore dataloader state if available
+    # Multi-host: Each host restores from its own checkpoint (saved per-process)
+    # This ensures each host resumes its correct data shard position
     if hasattr(data_loader, "load_dataloader_state"):
         try:
             # Determine which step to restore from
             if step is None:
                 step = checkpoint_manager.latest_step()
 
-            # Construct dataloader checkpoint directory
+            # Construct dataloader checkpoint directory (same structure as save)
+            # Each process has its own checkpoint: {checkpoint_dir}/{step}/assets/dataloader_process_{process_index}/
             checkpoint_dir = _extract_directory(checkpoint_manager)
-            dataloader_dir = str(epath.Path(checkpoint_dir) / str(step) / "dataloader")
+            process_idx = jax.process_index()
+            dataloader_dir = str(epath.Path(checkpoint_dir) / str(step) / "assets" / f"dataloader_process_{process_idx}")
 
-            # Check if dataloader checkpoint exists
+            # Check if dataloader checkpoint exists for this process
             if tf.io.gfile.exists(dataloader_dir):
+                # Each host restores from its own checkpoint
                 batches_seen = data_loader.load_dataloader_state(dataloader_dir)
-                if jax.process_index() == 0:
-                    logging.info(
-                        f"Restored dataloader state | batches_seen={batches_seen} | step={step} | location={dataloader_dir}"
-                    )
-            elif jax.process_index() == 0:
+                logging.info(
+                    f"[Process {process_idx}] Restored dataloader state | batches_seen={batches_seen} | step={step} | location={dataloader_dir}"
+                )
+
+                # Multi-host barrier: Ensure all hosts have completed restore before continuing
+                if jax.process_count() > 1:
+                    jax.experimental.multihost_utils.sync_global_devices("dataloader_restore_complete")
+                    if jax.process_index() == 0:
+                        logging.info(f"All {jax.process_count()} hosts synchronized after dataloader restore")
+            else:
                 logging.warning(
-                    f"Dataloader checkpoint not found at {dataloader_dir}. "
-                    "Dataloader will start from beginning of dataset."
+                    f"[Process {process_idx}] Dataloader checkpoint not found at {dataloader_dir}. "
+                    "Dataloader will start from beginning of dataset shard."
                 )
         except Exception as e:
-            if jax.process_index() == 0:
-                logging.warning(f"Failed to restore dataloader state: {e}")
-                logging.warning("Training will continue but dataloader will start from beginning")
+            logging.warning(f"[Process {jax.process_index()}] Failed to restore dataloader state: {e}")
+            logging.warning("Training will continue but dataloader will start from beginning")
     elif jax.process_index() == 0:
         logging.info("Data loader does not support state restoration (persistent_iterator not enabled)")
 
@@ -372,8 +399,9 @@ class CallbackHandler(ocp.AsyncCheckpointHandler):
     """A CheckpointHandler for calling an arbitrary function asynchronously. Only for saving, not for restoring."""
 
     def save(self, directory: epath.Path, args: CallbackSave):
-        if jax.process_index() == 0:
-            args.callback(directory)
+        # Run callback on all processes to support per-process state saving (e.g., dataloader checkpoints)
+        # Process-specific logic is handled inside the callback itself
+        args.callback(directory)
 
     async def async_save(self, directory: epath.Path, args: CallbackSave) -> list[futures.Future]:
         return [future.CommitFutureAwaitingContractedSignals(asyncio.to_thread(self.save, directory, args))]
