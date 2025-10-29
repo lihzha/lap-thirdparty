@@ -517,6 +517,135 @@ class PlanningDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class TrainingStage:
+    """Defines training configuration for a specific step range.
+
+    Each stage can independently control:
+    - Which losses to compute (langact, action, prediction)
+    - Weight for each loss component
+    - Probability of computing each loss (for stochastic curriculum learning)
+    """
+    start_step: int
+    end_step: int | None = None  # None means until training ends
+
+    # Loss enables
+    enable_langact_training: bool = True
+    enable_action_training: bool = False
+    enable_prediction_training: bool = False
+
+    # Loss weights
+    language_loss_weight: float = 1.0
+    action_loss_weight: float = 1.0
+    prediction_loss_weight: float = 1.0
+
+    # Stochastic loss probabilities (1.0 = always compute, 0.0 = never compute)
+    langact_prob: float = 1.0
+    action_prob: float = 1.0
+    prediction_prob: float = 1.0
+
+    def validate(self):
+        """Validate stage configuration."""
+        if self.start_step < 0:
+            raise ValueError(f"start_step must be >= 0, got {self.start_step}")
+        if self.end_step is not None and self.end_step <= self.start_step:
+            raise ValueError(f"end_step ({self.end_step}) must be > start_step ({self.start_step})")
+
+        # Validate probabilities are in [0, 1]
+        for prob_name in ["langact_prob", "action_prob", "prediction_prob"]:
+            prob = getattr(self, prob_name)
+            if not 0.0 <= prob <= 1.0:
+                raise ValueError(f"{prob_name} must be in [0.0, 1.0], got {prob}")
+
+        # Validate weights are non-negative
+        for weight_name in ["language_loss_weight", "action_loss_weight", "prediction_loss_weight"]:
+            weight = getattr(self, weight_name)
+            if weight < 0:
+                raise ValueError(f"{weight_name} must be >= 0, got {weight}")
+
+
+@dataclasses.dataclass(frozen=True)
+class TrainingSchedule:
+    """Manages multiple training stages with different loss configurations.
+
+    Enables flexible curriculum learning with:
+    - Stage-based loss configuration
+    - Smooth or abrupt transitions between stages
+    - Stochastic loss masking
+    """
+    stages: tuple[TrainingStage, ...]
+
+    def __post_init__(self):
+        """Validate the training schedule on initialization."""
+        if not self.stages:
+            raise ValueError("TrainingSchedule must have at least one stage")
+
+        # Validate each stage
+        for stage in self.stages:
+            stage.validate()
+
+        # Validate stages are ordered and non-overlapping
+        for i in range(len(self.stages) - 1):
+            current_stage = self.stages[i]
+            next_stage = self.stages[i + 1]
+
+            if current_stage.end_step is None:
+                raise ValueError(
+                    f"Stage {i} (starting at {current_stage.start_step}) has end_step=None "
+                    f"but is not the last stage"
+                )
+
+            if next_stage.start_step < current_stage.end_step:
+                raise ValueError(
+                    f"Stage {i+1} (starting at {next_stage.start_step}) overlaps with "
+                    f"stage {i} (ending at {current_stage.end_step})"
+                )
+
+    def get_stage_for_step(self, step: int) -> TrainingStage:
+        """Returns the appropriate stage configuration for the given training step.
+
+        Args:
+            step: Current training step
+
+        Returns:
+            TrainingStage configuration for this step
+
+        Raises:
+            ValueError: If no stage covers this step
+        """
+        for stage in self.stages:
+            if stage.start_step <= step:
+                if stage.end_step is None or step < stage.end_step:
+                    return stage
+
+        # If we reach here, no stage covers this step
+        raise ValueError(
+            f"No training stage covers step {step}. "
+            f"Available stages: {[(s.start_step, s.end_step) for s in self.stages]}"
+        )
+
+    def validate_for_training(self, num_train_steps: int):
+        """Validate that the schedule covers all training steps.
+
+        Args:
+            num_train_steps: Total number of training steps
+        """
+        # Check that step 0 is covered
+        try:
+            self.get_stage_for_step(0)
+        except ValueError:
+            raise ValueError("Training schedule must cover step 0")
+
+        # Check that the last step is covered
+        try:
+            self.get_stage_for_step(num_train_steps - 1)
+        except ValueError:
+            logging.warning(
+                f"Training schedule does not cover final step {num_train_steps - 1}. "
+                f"Last stage ends at {self.stages[-1].end_step}"
+            )
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig(upstream_config.TrainConfig):
     # Overide
     project_name: str = "openpi-cot"
@@ -543,6 +672,8 @@ class TrainConfig(upstream_config.TrainConfig):
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = None
     eval_mode: Literal["token_accuracy", "rollout", "both"] = "token_accuracy"
+    # Multi-stage training
+    training_schedule: TrainingSchedule | None = None
 
     @property
     @override

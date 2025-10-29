@@ -871,6 +871,22 @@ class TrainingStepRunner:
         model = nnx.merge(state.model_def, state.params)
         model.train()
 
+        # Determine stage configuration based on training schedule
+        stage_config = None
+        if self.config.training_schedule is not None:
+            current_stage = self.config.training_schedule.get_stage_for_step(int(state.step))
+            stage_config = {
+                "enable_langact_training": current_stage.enable_langact_training,
+                "enable_action_training": current_stage.enable_action_training,
+                "enable_prediction_training": current_stage.enable_prediction_training,
+                "language_loss_weight": current_stage.language_loss_weight,
+                "action_loss_weight": current_stage.action_loss_weight,
+                "prediction_loss_weight": current_stage.prediction_loss_weight,
+                "langact_prob": current_stage.langact_prob,
+                "action_prob": current_stage.action_prob,
+                "prediction_prob": current_stage.prediction_prob,
+            }
+
         @at.typecheck
         def loss_fn(
             model: _model.BaseModel,
@@ -885,7 +901,7 @@ class TrainingStepRunner:
                 number_token_accuracy,
                 direction_token_accuracy,
                 metrics,
-            ) = model.compute_loss(rng, observation, actions, train=True)
+            ) = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
             return jnp.mean(per_sample_loss), (
                 per_sample_loss,
                 token_accuracy,
@@ -1060,6 +1076,27 @@ def main(config: _config.TrainConfig):
         enabled=config.wandb_enabled,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
+
+    # Log training schedule information if configured
+    if config.training_schedule is not None:
+        logging.info("=" * 80)
+        logging.info("TRAINING SCHEDULE CONFIGURED")
+        logging.info("=" * 80)
+        for i, stage in enumerate(config.training_schedule.stages):
+            end_str = f"step {stage.end_step}" if stage.end_step is not None else "end of training"
+            logging.info(f"Stage {i}: steps {stage.start_step} -> {end_str}")
+            logging.info(f"  Loss enables: langact={stage.enable_langact_training}, "
+                        f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}")
+            logging.info(f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
+                        f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}")
+            logging.info(f"  Loss probs: lang={stage.langact_prob:.2f}, "
+                        f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}")
+        logging.info("=" * 80)
+        # Validate schedule
+        config.training_schedule.validate_for_training(config.num_train_steps)
+    else:
+        logging.info("No training schedule configured - using static model configuration")
+
     log_mem("Before init")
     data_loader = _data_loader.create_data_loader(
         config,
@@ -1177,7 +1214,45 @@ def main(config: _config.TrainConfig):
     dataset_stats_tracker = DatasetStatsTracker()
     dataset_info_buffer = LocalDatasetInfoBuffer(tok)
 
+    # Track current training stage for transition detection
+    current_stage_idx = None
+    if config.training_schedule is not None:
+        # Find the initial stage
+        for i, stage in enumerate(config.training_schedule.stages):
+            if stage.start_step <= start_step and (stage.end_step is None or start_step < stage.end_step):
+                current_stage_idx = i
+                logging.info(f"Starting training at step {start_step} in stage {i}")
+                break
+
     for step in pbar:
+        # Detect and log stage transitions
+        if config.training_schedule is not None:
+            for i, stage in enumerate(config.training_schedule.stages):
+                if stage.start_step == step and i != current_stage_idx:
+                    current_stage_idx = i
+                    end_str = f"step {stage.end_step}" if stage.end_step is not None else "end of training"
+                    logging.info("=" * 80)
+                    logging.info(f"STAGE TRANSITION at step {step}: Entering Stage {i}")
+                    logging.info(f"  Duration: steps {stage.start_step} -> {end_str}")
+                    logging.info(f"  Loss enables: langact={stage.enable_langact_training}, "
+                                f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}")
+                    logging.info(f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
+                                f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}")
+                    logging.info(f"  Loss probs: lang={stage.langact_prob:.2f}, "
+                                f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}")
+                    logging.info("=" * 80)
+                    if jax.process_index() == 0:
+                        wandb.log({
+                            "stage/current_stage": i,
+                            "stage/langact_enabled": float(stage.enable_langact_training),
+                            "stage/action_enabled": float(stage.enable_action_training),
+                            "stage/prediction_enabled": float(stage.enable_prediction_training),
+                            "stage/language_loss_weight": stage.language_loss_weight,
+                            "stage/action_loss_weight": stage.action_loss_weight,
+                            "stage/prediction_loss_weight": stage.prediction_loss_weight,
+                        }, step=step)
+                    break
+
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)

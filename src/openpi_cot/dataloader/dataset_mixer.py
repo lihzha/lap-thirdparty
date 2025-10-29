@@ -217,9 +217,6 @@ class OXECoTDatasets:
         # Store the pre-batched dataset for creating checkpointable versions
         self._pre_batched_dataset = self.dataset
 
-        # ds_size = dataset_size(self.dataset)
-        # breakpoint()
-
         self.dataset = prepare_batched_dataset(
             dataset=self.dataset,
             want_val=want_val,

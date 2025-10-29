@@ -504,6 +504,7 @@ class PiCoT(_pi0.Pi0):
         actions: _model.Actions,
         *,
         train: bool = False,
+        stage_config: dict | None = None,
     ) -> tuple[
         at.Float[at.Array, "*b ah"],
         at.Float[at.Array, ""],
@@ -512,11 +513,42 @@ class PiCoT(_pi0.Pi0):
         at.Float[at.Array, ""],
         dict[str, at.Array],
     ]:
-        preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
+        preprocess_rng, stochastic_rng, noise_rng, time_rng = jax.random.split(rng, 4)
         # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
         observation = preprocess_observation(
             preprocess_rng, observation, train=train, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
         )
+
+        # Apply stage configuration (if provided) with stochastic loss selection
+        if stage_config is not None:
+            # Split RNG for each loss type
+            langact_rng, action_rng, prediction_rng = jax.random.split(stochastic_rng, 3)
+
+            # Stochastic loss selection: enable loss with probability from stage_config
+            langact_enabled = stage_config.get("enable_langact_training", self.enable_langact_training)
+            if langact_enabled and stage_config.get("langact_prob", 1.0) < 1.0:
+                langact_enabled = jax.random.uniform(langact_rng) < stage_config["langact_prob"]
+
+            action_enabled = stage_config.get("enable_action_training", self.enable_action_training)
+            if action_enabled and stage_config.get("action_prob", 1.0) < 1.0:
+                action_enabled = jax.random.uniform(action_rng) < stage_config["action_prob"]
+
+            prediction_enabled = stage_config.get("enable_prediction_training", self.enable_prediction_training)
+            if prediction_enabled and stage_config.get("prediction_prob", 1.0) < 1.0:
+                prediction_enabled = jax.random.uniform(prediction_rng) < stage_config["prediction_prob"]
+
+            # Get loss weights from stage_config
+            language_loss_weight = stage_config.get("language_loss_weight", self.language_loss_weight)
+            action_loss_weight = stage_config.get("action_loss_weight", self.action_loss_weight)
+            prediction_loss_weight = stage_config.get("prediction_loss_weight", self.prediction_loss_weight)
+        else:
+            # Use model's static configuration
+            langact_enabled = self.enable_langact_training
+            action_enabled = self.enable_action_training
+            prediction_enabled = self.enable_prediction_training
+            language_loss_weight = self.language_loss_weight
+            action_loss_weight = self.action_loss_weight
+            prediction_loss_weight = self.prediction_loss_weight
 
         # OPTIMIZATION: Always encode ALL images once (single PaliGemma.img pass)
         # Then extract subsets as needed for different losses
@@ -543,7 +575,7 @@ class PiCoT(_pi0.Pi0):
         metrics = {}
 
         # Cross-entropy (language/reasoning) loss
-        if self.enable_langact_training:
+        if langact_enabled:
             attn_mask_lang = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
             positions_lang = jnp.cumsum(prefix_mask, axis=1) - 1
             (prefix_out, _), _ = self.PaliGemma.llm(
@@ -577,7 +609,7 @@ class PiCoT(_pi0.Pi0):
                 metrics["lang_loss"] = lang_loss
             else:
                 metrics["lang_loss"] = jnp.mean(lang_loss)
-            total_loss = total_loss + self.language_loss_weight * lang_loss
+            total_loss = total_loss + language_loss_weight * lang_loss
 
             # Compute token accuracy
             predictions = jnp.argmax(shift_logits, axis=-1)
@@ -633,7 +665,7 @@ class PiCoT(_pi0.Pi0):
                     metrics["per_sample_direction_total"] = per_sample_num_direction
 
         # Prediction (cross-entropy) loss - independent of langact loss
-        if self.enable_prediction_training and observation.tokenized_prediction is not None:
+        if prediction_enabled and observation.tokenized_prediction is not None:
             # For Gemma3: tokenized_prediction should also contain placeholders for all frames
             # For others: use the old approach
             if self.use_gemma3:
@@ -764,10 +796,10 @@ class PiCoT(_pi0.Pi0):
                 pred_direction_token_accuracy = direction_correct_pred.sum() / num_direction_pred
                 metrics["pred_direction_token_accuracy"] = pred_direction_token_accuracy
 
-            total_loss = total_loss + self.prediction_loss_weight * pred_loss
+            total_loss = total_loss + prediction_loss_weight * pred_loss
 
         # Diffusion (actions) loss. TODO: no sample mask for actions! Sample mask may only make sense for langact because it is obtained from cot_policy.is_idle_language_action
-        if self.enable_action_training:
+        if action_enabled:
             # For action training, text tokens should not use autoregressive masking
             # Rebuild prefix_ar_mask with all False (no autoregressive masking)
             prefix_ar_mask_action = jnp.zeros_like(prefix_mask, dtype=bool)
@@ -796,7 +828,7 @@ class PiCoT(_pi0.Pi0):
                 metrics["action_loss"] = action_loss
             else:
                 metrics["action_loss"] = jnp.mean(action_loss)
-            total_loss = total_loss + self.action_loss_weight * action_loss
+            total_loss = total_loss + action_loss_weight * action_loss
 
         return (
             total_loss,
