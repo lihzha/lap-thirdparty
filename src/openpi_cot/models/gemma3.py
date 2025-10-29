@@ -250,7 +250,6 @@ class Einsum(nn.Module):
             # Use LoRA if configured
             w = lora.Einsum(
                 shape=self.shape,
-                weight_name=self.weight_name,
                 init_fn=self.initializer,
                 lora_config=self.lora_config,
             )(eqn, x)
