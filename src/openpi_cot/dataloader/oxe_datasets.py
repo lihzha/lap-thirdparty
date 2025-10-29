@@ -438,8 +438,8 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
             # Map image keys from LIBERO dataset format to expected format
             # LIBERO uses: image (256x256x3), wrist_image (256x256x3)
             # Expected format: base_0_rgb, left_wrist_0_rgb, right_wrist_0_rgb
-            new_obs[self.spec.primary_image_key] = old_obs.get("image", tf.repeat("", traj_len))
-            new_obs[self.spec.wrist_image_key] = old_obs.get("wrist_image", tf.repeat("", traj_len))
+            new_obs[self.spec.primary_image_key] = old_obs.get("image")
+            new_obs[self.spec.wrist_image_key] = old_obs.get("wrist_image")
             # LIBERO doesn't have right wrist camera
             new_obs[self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
 
@@ -450,7 +450,7 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
             actions = tf.cast(traj["action"], tf.float32)
 
             # Get language instruction
-            language_instruction = traj.get("language_instruction", tf.constant("", dtype=tf.string))
+            language_instruction = traj.get("language_instruction")
 
             # Build trajectory ID from episode metadata
             file_path = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("file_path", "")
@@ -516,6 +516,33 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
             return traj
 
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
+
+    def apply_traj_filters(self, action_key):
+        # def is_nonzero_length(traj):
+        #     return tf.shape(traj[action_key])[0] > 0
+
+        # def has_any_instruction(traj):
+        #     instr = traj["language_instruction"]
+        #     instr = tf.reshape(instr, [-1])
+        #     instr = tf.strings.strip(instr)
+        #     return tf.reduce_any(tf.strings.length(instr) > 0)
+
+        # self.dataset = self.dataset.filter(has_any_instruction)
+
+        # self.dataset = self.dataset.filter(is_nonzero_length)
+        pass
+
+    def apply_frame_filters(self):
+        """
+        Optionally applied *per-dataset* transforms that happen at a frame level.
+        """
+
+        # # Always drop frames with empty/whitespace-only prompts
+        # def _non_empty_prompt(frame: dict) -> tf.Tensor:
+        #     p = tf.strings.strip(frame["prompt"])  # scalar tf.string after flatten
+        #     return tf.strings.length(p) > 0
+
+        # self.dataset = self.dataset.filter(_non_empty_prompt)
 
 
 class _SampleR1LiteCoTDataset(_SingleOXECoTDataset):
