@@ -73,21 +73,26 @@ def maybe_download(
             raise FileNotFoundError(f"File not found at {url}")
         return p.resolve()
 
-    # ── 1b. Short-circuit for gs:// already in remote cache bucket ────────────
-    # If OPENPI_DATA_HOME is a GCS bucket and the source URL is in the same
+    # ── 1b. Short-circuit for gs:// on same bucket as cache ────────────────────
+    # If OPENPI_DATA_HOME is a GCS bucket and the source URL is on the same
     # bucket, don't mirror/copy; just return the original URL.
     # This prevents redundant copies and avoids 404s when a checkpoint is a
     # directory prefix (e.g., step number) without an object at that exact key.
     cache_dir_probe = os.getenv(_OPENPI_DATA_HOME)
     if parsed.scheme == "gs" and cache_dir_probe and cache_dir_probe.startswith("gs://"):
         cache_bucket = urllib.parse.urlparse(cache_dir_probe).netloc
-        if parsed.netloc == cache_bucket:
+        source_bucket = parsed.netloc
+        if source_bucket == cache_bucket:
+            # Same bucket - no need to mirror, just verify it exists and return it
             try:
                 if tf.io.gfile.isdir(url) or tf.io.gfile.exists(url):
+                    logger.info("Same-bucket access (no mirroring needed): %s", url)
+                    print(f"Same-bucket access (no mirroring needed): {url}")
                     return epath.Path(url)
-            except Exception:
-                # Fall through to normal download path if any errors occur.
-                pass
+                else:
+                    raise FileNotFoundError(f"File not found at {url}")
+            except tf.errors.NotFoundError as e:
+                raise FileNotFoundError(f"File not found at {url}") from e
 
     # ── 2. Build cache path ────────────────────────────────────────────────────
     cache_dir = get_cache_dir()  # could be local or gs://
@@ -281,6 +286,14 @@ def mirror_checkpoint_to_remote_cache(url: str, **kwargs) -> str:
 
     cache_dir = get_cache_dir()
     if not _is_gcs(cache_dir):
+        return url
+
+    # ── Check if source and cache are on the same bucket ──────────────────────
+    cache_bucket = urllib.parse.urlparse(str(cache_dir)).netloc
+    source_bucket = parsed.netloc
+    if source_bucket == cache_bucket:
+        # Same bucket - no need to mirror, just return the original URL
+        logger.info("Same-bucket access (no mirroring needed): %s", url)
         return url
 
     cache_root = str(cache_dir)
