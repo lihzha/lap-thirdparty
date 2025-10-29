@@ -537,6 +537,65 @@ class TrainingSchedule:
             f"Available stages: {[(s.start_step, s.end_step) for s in self.stages]}"
         )
 
+    def get_stage_config_for_step(self, step):
+        """JAX-compatible method to get stage configuration for a given step.
+
+        This method returns stage parameters as a dictionary that can be used
+        inside JIT-compiled functions without concretization errors.
+
+        Args:
+            step: Current training step (can be a JAX traced value)
+
+        Returns:
+            Dictionary with stage configuration parameters
+        """
+        import jax.numpy as jnp
+
+        # Initialize with first stage as default
+        result = {
+            "enable_langact_training": self.stages[0].enable_langact_training,
+            "enable_action_training": self.stages[0].enable_action_training,
+            "enable_prediction_training": self.stages[0].enable_prediction_training,
+            "language_loss_weight": self.stages[0].language_loss_weight,
+            "action_loss_weight": self.stages[0].action_loss_weight,
+            "prediction_loss_weight": self.stages[0].prediction_loss_weight,
+            "langact_prob": self.stages[0].langact_prob,
+            "action_prob": self.stages[0].action_prob,
+            "prediction_prob": self.stages[0].prediction_prob,
+        }
+
+        # Iterate through stages and use jnp.where to select appropriate values
+        # This avoids Python control flow that would fail with traced values
+        for stage in self.stages:
+            in_range = step >= stage.start_step
+            if stage.end_step is not None:
+                in_range = in_range & (step < stage.end_step)
+            else:
+                in_range = in_range & (step >= stage.start_step)
+
+            # Use jnp.where to conditionally select values from this stage
+            result["enable_langact_training"] = jnp.where(
+                in_range, stage.enable_langact_training, result["enable_langact_training"]
+            )
+            result["enable_action_training"] = jnp.where(
+                in_range, stage.enable_action_training, result["enable_action_training"]
+            )
+            result["enable_prediction_training"] = jnp.where(
+                in_range, stage.enable_prediction_training, result["enable_prediction_training"]
+            )
+            result["language_loss_weight"] = jnp.where(
+                in_range, stage.language_loss_weight, result["language_loss_weight"]
+            )
+            result["action_loss_weight"] = jnp.where(in_range, stage.action_loss_weight, result["action_loss_weight"])
+            result["prediction_loss_weight"] = jnp.where(
+                in_range, stage.prediction_loss_weight, result["prediction_loss_weight"]
+            )
+            result["langact_prob"] = jnp.where(in_range, stage.langact_prob, result["langact_prob"])
+            result["action_prob"] = jnp.where(in_range, stage.action_prob, result["action_prob"])
+            result["prediction_prob"] = jnp.where(in_range, stage.prediction_prob, result["prediction_prob"])
+
+        return result
+
     def validate_for_training(self, num_train_steps: int):
         """Validate that the schedule covers all training steps.
 
@@ -580,7 +639,7 @@ class TrainingScheduleChoice:
         schedule = TrainingScheduleChoice(kind="lang_act_and_pred").build()
     """
 
-    kind: Literal["lang_act_only", "lang_act_and_pred", "raw_act_only"] = "lang_act_only"
+    kind: Literal["lang_act_only", "lang_act_and_pred", "raw_act_only", None] = None
 
     # Optional overrides for schedule parameters
     langact_weight: float = 1.0
@@ -608,7 +667,7 @@ class TrainingScheduleChoice:
                     ),
                 )
             )
-        elif self.kind == "lang_act_and_pred":
+        if self.kind == "lang_act_and_pred":
             return TrainingSchedule(
                 stages=(
                     TrainingStage(
@@ -626,7 +685,7 @@ class TrainingScheduleChoice:
                     ),
                 )
             )
-        elif self.kind == "raw_act_only":
+        if self.kind == "raw_act_only":
             return TrainingSchedule(
                 stages=(
                     TrainingStage(
@@ -644,8 +703,9 @@ class TrainingScheduleChoice:
                     ),
                 )
             )
-        else:
-            raise ValueError(f"Unknown schedule kind: {self.kind}")
+        if self.kind is None:
+            return None
+        raise ValueError(f"Unknown schedule kind: {self.kind}")
 
 
 def create_multi_device_configs(
@@ -744,9 +804,7 @@ class TrainConfig(upstream_config.TrainConfig):
     num_eval_batches: int | None = None
     eval_mode: Literal["token_accuracy", "rollout", "both"] = "token_accuracy"
     # Multi-stage training schedule choice
-    training_schedule_choice: TrainingScheduleChoice = dataclasses.field(
-        default_factory=TrainingScheduleChoice
-    )
+    training_schedule_choice: TrainingScheduleChoice = dataclasses.field(default_factory=TrainingScheduleChoice)
 
     @property
     def training_schedule(self) -> TrainingSchedule:

@@ -874,18 +874,8 @@ class TrainingStepRunner:
         # Determine stage configuration based on training schedule
         stage_config = None
         if self.config.training_schedule is not None:
-            current_stage = self.config.training_schedule.get_stage_for_step(int(state.step))
-            stage_config = {
-                "enable_langact_training": current_stage.enable_langact_training,
-                "enable_action_training": current_stage.enable_action_training,
-                "enable_prediction_training": current_stage.enable_prediction_training,
-                "language_loss_weight": current_stage.language_loss_weight,
-                "action_loss_weight": current_stage.action_loss_weight,
-                "prediction_loss_weight": current_stage.prediction_loss_weight,
-                "langact_prob": current_stage.langact_prob,
-                "action_prob": current_stage.action_prob,
-                "prediction_prob": current_stage.prediction_prob,
-            }
+            # Use JAX-compatible method that works with traced values
+            stage_config = self.config.training_schedule.get_stage_config_for_step(state.step)
 
         @at.typecheck
         def loss_fn(
