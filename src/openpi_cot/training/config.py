@@ -756,6 +756,8 @@ _CONFIGS = [
             discrete_state_input=True,
             enable_action_training=True,
             enable_langact_training=False,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
         ),
         data=LiberoDataConfig(
             repo_id="libero_10_no_noops",
