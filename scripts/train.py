@@ -988,7 +988,7 @@ class ValidationStepRunner:
                 metrics,
             ) = model.compute_loss(rng, observation, actions, train=False)
             return (
-                per_sample_loss,
+                jnp.mean(per_sample_loss),
                 token_accuracy,
                 critical_token_accuracy,
                 number_token_accuracy,
@@ -999,7 +999,7 @@ class ValidationStepRunner:
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         (
-            per_sample_loss,
+            loss,
             token_accuracy,
             critical_token_accuracy,
             number_token_accuracy,
@@ -1008,8 +1008,7 @@ class ValidationStepRunner:
         ) = loss_fn(model, eval_rng, observation, actions)
 
         result = {
-            "val_loss": jnp.mean(per_sample_loss),
-            "val_per_sample_loss": per_sample_loss,
+            "val_loss": loss,
             "val_token_accuracy": token_accuracy,
             "val_critical_token_accuracy": critical_token_accuracy,
             "val_number_token_accuracy": number_token_accuracy,
@@ -1021,9 +1020,6 @@ class ValidationStepRunner:
             if key.endswith("_loss"):
                 # For loss components, compute mean and prefix with val_
                 result[f"val_{key}"] = jnp.mean(value)
-            elif key.startswith("per_sample_"):
-                # Keep per-sample metrics as-is for dataset-level statistics
-                result[f"val_{key}"] = value
             else:
                 # For accuracies, prefix with val_
                 result[f"val_{key}"] = value
@@ -1334,13 +1330,6 @@ def main(config: _config.TrainConfig):
                 dynamic_ncols=True,
                 disable=(jax.process_index() != 0),
             )
-            # img_log_step_idx = np.random.randint(0, num_val_batches)
-            # num_images_to_log = 64
-
-            # Create validation dataset stats tracker
-            val_dataset_stats_tracker = DatasetStatsTracker()
-            val_dataset_info_buffer = LocalDatasetInfoBuffer(tok)
-
             with sharding.set_mesh(mesh):
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
@@ -1352,89 +1341,12 @@ def main(config: _config.TrainConfig):
                     val_info_local = jax.device_get(val_info)
                     val_infos.append(val_info_local)
 
-                    # Buffer dataset info for per-dataset validation statistics
-                    if hasattr(val_batch[0], "tokenized_dataset_name"):
-                        try:
-                            per_sample_loss = val_info_local.get("val_per_sample_loss")
-                            if per_sample_loss is not None:
-                                # Extract per-sample token counts for micro-averaging
-                                critical_data = None
-                                if "val_per_sample_critical_correct" in val_info_local and "val_per_sample_critical_total" in val_info_local:
-                                    critical_data = (val_info_local["val_per_sample_critical_correct"], val_info_local["val_per_sample_critical_total"])
-
-                                number_data = None
-                                if "val_per_sample_number_correct" in val_info_local and "val_per_sample_number_total" in val_info_local:
-                                    number_data = (val_info_local["val_per_sample_number_correct"], val_info_local["val_per_sample_number_total"])
-
-                                direction_data = None
-                                if "val_per_sample_direction_correct" in val_info_local and "val_per_sample_direction_total" in val_info_local:
-                                    direction_data = (val_info_local["val_per_sample_direction_correct"], val_info_local["val_per_sample_direction_total"])
-
-                                val_dataset_info_buffer.add_local_batch(
-                                    val_batch[0].tokenized_dataset_name,
-                                    per_sample_loss,
-                                    critical_data,
-                                    number_data,
-                                    direction_data,
-                                )
-                        except Exception as e:
-                            logging.warning(f"Failed to buffer validation dataset info: {e}")
-
-                # Gather dataset stats for validation
-                val_dataset_info_buffer.gather_and_update_stats(val_dataset_stats_tracker)
-
                 stacked_val = common_utils.stack_forest(val_infos)
-                reduced_val = {}
-                for key, value in stacked_val.items():
-                    if key == "val_per_sample_loss":
-                        reduced_val["val_max_per_sample_loss"] = jnp.max(value)
-                        reduced_val["val_loss"] = jnp.mean(value)
-                    elif not key.startswith("val_per_sample_"):
-                        reduced_val[key] = jnp.mean(value)
-
-                # Add dataset statistics to validation logging
-                val_dataset_metrics = val_dataset_stats_tracker.get_metrics()
-                # Prefix all dataset metrics with "val_" for clarity
-                reduced_val.update({f"val_{k}": v for k, v in val_dataset_metrics.items()})
-
+                reduced_val = jax.tree.map(jnp.mean, stacked_val)
                 val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val.items())
                 val_pbar.write(f"Step {step} (val): {val_info_str}")
                 if jax.process_index() == 0:
                     wandb.log(reduced_val, step=step)
-
-                    # Create and log validation dataset statistics bar plots
-                    if val_dataset_stats_tracker.dataset_stats:
-                        plots = create_dataset_stats_plots(val_dataset_stats_tracker.dataset_stats)
-                        if plots:
-                            log_dict = {
-                                "val_dataset_stats/counts_plot": wandb.Image(plots["counts"]),
-                                "val_dataset_stats/avg_loss_plot": wandb.Image(plots["avg_loss"]),
-                            }
-                            # Add critical token accuracy plot if available
-                            if "avg_critical_token_acc" in plots:
-                                log_dict["val_dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(
-                                    plots["avg_critical_token_acc"]
-                                )
-                            # Add number token accuracy plot if available
-                            if "avg_number_token_acc" in plots:
-                                log_dict["val_dataset_stats/avg_number_token_acc_plot"] = wandb.Image(
-                                    plots["avg_number_token_acc"]
-                                )
-                            # Add direction token accuracy plot if available
-                            if "avg_direction_token_acc" in plots:
-                                log_dict["val_dataset_stats/avg_direction_token_acc_plot"] = wandb.Image(
-                                    plots["avg_direction_token_acc"]
-                                )
-                            wandb.log(log_dict, step=step)
-                            # Close figures to prevent memory leaks
-                            plt.close(plots["counts"])
-                            plt.close(plots["avg_loss"])
-                            if "avg_critical_token_acc" in plots:
-                                plt.close(plots["avg_critical_token_acc"])
-                            if "avg_number_token_acc" in plots:
-                                plt.close(plots["avg_number_token_acc"])
-                            if "avg_direction_token_acc" in plots:
-                                plt.close(plots["avg_direction_token_acc"])
 
         batch = next(data_iter)
 
