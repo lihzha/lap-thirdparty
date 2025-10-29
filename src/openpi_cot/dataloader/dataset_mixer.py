@@ -8,7 +8,7 @@ import dlimp as dl
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
+from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset, dataset_size
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 from openpi_cot.dataloader.helpers import NormalizationType, state_encoding_to_type
 from openpi_cot.dataloader.oxe_datasets import _DobbeCoTDataset, _LiberoCoTDataset, _SampleR1LiteCoTDataset, _SingleOXECoTDataset
@@ -216,6 +216,9 @@ class OXECoTDatasets:
 
         # Store the pre-batched dataset for creating checkpointable versions
         self._pre_batched_dataset = self.dataset
+
+        # ds_size = dataset_size(self.dataset)
+        # breakpoint()
 
         self.dataset = prepare_batched_dataset(
             dataset=self.dataset,

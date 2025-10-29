@@ -806,6 +806,42 @@ _CONFIGS = [
             kind="checkpoint",
             params_path="gs://pi0-cot/checkpoints/pi_combined_cot_v4/oxe_no_galaxea_v4_fixed/30000/params",
         ),
+    ),TrainConfig(
+        name="pi05_libero_finetune_v4_freezevlm",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ),
+        data=LiberoFinetuneDataConfig(
+            repo_id="libero",
+            asset_id="libero",
+            dataset_type="combined",
+            data_mix="libero_finetune",
+            rlds_data_dir="gs://pi0-cot/OXE",  # Update this path
+            language_action_config_name="default",
+            decoding_schema="default",
+        ),
+        fsdp_devices=1,
+        batch_size=32,
+        num_train_steps=50000,
+        save_interval=500,
+        log_interval=100,
+        keep_period=500,
+        checkpoint_base_dir="gs://pi0-cot/checkpoints",  # Update this path
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint",
+            params_path="gs://pi0-cot/checkpoints/pi_combined_cot_v4/oxe_no_galaxea_v4_fixed/30000/params",
+        ),
+        freeze_filter=pi_cot_config.PiCoTConfig(
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ).get_vlm_freeze_filter(),
     ),
     TrainConfig(
         name="pi05_libero_finetune_local",
