@@ -9,7 +9,9 @@ import tensorflow as tf
 
 from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
 from openpi_cot.dataloader.dataset_utils import print_memory_usage
-from openpi_cot.dataloader.helpers import NormalizationType, convert_action_encoding, state_encoding_to_type
+from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.helpers import convert_action_encoding
+from openpi_cot.dataloader.helpers import state_encoding_to_type
 
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
@@ -349,7 +351,7 @@ class DroidCoTDataset(_SingleCoTDataset):
         self.dataset = self.dataset.filter(_path_ok)
         self.dataset = self.dataset.filter(_has_instruction)
         # if not self.use_json_actions:
-        self.dataset = self.dataset.filter(_id_ok)
+        # self.dataset = self.dataset.filter(_id_ok)
 
     def apply_repack_transforms(self):
         def _pop_keys(traj):
