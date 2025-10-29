@@ -62,7 +62,7 @@ def vis_batch(batch, tok=None, step=None):
         num_samples = img.shape[0]
         sample_images = []
         for t in range(min(num_samples, 4)):  # Log up to 4 samples
-            sample_img = img[t]  # [H, W, C]
+            sample_img = img[t, 0]  # [H, W, C]
 
             # Convert from [-1, 1] to [0, 255]
             sample_img_uint8 = ((sample_img + 1.0) / 2.0 * 255.0).clip(0, 255).astype(np.uint8)
@@ -312,9 +312,9 @@ class DatasetStatsTracker:
     def __init__(self):
         # Use micro-averaging: track total correct tokens and total tokens per dataset
         self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "count": int,
-                                 #  "critical_correct": int, "critical_total": int,
-                                 #  "number_correct": int, "number_total": int,
-                                 #  "direction_correct": int, "direction_total": int}}
+        #  "critical_correct": int, "critical_total": int,
+        #  "number_correct": int, "number_total": int,
+        #  "direction_correct": int, "direction_total": int}}
 
     def update(
         self,
@@ -1085,12 +1085,18 @@ def main(config: _config.TrainConfig):
         for i, stage in enumerate(config.training_schedule.stages):
             end_str = f"step {stage.end_step}" if stage.end_step is not None else "end of training"
             logging.info(f"Stage {i}: steps {stage.start_step} -> {end_str}")
-            logging.info(f"  Loss enables: langact={stage.enable_langact_training}, "
-                        f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}")
-            logging.info(f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
-                        f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}")
-            logging.info(f"  Loss probs: lang={stage.langact_prob:.2f}, "
-                        f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}")
+            logging.info(
+                f"  Loss enables: langact={stage.enable_langact_training}, "
+                f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}"
+            )
+            logging.info(
+                f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
+                f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}"
+            )
+            logging.info(
+                f"  Loss probs: lang={stage.langact_prob:.2f}, "
+                f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}"
+            )
         logging.info("=" * 80)
         # Validate schedule
         config.training_schedule.validate_for_training(config.num_train_steps)
@@ -1234,23 +1240,32 @@ def main(config: _config.TrainConfig):
                     logging.info("=" * 80)
                     logging.info(f"STAGE TRANSITION at step {step}: Entering Stage {i}")
                     logging.info(f"  Duration: steps {stage.start_step} -> {end_str}")
-                    logging.info(f"  Loss enables: langact={stage.enable_langact_training}, "
-                                f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}")
-                    logging.info(f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
-                                f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}")
-                    logging.info(f"  Loss probs: lang={stage.langact_prob:.2f}, "
-                                f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}")
+                    logging.info(
+                        f"  Loss enables: langact={stage.enable_langact_training}, "
+                        f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}"
+                    )
+                    logging.info(
+                        f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
+                        f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}"
+                    )
+                    logging.info(
+                        f"  Loss probs: lang={stage.langact_prob:.2f}, "
+                        f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}"
+                    )
                     logging.info("=" * 80)
                     if jax.process_index() == 0:
-                        wandb.log({
-                            "stage/current_stage": i,
-                            "stage/langact_enabled": float(stage.enable_langact_training),
-                            "stage/action_enabled": float(stage.enable_action_training),
-                            "stage/prediction_enabled": float(stage.enable_prediction_training),
-                            "stage/language_loss_weight": stage.language_loss_weight,
-                            "stage/action_loss_weight": stage.action_loss_weight,
-                            "stage/prediction_loss_weight": stage.prediction_loss_weight,
-                        }, step=step)
+                        wandb.log(
+                            {
+                                "stage/current_stage": i,
+                                "stage/langact_enabled": float(stage.enable_langact_training),
+                                "stage/action_enabled": float(stage.enable_action_training),
+                                "stage/prediction_enabled": float(stage.enable_prediction_training),
+                                "stage/language_loss_weight": stage.language_loss_weight,
+                                "stage/action_loss_weight": stage.action_loss_weight,
+                                "stage/prediction_loss_weight": stage.prediction_loss_weight,
+                            },
+                            step=step,
+                        )
                     break
 
         with sharding.set_mesh(mesh):

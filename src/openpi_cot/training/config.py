@@ -768,7 +768,15 @@ class TrainConfig(upstream_config.TrainConfig):
     num_eval_batches: int | None = None
     eval_mode: Literal["token_accuracy", "rollout", "both"] = "token_accuracy"
     # Multi-stage training
-    training_schedule: TrainingSchedule | None = None
+    training_schedule: TrainingSchedule | None = (
+        build_langact_prediction_schedule(
+            num_train_steps=100_000,
+            langact_weight=1.0,
+            prediction_weight=0.0,
+            prediction_prob=0.2,
+            enable_prediction_training=False,
+        ),
+    )
 
     @property
     @override
@@ -820,13 +828,6 @@ _CONFIGS = [
         save_interval=500,
         keep_period=5000,
         resume=True,
-        training_schedule=build_langact_prediction_schedule(
-            num_train_steps=100_000,
-            langact_weight=1.0,
-            prediction_weight=0.0,
-            prediction_prob=0.2,
-            enable_prediction_training=False,
-        ),
     )
     .build_for_devices(["v6", "v6europe", "v4", "local"]),
     # Gemma3 configs
