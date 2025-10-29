@@ -775,7 +775,7 @@ _CONFIGS = [
         checkpoint_base_dir="gs://pi0-cot/checkpoints",  # Update this path
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint",
-            params_path="gs://pi0-cot/checkpoints/pi_combined_cot_v4/oxe_no_galaxea_v4_fixed/30000",
+            params_path="gs://pi0-cot/checkpoints/pi_combined_cot_v4/oxe_no_galaxea_v4_fixed/30000/params",
         ),
     ),
     TrainConfig(

@@ -592,7 +592,6 @@ class PiCoT(_pi0.Pi0):
             # Per-sample: sum across token dimension
             per_sample_critical_correct = critical_correct.sum(axis=-1)  # [batch]
             per_sample_num_critical = critical_token_mask.sum(axis=-1)  # [batch]
-            per_sample_critical_token_accuracy = per_sample_critical_correct / jnp.maximum(per_sample_num_critical, 1.0)
             # Scalar (for backward compatibility - micro-averaged)
             num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
             critical_token_accuracy = critical_correct.sum() / num_critical_tokens
@@ -608,7 +607,6 @@ class PiCoT(_pi0.Pi0):
                 # Per-sample: sum across token dimension
                 per_sample_number_correct = number_correct.sum(axis=-1)  # [batch]
                 per_sample_num_number = number_mask.sum(axis=-1)  # [batch]
-                per_sample_number_token_accuracy = per_sample_number_correct / jnp.maximum(per_sample_num_number, 1.0)
                 # Scalar (for backward compatibility - micro-averaged)
                 num_number_tokens = jnp.maximum(number_mask.sum(), 1.0)
                 number_token_accuracy = number_correct.sum() / num_number_tokens
@@ -625,9 +623,6 @@ class PiCoT(_pi0.Pi0):
                 # Per-sample: sum across token dimension
                 per_sample_direction_correct = direction_correct.sum(axis=-1)  # [batch]
                 per_sample_num_direction = direction_mask.sum(axis=-1)  # [batch]
-                per_sample_direction_token_accuracy = per_sample_direction_correct / jnp.maximum(
-                    per_sample_num_direction, 1.0
-                )
                 # Scalar (for backward compatibility - micro-averaged)
                 num_direction_tokens = jnp.maximum(direction_mask.sum(), 1.0)
                 direction_token_accuracy = direction_correct.sum() / num_direction_tokens

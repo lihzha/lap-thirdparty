@@ -1248,6 +1248,9 @@ def main(config: _config.TrainConfig):
                 if key == "per_sample_loss":
                     per_sample_losses_chunk.append(np.asarray(training_utils.to_local_array(value)).reshape(-1))
                     reduced_info["max_per_sample_loss"] = jnp.max(value)
+                elif key.startswith("per_sample_"):
+                    # Skip per_sample_* metrics - they're only used for dataset-level statistics
+                    continue
                 else:
                     reduced_info[key] = reduce_overrides.get(key, jnp.mean)(value)
             reduced_info = jax.device_get(reduced_info)
