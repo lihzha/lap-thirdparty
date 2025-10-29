@@ -849,6 +849,7 @@ _CONFIGS = [
         dataset_type="combined",
         droid_dataset_name="droid",
         shuffle_buffer_size=400_000,
+        rlds_data_dir="gs://pi0-cot/OXE",
     )
     .with_training(
         fsdp_devices=1,
@@ -858,9 +859,7 @@ _CONFIGS = [
         keep_period=10000,
         resume=True,
     )
-    .build(
-        name="gemma3_combined_cot_v4", rlds_data_dir="gs://pi0-cot/OXE", checkpoint_base_dir="gs://pi0-cot/checkpoints"
-    ),
+    .build(name="gemma3_combined_cot_v4", checkpoint_base_dir="gs://pi0-cot/checkpoints"),
     ConfigBuilder("gemma3_droid_cot_lora")
     .with_model(
         pi_cot_config.PiCoTConfig(
@@ -879,6 +878,8 @@ _CONFIGS = [
         dataset_type="droid",
         droid_dataset_name="droid",
         shuffle_buffer_size=400_000,
+        rlds_data_dir="gs://v5_central1_a/OXE",
+        language_action_dir="gs://v5_central1_a/droid-base-lang-actions",
     )
     .with_training(
         fsdp_devices=1,
@@ -889,8 +890,6 @@ _CONFIGS = [
     )
     .build(
         name="gemma3_droid_cot_lora_v5",
-        rlds_data_dir="gs://v5_central1_a/OXE",
-        language_action_dir="gs://v5_central1_a/droid-base-lang-actions",
         checkpoint_base_dir="gs://v5_central1_a/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="gemma3", params_path="gs://v5_central1_a/cache/gemma3-4b-it"
