@@ -762,7 +762,7 @@ _CONFIGS = [
             asset_id="libero",
             dataset_type="oxe",
             data_mix="libero_10_no_noops",
-            rlds_data_dir="gs://pi0-cot/OXE/libero_10_no_noops",  # Update this path
+            rlds_data_dir="gs://pi0-cot/OXE",  # Update this path
             language_action_config_name="compact",
             decoding_schema="compact",
         ),
