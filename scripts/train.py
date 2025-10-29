@@ -1232,9 +1232,6 @@ def main(config: _config.TrainConfig):
             # Gather and update dataset stats from buffered local data (batched at log_interval)
             dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
 
-            # Gather and update dataset stats from buffered local data (batched at log_interval)
-            dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
-
             # infos appended above
             stacked_infos = common_utils.stack_forest(infos)
             reduce_overrides = {
