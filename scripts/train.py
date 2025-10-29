@@ -391,6 +391,10 @@ class DatasetStatsTracker:
                     metrics[f"dataset/{dataset_name}/direction_token_count"] = stats["direction_total"]
         return metrics
 
+    def reset(self):
+        """Reset all accumulated statistics."""
+        self.dataset_stats = {}
+
 
 class LocalDatasetInfoBuffer:
     """Buffers local dataset info per step (without multihost gathering). Only gathers at log_interval."""
@@ -1320,6 +1324,8 @@ def main(config: _config.TrainConfig):
             #     vis_tools.log_hard_examples_payload(payload)
 
             infos = []
+            # Reset dataset stats tracker to only track the next log_interval window
+            dataset_stats_tracker.reset()
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
             # use a pbar to track the validation progress

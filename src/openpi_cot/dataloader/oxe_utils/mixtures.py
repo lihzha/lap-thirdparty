@@ -97,7 +97,6 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     ],
     "oxe_pi_magic_soup_with_other_states_with_bimanual": [
         ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
-        ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
         ("bc_z", 1.0),
         ("droid", 1.0),
         ("fractal20220817_data", 1.0),

@@ -452,14 +452,8 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
             # Get language instruction
             language_instruction = traj.get("language_instruction")
 
-            # Build trajectory ID from episode metadata
-            file_path = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("file_path", "")
-
-            if isinstance(file_path, tf.Tensor) and tf.rank(file_path) > 0:
-                file_path = file_path[0]
-
-            # Create trajectory ID
-            trajectory_id = tf.strings.join([tf.constant("libero_", dtype=tf.string), tf.strings.as_string(file_path)])
+            # Preserve trajectory ID from get_traj_identifier (action-based hash)
+            # This ensures proper train/val splitting and avoids metadata dependency issues
 
             # Determine state type (LIBERO uses EEF pose representation)
             state_type_str = state_encoding_to_type(self.state_encoding)
@@ -469,7 +463,7 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
                 "language_instruction": language_instruction,
                 "actions": actions,
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
-                "trajectory_id": tf.repeat(trajectory_id, traj_len),
+                "trajectory_id": traj["trajectory_id"],  # Preserve existing trajectory_id
                 "raw_action": actions,
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # LIBERO is single-arm
@@ -478,29 +472,9 @@ class _LiberoCoTDataset(_SingleOXECoTDataset):
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
 
-    def get_traj_identifier(self):
-        """Get trajectory identifier from episode metadata."""
-
-        def _get_traj_identifier(traj):
-            # Apply standardization function if provided
-            if self.standardize_fn is not None:
-                traj = self.standardize_fn(traj)
-
-            traj_len = tf.shape(traj["action"])[0]
-
-            # Use episode metadata to create trajectory ID
-            file_path = traj.get("traj_metadata", {}).get("episode_metadata", {}).get("file_path", "")
-
-            if isinstance(file_path, tf.Tensor) and tf.rank(file_path) > 0:
-                file_path = file_path[0]
-
-            # Create unique trajectory ID
-            trajectory_id = tf.strings.join([tf.constant("libero_", dtype=tf.string), tf.strings.as_string(file_path)])
-
-            traj["trajectory_id"] = tf.repeat(trajectory_id, traj_len)
-            return traj
-
-        self.dataset = self.dataset.traj_map(_get_traj_identifier, self.num_parallel_calls)
+    # Note: Inheriting get_traj_identifier from parent class (_SingleOXECoTDataset)
+    # which uses action-based hashing for robust trajectory identification.
+    # This avoids issues with missing or malformed trajectory metadata.
 
     def apply_repack_transforms(self):
         """Repack trajectory data for LIBERO dataset."""
