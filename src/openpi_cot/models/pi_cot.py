@@ -572,7 +572,11 @@ class PiCoT(_pi0.Pi0):
                 train=True,
                 per_example=True,
             )
-            metrics["lang_loss"] = lang_loss
+            # Store per-sample loss for training (dataset tracking), scalar for validation
+            if train:
+                metrics["lang_loss"] = lang_loss
+            else:
+                metrics["lang_loss"] = jnp.mean(lang_loss)
             total_loss = total_loss + self.language_loss_weight * lang_loss
 
             # Compute token accuracy
@@ -592,12 +596,10 @@ class PiCoT(_pi0.Pi0):
             # Scalar (for backward compatibility - micro-averaged)
             num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
             critical_token_accuracy = critical_correct.sum() / num_critical_tokens
-            # Store per-sample counts for micro-averaging (always store, needed for per-dataset tracking)
-            metrics["per_sample_critical_correct"] = per_sample_critical_correct
-            metrics["per_sample_critical_total"] = per_sample_num_critical
-            # Store per-sample accuracy for validation logging
-            if not train:
-                metrics["per_sample_critical_token_accuracy"] = jnp.mean(per_sample_critical_token_accuracy)
+            # Store per-sample counts for micro-averaging (only during training for per-dataset tracking)
+            if train:
+                metrics["per_sample_critical_correct"] = per_sample_critical_correct
+                metrics["per_sample_critical_total"] = per_sample_num_critical
 
             # Compute number token accuracy (per-sample and scalar)
             if observation.number_token_mask is not None:
@@ -611,12 +613,10 @@ class PiCoT(_pi0.Pi0):
                 num_number_tokens = jnp.maximum(number_mask.sum(), 1.0)
                 number_token_accuracy = number_correct.sum() / num_number_tokens
                 metrics["number_token_accuracy"] = number_token_accuracy
-                # Store per-sample counts for micro-averaging
-                metrics["per_sample_number_correct"] = per_sample_number_correct
-                metrics["per_sample_number_total"] = per_sample_num_number
-                # Store per-sample accuracy for validation logging
-                if not train:
-                    metrics["per_sample_number_token_accuracy"] = jnp.mean(per_sample_number_token_accuracy)
+                # Store per-sample counts for micro-averaging (only during training for per-dataset tracking)
+                if train:
+                    metrics["per_sample_number_correct"] = per_sample_number_correct
+                    metrics["per_sample_number_total"] = per_sample_num_number
 
             # Compute direction token accuracy (per-sample and scalar)
             if observation.direction_token_mask is not None:
@@ -632,12 +632,10 @@ class PiCoT(_pi0.Pi0):
                 num_direction_tokens = jnp.maximum(direction_mask.sum(), 1.0)
                 direction_token_accuracy = direction_correct.sum() / num_direction_tokens
                 metrics["direction_token_accuracy"] = direction_token_accuracy
-                # Store per-sample counts for micro-averaging
-                metrics["per_sample_direction_correct"] = per_sample_direction_correct
-                metrics["per_sample_direction_total"] = per_sample_num_direction
-                # Store per-sample accuracy for validation logging
-                if not train:
-                    metrics["per_sample_direction_token_accuracy"] = jnp.mean(per_sample_direction_token_accuracy)
+                # Store per-sample counts for micro-averaging (only during training for per-dataset tracking)
+                if train:
+                    metrics["per_sample_direction_correct"] = per_sample_direction_correct
+                    metrics["per_sample_direction_total"] = per_sample_num_direction
 
         # Prediction (cross-entropy) loss - independent of langact loss
         if self.enable_prediction_training and observation.tokenized_prediction is not None:
@@ -703,7 +701,11 @@ class PiCoT(_pi0.Pi0):
                 train=True,
                 per_example=True,
             )
-            metrics["pred_loss"] = pred_loss
+            # Store per-sample loss for training (dataset tracking), scalar for validation
+            if train:
+                metrics["pred_loss"] = pred_loss
+            else:
+                metrics["pred_loss"] = jnp.mean(pred_loss)
 
             # Compute prediction token accuracy
             predictions_pred = jnp.argmax(shift_logits_pred, axis=-1)
@@ -730,13 +732,6 @@ class PiCoT(_pi0.Pi0):
                 num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)
                 pred_critical_token_accuracy = critical_correct_pred.sum() / num_critical_pred
                 metrics["pred_critical_token_accuracy"] = pred_critical_token_accuracy
-                # Store per-sample accuracy
-                if train:
-                    metrics["per_sample_pred_critical_token_accuracy"] = per_sample_pred_critical_token_accuracy
-                else:
-                    metrics["per_sample_pred_critical_token_accuracy"] = jnp.mean(
-                        per_sample_pred_critical_token_accuracy
-                    )
 
             # Compute prediction number token accuracy if available (per-sample and scalar)
             if (
@@ -755,11 +750,6 @@ class PiCoT(_pi0.Pi0):
                 num_number_pred = jnp.maximum(number_pred_mask.sum(), 1.0)
                 pred_number_token_accuracy = number_correct_pred.sum() / num_number_pred
                 metrics["pred_number_token_accuracy"] = pred_number_token_accuracy
-                # Store per-sample accuracy
-                if train:
-                    metrics["per_sample_pred_number_token_accuracy"] = per_sample_pred_number_token_accuracy
-                else:
-                    metrics["per_sample_pred_number_token_accuracy"] = jnp.mean(per_sample_pred_number_token_accuracy)
 
             # Compute prediction direction token accuracy if available (per-sample and scalar)
             if (
@@ -778,13 +768,6 @@ class PiCoT(_pi0.Pi0):
                 num_direction_pred = jnp.maximum(direction_pred_mask.sum(), 1.0)
                 pred_direction_token_accuracy = direction_correct_pred.sum() / num_direction_pred
                 metrics["pred_direction_token_accuracy"] = pred_direction_token_accuracy
-                # Store per-sample accuracy
-                if train:
-                    metrics["per_sample_pred_direction_token_accuracy"] = per_sample_pred_direction_token_accuracy
-                else:
-                    metrics["per_sample_pred_direction_token_accuracy"] = jnp.mean(
-                        per_sample_pred_direction_token_accuracy
-                    )
 
             total_loss = total_loss + self.prediction_loss_weight * pred_loss
 
@@ -813,7 +796,11 @@ class PiCoT(_pi0.Pi0):
             )
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
             action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
-            metrics["action_loss"] = action_loss
+            # Store per-sample loss for training (dataset tracking), scalar for validation
+            if train:
+                metrics["action_loss"] = action_loss
+            else:
+                metrics["action_loss"] = jnp.mean(action_loss)
             total_loss = total_loss + self.action_loss_weight * action_loss
 
         return (
