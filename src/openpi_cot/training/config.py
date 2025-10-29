@@ -21,7 +21,7 @@ import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.policies.cot_policy as cot_policy
-import openpi_cot.policies.libero_policy as libero_policy
+import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.planning_policy as planning_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
@@ -382,7 +382,7 @@ class VQADataConfig(RLDSCoTDataConfig):
 
 
 @dataclasses.dataclass(frozen=True)
-class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
+class LiberoFinetuneDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
     """
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
     """
@@ -421,12 +421,12 @@ class LiberoDataConfig(CoTDataConfig, upstream_config.DataConfigFactory):
 
         data_transforms = upstream_transforms.Group(
             inputs=[
-                libero_policy.LiberoInputs(
+                libero_finetune_policy.LiberoFinetuneInputs(
                     model_type=model_config.model_type,
                     action_dim=model_config.action_dim,
                 )
             ],
-            outputs=[libero_policy.LiberoOutputs()],
+            outputs=[libero_finetune_policy.LiberoFinetuneOutputs()],
         )
 
         # assert base_cfg.action_space == cot_rlds_dataset.DroidActionSpace.CARTESIAN_POSITION
@@ -759,7 +759,7 @@ _CONFIGS = [
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
         ),
-        data=LiberoDataConfig(
+        data=LiberoFinetuneDataConfig(
             repo_id="libero_10_no_noops",
             asset_id="libero",
             dataset_type="oxe",
@@ -790,7 +790,7 @@ _CONFIGS = [
             enable_action_training=True,
             enable_langact_training=True,
         ),
-        data=LiberoDataConfig(
+        data=LiberoFinetuneDataConfig(
             repo_id="libero_10_no_noops",
             asset_id="libero",
             dataset_type="oxe",
