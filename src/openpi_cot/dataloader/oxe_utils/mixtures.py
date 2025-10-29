@@ -178,7 +178,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # # ("toto", 1.0),   # no language instructions, 901 trajs, no wrist camera
         # # # ("language_table", 0.1),  442226 trajs
     ],
-    "libero_finetuning": [
+    "libero_finetune": [
         ("libero_10_no_noops", 1.0),
         ("libero_spatial_no_noops", 1.0),
         ("libero_object_no_noops", 1.0),

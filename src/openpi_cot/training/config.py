@@ -787,7 +787,7 @@ _CONFIGS = [
             action_expert_variant="gemma2_300m",
         ),
         data=LiberoFinetuneDataConfig(
-            repo_id="libero_10_no_noops",
+            repo_id="libero",
             asset_id="libero",
             dataset_type="combined",
             data_mix="libero_finetune",
