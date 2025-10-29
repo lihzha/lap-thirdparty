@@ -443,58 +443,502 @@ class PiCoT(_pi0.Pi0):
         Returns:
             (prefix_tokens, prefix_mask, prefix_ar_mask)
         """
-        # For Gemma3: tokenized_prompt already contains image placeholders
-        # For others: use old approach (concatenate image and text embeddings)
+        # Get image embeddings (use precomputed if available)
+        if precomputed_img_embeddings is not None:
+            img_tokens, img_mask, img_ar_mask = precomputed_img_embeddings
+        else:
+            img_tokens, img_mask, img_ar_mask = self._embed_images(obs, num_frames)
+
+        # Build prefix using appropriate strategy for model variant
         if self.use_gemma3 and obs.tokenized_prompt is not None:
-            # Embed the full tokenized sequence (including placeholders)
+            return self._build_prefix_gemma3(obs, img_tokens, img_mask, img_ar_mask)
+        else:
+            return self._build_prefix_legacy(obs, img_tokens, img_mask, img_ar_mask)
+
+    def _prepare_token_mask(
+        self,
+        langact_mask: at.Bool[at.Array, "b s"],
+        pad_mask: at.Bool[at.Array, "b s"],
+        sample_mask: at.Bool[at.Array, "b"] | None = None,
+    ) -> at.Bool[at.Array, "b s"]:
+        """Prepare token mask by combining langact, padding, and sample masks.
+
+        Args:
+            langact_mask: Mask indicating which tokens are part of language/action
+            pad_mask: Mask indicating which tokens are not padding
+            sample_mask: Optional per-sample mask for batch-level filtering
+
+        Returns:
+            Combined token mask
+        """
+        token_mask = jnp.logical_and(langact_mask, pad_mask)
+        if sample_mask is not None:
+            ex_mask = jnp.asarray(sample_mask)[..., None]
+            token_mask = token_mask * ex_mask
+        return token_mask
+
+    def _compute_token_accuracy_metrics(
+        self,
+        predictions: at.Int[at.Array, "b s"],
+        labels: at.Int[at.Array, "b s"],
+        token_mask: at.Bool[at.Array, "b s"],
+        critical_mask: at.Bool[at.Array, "b s"] | None = None,
+        number_mask: at.Bool[at.Array, "b s"] | None = None,
+        direction_mask: at.Bool[at.Array, "b s"] | None = None,
+        train: bool = False,
+    ) -> dict[str, at.Array]:
+        """Compute token accuracy metrics including critical, number, and direction tokens.
+
+        Args:
+            predictions: Predicted token IDs [b, s]
+            labels: Ground truth token IDs [b, s]
+            token_mask: Mask indicating which tokens to include [b, s]
+            critical_mask: Optional mask for critical tokens [b, s]
+            number_mask: Optional mask for number tokens [b, s]
+            direction_mask: Optional mask for direction tokens [b, s]
+            train: If True, compute per-sample metrics for dataset tracking
+
+        Returns:
+            Dictionary containing accuracy metrics
+        """
+        metrics = {}
+
+        # Overall token accuracy
+        correct = (predictions == labels).astype(jnp.float32)
+        masked_correct = correct * token_mask
+        num_tokens = jnp.maximum(token_mask.sum(), 1.0)
+        metrics["token_accuracy"] = masked_correct.sum() / num_tokens
+
+        # Critical token accuracy
+        if critical_mask is not None:
+            critical_correct = correct * critical_mask
+            # Scalar (micro-averaged)
+            num_critical = jnp.maximum(critical_mask.sum(), 1.0)
+            metrics["critical_token_accuracy"] = critical_correct.sum() / num_critical
+            # Per-sample (only during training for dataset tracking)
+            if train:
+                per_sample_critical_correct = critical_correct.sum(axis=-1)
+                per_sample_num_critical = critical_mask.sum(axis=-1)
+                metrics["per_sample_critical_correct"] = per_sample_critical_correct
+                metrics["per_sample_critical_total"] = per_sample_num_critical
+
+        # Number token accuracy
+        if number_mask is not None:
+            number_correct = correct * number_mask
+            # Scalar (micro-averaged)
+            num_number = jnp.maximum(number_mask.sum(), 1.0)
+            metrics["number_token_accuracy"] = number_correct.sum() / num_number
+            # Per-sample (only during training for dataset tracking)
+            if train:
+                per_sample_number_correct = number_correct.sum(axis=-1)
+                per_sample_num_number = number_mask.sum(axis=-1)
+                metrics["per_sample_number_correct"] = per_sample_number_correct
+                metrics["per_sample_number_total"] = per_sample_num_number
+
+        # Direction token accuracy
+        if direction_mask is not None:
+            direction_correct = correct * direction_mask
+            # Scalar (micro-averaged)
+            num_direction = jnp.maximum(direction_mask.sum(), 1.0)
+            metrics["direction_token_accuracy"] = direction_correct.sum() / num_direction
+            # Per-sample (only during training for dataset tracking)
+            if train:
+                per_sample_direction_correct = direction_correct.sum(axis=-1)
+                per_sample_num_direction = direction_mask.sum(axis=-1)
+                metrics["per_sample_direction_correct"] = per_sample_direction_correct
+                metrics["per_sample_direction_total"] = per_sample_num_direction
+
+        return metrics
+
+    def _compute_cross_entropy_with_metrics(
+        self,
+        logits: at.Float[at.Array, "b s v"],
+        labels: at.Int[at.Array, "b s"],
+        token_mask: at.Bool[at.Array, "b s"],
+        critical_mask: at.Bool[at.Array, "b s"] | None = None,
+        number_mask: at.Bool[at.Array, "b s"] | None = None,
+        direction_mask: at.Bool[at.Array, "b s"] | None = None,
+        train: bool = False,
+    ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
+        """Compute cross-entropy loss and associated accuracy metrics.
+
+        Args:
+            logits: Model predictions [b, s, vocab_size]
+            labels: Ground truth token IDs [b, s]
+            token_mask: Mask indicating which tokens to include [b, s]
+            critical_mask: Optional mask for critical tokens [b, s]
+            number_mask: Optional mask for number tokens [b, s]
+            direction_mask: Optional mask for direction tokens [b, s]
+            train: If True, return per-sample loss and compute per-sample metrics
+
+        Returns:
+            (loss, metrics_dict)
+        """
+        metrics = {}
+
+        # Compute cross-entropy loss
+        loss = cross_entropy_loss(
+            logits,
+            labels,
+            mask=token_mask,
+            axis=-1,
+            train=True,
+            per_example=True,
+        )
+
+        # Compute accuracy metrics
+        predictions = jnp.argmax(logits, axis=-1)
+        accuracy_metrics = self._compute_token_accuracy_metrics(
+            predictions=predictions,
+            labels=labels,
+            token_mask=token_mask,
+            critical_mask=critical_mask,
+            number_mask=number_mask,
+            direction_mask=direction_mask,
+            train=train,
+        )
+        metrics.update(accuracy_metrics)
+
+        return loss, metrics
+
+    def _forward_language_model(
+        self,
+        prefix_tokens: at.Float[at.Array, "b s emb"],
+        prefix_mask: at.Bool[at.Array, "b s"],
+        prefix_ar_mask: at.Bool[at.Array, "b s"],
+    ) -> tuple[at.Float[at.Array, "b s emb"], at.Array]:
+        """Forward pass through language model with attention masking.
+
+        Args:
+            prefix_tokens: Input token embeddings
+            prefix_mask: Input mask indicating valid tokens
+            prefix_ar_mask: Autoregressive mask for causal attention
+
+        Returns:
+            (output_embeddings, kv_cache)
+        """
+        attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        (prefix_out, _), kv_cache = self.PaliGemma.llm(
+            [prefix_tokens, None], mask=attn_mask, positions=positions
+        )
+        return prefix_out, kv_cache
+
+    def _build_prefix_gemma3(
+        self,
+        obs: CoTObservation | Observation,
+        img_tokens: at.Float[at.Array, "b s_img emb"],
+        img_mask: at.Bool[at.Array, "b s_img"],
+        img_ar_mask: at.Bool[at.Array, "b s_img"],
+    ) -> tuple[
+        at.Float[at.Array, "b s_out emb"],
+        at.Bool[at.Array, "b s_out"],
+        at.Bool[at.Array, "b s_out"],
+    ]:
+        """Build prefix for Gemma3 models using placeholder replacement.
+
+        Args:
+            obs: Observation containing tokenized prompt with placeholders
+            img_tokens: Precomputed image embeddings
+            img_mask: Image mask
+            img_ar_mask: Image autoregressive mask
+
+        Returns:
+            (tokens, input_mask, ar_mask)
+        """
+        # Embed the full tokenized sequence (including placeholders)
+        text_tokens, text_mask, text_ar_mask = self._embed_text(
+            obs.tokenized_prompt,
+            obs.tokenized_prompt_mask,
+            obs.tokenized_langact_mask,
+        )
+
+        # Replace placeholder embeddings with actual image embeddings
+        tokens = self._replace_image_placeholders(text_tokens, obs.tokenized_prompt, img_tokens)
+
+        # Replace placeholder masks with actual image masks
+        if text_ar_mask is None:
+            text_ar_mask = jnp.zeros_like(text_mask, dtype=bool)
+        input_mask, ar_mask = self._replace_placeholder_masks(
+            text_mask, text_ar_mask, obs.tokenized_prompt, img_mask, img_ar_mask
+        )
+
+        return tokens, input_mask, ar_mask
+
+    def _build_prefix_legacy(
+        self,
+        obs: CoTObservation | Observation,
+        img_tokens: at.Float[at.Array, "b s_img emb"],
+        img_mask: at.Bool[at.Array, "b s_img"],
+        img_ar_mask: at.Bool[at.Array, "b s_img"],
+    ) -> tuple[
+        at.Float[at.Array, "b s_out emb"],
+        at.Bool[at.Array, "b s_out"],
+        at.Bool[at.Array, "b s_out"],
+    ]:
+        """Build prefix for legacy models by concatenating image and text embeddings.
+
+        Args:
+            obs: Observation containing tokenized prompt
+            img_tokens: Precomputed image embeddings
+            img_mask: Image mask
+            img_ar_mask: Image autoregressive mask
+
+        Returns:
+            (tokens, input_mask, ar_mask)
+        """
+        # Add language (aka tokenized inputs)
+        if obs.tokenized_prompt is not None:
             text_tokens, text_mask, text_ar_mask = self._embed_text(
                 obs.tokenized_prompt,
                 obs.tokenized_prompt_mask,
                 obs.tokenized_langact_mask,
             )
 
-            # Get actual image embeddings and masks from SigLIP (use precomputed if available)
-            if precomputed_img_embeddings is not None:
-                img_tokens, img_mask, img_ar_mask = precomputed_img_embeddings
+            if text_ar_mask is not None:
+                ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
             else:
-                img_tokens, img_mask, img_ar_mask = self._embed_images(obs, num_frames)
-
-            # Replace placeholder embeddings with actual image embeddings
-            tokens = self._replace_image_placeholders(text_tokens, obs.tokenized_prompt, img_tokens)
-
-            # Replace placeholder masks with actual image masks
-            if text_ar_mask is None:
-                text_ar_mask = jnp.zeros_like(text_mask, dtype=bool)
-            input_mask, ar_mask = self._replace_placeholder_masks(
-                text_mask, text_ar_mask, obs.tokenized_prompt, img_mask, img_ar_mask
-            )
+                text_ar_mask = jnp.array([False] * text_mask.shape[1])
+                text_ar_mask = einops.repeat(text_ar_mask, "s -> b s", b=img_ar_mask.shape[0])
+                ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
+            tokens = jnp.concatenate([img_tokens, text_tokens], axis=1)
+            input_mask = jnp.concatenate([img_mask, text_mask], axis=1)
         else:
-            # Original approach: embed images and text separately, then concatenate
-            if precomputed_img_embeddings is not None:
-                img_tokens, img_mask, img_ar_mask = precomputed_img_embeddings
-            else:
-                img_tokens, img_mask, img_ar_mask = self._embed_images(obs, num_frames)
-
-            # add language (aka tokenized inputs)
-            if obs.tokenized_prompt is not None:
-                text_tokens, text_mask, text_ar_mask = self._embed_text(
-                    obs.tokenized_prompt,
-                    obs.tokenized_prompt_mask,
-                    obs.tokenized_langact_mask,
-                )
-
-                if text_ar_mask is not None:
-                    ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
-                else:
-                    text_ar_mask = jnp.array([False] * text_mask.shape[1])
-                    text_ar_mask = einops.repeat(text_ar_mask, "s -> b s", b=img_ar_mask.shape[0])
-                    ar_mask = jnp.concatenate([img_ar_mask, text_ar_mask], axis=1)
-                tokens = jnp.concatenate([img_tokens, text_tokens], axis=1)
-                input_mask = jnp.concatenate([img_mask, text_mask], axis=1)
-            else:
-                tokens, input_mask, ar_mask = img_tokens, img_mask, img_ar_mask
+            tokens, input_mask, ar_mask = img_tokens, img_mask, img_ar_mask
 
         return tokens, input_mask, ar_mask
+
+    def _compute_language_loss(
+        self,
+        observation: CoTObservation | Observation,
+        prefix_tokens: at.Float[at.Array, "b s emb"],
+        prefix_mask: at.Bool[at.Array, "b s"],
+        prefix_ar_mask: at.Bool[at.Array, "b s"],
+        train: bool,
+    ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array], at.Float[at.Array, ""]]:
+        """Compute language/reasoning cross-entropy loss and accuracy metrics.
+
+        Args:
+            observation: Observation containing tokenized prompts and masks
+            prefix_tokens: Prefix embeddings (images + text)
+            prefix_mask: Prefix attention mask
+            prefix_ar_mask: Prefix autoregressive mask
+            train: If True, return per-sample loss and metrics
+
+        Returns:
+            (loss, metrics, token_accuracy_scalar)
+        """
+        # Forward pass
+        prefix_out, _ = self._forward_language_model(prefix_tokens, prefix_mask, prefix_ar_mask)
+
+        # Predict next tokens over the reasoning span
+        shift_labels = observation.tokenized_prompt[:, 1:]
+        max_len = observation.tokenized_langact_mask.shape[1]
+        shift_tokens = prefix_out[:, -max_len:-1, :]
+        shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
+
+        # Prepare token mask
+        token_mask = self._prepare_token_mask(
+            observation.tokenized_langact_mask[:, 1:],
+            observation.tokenized_prompt_mask[:, 1:],
+            observation.sample_mask,
+        )
+
+        # Prepare additional masks for accuracy computation
+        ex_mask = jnp.asarray(observation.sample_mask)[..., None] if observation.sample_mask is not None else None
+        critical_mask = observation.crictical_token_mask[:, 1:] * ex_mask if ex_mask is not None else observation.crictical_token_mask[:, 1:]
+        number_mask = observation.number_token_mask[:, 1:] * ex_mask if observation.number_token_mask is not None and ex_mask is not None else observation.number_token_mask[:, 1:] if observation.number_token_mask is not None else None
+        direction_mask = observation.direction_token_mask[:, 1:] * ex_mask if observation.direction_token_mask is not None and ex_mask is not None else observation.direction_token_mask[:, 1:] if observation.direction_token_mask is not None else None
+
+        # Compute loss and metrics
+        loss, metrics = self._compute_cross_entropy_with_metrics(
+            logits=shift_logits,
+            labels=shift_labels,
+            token_mask=token_mask,
+            critical_mask=critical_mask,
+            number_mask=number_mask,
+            direction_mask=direction_mask,
+            train=train,
+        )
+
+        # Store loss in metrics
+        if train:
+            metrics["lang_loss"] = loss
+        else:
+            metrics["lang_loss"] = jnp.mean(loss)
+
+        # Extract scalar token accuracy for backward compatibility
+        token_accuracy = metrics.get("token_accuracy", jnp.array(0.0))
+
+        return loss, metrics, token_accuracy
+
+    def _compute_prediction_loss(
+        self,
+        observation: CoTObservation | Observation,
+        img_tokens_all: at.Float[at.Array, "b s_img emb"],
+        img_mask_all: at.Bool[at.Array, "b s_img"],
+        img_ar_mask_all: at.Bool[at.Array, "b s_img"],
+        train: bool,
+    ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
+        """Compute prediction cross-entropy loss using all video frames.
+
+        Args:
+            observation: Observation containing tokenized predictions
+            img_tokens_all: All-frame image embeddings
+            img_mask_all: All-frame image mask
+            img_ar_mask_all: All-frame image AR mask
+            train: If True, return per-sample loss and metrics
+
+        Returns:
+            (loss, metrics)
+        """
+        # Build prediction-specific prefix using all frames
+        if self.use_gemma3:
+            # Embed the prediction tokenized sequence (including placeholders)
+            text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
+                observation.tokenized_prediction,
+                observation.tokenized_prediction_mask,
+                observation.tokenized_prediction_langact_mask,
+            )
+            # Replace placeholders with precomputed all-frame embeddings
+            prefix_tokens_pred = self._replace_image_placeholders(
+                text_tokens_pred, observation.tokenized_prediction, img_tokens_all
+            )
+            # Replace placeholder masks
+            if text_ar_mask_pred is None:
+                text_ar_mask_pred = jnp.zeros_like(text_mask_pred, dtype=bool)
+            prefix_mask_pred, prefix_ar_mask_pred = self._replace_placeholder_masks(
+                text_mask_pred, text_ar_mask_pred, observation.tokenized_prediction, img_mask_all, img_ar_mask_all
+            )
+        else:
+            # Original approach: concatenate precomputed all-frame embeddings with text
+            text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
+                observation.tokenized_prediction,
+                observation.tokenized_prediction_mask,
+                observation.tokenized_prediction_langact_mask,
+            )
+            prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
+            prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
+            prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
+
+        # Forward pass
+        prefix_out_pred, _ = self._forward_language_model(prefix_tokens_pred, prefix_mask_pred, prefix_ar_mask_pred)
+
+        # Predict next tokens over the prediction span
+        shift_labels_pred = observation.tokenized_prediction[:, 1:]
+        max_len_pred = observation.tokenized_prediction_langact_mask.shape[1]
+        shift_tokens_pred = prefix_out_pred[:, -max_len_pred:-1, :]
+        shift_logits_pred = self.PaliGemma.llm(shift_tokens_pred, method="decode")
+
+        # Prepare token mask
+        token_mask_pred = self._prepare_token_mask(
+            observation.tokenized_prediction_langact_mask[:, 1:],
+            observation.tokenized_prediction_mask[:, 1:],
+            observation.sample_mask,
+        )
+
+        # Prepare additional masks for accuracy computation
+        ex_mask_pred = jnp.asarray(observation.sample_mask)[..., None] if observation.sample_mask is not None else None
+        critical_pred_mask = None
+        if hasattr(observation, "prediction_crictical_token_mask") and observation.prediction_crictical_token_mask is not None:
+            critical_pred_mask = observation.prediction_crictical_token_mask[:, 1:] * ex_mask_pred if ex_mask_pred is not None else observation.prediction_crictical_token_mask[:, 1:]
+
+        number_pred_mask = None
+        if hasattr(observation, "prediction_number_token_mask") and observation.prediction_number_token_mask is not None:
+            number_pred_mask = observation.prediction_number_token_mask[:, 1:] * ex_mask_pred if ex_mask_pred is not None else observation.prediction_number_token_mask[:, 1:]
+
+        direction_pred_mask = None
+        if hasattr(observation, "prediction_direction_token_mask") and observation.prediction_direction_token_mask is not None:
+            direction_pred_mask = observation.prediction_direction_token_mask[:, 1:] * ex_mask_pred if ex_mask_pred is not None else observation.prediction_direction_token_mask[:, 1:]
+
+        # Compute loss and metrics
+        pred_loss, pred_metrics = self._compute_cross_entropy_with_metrics(
+            logits=shift_logits_pred,
+            labels=shift_labels_pred,
+            token_mask=token_mask_pred,
+            critical_mask=critical_pred_mask,
+            number_mask=number_pred_mask,
+            direction_mask=direction_pred_mask,
+            train=train,
+        )
+
+        # Rename metrics to add "pred_" prefix
+        metrics = {}
+        for key, value in pred_metrics.items():
+            if key == "token_accuracy":
+                metrics["pred_token_accuracy"] = value
+            elif key == "critical_token_accuracy":
+                metrics["pred_critical_token_accuracy"] = value
+            elif key == "number_token_accuracy":
+                metrics["pred_number_token_accuracy"] = value
+            elif key == "direction_token_accuracy":
+                metrics["pred_direction_token_accuracy"] = value
+            else:
+                metrics[key] = value
+
+        # Store loss
+        if train:
+            metrics["pred_loss"] = pred_loss
+        else:
+            metrics["pred_loss"] = jnp.mean(pred_loss)
+
+        return pred_loss, metrics
+
+    def _compute_action_loss(
+        self,
+        observation: CoTObservation | Observation,
+        actions: _model.Actions,
+        prefix_tokens: at.Float[at.Array, "b s emb"],
+        prefix_mask: at.Bool[at.Array, "b s"],
+        noise_rng: at.KeyArrayLike,
+        time_rng: at.KeyArrayLike,
+        train: bool,
+    ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
+        """Compute action diffusion loss.
+
+        Args:
+            observation: Observation containing state
+            actions: Ground truth actions
+            prefix_tokens: Prefix embeddings (images + text)
+            prefix_mask: Prefix attention mask
+            noise_rng: RNG for noise sampling
+            time_rng: RNG for time sampling
+            train: If True, return per-sample loss
+
+        Returns:
+            (loss, metrics)
+        """
+        # For action training, text tokens should not use autoregressive masking
+        prefix_ar_mask_action = jnp.zeros_like(prefix_mask, dtype=bool)
+
+        batch_shape = actions.shape[:-2]
+        noise = jax.random.normal(noise_rng, actions.shape)
+        time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
+        time_expanded = time[..., None, None]
+        x_t = time_expanded * noise + (1 - time_expanded) * actions
+        u_t = noise - actions
+        suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
+        suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
+
+        input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
+        ar_mask = jnp.concatenate([prefix_ar_mask_action, suffix_ar_mask], axis=1)
+        attn_mask = _pi0.make_attn_mask(input_mask, ar_mask)
+        positions = jnp.cumsum(input_mask, axis=1) - 1
+
+        (_, suffix_out), _ = self.PaliGemma.llm(
+            [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
+        )
+        v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+        action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
+
+        # Store loss in metrics
+        metrics = {}
+        if train:
+            metrics["action_loss"] = action_loss
+        else:
+            metrics["action_loss"] = jnp.mean(action_loss)
+
+        return action_loss, metrics
 
     @override
     def compute_loss(
@@ -514,17 +958,17 @@ class PiCoT(_pi0.Pi0):
         dict[str, at.Array],
     ]:
         preprocess_rng, stochastic_rng, noise_rng, time_rng = jax.random.split(rng, 4)
-        # Assume reasoning is already tokenized for compute_loss. For inference, we tokenize on-the-fly.
+
+        # Preprocess observation
         observation = preprocess_observation(
             preprocess_rng, observation, train=train, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
         )
 
-        # Apply stage configuration (if provided) with stochastic loss selection
+        # Determine loss configuration from stage_config or model defaults
         if stage_config is not None:
-            # Split RNG for each loss type
             langact_rng, action_rng, prediction_rng = jax.random.split(stochastic_rng, 3)
 
-            # Stochastic loss selection: enable loss with probability from stage_config
+            # Stochastic loss selection with probability-based enabling
             langact_enabled = stage_config.get("enable_langact_training", self.enable_langact_training)
             if langact_enabled and stage_config.get("langact_prob", 1.0) < 1.0:
                 langact_enabled = jax.random.uniform(langact_rng) < stage_config["langact_prob"]
@@ -537,7 +981,7 @@ class PiCoT(_pi0.Pi0):
             if prediction_enabled and stage_config.get("prediction_prob", 1.0) < 1.0:
                 prediction_enabled = jax.random.uniform(prediction_rng) < stage_config["prediction_prob"]
 
-            # Get loss weights from stage_config
+            # Get loss weights
             language_loss_weight = stage_config.get("language_loss_weight", self.language_loss_weight)
             action_loss_weight = stage_config.get("action_loss_weight", self.action_loss_weight)
             prediction_loss_weight = stage_config.get("prediction_loss_weight", self.prediction_loss_weight)
@@ -550,285 +994,53 @@ class PiCoT(_pi0.Pi0):
             action_loss_weight = self.action_loss_weight
             prediction_loss_weight = self.prediction_loss_weight
 
-        # OPTIMIZATION: Always encode ALL images once (single PaliGemma.img pass)
-        # Then extract subsets as needed for different losses
+        # OPTIMIZATION: Encode all images once, then extract subsets for different losses
         img_tokens_all, img_mask_all, img_ar_mask_all = self._embed_images(observation, num_frames=None)
-
-        # Extract first-frame embeddings from full embeddings
         img_tokens_first, img_mask_first, img_ar_mask_first = self._extract_first_frame_embeddings(
             observation, img_tokens_all, img_mask_all, img_ar_mask_all
         )
 
-        # Build prefix for langact/action losses (first frame + regular text)
-        # Pass precomputed first-frame embeddings to avoid re-encoding
+        # Build prefix for langact/action losses (first frame + text)
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(
             observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
         )
 
+        # Initialize loss accumulator and metrics
         total_loss = 0.0
         token_accuracy = jnp.array(0.0)
         critical_token_accuracy = jnp.array(0.0)
         number_token_accuracy = jnp.array(0.0)
         direction_token_accuracy = jnp.array(0.0)
-
-        # Additional metrics to return
         metrics = {}
 
-        # Cross-entropy (language/reasoning) loss
+        # Compute language/reasoning loss
         if langact_enabled:
-            attn_mask_lang = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
-            positions_lang = jnp.cumsum(prefix_mask, axis=1) - 1
-            (prefix_out, _), _ = self.PaliGemma.llm(
-                [prefix_tokens, None], mask=attn_mask_lang, positions=positions_lang
+            lang_loss, lang_metrics, token_accuracy = self._compute_language_loss(
+                observation, prefix_tokens, prefix_mask, prefix_ar_mask, train
             )
-
-            # Predict next tokens over the reasoning span
-            shift_labels = observation.tokenized_prompt[:, 1:]
-            max_len = observation.tokenized_langact_mask.shape[1]
-            shift_tokens = prefix_out[:, -max_len:-1, :]
-            shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
-
-            langact_and_pad_mask = jnp.logical_and(
-                observation.tokenized_langact_mask[:, 1:],
-                observation.tokenized_prompt_mask[:, 1:],
-            )
-
-            ex_mask = jnp.asarray(observation.sample_mask)[..., None]
-            token_mask = langact_and_pad_mask * ex_mask
-
-            lang_loss = cross_entropy_loss(
-                shift_logits,
-                shift_labels,
-                mask=token_mask,
-                axis=-1,
-                train=True,
-                per_example=True,
-            )
-            # Store per-sample loss for training (dataset tracking), scalar for validation
-            if train:
-                metrics["lang_loss"] = lang_loss
-            else:
-                metrics["lang_loss"] = jnp.mean(lang_loss)
             total_loss = total_loss + language_loss_weight * lang_loss
+            metrics.update(lang_metrics)
 
-            # Compute token accuracy
-            predictions = jnp.argmax(shift_logits, axis=-1)
-            correct = (predictions == shift_labels).astype(jnp.float32)
-            masked_correct = correct * token_mask
-            num_tokens = jnp.maximum(token_mask.sum(), 1.0)
-            token_accuracy = masked_correct.sum() / num_tokens
+            # Extract backward-compatible scalar accuracies
+            critical_token_accuracy = lang_metrics.get("critical_token_accuracy", jnp.array(0.0))
+            number_token_accuracy = lang_metrics.get("number_token_accuracy", jnp.array(0.0))
+            direction_token_accuracy = lang_metrics.get("direction_token_accuracy", jnp.array(0.0))
 
-            # Compute critical token accuracy (per-sample and scalar)
-            critical_token_mask = observation.crictical_token_mask[:, 1:] * ex_mask
-            critical_correct = correct * critical_token_mask
-            # Per-sample: sum across token dimension
-            per_sample_critical_correct = critical_correct.sum(axis=-1)  # [batch]
-            per_sample_num_critical = critical_token_mask.sum(axis=-1)  # [batch]
-            # Scalar (for backward compatibility - micro-averaged)
-            num_critical_tokens = jnp.maximum(critical_token_mask.sum(), 1.0)
-            critical_token_accuracy = critical_correct.sum() / num_critical_tokens
-            # Store per-sample counts for micro-averaging (only during training for per-dataset tracking)
-            if train:
-                metrics["per_sample_critical_correct"] = per_sample_critical_correct
-                metrics["per_sample_critical_total"] = per_sample_num_critical
-
-            # Compute number token accuracy (per-sample and scalar)
-            if observation.number_token_mask is not None:
-                number_mask = observation.number_token_mask[:, 1:] * ex_mask
-                number_correct = correct * number_mask
-                # Per-sample: sum across token dimension
-                per_sample_number_correct = number_correct.sum(axis=-1)  # [batch]
-                per_sample_num_number = number_mask.sum(axis=-1)  # [batch]
-                # Scalar (for backward compatibility - micro-averaged)
-                num_number_tokens = jnp.maximum(number_mask.sum(), 1.0)
-                number_token_accuracy = number_correct.sum() / num_number_tokens
-                metrics["number_token_accuracy"] = number_token_accuracy
-                # Store per-sample counts for micro-averaging (only during training for per-dataset tracking)
-                if train:
-                    metrics["per_sample_number_correct"] = per_sample_number_correct
-                    metrics["per_sample_number_total"] = per_sample_num_number
-
-            # Compute direction token accuracy (per-sample and scalar)
-            if observation.direction_token_mask is not None:
-                direction_mask = observation.direction_token_mask[:, 1:] * ex_mask
-                direction_correct = correct * direction_mask
-                # Per-sample: sum across token dimension
-                per_sample_direction_correct = direction_correct.sum(axis=-1)  # [batch]
-                per_sample_num_direction = direction_mask.sum(axis=-1)  # [batch]
-                # Scalar (for backward compatibility - micro-averaged)
-                num_direction_tokens = jnp.maximum(direction_mask.sum(), 1.0)
-                direction_token_accuracy = direction_correct.sum() / num_direction_tokens
-                metrics["direction_token_accuracy"] = direction_token_accuracy
-                # Store per-sample counts for micro-averaging (only during training for per-dataset tracking)
-                if train:
-                    metrics["per_sample_direction_correct"] = per_sample_direction_correct
-                    metrics["per_sample_direction_total"] = per_sample_num_direction
-
-        # Prediction (cross-entropy) loss - independent of langact loss
+        # Compute prediction loss (uses all frames)
         if prediction_enabled and observation.tokenized_prediction is not None:
-            # For Gemma3: tokenized_prediction should also contain placeholders for all frames
-            # For others: use the old approach
-            if self.use_gemma3:
-                # Embed the prediction tokenized sequence (including placeholders)
-                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
-                    observation.tokenized_prediction,
-                    observation.tokenized_prediction_mask,
-                    observation.tokenized_prediction_langact_mask,
-                )
-                # Replace placeholders with precomputed all-frame embeddings
-                prefix_tokens_pred = self._replace_image_placeholders(
-                    text_tokens_pred, observation.tokenized_prediction, img_tokens_all
-                )
-                # Replace placeholder masks with actual image masks
-                if text_ar_mask_pred is None:
-                    text_ar_mask_pred = jnp.zeros_like(text_mask_pred, dtype=bool)
-                prefix_mask_pred, prefix_ar_mask_pred = self._replace_placeholder_masks(
-                    text_mask_pred, text_ar_mask_pred, observation.tokenized_prediction, img_mask_all, img_ar_mask_all
-                )
-            else:
-                # Original approach: concatenate precomputed all-frame embeddings with text
-                text_tokens_pred, text_mask_pred, text_ar_mask_pred = self._embed_text(
-                    observation.tokenized_prediction,
-                    observation.tokenized_prediction_mask,
-                    observation.tokenized_prediction_langact_mask,
-                )
-                prefix_tokens_pred = jnp.concatenate([img_tokens_all, text_tokens_pred], axis=1)
-                prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
-                prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
-            # Use prediction-specific prefix (already built above)
-            pred_attn_mask = _pi0.make_attn_mask(prefix_mask_pred, prefix_ar_mask_pred)
-            pred_positions = jnp.cumsum(prefix_mask_pred, axis=1) - 1
-            (prefix_out_pred, _), _ = self.PaliGemma.llm(
-                [prefix_tokens_pred, None], mask=pred_attn_mask, positions=pred_positions
+            pred_loss, pred_metrics = self._compute_prediction_loss(
+                observation, img_tokens_all, img_mask_all, img_ar_mask_all, train
             )
-
-            # Predict next tokens over the prediction langact span
-            shift_labels_pred = observation.tokenized_prediction[:, 1:]
-            max_len_pred = observation.tokenized_prediction_langact_mask.shape[1]
-            shift_tokens_pred = prefix_out_pred[:, -max_len_pred:-1, :]
-            shift_logits_pred = self.PaliGemma.llm(shift_tokens_pred, method="decode")
-
-            prediction_and_pad_mask = jnp.logical_and(
-                observation.tokenized_prediction_langact_mask[:, 1:],
-                observation.tokenized_prediction_mask[:, 1:],
-            )
-
-            ex_mask_pred = (
-                jnp.asarray(observation.sample_mask)[..., None]
-                if observation.sample_mask is not None
-                else jnp.ones_like(prediction_and_pad_mask[:, :1])
-            )
-            token_mask_pred = prediction_and_pad_mask * ex_mask_pred
-
-            pred_loss = cross_entropy_loss(
-                shift_logits_pred,
-                shift_labels_pred,
-                mask=token_mask_pred,
-                axis=-1,
-                train=True,
-                per_example=True,
-            )
-            # Store per-sample loss for training (dataset tracking), scalar for validation
-            if train:
-                metrics["pred_loss"] = pred_loss
-            else:
-                metrics["pred_loss"] = jnp.mean(pred_loss)
-
-            # Compute prediction token accuracy
-            predictions_pred = jnp.argmax(shift_logits_pred, axis=-1)
-            correct_pred = (predictions_pred == shift_labels_pred).astype(jnp.float32)
-            masked_correct_pred = correct_pred * token_mask_pred
-            num_tokens_pred = jnp.maximum(token_mask_pred.sum(), 1.0)
-            pred_token_accuracy = masked_correct_pred.sum() / num_tokens_pred
-            metrics["pred_token_accuracy"] = pred_token_accuracy
-
-            # Compute prediction critical token accuracy if available (per-sample and scalar)
-            if (
-                hasattr(observation, "prediction_crictical_token_mask")
-                and observation.prediction_crictical_token_mask is not None
-            ):
-                critical_pred_mask = observation.prediction_crictical_token_mask[:, 1:] * ex_mask_pred
-                critical_correct_pred = correct_pred * critical_pred_mask
-                # Per-sample
-                per_sample_critical_correct_pred = critical_correct_pred.sum(axis=-1)  # [batch]
-                per_sample_num_critical_pred = critical_pred_mask.sum(axis=-1)  # [batch]
-                per_sample_pred_critical_token_accuracy = per_sample_critical_correct_pred / jnp.maximum(
-                    per_sample_num_critical_pred, 1.0
-                )
-                # Scalar
-                num_critical_pred = jnp.maximum(critical_pred_mask.sum(), 1.0)
-                pred_critical_token_accuracy = critical_correct_pred.sum() / num_critical_pred
-                metrics["pred_critical_token_accuracy"] = pred_critical_token_accuracy
-
-            # Compute prediction number token accuracy if available (per-sample and scalar)
-            if (
-                hasattr(observation, "prediction_number_token_mask")
-                and observation.prediction_number_token_mask is not None
-            ):
-                number_pred_mask = observation.prediction_number_token_mask[:, 1:] * ex_mask_pred
-                number_correct_pred = correct_pred * number_pred_mask
-                # Per-sample
-                per_sample_number_correct_pred = number_correct_pred.sum(axis=-1)  # [batch]
-                per_sample_num_number_pred = number_pred_mask.sum(axis=-1)  # [batch]
-                per_sample_pred_number_token_accuracy = per_sample_number_correct_pred / jnp.maximum(
-                    per_sample_num_number_pred, 1.0
-                )
-                # Scalar
-                num_number_pred = jnp.maximum(number_pred_mask.sum(), 1.0)
-                pred_number_token_accuracy = number_correct_pred.sum() / num_number_pred
-                metrics["pred_number_token_accuracy"] = pred_number_token_accuracy
-
-            # Compute prediction direction token accuracy if available (per-sample and scalar)
-            if (
-                hasattr(observation, "prediction_direction_token_mask")
-                and observation.prediction_direction_token_mask is not None
-            ):
-                direction_pred_mask = observation.prediction_direction_token_mask[:, 1:] * ex_mask_pred
-                direction_correct_pred = correct_pred * direction_pred_mask
-                # Per-sample
-                per_sample_direction_correct_pred = direction_correct_pred.sum(axis=-1)  # [batch]
-                per_sample_num_direction_pred = direction_pred_mask.sum(axis=-1)  # [batch]
-                per_sample_pred_direction_token_accuracy = per_sample_direction_correct_pred / jnp.maximum(
-                    per_sample_num_direction_pred, 1.0
-                )
-                # Scalar
-                num_direction_pred = jnp.maximum(direction_pred_mask.sum(), 1.0)
-                pred_direction_token_accuracy = direction_correct_pred.sum() / num_direction_pred
-                metrics["pred_direction_token_accuracy"] = pred_direction_token_accuracy
-
             total_loss = total_loss + prediction_loss_weight * pred_loss
+            metrics.update(pred_metrics)
 
-        # Diffusion (actions) loss. TODO: no sample mask for actions! Sample mask may only make sense for langact because it is obtained from cot_policy.is_idle_language_action
+        # Compute action diffusion loss
         if action_enabled:
-            # For action training, text tokens should not use autoregressive masking
-            # Rebuild prefix_ar_mask with all False (no autoregressive masking)
-            prefix_ar_mask_action = jnp.zeros_like(prefix_mask, dtype=bool)
-
-            batch_shape = actions.shape[:-2]
-            noise = jax.random.normal(noise_rng, actions.shape)
-            time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
-            time_expanded = time[..., None, None]
-            x_t = time_expanded * noise + (1 - time_expanded) * actions
-            u_t = noise - actions
-            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
-            suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
-
-            input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
-            ar_mask = jnp.concatenate([prefix_ar_mask_action, suffix_ar_mask], axis=1)
-            attn_mask = _pi0.make_attn_mask(input_mask, ar_mask)
-            positions = jnp.cumsum(input_mask, axis=1) - 1
-
-            (_, suffix_out), _ = self.PaliGemma.llm(
-                [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
+            action_loss, action_metrics = self._compute_action_loss(
+                observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
             )
-            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
-            action_loss = jnp.mean(jnp.square(v_t - u_t), axis=(-1, -2))
-            # Store per-sample loss for training (dataset tracking), scalar for validation
-            if train:
-                metrics["action_loss"] = action_loss
-            else:
-                metrics["action_loss"] = jnp.mean(action_loss)
             total_loss = total_loss + action_loss_weight * action_loss
+            metrics.update(action_metrics)
 
         return (
             total_loss,
@@ -838,6 +1050,36 @@ class PiCoT(_pi0.Pi0):
             direction_token_accuracy,
             metrics,
         )
+
+    def _slide_window_cache(
+        self,
+        k_cache: at.Array,
+        v_cache: at.Array,
+        p_mask: at.Array,
+        p_ar_mask: at.Array,
+    ) -> tuple[at.Array, at.Array, at.Array, at.Array]:
+        """Slide the KV cache and masks left by 1 position to free the last slot.
+
+        Args:
+            k_cache: Key cache
+            v_cache: Value cache
+            p_mask: Position mask
+            p_ar_mask: Autoregressive mask
+
+        Returns:
+            (k_cache, v_cache, p_mask, p_ar_mask) after sliding
+        """
+        # Shift caches and masks left by 1 to free the last slot
+        k_cache = jnp.concatenate([k_cache[:, :, 1:], jnp.zeros_like(k_cache[:, :, :1])], axis=2)
+        v_cache = jnp.concatenate([v_cache[:, :, 1:], jnp.zeros_like(v_cache[:, :, :1])], axis=2)
+        p_mask = jnp.concatenate([p_mask[:, 1:], jnp.zeros_like(p_mask[:, :1])], axis=1)
+        p_ar_mask = jnp.concatenate([p_ar_mask[:, 1:], jnp.zeros_like(p_ar_mask[:, :1])], axis=1)
+
+        # Maintain the scratch query column at the end
+        p_mask = p_mask.at[:, -1].set(True)
+        p_ar_mask = p_ar_mask.at[:, -1].set(True)
+
+        return k_cache, v_cache, p_mask, p_ar_mask
 
     @override
     def sample_actions(
@@ -990,14 +1232,7 @@ class PiCoT(_pi0.Pi0):
             ) = carry
 
             # Sliding window: shift caches and masks left by 1 to free the last slot
-            k_cache = jnp.concatenate([k_cache[:, :, 1:], jnp.zeros_like(k_cache[:, :, :1])], axis=2)
-            v_cache = jnp.concatenate([v_cache[:, :, 1:], jnp.zeros_like(v_cache[:, :, :1])], axis=2)
-            p_mask = jnp.concatenate([p_mask[:, 1:], jnp.zeros_like(p_mask[:, :1])], axis=1)
-            p_ar_mask = jnp.concatenate([p_ar_mask[:, 1:], jnp.zeros_like(p_ar_mask[:, :1])], axis=1)
-
-            # Maintain the scratch query column at the end
-            p_mask = p_mask.at[:, -1].set(True)
-            p_ar_mask = p_ar_mask.at[:, -1].set(True)
+            k_cache, v_cache, p_mask, p_ar_mask = self._slide_window_cache(k_cache, v_cache, p_mask, p_ar_mask)
 
             # Build attention for the single query row over the window + scratch
             attn_row = _pi0.make_attn_mask(p_mask, p_ar_mask)[:, -1:, :]  # (B,1,MAX+1)
