@@ -969,17 +969,31 @@ class PiCoT(_pi0.Pi0):
             langact_rng, action_rng, prediction_rng = jax.random.split(stochastic_rng, 3)
 
             # Stochastic loss selection with probability-based enabling
+            # Use JAX operations to avoid traced boolean conversion errors
             langact_enabled = stage_config.get("enable_langact_training", self.enable_langact_training)
-            if langact_enabled and stage_config.get("langact_prob", 1.0) < 1.0:
-                langact_enabled = jax.random.uniform(langact_rng) < stage_config["langact_prob"]
+            langact_prob = stage_config.get("langact_prob", 1.0)
+            # Apply stochastic masking: if prob < 1.0, use random sampling
+            langact_enabled = jnp.where(
+                langact_prob < 1.0,
+                langact_enabled & (jax.random.uniform(langact_rng) < langact_prob),
+                langact_enabled
+            )
 
             action_enabled = stage_config.get("enable_action_training", self.enable_action_training)
-            if action_enabled and stage_config.get("action_prob", 1.0) < 1.0:
-                action_enabled = jax.random.uniform(action_rng) < stage_config["action_prob"]
+            action_prob = stage_config.get("action_prob", 1.0)
+            action_enabled = jnp.where(
+                action_prob < 1.0,
+                action_enabled & (jax.random.uniform(action_rng) < action_prob),
+                action_enabled
+            )
 
             prediction_enabled = stage_config.get("enable_prediction_training", self.enable_prediction_training)
-            if prediction_enabled and stage_config.get("prediction_prob", 1.0) < 1.0:
-                prediction_enabled = jax.random.uniform(prediction_rng) < stage_config["prediction_prob"]
+            prediction_prob = stage_config.get("prediction_prob", 1.0)
+            prediction_enabled = jnp.where(
+                prediction_prob < 1.0,
+                prediction_enabled & (jax.random.uniform(prediction_rng) < prediction_prob),
+                prediction_enabled
+            )
 
             # Get loss weights
             language_loss_weight = stage_config.get("language_loss_weight", self.language_loss_weight)
@@ -1014,33 +1028,80 @@ class PiCoT(_pi0.Pi0):
         metrics = {}
 
         # Compute language/reasoning loss
-        if langact_enabled:
-            lang_loss, lang_metrics, token_accuracy = self._compute_language_loss(
+        # Use jax.lax.cond for efficiency when disabled, or compute and mask
+        def compute_lang_loss_fn():
+            lang_loss, lang_metrics, token_acc = self._compute_language_loss(
                 observation, prefix_tokens, prefix_mask, prefix_ar_mask, train
             )
-            total_loss = total_loss + language_loss_weight * lang_loss
-            metrics.update(lang_metrics)
+            return lang_loss, lang_metrics, token_acc
 
-            # Extract backward-compatible scalar accuracies
-            critical_token_accuracy = lang_metrics.get("critical_token_accuracy", jnp.array(0.0))
-            number_token_accuracy = lang_metrics.get("number_token_accuracy", jnp.array(0.0))
-            direction_token_accuracy = lang_metrics.get("direction_token_accuracy", jnp.array(0.0))
+        def skip_lang_loss_fn():
+            return jnp.array(0.0), {}, jnp.array(0.0)
+
+        lang_loss, lang_metrics, lang_token_accuracy = jax.lax.cond(
+            langact_enabled,
+            compute_lang_loss_fn,
+            skip_lang_loss_fn
+        )
+        total_loss = total_loss + language_loss_weight * lang_loss
+        metrics.update(lang_metrics)
+        token_accuracy = jnp.where(langact_enabled, lang_token_accuracy, token_accuracy)
+
+        # Extract backward-compatible scalar accuracies
+        critical_token_accuracy = jnp.where(
+            langact_enabled,
+            lang_metrics.get("critical_token_accuracy", jnp.array(0.0)),
+            critical_token_accuracy
+        )
+        number_token_accuracy = jnp.where(
+            langact_enabled,
+            lang_metrics.get("number_token_accuracy", jnp.array(0.0)),
+            number_token_accuracy
+        )
+        direction_token_accuracy = jnp.where(
+            langact_enabled,
+            lang_metrics.get("direction_token_accuracy", jnp.array(0.0)),
+            direction_token_accuracy
+        )
 
         # Compute prediction loss (uses all frames)
-        if prediction_enabled and observation.tokenized_prediction is not None:
+        has_prediction = observation.tokenized_prediction is not None
+        should_compute_prediction = prediction_enabled & has_prediction
+
+        def compute_pred_loss_fn():
             pred_loss, pred_metrics = self._compute_prediction_loss(
                 observation, img_tokens_all, img_mask_all, img_ar_mask_all, train
             )
-            total_loss = total_loss + prediction_loss_weight * pred_loss
-            metrics.update(pred_metrics)
+            return pred_loss, pred_metrics
+
+        def skip_pred_loss_fn():
+            return jnp.array(0.0), {}
+
+        pred_loss, pred_metrics = jax.lax.cond(
+            should_compute_prediction,
+            compute_pred_loss_fn,
+            skip_pred_loss_fn
+        )
+        total_loss = total_loss + prediction_loss_weight * pred_loss
+        metrics.update(pred_metrics)
 
         # Compute action diffusion loss
-        if action_enabled:
+        def compute_action_loss_fn():
             action_loss, action_metrics = self._compute_action_loss(
                 observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
             )
-            total_loss = total_loss + action_loss_weight * action_loss
-            metrics.update(action_metrics)
+            return action_loss, action_metrics
+
+        def skip_action_loss_fn():
+            return jnp.array(0.0), {}
+
+        action_loss, action_metrics = jax.lax.cond(
+            action_enabled,
+            compute_action_loss_fn,
+            skip_action_loss_fn
+        )
+        total_loss = total_loss + action_loss_weight * action_loss
+        metrics.update(action_metrics)
 
         return (
             total_loss,
