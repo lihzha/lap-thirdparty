@@ -1119,11 +1119,11 @@ class PiCoT(_pi0.Pi0):
                 # Add per-sample metrics when train=True to match compute_pred output
                 if train:
                     dummy_metrics["per_sample_critical_correct"] = jnp.zeros(batch_size, dtype=jnp.float32)
-                    dummy_metrics["per_sample_critical_total"] = jnp.zeros(batch_size, dtype=jnp.float32)
+                    dummy_metrics["per_sample_critical_total"] = jnp.zeros(batch_size, dtype=jnp.int32)
                     dummy_metrics["per_sample_number_correct"] = jnp.zeros(batch_size, dtype=jnp.float32)
-                    dummy_metrics["per_sample_number_total"] = jnp.zeros(batch_size, dtype=jnp.float32)
+                    dummy_metrics["per_sample_number_total"] = jnp.zeros(batch_size, dtype=jnp.int32)
                     dummy_metrics["per_sample_direction_correct"] = jnp.zeros(batch_size, dtype=jnp.float32)
-                    dummy_metrics["per_sample_direction_total"] = jnp.zeros(batch_size, dtype=jnp.float32)
+                    dummy_metrics["per_sample_direction_total"] = jnp.zeros(batch_size, dtype=jnp.int32)
                 return dummy_loss, dummy_metrics
 
             pred_loss, pred_metrics = jax.lax.cond(prediction_enabled, compute_pred, skip_pred)
