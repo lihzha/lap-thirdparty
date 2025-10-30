@@ -1,4 +1,5 @@
 import dataclasses
+import datetime
 import logging
 import math
 import os
@@ -693,7 +694,9 @@ def create_dataset_stats_plots(
         cumulative_counts_list = [cumulative_counts.get(name, 0) for name in dataset_names_sorted]
 
         fig_cumulative, ax_cumulative = plt.subplots(figsize=(12, 6))
-        bars_cumulative = ax_cumulative.bar(range(len(dataset_names_sorted)), cumulative_counts_list, color="mediumseagreen")
+        bars_cumulative = ax_cumulative.bar(
+            range(len(dataset_names_sorted)), cumulative_counts_list, color="mediumseagreen"
+        )
         ax_cumulative.set_xlabel("Dataset", fontsize=12)
         ax_cumulative.set_ylabel("Cumulative Number of Examples", fontsize=12)
         ax_cumulative.set_title("Dataset Cumulative Example Counts", fontsize=14, fontweight="bold")
@@ -1111,6 +1114,11 @@ def main(config: _config.TrainConfig):
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
 
+    # Log training start timestamp and preemption tracking info
+    training_start_timestamp = datetime.datetime.now().isoformat()
+    logging.info(f"Training started at: {training_start_timestamp}")
+    logging.info(f"Resuming from checkpoint: {resuming}")
+
     # Log training schedule information if configured
     if config.training_schedule is not None:
         logging.info("=" * 80)
@@ -1174,15 +1182,28 @@ def main(config: _config.TrainConfig):
     sharding.log_param_sharding_actual(train_state.params)
 
     # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
+    dataloader_restored = False
     if resuming:
-        train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
-        logging.info("Restored checkpoint - dataloader iterator will resume from checkpointed position")
+        try:
+            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+            dataloader_restored = True
+            logging.info("Successfully restored checkpoint and dataloader state")
+        except Exception as e:
+            logging.error(f"Failed to restore dataloader state: {e}")
+            dataloader_restored = False
 
     # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
-    data_iter = iter(data_loader)
-    log_mem("Before getting batch")
-    batch = next(data_iter)
-    vis_batch(batch, tok=tok)
+    try:
+        data_iter = iter(data_loader)
+        log_mem("Before getting batch")
+        batch = next(data_iter)
+        vis_batch(batch, tok=tok)
+        dataloader_initialized = True
+        logging.info("Successfully initialized dataloader and retrieved first batch")
+    except Exception as e:
+        logging.error(f"Failed to initialize dataloader: {e}")
+        dataloader_initialized = False
+        raise  # Re-raise the exception as this is critical
 
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
@@ -1241,6 +1262,19 @@ def main(config: _config.TrainConfig):
         else:
             num_val_batches = int(60000 / config.batch_size)  # adjust if needed
     start_step = int(train_state.step)
+
+    # Log preemption tracking information to wandb
+    if jax.process_index() == 0:
+        preemption_info = {
+            "preemption/start_timestamp": training_start_timestamp,
+            "preemption/is_resuming": float(resuming),
+            "preemption/start_step": start_step,
+            "preemption/dataloader_restored": float(dataloader_restored),
+            "preemption/dataloader_initialized": float(dataloader_initialized),
+        }
+        wandb.log(preemption_info, step=start_step)
+        logging.info(f"Logged preemption tracking info: {preemption_info}")
+
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
         initial=start_step,
