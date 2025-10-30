@@ -47,6 +47,7 @@ class DeviceConfig:
     rlds_data_dir: str
     checkpoint_base_dir: str
     language_action_dir: str | None = None
+    cache_dir: str | None = None
     fsdp_devices: int = 1
     default_batch_size: int = 256
 
@@ -55,6 +56,14 @@ class DeviceConfig:
         if self.language_action_dir is not None:
             return self.language_action_dir
         return self.rlds_data_dir.replace("OXE", "droid-base-lang-actions")
+
+    def get_cache_dir(self) -> str:
+        """Get cache directory, deriving from checkpoint_base_dir if not set."""
+        if self.cache_dir is not None:
+            return self.cache_dir
+        # Extract base bucket from checkpoint_base_dir
+        base = self.checkpoint_base_dir.rsplit("/", 1)[0] if "/" in self.checkpoint_base_dir else self.checkpoint_base_dir
+        return f"{base}/cache"
 
 
 # Centralized device registry
@@ -767,6 +776,22 @@ def create_multi_device_configs(
             **train_config_kwargs,
         }
 
+        # Handle device-specific weight loader params_path
+        if "weight_loader" in train_kwargs:
+            weight_loader = train_kwargs["weight_loader"]
+            # Check if weight_loader has params_path that needs to be device-specific
+            if hasattr(weight_loader, "params_path") and weight_loader.params_path:
+                params_path = weight_loader.params_path
+                # Extract the relative path after /cache/
+                if "/cache/" in params_path:
+                    cache_suffix = params_path.split("/cache/", 1)[1]
+                    device_cache_dir = device_cfg.get_cache_dir()
+                    device_params_path = f"{device_cache_dir}/{cache_suffix}"
+                    # Create new weight loader with device-specific params_path
+                    train_kwargs["weight_loader"] = dataclasses.replace(
+                        weight_loader, params_path=device_params_path
+                    )
+
         # Set batch_size from device default if not specified
         if "batch_size" not in train_config_kwargs:
             train_kwargs["batch_size"] = device_cfg.default_batch_size
@@ -890,8 +915,9 @@ _CONFIGS = [
         resume=True,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
     ),
-    TrainConfig(
-        name="gemma3_droid_cot_lora_v5",
+    *create_multi_device_configs(
+        base_name="gemma3_droid_cot_lora",
+        devices=["v5", "v6", "v6europe", "v4", "local"],
         model=pi_cot_config.PiCoTConfig(
             pi05=True,
             discrete_state_input=False,
@@ -900,24 +926,22 @@ _CONFIGS = [
             action_expert_variant="gemma3_300m",
             prompt_format="pi05",
         ),
-        data=RLDSCoTDataConfig(
-            repo_id="droid",
-            asset_id="droid",
-            dataset_type="droid",
-            droid_dataset_name="droid",
-            shuffle_buffer_size=400_000,
-            rlds_data_dir="gs://v5_central1_a/OXE",
-            language_action_dir="gs://v5_central1_a/droid-base-lang-actions",
-        ),
-        fsdp_devices=1,
-        batch_size=1,
-        save_interval=500,
-        keep_period=10000,
-        resume=True,
-        checkpoint_base_dir="gs://v5_central1_a/checkpoints",
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "droid",
+            "asset_id": "droid",
+            "dataset_type": "droid",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "shuffle_buffer_size": 400_000,
+        },
+        # Template path - will be replaced per device (e.g., gs://v6_east1d/cache/gemma3-4b-it for v6)
         weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="gemma3", params_path="gs://v5_central1_a/cache/gemma3-4b-it"
+            kind="checkpoint", params_path="gs://template/cache/gemma3-4b-it"
         ),
+        save_interval=500,
+        keep_period=5000,
+        resume=True,
     ),
     # Evaluation and special single-instance configs
     TrainConfig(
