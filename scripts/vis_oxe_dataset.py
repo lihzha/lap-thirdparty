@@ -164,6 +164,74 @@ def _decode_prompt_strings(obs, tokenizer) -> list[str]:
     return out
 
 
+def _format_action_array(actions: np.ndarray, max_steps: int = 3) -> str:
+    """Format action array as a human-readable string.
+
+    Args:
+        actions: Action array of shape [action_horizon, action_dim] or [action_dim]
+        max_steps: Maximum number of timesteps to display
+
+    Returns:
+        Formatted string representation
+    """
+    if actions is None or actions.size == 0:
+        return "No actions"
+
+    # Handle both [H, D] and [D] shapes
+    if len(actions.shape) == 1:
+        actions = actions[None, :]
+
+    horizon, action_dim = actions.shape
+
+    # Format first few timesteps
+    lines = []
+    actions_sum = np.sum(actions[:, :7], axis=0)
+    actions_sum[-1] = actions[-1, 6]
+    # for t in range(min(max_steps, horizon)):
+    #     # Show first 7 dims (xyz, rpy, gripper) for compactness
+    #     act = actions[t, :7]
+    #     line = f"t{t}: xyz=({act[0]:.2f},{act[1]:.2f},{act[2]:.2f}) rpy=({act[3]:.2f},{act[4]:.2f},{act[5]:.2f}) g={act[6]:.2f}"
+    #     lines.append(line)
+
+    act = actions_sum
+    line = f"xyz=({act[0]:.2f},{act[1]:.2f},{act[2]:.2f}) rpy=({act[3]:.2f},{act[4]:.2f},{act[5]:.2f}) g={act[6]:.2f}"
+
+    # if horizon > max_steps:
+    #     lines.append(f"... ({horizon - max_steps} more steps)")
+
+    # return " | ".join(lines)
+    return line
+
+
+def _extract_gt_actions(batch) -> list[str]:
+    """Extract and format ground truth actions per example.
+
+    Args:
+        batch: Tuple of (observation, actions) from dataloader
+
+    Returns:
+        List of formatted action strings, one per batch element
+    """
+    if batch is None or len(batch) < 2:
+        return []
+
+    actions = _safe_device_get(batch[1])
+    if actions is None:
+        return []
+
+    out: list[str] = []
+    batch_size = actions.shape[0]
+
+    for i in range(batch_size):
+        # Extract actions for this example
+        # Shape: [action_horizon, action_dim] or [action_dim]
+        action_chunk = actions[i]
+        formatted = _format_action_array(action_chunk, max_steps=2)
+        out.append(formatted)
+
+    return out
+
+
 def _ensure_color(img: np.ndarray | None) -> np.ndarray | None:
     if img is None:
         return None
@@ -421,6 +489,8 @@ def main(config: _config.TrainConfig):
         # Decode langact and prompt strings
         langact_texts = _decode_langact_strings(obs, tok)
         prompt_texts = _decode_prompt_strings(obs, tok)
+        # Extract ground truth actions
+        gt_action_texts = _extract_gt_actions(batch)
 
         # Visualize all camera views
         for cam_key in obs.images.keys():
@@ -438,9 +508,21 @@ def main(config: _config.TrainConfig):
                 end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
                 la_text = langact_texts[i] if i < len(langact_texts) else ""
                 prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
-                # Combine prompt and langact for display
-                combined_text = f"{prompt_text} {la_text}" if prompt_text else f"LangAct: {la_text}"
-                logging.info(f"{prompt_text} {la_text}")
+                gt_action_text = gt_action_texts[i] if i < len(gt_action_texts) else ""
+
+                # Combine prompt, langact, and GT actions for display
+                text_parts = []
+                if prompt_text:
+                    text_parts.append(f"Prompt: {prompt_text}")
+                if la_text:
+                    text_parts.append(f"LangAct: {la_text}")
+                if gt_action_text:
+                    text_parts.append(f"GT Action: {gt_action_text}")
+                combined_text = " | ".join(text_parts)
+
+                logging.info(f"[{i}] Prompt: {prompt_text} | LangAct: {la_text}")
+                logging.info(f"[{i}] GT Action: {gt_action_text}")
+
                 col1 = np.copy(_ensure_color(start_u8))
                 col2 = np.copy(_ensure_color(end_u8))
                 panels = [col1]
@@ -449,8 +531,8 @@ def main(config: _config.TrainConfig):
                 if not panels:
                     continue
                 row = np.concatenate(panels, axis=1)
-                # Single bottom overlay spanning the entire row
-                band_h_row = max(50, row.shape[0] // 8)
+                # Larger bottom overlay to fit action comparisons
+                band_h_row = max(90, row.shape[0] // 5)
                 row = _draw_text_block(
                     row, combined_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2)
                 )
