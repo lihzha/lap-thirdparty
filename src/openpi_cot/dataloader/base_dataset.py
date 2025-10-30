@@ -11,11 +11,14 @@ import psutil
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-from openpi_cot.dataloader.dataset_utils import gather_with_padding, prepare_batched_dataset
-from openpi_cot.dataloader.helpers import NormalizationType, StateEncoding, convert_action_encoding
+from openpi_cot.dataloader.dataset_utils import gather_with_padding
+from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
+from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.helpers import StateEncoding
 from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
 from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
-from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics, get_dataset_statistics
+from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
+from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 from openpi_cot.transforms import NormalizeActionAndProprio
 
 if TYPE_CHECKING:
@@ -74,13 +77,15 @@ class _SingleCoTDataset:
         self.val_fraction = getattr(self.config, "val_fraction", 0.02)
 
         # ------------------------------------------------------------------
-        # Global seeding for reproducibility across dataset ops
-        # ------------------------------------------------------------------
-        tf.random.set_seed(self.seed)
         # Configure Tensorflow with no GPU/TPU devices to avoid clobbering JAX/TPU runtime
+        # ------------------------------------------------------------------
         tf.config.set_visible_devices([], "GPU")
         with contextlib.suppress(Exception):
             tf.config.set_visible_devices([], "TPU")
+
+        # Set global seed for file-level operations (shuffle, interleave)
+        # Data-level randomness uses stateless ops with explicit seeds
+        tf.random.set_seed(self.seed)
 
         self.builder = self.build_dataset_builder(dataset_name, data_dir)
 
@@ -185,6 +190,8 @@ class _SingleCoTDataset:
 
     def build_dataset(self, builder):
         opts = tf.data.Options()
+        # Always use deterministic operations for reproducibility
+        # File interleaving will be deterministic but still provide good mixing
         opts.experimental_deterministic = bool(self.want_val)
         opts.experimental_optimization.map_parallelization = True
         opts.experimental_optimization.parallel_batch = True
@@ -194,7 +201,7 @@ class _SingleCoTDataset:
         dataset = dl.DLataset.from_rlds(
             builder,
             split="all",
-            shuffle=bool(not self.want_val),  # shuffle at file/shard level for first-level randomness
+            shuffle=bool(not self.want_val),  # shuffle at file/shard level for deterministic interleaving
             num_parallel_reads=self.num_parallel_reads,
         )
         dataset = dataset.shard(jax.process_count(), jax.process_index())
@@ -268,7 +275,8 @@ class _SingleCoTDataset:
 
             # Use unified gather function with proper zero-padding
             traj[action_key] = gather_with_padding(
-                data=traj[action_key],
+                # data=traj[action_key],
+                data=traj["raw_action"],
                 sequence_length=traj_len,
                 window_size=action_horizon,
             )
@@ -480,7 +488,7 @@ class _SingleCoTDataset:
             it doesn't use device-specific optimizations, but it can be checkpointed.
         """
         # If standalone mode with stored params, create checkpointable version
-        if hasattr(self, '_pre_batched_dataset') and hasattr(self, '_prepare_batched_params'):
+        if hasattr(self, "_pre_batched_dataset") and hasattr(self, "_prepare_batched_params"):
             checkpointable_dataset = prepare_batched_dataset(
                 dataset=self._pre_batched_dataset,
                 checkpointable=True,
@@ -488,11 +496,11 @@ class _SingleCoTDataset:
             )
             # Return iterator from underlying TensorFlow dataset, not dlimp wrapper
             # This ensures compatibility with TensorFlow's checkpoint mechanism
-            if hasattr(checkpointable_dataset, 'dataset'):
+            if hasattr(checkpointable_dataset, "dataset"):
                 return iter(checkpointable_dataset.dataset)
             return iter(checkpointable_dataset)
         # Fallback to regular dataset (non-standalone mode)
-        if hasattr(self.dataset, 'dataset'):
+        if hasattr(self.dataset, "dataset"):
             return iter(self.dataset.dataset)
         return iter(self.dataset)
 
