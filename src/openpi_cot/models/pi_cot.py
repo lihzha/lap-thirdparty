@@ -1063,11 +1063,10 @@ class PiCoT(_pi0.Pi0):
 
         def skip_lang():
             # Return same structure with zeros - must match _compute_language_loss return type exactly
+            # NOTE: Loss is ALWAYS per-sample (batch_size), regardless of train flag
             batch_size = observation.tokenized_prompt.shape[0]
-            if train:
-                dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
-            else:
-                dummy_loss = jnp.array(0.0, dtype=jnp.float32)
+            dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
+
             dummy_metrics = {
                 "lang_loss": jnp.zeros(batch_size, dtype=jnp.float32) if train else jnp.array(0.0, dtype=jnp.float32),
                 "token_accuracy": jnp.array(0.0, dtype=jnp.float32),
@@ -1104,11 +1103,10 @@ class PiCoT(_pi0.Pi0):
                 return self._compute_prediction_loss(observation, img_tokens_all, img_mask_all, img_ar_mask_all, train)
 
             def skip_pred():
+                # NOTE: Loss is ALWAYS per-sample (batch_size), regardless of train flag
                 batch_size = observation.tokenized_prediction.shape[0]
-                if train:
-                    dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
-                else:
-                    dummy_loss = jnp.array(0.0, dtype=jnp.float32)
+                dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
+
                 dummy_metrics = {
                     "pred_loss": jnp.zeros(batch_size, dtype=jnp.float32)
                     if train
@@ -1131,11 +1129,10 @@ class PiCoT(_pi0.Pi0):
             )
 
         def skip_action():
+            # NOTE: Loss is ALWAYS per-sample (batch_size), regardless of train flag
             batch_size = actions.shape[0]
-            if train:
-                dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
-            else:
-                dummy_loss = jnp.array(0.0, dtype=jnp.float32)
+            dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
+
             dummy_metrics = {
                 "action_loss": jnp.zeros(batch_size, dtype=jnp.float32) if train else jnp.array(0.0, dtype=jnp.float32)
             }
