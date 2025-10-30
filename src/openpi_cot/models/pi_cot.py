@@ -1028,79 +1028,50 @@ class PiCoT(_pi0.Pi0):
         metrics = {}
 
         # Compute language/reasoning loss
-        # Use jax.lax.cond for efficiency when disabled, or compute and mask
-        def compute_lang_loss_fn():
-            lang_loss, lang_metrics, token_acc = self._compute_language_loss(
-                observation, prefix_tokens, prefix_mask, prefix_ar_mask, train
-            )
-            return lang_loss, lang_metrics, token_acc
-
-        def skip_lang_loss_fn():
-            return jnp.array(0.0), {}, jnp.array(0.0)
-
-        lang_loss, lang_metrics, lang_token_accuracy = jax.lax.cond(
-            langact_enabled,
-            compute_lang_loss_fn,
-            skip_lang_loss_fn
+        # Always compute but mask to zero when disabled (avoids structure mismatch with jax.lax.cond)
+        lang_loss, lang_metrics, lang_token_accuracy = self._compute_language_loss(
+            observation, prefix_tokens, prefix_mask, prefix_ar_mask, train
         )
+        # Apply enable flag by masking the loss
+        lang_loss = jnp.where(langact_enabled, lang_loss, 0.0)
         total_loss = total_loss + language_loss_weight * lang_loss
-        metrics.update(lang_metrics)
-        token_accuracy = jnp.where(langact_enabled, lang_token_accuracy, token_accuracy)
 
-        # Extract backward-compatible scalar accuracies
-        critical_token_accuracy = jnp.where(
-            langact_enabled,
-            lang_metrics.get("critical_token_accuracy", jnp.array(0.0)),
-            critical_token_accuracy
-        )
-        number_token_accuracy = jnp.where(
-            langact_enabled,
-            lang_metrics.get("number_token_accuracy", jnp.array(0.0)),
-            number_token_accuracy
-        )
-        direction_token_accuracy = jnp.where(
-            langact_enabled,
-            lang_metrics.get("direction_token_accuracy", jnp.array(0.0)),
-            direction_token_accuracy
-        )
+        # Mask metrics when disabled
+        for key, value in lang_metrics.items():
+            lang_metrics[key] = jnp.where(langact_enabled, value, 0.0)
+        metrics.update(lang_metrics)
+
+        token_accuracy = jnp.where(langact_enabled, lang_token_accuracy, token_accuracy)
+        critical_token_accuracy = lang_metrics.get("critical_token_accuracy", jnp.array(0.0))
+        number_token_accuracy = lang_metrics.get("number_token_accuracy", jnp.array(0.0))
+        direction_token_accuracy = lang_metrics.get("direction_token_accuracy", jnp.array(0.0))
 
         # Compute prediction loss (uses all frames)
-        has_prediction = observation.tokenized_prediction is not None
-        should_compute_prediction = prediction_enabled & has_prediction
-
-        def compute_pred_loss_fn():
+        # Only compute if tokenized_prediction exists
+        if observation.tokenized_prediction is not None:
             pred_loss, pred_metrics = self._compute_prediction_loss(
                 observation, img_tokens_all, img_mask_all, img_ar_mask_all, train
             )
-            return pred_loss, pred_metrics
+            # Apply enable flag by masking the loss
+            pred_loss = jnp.where(prediction_enabled, pred_loss, 0.0)
+            total_loss = total_loss + prediction_loss_weight * pred_loss
 
-        def skip_pred_loss_fn():
-            return jnp.array(0.0), {}
-
-        pred_loss, pred_metrics = jax.lax.cond(
-            should_compute_prediction,
-            compute_pred_loss_fn,
-            skip_pred_loss_fn
-        )
-        total_loss = total_loss + prediction_loss_weight * pred_loss
-        metrics.update(pred_metrics)
+            # Mask metrics when disabled
+            for key, value in pred_metrics.items():
+                pred_metrics[key] = jnp.where(prediction_enabled, value, 0.0)
+            metrics.update(pred_metrics)
 
         # Compute action diffusion loss
-        def compute_action_loss_fn():
-            action_loss, action_metrics = self._compute_action_loss(
-                observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
-            )
-            return action_loss, action_metrics
-
-        def skip_action_loss_fn():
-            return jnp.array(0.0), {}
-
-        action_loss, action_metrics = jax.lax.cond(
-            action_enabled,
-            compute_action_loss_fn,
-            skip_action_loss_fn
+        action_loss, action_metrics = self._compute_action_loss(
+            observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
         )
+        # Apply enable flag by masking the loss
+        action_loss = jnp.where(action_enabled, action_loss, 0.0)
         total_loss = total_loss + action_loss_weight * action_loss
+
+        # Mask metrics when disabled
+        for key, value in action_metrics.items():
+            action_metrics[key] = jnp.where(action_enabled, value, 0.0)
         metrics.update(action_metrics)
 
         return (
