@@ -62,7 +62,9 @@ class DeviceConfig:
         if self.cache_dir is not None:
             return self.cache_dir
         # Extract base bucket from checkpoint_base_dir
-        base = self.checkpoint_base_dir.rsplit("/", 1)[0] if "/" in self.checkpoint_base_dir else self.checkpoint_base_dir
+        base = (
+            self.checkpoint_base_dir.rsplit("/", 1)[0] if "/" in self.checkpoint_base_dir else self.checkpoint_base_dir
+        )
         return f"{base}/cache"
 
 
@@ -788,9 +790,7 @@ def create_multi_device_configs(
                     device_cache_dir = device_cfg.get_cache_dir()
                     device_params_path = f"{device_cache_dir}/{cache_suffix}"
                     # Create new weight loader with device-specific params_path
-                    train_kwargs["weight_loader"] = dataclasses.replace(
-                        weight_loader, params_path=device_params_path
-                    )
+                    train_kwargs["weight_loader"] = dataclasses.replace(weight_loader, params_path=device_params_path)
 
         # Set batch_size from device default if not specified
         if "batch_size" not in train_config_kwargs:
@@ -932,13 +932,11 @@ _CONFIGS = [
             "asset_id": "droid",
             "dataset_type": "droid",
             "droid_dataset_name": "droid",
-            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "data_mix": "droid",
             "shuffle_buffer_size": 400_000,
         },
         # Template path - will be replaced per device (e.g., gs://v6_east1d/cache/gemma3-4b-it for v6)
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint", params_path="gs://template/cache/gemma3-4b-it"
-        ),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://template/cache/gemma3-4b-it"),
         save_interval=500,
         keep_period=5000,
         resume=True,
