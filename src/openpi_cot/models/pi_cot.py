@@ -452,8 +452,7 @@ class PiCoT(_pi0.Pi0):
         # Build prefix using appropriate strategy for model variant
         if self.use_gemma3 and obs.tokenized_prompt is not None:
             return self._build_prefix_gemma3(obs, img_tokens, img_mask, img_ar_mask)
-        else:
-            return self._build_prefix_legacy(obs, img_tokens, img_mask, img_ar_mask)
+        return self._build_prefix_legacy(obs, img_tokens, img_mask, img_ar_mask)
 
     def _prepare_token_mask(
         self,
@@ -619,9 +618,7 @@ class PiCoT(_pi0.Pi0):
         """
         attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        (prefix_out, _), kv_cache = self.PaliGemma.llm(
-            [prefix_tokens, None], mask=attn_mask, positions=positions
-        )
+        (prefix_out, _), kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=attn_mask, positions=positions)
         return prefix_out, kv_cache
 
     def _build_prefix_gemma3(
@@ -746,9 +743,25 @@ class PiCoT(_pi0.Pi0):
 
         # Prepare additional masks for accuracy computation
         ex_mask = jnp.asarray(observation.sample_mask)[..., None] if observation.sample_mask is not None else None
-        critical_mask = observation.crictical_token_mask[:, 1:] * ex_mask if ex_mask is not None else observation.crictical_token_mask[:, 1:]
-        number_mask = observation.number_token_mask[:, 1:] * ex_mask if observation.number_token_mask is not None and ex_mask is not None else observation.number_token_mask[:, 1:] if observation.number_token_mask is not None else None
-        direction_mask = observation.direction_token_mask[:, 1:] * ex_mask if observation.direction_token_mask is not None and ex_mask is not None else observation.direction_token_mask[:, 1:] if observation.direction_token_mask is not None else None
+        critical_mask = (
+            observation.crictical_token_mask[:, 1:] * ex_mask
+            if ex_mask is not None
+            else observation.crictical_token_mask[:, 1:]
+        )
+        number_mask = (
+            observation.number_token_mask[:, 1:] * ex_mask
+            if observation.number_token_mask is not None and ex_mask is not None
+            else observation.number_token_mask[:, 1:]
+            if observation.number_token_mask is not None
+            else None
+        )
+        direction_mask = (
+            observation.direction_token_mask[:, 1:] * ex_mask
+            if observation.direction_token_mask is not None and ex_mask is not None
+            else observation.direction_token_mask[:, 1:]
+            if observation.direction_token_mask is not None
+            else None
+        )
 
         # Compute loss and metrics
         loss, metrics = self._compute_cross_entropy_with_metrics(
@@ -840,16 +853,37 @@ class PiCoT(_pi0.Pi0):
         # Prepare additional masks for accuracy computation
         ex_mask_pred = jnp.asarray(observation.sample_mask)[..., None] if observation.sample_mask is not None else None
         critical_pred_mask = None
-        if hasattr(observation, "prediction_crictical_token_mask") and observation.prediction_crictical_token_mask is not None:
-            critical_pred_mask = observation.prediction_crictical_token_mask[:, 1:] * ex_mask_pred if ex_mask_pred is not None else observation.prediction_crictical_token_mask[:, 1:]
+        if (
+            hasattr(observation, "prediction_crictical_token_mask")
+            and observation.prediction_crictical_token_mask is not None
+        ):
+            critical_pred_mask = (
+                observation.prediction_crictical_token_mask[:, 1:] * ex_mask_pred
+                if ex_mask_pred is not None
+                else observation.prediction_crictical_token_mask[:, 1:]
+            )
 
         number_pred_mask = None
-        if hasattr(observation, "prediction_number_token_mask") and observation.prediction_number_token_mask is not None:
-            number_pred_mask = observation.prediction_number_token_mask[:, 1:] * ex_mask_pred if ex_mask_pred is not None else observation.prediction_number_token_mask[:, 1:]
+        if (
+            hasattr(observation, "prediction_number_token_mask")
+            and observation.prediction_number_token_mask is not None
+        ):
+            number_pred_mask = (
+                observation.prediction_number_token_mask[:, 1:] * ex_mask_pred
+                if ex_mask_pred is not None
+                else observation.prediction_number_token_mask[:, 1:]
+            )
 
         direction_pred_mask = None
-        if hasattr(observation, "prediction_direction_token_mask") and observation.prediction_direction_token_mask is not None:
-            direction_pred_mask = observation.prediction_direction_token_mask[:, 1:] * ex_mask_pred if ex_mask_pred is not None else observation.prediction_direction_token_mask[:, 1:]
+        if (
+            hasattr(observation, "prediction_direction_token_mask")
+            and observation.prediction_direction_token_mask is not None
+        ):
+            direction_pred_mask = (
+                observation.prediction_direction_token_mask[:, 1:] * ex_mask_pred
+                if ex_mask_pred is not None
+                else observation.prediction_direction_token_mask[:, 1:]
+            )
 
         # Compute loss and metrics
         pred_loss, pred_metrics = self._compute_cross_entropy_with_metrics(
@@ -974,17 +1008,13 @@ class PiCoT(_pi0.Pi0):
             langact_prob = stage_config.get("langact_prob", 1.0)
             # Apply stochastic masking: if prob < 1.0, use random sampling
             langact_enabled = jnp.where(
-                langact_prob < 1.0,
-                langact_enabled & (jax.random.uniform(langact_rng) < langact_prob),
-                langact_enabled
+                langact_prob < 1.0, langact_enabled & (jax.random.uniform(langact_rng) < langact_prob), langact_enabled
             )
 
             action_enabled = stage_config.get("enable_action_training", self.enable_action_training)
             action_prob = stage_config.get("action_prob", 1.0)
             action_enabled = jnp.where(
-                action_prob < 1.0,
-                action_enabled & (jax.random.uniform(action_rng) < action_prob),
-                action_enabled
+                action_prob < 1.0, action_enabled & (jax.random.uniform(action_rng) < action_prob), action_enabled
             )
 
             prediction_enabled = stage_config.get("enable_prediction_training", self.enable_prediction_training)
@@ -992,7 +1022,7 @@ class PiCoT(_pi0.Pi0):
             prediction_enabled = jnp.where(
                 prediction_prob < 1.0,
                 prediction_enabled & (jax.random.uniform(prediction_rng) < prediction_prob),
-                prediction_enabled
+                prediction_enabled,
             )
 
             # Get loss weights
@@ -1032,36 +1062,34 @@ class PiCoT(_pi0.Pi0):
             return self._compute_language_loss(observation, prefix_tokens, prefix_mask, prefix_ar_mask, train)
 
         def skip_lang():
-            # Return same structure with zeros - must match _compute_language_loss return type
+            # Return same structure with zeros - must match _compute_language_loss return type exactly
             batch_size = observation.tokenized_prompt.shape[0]
             if train:
-                dummy_loss = jnp.zeros(batch_size)
+                dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
             else:
-                dummy_loss = jnp.array(0.0)
+                dummy_loss = jnp.array(0.0, dtype=jnp.float32)
             dummy_metrics = {
-                "lang_loss": jnp.array(0.0),
-                "token_accuracy": jnp.array(0.0),
-                "critical_token_accuracy": jnp.array(0.0),
-                "number_token_accuracy": jnp.array(0.0),
-                "direction_token_accuracy": jnp.array(0.0),
+                "lang_loss": jnp.zeros(batch_size, dtype=jnp.float32) if train else jnp.array(0.0, dtype=jnp.float32),
+                "token_accuracy": jnp.array(0.0, dtype=jnp.float32),
+                "critical_token_accuracy": jnp.array(0.0, dtype=jnp.float32),
+                "number_token_accuracy": jnp.array(0.0, dtype=jnp.float32),
+                "direction_token_accuracy": jnp.array(0.0, dtype=jnp.float32),
             }
-            # Add per-sample metrics if training
+            # Add per-sample metrics if training (must match dtypes: float32 for correct, int32 for total)
             if train:
-                dummy_metrics.update({
-                    "per_sample_critical_correct": jnp.zeros(batch_size),
-                    "per_sample_critical_total": jnp.zeros(batch_size),
-                    "per_sample_number_correct": jnp.zeros(batch_size),
-                    "per_sample_number_total": jnp.zeros(batch_size),
-                    "per_sample_direction_correct": jnp.zeros(batch_size),
-                    "per_sample_direction_total": jnp.zeros(batch_size),
-                })
-            return dummy_loss, dummy_metrics, jnp.array(0.0)
+                dummy_metrics.update(
+                    {
+                        "per_sample_critical_correct": jnp.zeros(batch_size, dtype=jnp.float32),
+                        "per_sample_critical_total": jnp.zeros(batch_size, dtype=jnp.int32),
+                        "per_sample_number_correct": jnp.zeros(batch_size, dtype=jnp.float32),
+                        "per_sample_number_total": jnp.zeros(batch_size, dtype=jnp.int32),
+                        "per_sample_direction_correct": jnp.zeros(batch_size, dtype=jnp.float32),
+                        "per_sample_direction_total": jnp.zeros(batch_size, dtype=jnp.int32),
+                    }
+                )
+            return dummy_loss, dummy_metrics, jnp.array(0.0, dtype=jnp.float32)
 
-        lang_loss, lang_metrics, lang_token_accuracy = jax.lax.cond(
-            langact_enabled,
-            compute_lang,
-            skip_lang
-        )
+        lang_loss, lang_metrics, lang_token_accuracy = jax.lax.cond(langact_enabled, compute_lang, skip_lang)
         total_loss = total_loss + language_loss_weight * lang_loss
         metrics.update(lang_metrics)
         token_accuracy = lang_token_accuracy
@@ -1071,31 +1099,28 @@ class PiCoT(_pi0.Pi0):
 
         # Compute prediction loss (conditionally, only if tokenized_prediction exists)
         if observation.tokenized_prediction is not None:
+
             def compute_pred():
-                return self._compute_prediction_loss(
-                    observation, img_tokens_all, img_mask_all, img_ar_mask_all, train
-                )
+                return self._compute_prediction_loss(observation, img_tokens_all, img_mask_all, img_ar_mask_all, train)
 
             def skip_pred():
                 batch_size = observation.tokenized_prediction.shape[0]
                 if train:
-                    dummy_loss = jnp.zeros(batch_size)
+                    dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
                 else:
-                    dummy_loss = jnp.array(0.0)
+                    dummy_loss = jnp.array(0.0, dtype=jnp.float32)
                 dummy_metrics = {
-                    "pred_loss": jnp.array(0.0),
-                    "pred_token_accuracy": jnp.array(0.0),
-                    "pred_critical_token_accuracy": jnp.array(0.0),
-                    "pred_number_token_accuracy": jnp.array(0.0),
-                    "pred_direction_token_accuracy": jnp.array(0.0),
+                    "pred_loss": jnp.zeros(batch_size, dtype=jnp.float32)
+                    if train
+                    else jnp.array(0.0, dtype=jnp.float32),
+                    "pred_token_accuracy": jnp.array(0.0, dtype=jnp.float32),
+                    "pred_critical_token_accuracy": jnp.array(0.0, dtype=jnp.float32),
+                    "pred_number_token_accuracy": jnp.array(0.0, dtype=jnp.float32),
+                    "pred_direction_token_accuracy": jnp.array(0.0, dtype=jnp.float32),
                 }
                 return dummy_loss, dummy_metrics
 
-            pred_loss, pred_metrics = jax.lax.cond(
-                prediction_enabled,
-                compute_pred,
-                skip_pred
-            )
+            pred_loss, pred_metrics = jax.lax.cond(prediction_enabled, compute_pred, skip_pred)
             total_loss = total_loss + prediction_loss_weight * pred_loss
             metrics.update(pred_metrics)
 
@@ -1108,17 +1133,15 @@ class PiCoT(_pi0.Pi0):
         def skip_action():
             batch_size = actions.shape[0]
             if train:
-                dummy_loss = jnp.zeros(batch_size)
+                dummy_loss = jnp.zeros(batch_size, dtype=jnp.float32)
             else:
-                dummy_loss = jnp.array(0.0)
-            dummy_metrics = {"action_loss": jnp.array(0.0)}
+                dummy_loss = jnp.array(0.0, dtype=jnp.float32)
+            dummy_metrics = {
+                "action_loss": jnp.zeros(batch_size, dtype=jnp.float32) if train else jnp.array(0.0, dtype=jnp.float32)
+            }
             return dummy_loss, dummy_metrics
 
-        action_loss, action_metrics = jax.lax.cond(
-            action_enabled,
-            compute_action,
-            skip_action
-        )
+        action_loss, action_metrics = jax.lax.cond(action_enabled, compute_action, skip_action)
         total_loss = total_loss + action_loss_weight * action_loss
         metrics.update(action_metrics)
 
