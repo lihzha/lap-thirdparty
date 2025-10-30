@@ -206,39 +206,39 @@ class DroidCoTDataset(_SingleCoTDataset):
             def _sample_from_table():
                 # Check if instr_bytes is empty (default value)
                 # If empty, return empty string - these will be filtered by _has_instruction later
-                # def _select_random_instruction():
-                #     parsed_instructions = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
-                #     num_instructions = tf.shape(parsed_instructions)[0]
-                #     random_idx = tf.random.stateless_uniform(
-                #         shape=[],
-                #         seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)],
-                #         minval=0,
-                #         maxval=num_instructions,
-                #         dtype=tf.int32,
-                #     )
-                #     return tf.gather(parsed_instructions, random_idx)
+                def _select_random_instruction():
+                    parsed_instructions = tf.io.parse_tensor(instr_bytes, out_type=tf.string)
+                    num_instructions = tf.shape(parsed_instructions)[0]
+                    # Use stateless random with episode-specific seed
+                    random_idx = tf.random.stateless_uniform(
+                        shape=[],
+                        seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)],
+                        minval=0,
+                        maxval=num_instructions,
+                        dtype=tf.int32,
+                    )
+                    return tf.gather(parsed_instructions, random_idx)
 
                 return tf.cond(
                     tf.logical_and(
                         tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
                         tf.greater(tf.strings.length(instr_bytes), 10),
                     ),
-                    # _select_random_instruction,
-                    lambda: tf.random.shuffle(tf.io.parse_tensor(instr_bytes, out_type=tf.string), seed=self.seed)[0],
+                    _select_random_instruction,
                     lambda: tf.constant("", dtype=tf.string),
                 )
 
             instruction = _sample_from_table()
             instruction_vec = tf.fill([tf.shape(actions)[0]], instruction)
 
-            # # Randomly samples one of the two exterior images in DROID during training (we only train with one at a time).
-            # # Note: the "left" refers to the left camera in the stereo pair, we only train on the left camera.
-            # random_val = tf.random.stateless_uniform(
-            #     shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
-            # )
+            # Randomly samples one of the two exterior images in DROID during training (we only train with one at a time).
+            # Note: the "left" refers to the left camera in the stereo pair, we only train on the left camera.
+            # Use stateless random with episode-specific seed
+            random_val = tf.random.stateless_uniform(
+                shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
+            )
             exterior_img = tf.cond(
-                # random_val > 0.5,
-                tf.random.uniform(shape=[], seed=self.seed) > 0.5,
+                random_val > 0.5,
                 lambda: traj["observation"][self.spec.images_list[0]],
                 lambda: traj["observation"][self.spec.images_list[1]],
             )
