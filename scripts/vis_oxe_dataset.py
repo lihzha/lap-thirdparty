@@ -491,6 +491,7 @@ def main(config: _config.TrainConfig):
         prompt_texts = _decode_prompt_strings(obs, tok)
         # Extract ground truth actions
         gt_action_texts = _extract_gt_actions(batch)
+        breakpoint()
 
         # Visualize all camera views
         for cam_key in obs.images.keys():
