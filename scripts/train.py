@@ -315,6 +315,8 @@ class DatasetStatsTracker:
         #  "critical_correct": int, "critical_total": int,
         #  "number_correct": int, "number_total": int,
         #  "direction_correct": int, "direction_total": int}}
+        # Track cumulative counts separately (never reset)
+        self.cumulative_counts = {}  # {dataset_name: int}
 
     def update(
         self,
@@ -347,6 +349,11 @@ class DatasetStatsTracker:
                 }
             self.dataset_stats[name]["total_loss"] += float(losses[idx])
             self.dataset_stats[name]["count"] += 1
+
+            # Update cumulative counts (never reset)
+            if name not in self.cumulative_counts:
+                self.cumulative_counts[name] = 0
+            self.cumulative_counts[name] += 1
 
             # Micro-averaging: accumulate token-level counts
             if critical_token_data is not None:
@@ -389,10 +396,15 @@ class DatasetStatsTracker:
                     avg_direction_acc = stats["direction_correct"] / stats["direction_total"]
                     metrics[f"dataset/{dataset_name}/avg_direction_token_acc"] = avg_direction_acc
                     metrics[f"dataset/{dataset_name}/direction_token_count"] = stats["direction_total"]
+
+        # Add cumulative counts (never reset)
+        for dataset_name, cumulative_count in self.cumulative_counts.items():
+            metrics[f"dataset/{dataset_name}/cumulative_count"] = cumulative_count
+
         return metrics
 
     def reset(self):
-        """Reset all accumulated statistics."""
+        """Reset accumulated statistics for the current log interval. Cumulative counts are preserved."""
         self.dataset_stats = {}
 
 
@@ -592,7 +604,9 @@ def gather_dataset_info_multihost(
     return all_decoded_names, all_losses
 
 
-def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> dict[str, plt.Figure]:
+def create_dataset_stats_plots(
+    dataset_stats: dict[str, dict[str, float]], cumulative_counts: dict[str, int] | None = None
+) -> dict[str, plt.Figure]:
     """Create bar plots for dataset statistics.
 
     Args:
@@ -602,9 +616,10 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
             "number_correct": int, "number_total": int,
             "direction_correct": int, "direction_total": int
         }
+        cumulative_counts: Optional dictionary mapping dataset names to cumulative counts
 
     Returns:
-        Dictionary with 'counts', 'avg_loss', 'avg_critical_token_acc', 'avg_number_token_acc', 'avg_direction_token_acc' matplotlib figures
+        Dictionary with 'counts', 'cumulative_counts', 'avg_loss', 'avg_critical_token_acc', 'avg_number_token_acc', 'avg_direction_token_acc' matplotlib figures
     """
     if not dataset_stats:
         return {}
@@ -671,6 +686,35 @@ def create_dataset_stats_plots(dataset_stats: dict[str, dict[str, float]]) -> di
 
     plt.tight_layout()
     plots["counts"] = fig_counts
+
+    # Create cumulative counts bar plot if available
+    if cumulative_counts:
+        # Get cumulative counts for datasets that are in dataset_stats
+        cumulative_counts_list = [cumulative_counts.get(name, 0) for name in dataset_names_sorted]
+
+        fig_cumulative, ax_cumulative = plt.subplots(figsize=(12, 6))
+        bars_cumulative = ax_cumulative.bar(range(len(dataset_names_sorted)), cumulative_counts_list, color="mediumseagreen")
+        ax_cumulative.set_xlabel("Dataset", fontsize=12)
+        ax_cumulative.set_ylabel("Cumulative Number of Examples", fontsize=12)
+        ax_cumulative.set_title("Dataset Cumulative Example Counts", fontsize=14, fontweight="bold")
+        ax_cumulative.set_xticks(range(len(dataset_names_sorted)))
+        ax_cumulative.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+        ax_cumulative.grid(axis="y", alpha=0.3)
+
+        # Add value labels on top of bars
+        for i, (bar, count) in enumerate(zip(bars_cumulative, cumulative_counts_list)):
+            height = bar.get_height()
+            ax_cumulative.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{int(count)}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+
+        plt.tight_layout()
+        plots["cumulative_counts"] = fig_cumulative
 
     # Create average loss bar plot
     fig_loss, ax_loss = plt.subplots(figsize=(12, 6))
@@ -1347,12 +1391,17 @@ def main(config: _config.TrainConfig):
 
                 # Create and log dataset statistics bar plots
                 if dataset_stats_tracker.dataset_stats:
-                    plots = create_dataset_stats_plots(dataset_stats_tracker.dataset_stats)
+                    plots = create_dataset_stats_plots(
+                        dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_counts
+                    )
                     if plots:
                         log_dict = {
                             "dataset_stats/counts_plot": wandb.Image(plots["counts"]),
                             "dataset_stats/avg_loss_plot": wandb.Image(plots["avg_loss"]),
                         }
+                        # Add cumulative counts plot if available
+                        if "cumulative_counts" in plots:
+                            log_dict["dataset_stats/cumulative_counts_plot"] = wandb.Image(plots["cumulative_counts"])
                         # Add critical token accuracy plot if available
                         if "avg_critical_token_acc" in plots:
                             log_dict["dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(
@@ -1372,6 +1421,8 @@ def main(config: _config.TrainConfig):
                         # Close figures to prevent memory leaks
                         plt.close(plots["counts"])
                         plt.close(plots["avg_loss"])
+                        if "cumulative_counts" in plots:
+                            plt.close(plots["cumulative_counts"])
                         if "avg_critical_token_acc" in plots:
                             plt.close(plots["avg_critical_token_acc"])
                         if "avg_number_token_acc" in plots:

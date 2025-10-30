@@ -1027,51 +1027,99 @@ class PiCoT(_pi0.Pi0):
         direction_token_accuracy = jnp.array(0.0)
         metrics = {}
 
-        # Compute language/reasoning loss
-        # Always compute but mask to zero when disabled (avoids structure mismatch with jax.lax.cond)
-        lang_loss, lang_metrics, lang_token_accuracy = self._compute_language_loss(
-            observation, prefix_tokens, prefix_mask, prefix_ar_mask, train
+        # Compute language/reasoning loss (conditionally)
+        def compute_lang():
+            return self._compute_language_loss(observation, prefix_tokens, prefix_mask, prefix_ar_mask, train)
+
+        def skip_lang():
+            # Return same structure with zeros - must match _compute_language_loss return type
+            batch_size = observation.tokenized_prompt.shape[0]
+            if train:
+                dummy_loss = jnp.zeros(batch_size)
+            else:
+                dummy_loss = jnp.array(0.0)
+            dummy_metrics = {
+                "lang_loss": jnp.array(0.0),
+                "token_accuracy": jnp.array(0.0),
+                "critical_token_accuracy": jnp.array(0.0),
+                "number_token_accuracy": jnp.array(0.0),
+                "direction_token_accuracy": jnp.array(0.0),
+            }
+            # Add per-sample metrics if training
+            if train:
+                dummy_metrics.update({
+                    "per_sample_critical_correct": jnp.zeros(batch_size),
+                    "per_sample_critical_total": jnp.zeros(batch_size),
+                    "per_sample_number_correct": jnp.zeros(batch_size),
+                    "per_sample_number_total": jnp.zeros(batch_size),
+                    "per_sample_direction_correct": jnp.zeros(batch_size),
+                    "per_sample_direction_total": jnp.zeros(batch_size),
+                })
+            return dummy_loss, dummy_metrics, jnp.array(0.0)
+
+        lang_loss, lang_metrics, lang_token_accuracy = jax.lax.cond(
+            langact_enabled,
+            compute_lang,
+            skip_lang
         )
-        # Apply enable flag by masking the loss
-        lang_loss = jnp.where(langact_enabled, lang_loss, 0.0)
         total_loss = total_loss + language_loss_weight * lang_loss
-
-        # Mask metrics when disabled
-        for key, value in lang_metrics.items():
-            lang_metrics[key] = jnp.where(langact_enabled, value, 0.0)
         metrics.update(lang_metrics)
-
-        token_accuracy = jnp.where(langact_enabled, lang_token_accuracy, token_accuracy)
+        token_accuracy = lang_token_accuracy
         critical_token_accuracy = lang_metrics.get("critical_token_accuracy", jnp.array(0.0))
         number_token_accuracy = lang_metrics.get("number_token_accuracy", jnp.array(0.0))
         direction_token_accuracy = lang_metrics.get("direction_token_accuracy", jnp.array(0.0))
 
-        # Compute prediction loss (uses all frames)
-        # Only compute if tokenized_prediction exists
+        # Compute prediction loss (conditionally, only if tokenized_prediction exists)
         if observation.tokenized_prediction is not None:
-            pred_loss, pred_metrics = self._compute_prediction_loss(
-                observation, img_tokens_all, img_mask_all, img_ar_mask_all, train
-            )
-            # Apply enable flag by masking the loss
-            pred_loss = jnp.where(prediction_enabled, pred_loss, 0.0)
-            total_loss = total_loss + prediction_loss_weight * pred_loss
+            def compute_pred():
+                return self._compute_prediction_loss(
+                    observation, img_tokens_all, img_mask_all, img_ar_mask_all, train
+                )
 
-            # Mask metrics when disabled
-            for key, value in pred_metrics.items():
-                pred_metrics[key] = jnp.where(prediction_enabled, value, 0.0)
+            def skip_pred():
+                batch_size = observation.tokenized_prediction.shape[0]
+                if train:
+                    dummy_loss = jnp.zeros(batch_size)
+                else:
+                    dummy_loss = jnp.array(0.0)
+                dummy_metrics = {
+                    "pred_loss": jnp.array(0.0),
+                    "pred_token_accuracy": jnp.array(0.0),
+                    "pred_critical_token_accuracy": jnp.array(0.0),
+                    "pred_number_token_accuracy": jnp.array(0.0),
+                    "pred_direction_token_accuracy": jnp.array(0.0),
+                }
+                return dummy_loss, dummy_metrics
+
+            pred_loss, pred_metrics = jax.lax.cond(
+                prediction_enabled,
+                compute_pred,
+                skip_pred
+            )
+            total_loss = total_loss + prediction_loss_weight * pred_loss
             metrics.update(pred_metrics)
 
-        # Compute action diffusion loss
-        action_loss, action_metrics = self._compute_action_loss(
-            observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
-        )
-        # Apply enable flag by masking the loss
-        action_loss = jnp.where(action_enabled, action_loss, 0.0)
-        total_loss = total_loss + action_loss_weight * action_loss
+        # Compute action diffusion loss (conditionally)
+        def compute_action():
+            return self._compute_action_loss(
+                observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
+            )
 
-        # Mask metrics when disabled
-        for key, value in action_metrics.items():
-            action_metrics[key] = jnp.where(action_enabled, value, 0.0)
+        def skip_action():
+            batch_size = actions.shape[0]
+            if train:
+                dummy_loss = jnp.zeros(batch_size)
+            else:
+                dummy_loss = jnp.array(0.0)
+            dummy_metrics = {"action_loss": jnp.array(0.0)}
+            return dummy_loss, dummy_metrics
+
+        action_loss, action_metrics = jax.lax.cond(
+            action_enabled,
+            compute_action,
+            skip_action
+        )
+        total_loss = total_loss + action_loss_weight * action_loss
         metrics.update(action_metrics)
 
         return (
