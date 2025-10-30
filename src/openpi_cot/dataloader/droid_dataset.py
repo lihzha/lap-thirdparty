@@ -189,12 +189,13 @@ class DroidCoTDataset(_SingleCoTDataset):
             """Reformat observation and action keys, sample language instruction."""
             if self.standardize_fn is not None:
                 traj = self.standardize_fn(traj)
-            actions = convert_action_encoding(
-                action=traj["action"],
-                from_encoding=self.action_encoding,
-                to_encoding=self.config.action_encoding,
-                to_delta_cartesian_pose=False,
-            )
+            # actions = convert_action_encoding(
+            #     action=traj["action"],
+            #     from_encoding=self.action_encoding,
+            #     to_encoding=self.config.action_encoding,
+            #     to_delta_cartesian_pose=False,
+            # )
+            actions = traj["action"]
 
             # Align lengths across modalities
             traj_len = tf.shape(actions)[0]
