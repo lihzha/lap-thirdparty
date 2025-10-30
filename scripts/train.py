@@ -316,8 +316,11 @@ class DatasetStatsTracker:
         #  "critical_correct": int, "critical_total": int,
         #  "number_correct": int, "number_total": int,
         #  "direction_correct": int, "direction_total": int}}
-        # Track cumulative counts separately (never reset)
-        self.cumulative_counts = {}  # {dataset_name: int}
+        # Track cumulative stats (never reset) - for since-start averages
+        self.cumulative_stats = {}  # {dataset_name: {"total_loss": float, "count": int,
+        #  "critical_correct": int, "critical_total": int,
+        #  "number_correct": int, "number_total": int,
+        #  "direction_correct": int, "direction_total": int}}
 
     def update(
         self,
@@ -337,6 +340,7 @@ class DatasetStatsTracker:
             direction_token_data: Tuple of (correct_counts, total_counts) for direction tokens (optional)
         """
         for idx, name in enumerate(dataset_names):
+            # Update current interval stats
             if name not in self.dataset_stats:
                 self.dataset_stats[name] = {
                     "total_loss": 0.0,
@@ -351,28 +355,46 @@ class DatasetStatsTracker:
             self.dataset_stats[name]["total_loss"] += float(losses[idx])
             self.dataset_stats[name]["count"] += 1
 
-            # Update cumulative counts (never reset)
-            if name not in self.cumulative_counts:
-                self.cumulative_counts[name] = 0
-            self.cumulative_counts[name] += 1
+            # Update cumulative stats (never reset) - for since-start averages
+            if name not in self.cumulative_stats:
+                self.cumulative_stats[name] = {
+                    "total_loss": 0.0,
+                    "count": 0,
+                    "critical_correct": 0,
+                    "critical_total": 0,
+                    "number_correct": 0,
+                    "number_total": 0,
+                    "direction_correct": 0,
+                    "direction_total": 0,
+                }
+            self.cumulative_stats[name]["total_loss"] += float(losses[idx])
+            self.cumulative_stats[name]["count"] += 1
 
-            # Micro-averaging: accumulate token-level counts
+            # Micro-averaging: accumulate token-level counts (both interval and cumulative)
             if critical_token_data is not None:
                 correct_counts, total_counts = critical_token_data
                 self.dataset_stats[name]["critical_correct"] += int(correct_counts[idx])
                 self.dataset_stats[name]["critical_total"] += int(total_counts[idx])
+                self.cumulative_stats[name]["critical_correct"] += int(correct_counts[idx])
+                self.cumulative_stats[name]["critical_total"] += int(total_counts[idx])
             if number_token_data is not None:
                 correct_counts, total_counts = number_token_data
                 self.dataset_stats[name]["number_correct"] += int(correct_counts[idx])
                 self.dataset_stats[name]["number_total"] += int(total_counts[idx])
+                self.cumulative_stats[name]["number_correct"] += int(correct_counts[idx])
+                self.cumulative_stats[name]["number_total"] += int(total_counts[idx])
             if direction_token_data is not None:
                 correct_counts, total_counts = direction_token_data
                 self.dataset_stats[name]["direction_correct"] += int(correct_counts[idx])
                 self.dataset_stats[name]["direction_total"] += int(total_counts[idx])
+                self.cumulative_stats[name]["direction_correct"] += int(correct_counts[idx])
+                self.cumulative_stats[name]["direction_total"] += int(total_counts[idx])
 
     def get_metrics(self) -> dict[str, float]:
         """Get current average losses and micro-averaged token accuracies for all datasets."""
         metrics = {}
+
+        # Current interval metrics
         for dataset_name, stats in self.dataset_stats.items():
             if stats["count"] > 0:
                 # Loss (macro-averaged per sample)
@@ -398,9 +420,28 @@ class DatasetStatsTracker:
                     metrics[f"dataset/{dataset_name}/avg_direction_token_acc"] = avg_direction_acc
                     metrics[f"dataset/{dataset_name}/direction_token_count"] = stats["direction_total"]
 
-        # Add cumulative counts (never reset)
-        for dataset_name, cumulative_count in self.cumulative_counts.items():
-            metrics[f"dataset/{dataset_name}/cumulative_count"] = cumulative_count
+        # Cumulative (since-start) metrics
+        for dataset_name, stats in self.cumulative_stats.items():
+            if stats["count"] > 0:
+                # Cumulative loss (macro-averaged per sample)
+                cumulative_avg_loss = stats["total_loss"] / stats["count"]
+                metrics[f"dataset/{dataset_name}/cumulative_avg_loss"] = cumulative_avg_loss
+                metrics[f"dataset/{dataset_name}/cumulative_count"] = stats["count"]
+
+                # Cumulative micro-averaged critical token accuracy
+                if stats["critical_total"] > 0:
+                    cumulative_avg_critical_acc = stats["critical_correct"] / stats["critical_total"]
+                    metrics[f"dataset/{dataset_name}/cumulative_avg_critical_token_acc"] = cumulative_avg_critical_acc
+
+                # Cumulative micro-averaged number token accuracy
+                if stats["number_total"] > 0:
+                    cumulative_avg_number_acc = stats["number_correct"] / stats["number_total"]
+                    metrics[f"dataset/{dataset_name}/cumulative_avg_number_token_acc"] = cumulative_avg_number_acc
+
+                # Cumulative micro-averaged direction token accuracy
+                if stats["direction_total"] > 0:
+                    cumulative_avg_direction_acc = stats["direction_correct"] / stats["direction_total"]
+                    metrics[f"dataset/{dataset_name}/cumulative_avg_direction_token_acc"] = cumulative_avg_direction_acc
 
         return metrics
 
@@ -606,7 +647,8 @@ def gather_dataset_info_multihost(
 
 
 def create_dataset_stats_plots(
-    dataset_stats: dict[str, dict[str, float]], cumulative_counts: dict[str, int] | None = None
+    dataset_stats: dict[str, dict[str, float]],
+    cumulative_stats: dict[str, dict[str, float]] | None = None,
 ) -> dict[str, plt.Figure]:
     """Create bar plots for dataset statistics.
 
@@ -617,10 +659,10 @@ def create_dataset_stats_plots(
             "number_correct": int, "number_total": int,
             "direction_correct": int, "direction_total": int
         }
-        cumulative_counts: Optional dictionary mapping dataset names to cumulative counts
+        cumulative_stats: Optional dictionary with same structure for cumulative (since-start) metrics
 
     Returns:
-        Dictionary with 'counts', 'cumulative_counts', 'avg_loss', 'avg_critical_token_acc', 'avg_number_token_acc', 'avg_direction_token_acc' matplotlib figures
+        Dictionary with plots for interval and cumulative metrics
     """
     if not dataset_stats:
         return {}
@@ -688,23 +730,47 @@ def create_dataset_stats_plots(
     plt.tight_layout()
     plots["counts"] = fig_counts
 
-    # Create cumulative counts bar plot if available
-    if cumulative_counts:
-        # Get cumulative counts for datasets that are in dataset_stats
-        cumulative_counts_list = [cumulative_counts.get(name, 0) for name in dataset_names_sorted]
+    # Create cumulative (since-start) plots if cumulative_stats is provided
+    if cumulative_stats:
+        # Extract cumulative statistics (sorted by same order as interval plots)
+        cumulative_counts_list = [cumulative_stats.get(name, {}).get("count", 0) for name in dataset_names_sorted]
+        cumulative_avg_losses = [
+            cumulative_stats[name]["total_loss"] / cumulative_stats[name]["count"]
+            if name in cumulative_stats and cumulative_stats[name]["count"] > 0
+            else 0.0
+            for name in dataset_names_sorted
+        ]
+        cumulative_avg_critical_accs = [
+            cumulative_stats[name]["critical_correct"] / cumulative_stats[name]["critical_total"]
+            if name in cumulative_stats and cumulative_stats[name]["critical_total"] > 0
+            else 0.0
+            for name in dataset_names_sorted
+        ]
+        cumulative_avg_number_accs = [
+            cumulative_stats[name]["number_correct"] / cumulative_stats[name]["number_total"]
+            if name in cumulative_stats and cumulative_stats[name]["number_total"] > 0
+            else 0.0
+            for name in dataset_names_sorted
+        ]
+        cumulative_avg_direction_accs = [
+            cumulative_stats[name]["direction_correct"] / cumulative_stats[name]["direction_total"]
+            if name in cumulative_stats and cumulative_stats[name]["direction_total"] > 0
+            else 0.0
+            for name in dataset_names_sorted
+        ]
 
+        # Cumulative counts plot
         fig_cumulative, ax_cumulative = plt.subplots(figsize=(12, 6))
         bars_cumulative = ax_cumulative.bar(
             range(len(dataset_names_sorted)), cumulative_counts_list, color="mediumseagreen"
         )
         ax_cumulative.set_xlabel("Dataset", fontsize=12)
-        ax_cumulative.set_ylabel("Cumulative Number of Examples", fontsize=12)
-        ax_cumulative.set_title("Dataset Cumulative Example Counts", fontsize=14, fontweight="bold")
+        ax_cumulative.set_ylabel("Cumulative Number of Examples (Since Start)", fontsize=12)
+        ax_cumulative.set_title("Dataset Cumulative Example Counts (Since Start)", fontsize=14, fontweight="bold")
         ax_cumulative.set_xticks(range(len(dataset_names_sorted)))
         ax_cumulative.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
         ax_cumulative.grid(axis="y", alpha=0.3)
 
-        # Add value labels on top of bars
         for i, (bar, count) in enumerate(zip(bars_cumulative, cumulative_counts_list)):
             height = bar.get_height()
             ax_cumulative.text(
@@ -715,9 +781,120 @@ def create_dataset_stats_plots(
                 va="bottom",
                 fontsize=9,
             )
-
         plt.tight_layout()
         plots["cumulative_counts"] = fig_cumulative
+
+        # Cumulative average loss plot
+        fig_cumulative_loss, ax_cumulative_loss = plt.subplots(figsize=(12, 6))
+        bars_cumulative_loss = ax_cumulative_loss.bar(
+            range(len(dataset_names_sorted)), cumulative_avg_losses, color="coral"
+        )
+        ax_cumulative_loss.set_xlabel("Dataset", fontsize=12)
+        ax_cumulative_loss.set_ylabel("Cumulative Average Loss (Since Start)", fontsize=12)
+        ax_cumulative_loss.set_title("Dataset Cumulative Average Loss (Since Start)", fontsize=14, fontweight="bold")
+        ax_cumulative_loss.set_xticks(range(len(dataset_names_sorted)))
+        ax_cumulative_loss.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+        ax_cumulative_loss.grid(axis="y", alpha=0.3)
+
+        for i, (bar, loss) in enumerate(zip(bars_cumulative_loss, cumulative_avg_losses)):
+            height = bar.get_height()
+            ax_cumulative_loss.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f"{loss:.4f}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+        plt.tight_layout()
+        plots["cumulative_avg_loss"] = fig_cumulative_loss
+
+        # Cumulative critical token accuracy plot
+        if any(acc > 0 for acc in cumulative_avg_critical_accs):
+            fig_cumulative_crit, ax_cumulative_crit = plt.subplots(figsize=(12, 6))
+            bars_cumulative_crit = ax_cumulative_crit.bar(
+                range(len(dataset_names_sorted)), cumulative_avg_critical_accs, color="mediumseagreen"
+            )
+            ax_cumulative_crit.set_xlabel("Dataset", fontsize=12)
+            ax_cumulative_crit.set_ylabel("Cumulative Avg Critical Token Accuracy (Since Start)", fontsize=12)
+            ax_cumulative_crit.set_title(
+                "Dataset Cumulative Average Critical Token Accuracy (Since Start)", fontsize=14, fontweight="bold"
+            )
+            ax_cumulative_crit.set_xticks(range(len(dataset_names_sorted)))
+            ax_cumulative_crit.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+            ax_cumulative_crit.grid(axis="y", alpha=0.3)
+            ax_cumulative_crit.set_ylim([0, 1])
+
+            for i, (bar, acc) in enumerate(zip(bars_cumulative_crit, cumulative_avg_critical_accs)):
+                height = bar.get_height()
+                ax_cumulative_crit.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f"{acc:.4f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+            plt.tight_layout()
+            plots["cumulative_avg_critical_token_acc"] = fig_cumulative_crit
+
+        # Cumulative number token accuracy plot
+        if any(acc > 0 for acc in cumulative_avg_number_accs):
+            fig_cumulative_num, ax_cumulative_num = plt.subplots(figsize=(12, 6))
+            bars_cumulative_num = ax_cumulative_num.bar(
+                range(len(dataset_names_sorted)), cumulative_avg_number_accs, color="skyblue"
+            )
+            ax_cumulative_num.set_xlabel("Dataset", fontsize=12)
+            ax_cumulative_num.set_ylabel("Cumulative Avg Number Token Accuracy (Since Start)", fontsize=12)
+            ax_cumulative_num.set_title(
+                "Dataset Cumulative Average Number Token Accuracy (Since Start)", fontsize=14, fontweight="bold"
+            )
+            ax_cumulative_num.set_xticks(range(len(dataset_names_sorted)))
+            ax_cumulative_num.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+            ax_cumulative_num.grid(axis="y", alpha=0.3)
+            ax_cumulative_num.set_ylim([0, 1])
+
+            for i, (bar, acc) in enumerate(zip(bars_cumulative_num, cumulative_avg_number_accs)):
+                height = bar.get_height()
+                ax_cumulative_num.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f"{acc:.4f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+            plt.tight_layout()
+            plots["cumulative_avg_number_token_acc"] = fig_cumulative_num
+
+        # Cumulative direction token accuracy plot
+        if any(acc > 0 for acc in cumulative_avg_direction_accs):
+            fig_cumulative_dir, ax_cumulative_dir = plt.subplots(figsize=(12, 6))
+            bars_cumulative_dir = ax_cumulative_dir.bar(
+                range(len(dataset_names_sorted)), cumulative_avg_direction_accs, color="lightcoral"
+            )
+            ax_cumulative_dir.set_xlabel("Dataset", fontsize=12)
+            ax_cumulative_dir.set_ylabel("Cumulative Avg Direction Token Accuracy (Since Start)", fontsize=12)
+            ax_cumulative_dir.set_title(
+                "Dataset Cumulative Average Direction Token Accuracy (Since Start)", fontsize=14, fontweight="bold"
+            )
+            ax_cumulative_dir.set_xticks(range(len(dataset_names_sorted)))
+            ax_cumulative_dir.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
+            ax_cumulative_dir.grid(axis="y", alpha=0.3)
+            ax_cumulative_dir.set_ylim([0, 1])
+
+            for i, (bar, acc) in enumerate(zip(bars_cumulative_dir, cumulative_avg_direction_accs)):
+                height = bar.get_height()
+                ax_cumulative_dir.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height,
+                    f"{acc:.4f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+            plt.tight_layout()
+            plots["cumulative_avg_direction_token_acc"] = fig_cumulative_dir
 
     # Create average loss bar plot
     fig_loss, ax_loss = plt.subplots(figsize=(12, 6))
@@ -1426,43 +1603,51 @@ def main(config: _config.TrainConfig):
                 # Create and log dataset statistics bar plots
                 if dataset_stats_tracker.dataset_stats:
                     plots = create_dataset_stats_plots(
-                        dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_counts
+                        dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
                     )
                     if plots:
-                        log_dict = {
-                            "dataset_stats/counts_plot": wandb.Image(plots["counts"]),
-                            "dataset_stats/avg_loss_plot": wandb.Image(plots["avg_loss"]),
-                        }
-                        # Add cumulative counts plot if available
-                        if "cumulative_counts" in plots:
-                            log_dict["dataset_stats/cumulative_counts_plot"] = wandb.Image(plots["cumulative_counts"])
-                        # Add critical token accuracy plot if available
+                        log_dict = {}
+                        # Interval plots
+                        if "counts" in plots:
+                            log_dict["dataset_stats/interval_counts_plot"] = wandb.Image(plots["counts"])
+                        if "avg_loss" in plots:
+                            log_dict["dataset_stats/interval_avg_loss_plot"] = wandb.Image(plots["avg_loss"])
                         if "avg_critical_token_acc" in plots:
-                            log_dict["dataset_stats/avg_critical_token_acc_plot"] = wandb.Image(
+                            log_dict["dataset_stats/interval_avg_critical_token_acc_plot"] = wandb.Image(
                                 plots["avg_critical_token_acc"]
                             )
-                        # Add number token accuracy plot if available
                         if "avg_number_token_acc" in plots:
-                            log_dict["dataset_stats/avg_number_token_acc_plot"] = wandb.Image(
+                            log_dict["dataset_stats/interval_avg_number_token_acc_plot"] = wandb.Image(
                                 plots["avg_number_token_acc"]
                             )
-                        # Add direction token accuracy plot if available
                         if "avg_direction_token_acc" in plots:
-                            log_dict["dataset_stats/avg_direction_token_acc_plot"] = wandb.Image(
+                            log_dict["dataset_stats/interval_avg_direction_token_acc_plot"] = wandb.Image(
                                 plots["avg_direction_token_acc"]
                             )
-                        wandb.log(log_dict, step=step)
-                        # Close figures to prevent memory leaks
-                        plt.close(plots["counts"])
-                        plt.close(plots["avg_loss"])
+
+                        # Cumulative (since-start) plots
                         if "cumulative_counts" in plots:
-                            plt.close(plots["cumulative_counts"])
-                        if "avg_critical_token_acc" in plots:
-                            plt.close(plots["avg_critical_token_acc"])
-                        if "avg_number_token_acc" in plots:
-                            plt.close(plots["avg_number_token_acc"])
-                        if "avg_direction_token_acc" in plots:
-                            plt.close(plots["avg_direction_token_acc"])
+                            log_dict["dataset_stats/cumulative_counts_plot"] = wandb.Image(plots["cumulative_counts"])
+                        if "cumulative_avg_loss" in plots:
+                            log_dict["dataset_stats/cumulative_avg_loss_plot"] = wandb.Image(plots["cumulative_avg_loss"])
+                        if "cumulative_avg_critical_token_acc" in plots:
+                            log_dict["dataset_stats/cumulative_avg_critical_token_acc_plot"] = wandb.Image(
+                                plots["cumulative_avg_critical_token_acc"]
+                            )
+                        if "cumulative_avg_number_token_acc" in plots:
+                            log_dict["dataset_stats/cumulative_avg_number_token_acc_plot"] = wandb.Image(
+                                plots["cumulative_avg_number_token_acc"]
+                            )
+                        if "cumulative_avg_direction_token_acc" in plots:
+                            log_dict["dataset_stats/cumulative_avg_direction_token_acc_plot"] = wandb.Image(
+                                plots["cumulative_avg_direction_token_acc"]
+                            )
+
+                        wandb.log(log_dict, step=step)
+
+                        # Close all figures to prevent memory leaks
+                        for plot_fig in plots.values():
+                            plt.close(plot_fig)
 
                 if config.model.enable_langact_training:
                     host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
