@@ -127,14 +127,11 @@ def log_batch_sharding(batch):
 
 def _decode_langact_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the langact (language action) tokens per example."""
-    # if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
-    #     return []
-    # tokens = _safe_device_get(obs.tokenized_prediction)
-    # rmask = _safe_device_get(obs.tokenized_prediction_langact_mask)
-    if obs.tokenized_prompt is None:
+    if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
         return []
-    tokens = _safe_device_get(obs.tokenized_prompt)
-    rmask = _safe_device_get(obs.tokenized_langact_mask)
+    tokens = _safe_device_get(obs.tokenized_prediction)
+    rmask = _safe_device_get(obs.tokenized_prediction_langact_mask)
+
     if tokens is None or rmask is None:
         return []
     out: list[str] = []
@@ -495,7 +492,6 @@ def main(config: _config.TrainConfig):
         prompt_texts = _decode_prompt_strings(obs, tok)
         # Extract ground truth actions
         gt_action_texts = _extract_gt_actions(batch)
-        breakpoint()
 
         # Visualize all camera views
         for cam_key in obs.images.keys():
