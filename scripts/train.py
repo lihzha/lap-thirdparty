@@ -150,7 +150,7 @@ def vis_batch(batch, tok=None, step=None):
     logging.info("=" * 80)
 
     # Log images to wandb
-    if wandb_images and jax.process_index() == 0:
+    if wandb_images and jax.process_index() == 0 and step is not None:
         wandb.log(wandb_images, step=step)
         logging.info(f"Logged {len(wandb_images)} image groups to wandb")
 

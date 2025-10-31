@@ -945,6 +945,29 @@ class PiCoT(_pi0.Pi0):
         # For action training, text tokens should not use autoregressive masking
         prefix_ar_mask_action = jnp.zeros_like(prefix_mask, dtype=bool)
 
+        # Mask out langact tokens so actions cannot see them
+        if observation.tokenized_langact_mask is not None:
+            if self.use_gemma3:
+                # For Gemma3, prefix corresponds directly to tokenized_prompt
+                # Mask out positions where langact tokens are present
+                prefix_mask_action = jnp.logical_and(prefix_mask, jnp.logical_not(observation.tokenized_langact_mask))
+            else:
+                # For legacy, prefix = [img_tokens, text_tokens]
+                # Compute image sequence length
+                img_seq_len = prefix_mask.shape[1] - observation.tokenized_langact_mask.shape[1]
+                # Pad langact mask with False for image positions
+                langact_mask_full = jnp.concatenate(
+                    [
+                        jnp.zeros((observation.tokenized_langact_mask.shape[0], img_seq_len), dtype=bool),
+                        observation.tokenized_langact_mask,
+                    ],
+                    axis=1,
+                )
+                # Mask out langact positions
+                prefix_mask_action = jnp.logical_and(prefix_mask, jnp.logical_not(langact_mask_full))
+        else:
+            prefix_mask_action = prefix_mask
+
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
@@ -954,7 +977,7 @@ class PiCoT(_pi0.Pi0):
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
         suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
 
-        input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
+        input_mask = jnp.concatenate([prefix_mask_action, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask_action, suffix_ar_mask], axis=1)
         attn_mask = _pi0.make_attn_mask(input_mask, ar_mask)
         positions = jnp.cumsum(input_mask, axis=1) - 1
