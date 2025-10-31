@@ -370,8 +370,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "language_actions" in data:
             inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
 
-            breakpoint()
-
             # Check if the language action represents idle movement
             is_idle = is_idle_language_action(
                 inputs["language_actions"],

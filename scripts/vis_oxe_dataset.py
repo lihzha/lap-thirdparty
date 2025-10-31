@@ -127,10 +127,14 @@ def log_batch_sharding(batch):
 
 def _decode_langact_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the langact (language action) tokens per example."""
-    if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
+    # if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
+    #     return []
+    # tokens = _safe_device_get(obs.tokenized_prediction)
+    # rmask = _safe_device_get(obs.tokenized_prediction_langact_mask)
+    if obs.tokenized_prompt is None:
         return []
-    tokens = _safe_device_get(obs.tokenized_prediction)
-    rmask = _safe_device_get(obs.tokenized_prediction_langact_mask)
+    tokens = _safe_device_get(obs.tokenized_prompt)
+    rmask = _safe_device_get(obs.tokenized_langact_mask)
     if tokens is None or rmask is None:
         return []
     out: list[str] = []
