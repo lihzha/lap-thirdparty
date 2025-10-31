@@ -1629,7 +1629,9 @@ def main(config: _config.TrainConfig):
                         if "cumulative_counts" in plots:
                             log_dict["dataset_stats/cumulative_counts_plot"] = wandb.Image(plots["cumulative_counts"])
                         if "cumulative_avg_loss" in plots:
-                            log_dict["dataset_stats/cumulative_avg_loss_plot"] = wandb.Image(plots["cumulative_avg_loss"])
+                            log_dict["dataset_stats/cumulative_avg_loss_plot"] = wandb.Image(
+                                plots["cumulative_avg_loss"]
+                            )
                         if "cumulative_avg_critical_token_acc" in plots:
                             log_dict["dataset_stats/cumulative_avg_critical_token_acc_plot"] = wandb.Image(
                                 plots["cumulative_avg_critical_token_acc"]
