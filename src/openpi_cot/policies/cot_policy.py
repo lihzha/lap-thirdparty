@@ -301,7 +301,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 prompt_str = prompt_str.split("@")[-1]
 
         inputs["prompt"] = prompt_str
-        inputs["dataset_name"] = data["dataset_name"].decode()
+        if "dataset_name" in data:
+            inputs["dataset_name"] = data["dataset_name"].decode()
 
         # Extract state_type if available
         # state_type = data.get("state_type")
@@ -485,7 +486,7 @@ class ActionDecodingSchema:
                 rf"move\s+(right|left|forward|backward|back|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
                 re.IGNORECASE,
             )
-            grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
+            # grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
 
             for i, sentence in enumerate(sentences):
                 # Parse movements in language frame (right=+x, forward=+y, up=-z)
@@ -535,12 +536,18 @@ class ActionDecodingSchema:
                     translations[i] = v_m
 
                 # Parse gripper action
-                grip_match = grip_pattern.search(sentence)
-                if grip_match:
-                    gripper_actions[i] = float(grip_match.group(1))
+                # grip_match = grip_pattern.search(sentence)
+                if "open gripper" in sentence.lower():
+                    gripper_actions[i] = 1.0
+                elif "close gripper" in sentence.lower():
+                    gripper_actions[i] = 0.0
                 else:
-                    # Maintain previous gripper state
                     gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
+                # if grip_match:
+                #     gripper_actions[i] = float(grip_match.group(1))
+                # else:
+                #     # Maintain previous gripper state
+                #     gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
 
         return translations, gripper_actions
 
@@ -713,6 +720,9 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
     def __call__(self, data: dict) -> dict:
         # Get actions and reasoning from data
+
+        if "reasoning" not in data:
+            return {"actions": np.asarray(data["actions"][:, :7]), "reasoning": None}
         reasoning = data.get("reasoning")
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
@@ -737,5 +747,6 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # Store parsed actions separately for inspection
         data["parsed_actions"] = parsed_actions
+        print(reasoning, parsed_actions)
 
         return {"actions": parsed_actions, "reasoning": reasoning}

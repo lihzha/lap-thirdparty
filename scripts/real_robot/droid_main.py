@@ -6,16 +6,45 @@ from droid.robot_env import RobotEnv
 import tyro
 from scipy.spatial.transform import Rotation as R
 import sys
-
+import cv2
 
 sys.path.append(".")
-from shared import BaseEvalRunner, Args
+from shared import BaseEvalRunner, Args, IMAGE_KEYS
 
 AXIS_PERM = np.array([0, 2, 1])
 AXIS_SIGN = np.array([1, 1, 1])
 faulthandler.enable()
 # DROID data collection frequency -- we slow down execution to match this frequency
 DROID_CONTROL_FREQUENCY = 15
+
+
+import numpy as np
+
+def binarize_gripper_actions_np(actions: np.ndarray, threshold: float = 0.95) -> np.ndarray:
+    """
+    Convert continuous gripper actions to binary (0 or 1) using backward propagation logic.
+    """
+    actions = actions.astype(np.float32)
+    n = actions.shape[0]
+    new_actions = np.zeros_like(actions)
+
+    open_mask = actions > threshold
+    closed_mask = actions < (1 - threshold)
+    in_between_mask = ~(open_mask | closed_mask)
+
+    carry = actions[-1] > threshold  # carry as boolean (True=open)
+    
+    for i in reversed(range(n)):
+        if not in_between_mask[i]:
+            carry = open_mask[i]
+        new_actions[i] = float(carry)
+
+    return new_actions
+
+
+def invert_gripper_actions_np(actions: np.ndarray) -> np.ndarray:
+    """Invert gripper binary actions: 1 → 0, 0 → 1."""
+    return 1.0 - actions
 
 
 class DroidEvalRunner(BaseEvalRunner):
@@ -54,17 +83,53 @@ class DroidEvalRunner(BaseEvalRunner):
         cartesian_position = np.array(robot_state["cartesian_position"])
         joint_position = np.array(robot_state["joint_positions"])
         gripper_position = np.array([robot_state["gripper_position"]])
+        # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         # Save the images to disk so that they can be viewed live while the robot is running
         # Create one combined image to make live viewing easy
         return {
             # "left_image": left_image,
-            "right_image": right_image,
-            "wrist_image": wrist_image,
+            "right_image": right_image[None],
+            "wrist_image": wrist_image[None],
             "cartesian_position": cartesian_position,
             "joint_position": joint_position,
             "gripper_position": gripper_position,
             "state": np.concatenate([cartesian_position, gripper_position]),
         }
+    # def _extract_observation(self, obs_dict, save_to_disk=False):
+    #     image_observations = obs_dict["image"]
+    #     left_image, right_image, wrist_image = None, None, None
+    #     for key in image_observations:
+    #         # Note the "left" below refers to the left camera in the stereo pair.
+    #         # The model is only trained on left stereo cams, so we only feed those.
+    #         if self.args.wrist_camera_id in key and "left" in key:
+    #             wrist_image = image_observations[key]
+    #         if key == "0":
+    #             right_image = image_observations[key]
+    #     # Drop the alpha dimension
+    #     # left_image = left_image[..., :3]
+    #     right_image = right_image[..., :3]
+    #     wrist_image = wrist_image[..., :3]
+    #     # Convert to RGB
+    #     # left_image = left_image[..., ::-1]
+    #     right_image = right_image[..., ::-1]
+    #     wrist_image = wrist_image[..., ::-1]
+    #     # In addition to image observations, also capture the proprioceptive state
+    #     robot_state = obs_dict["robot_state"]
+    #     cartesian_position = np.array(robot_state["cartesian_position"])
+    #     joint_position = np.array(robot_state["joint_positions"])
+    #     gripper_position = np.array([robot_state["gripper_position"]])
+    #     # Save the images to disk so that they can be viewed live while the robot is running
+    #     # Create one combined image to make live viewing easy
+    #     return {
+    #         # "left_image": left_image,
+    #         "right_image": right_image,
+    #         "wrist_image": wrist_image,
+    #         "cartesian_position": cartesian_position,
+    #         "joint_position": joint_position,
+    #         "gripper_position": gripper_position,
+    #         "state": np.concatenate([cartesian_position, gripper_position]),
+    #     }
+
 
 
 class DroidExtrEvalRunner(DroidEvalRunner):
@@ -102,6 +167,21 @@ class DroidUpstreamEvalRunner(DroidEvalRunner):
             action_space="joint_velocity",
             gripper_action_space="position",
         )
+    
+    def obs_to_request(self, curr_obs, instruction):
+
+        request = {
+            "observation/exterior_image_1_left": image_tools.resize_with_pad(
+                    curr_obs[self.side_image_name], 224, 224
+                ),
+            "observation/cartesian_position": curr_obs["cartesian_position"],
+            "observation/gripper_position": curr_obs["gripper_position"],
+            "observation/joint_position": curr_obs["joint_position"],
+            "prompt": instruction,
+        }
+        if self.args.use_wrist_camera:
+            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
+        return request
 
 
 if __name__ == "__main__":

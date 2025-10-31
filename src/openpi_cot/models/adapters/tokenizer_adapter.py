@@ -151,7 +151,6 @@ class PromptFormat:
                         parts.append(component.template.format(state=state_str, state_label=""))
             elif component.type == "schema" or component.type == "action_prefix":
                 parts.append(component.template)
-
         return self.separator.join(parts)
 
     def _discretize_state(self, state: np.ndarray) -> str:
@@ -445,6 +444,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             # text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
             # tokens = image_placeholders + text_tokens
         else:
+            print(formatted_prompt)
             tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         reasoning_start = len(tokens)

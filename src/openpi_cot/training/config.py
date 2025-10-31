@@ -949,6 +949,20 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
+        name="pi05_action_eval",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=200,
+            pi05=True,
+            discrete_state_input=True,
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+        ),
+    ),
+    TrainConfig(
         name="paligemma2_eval",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,

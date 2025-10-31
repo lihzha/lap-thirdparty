@@ -57,7 +57,9 @@ class TokenizePromptAndReasoning(DataTransformFn):
             tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
         else:
             pad_id = self.tokenizer._tokenizer.pad_id()
-            tokenized_dataset_name = np.asarray([pad_id] * self.dataset_name_pad_len, dtype=np.int32)
+            tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len 
+            tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
+            
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
@@ -115,8 +117,10 @@ class DetokenizeReasoning(DataTransformFn):
     tokenizer: PaligemmaCoTTokenizer
 
     def __call__(self, data: DataDict) -> DataDict:
-        text = self.tokenizer.decode(data["reasoning_logits"].squeeze()[: data["final_length"]].astype(np.int32))
-        return {**data, "reasoning": text}
+        if "reasoning_logits" in data:
+            text = self.tokenizer.decode(data["reasoning_logits"].squeeze()[: data["final_length"]].astype(np.int32))
+            return {**data, "reasoning": text}
+        return data
 
 
 @dataclasses.dataclass(frozen=True)
