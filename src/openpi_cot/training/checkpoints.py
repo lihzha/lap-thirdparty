@@ -234,23 +234,24 @@ def save_state(
                 # - Each host has a DIFFERENT iterator seeing different data shards
                 # - Each host MUST save its own checkpoint to restore correctly
                 # - All hosts save in parallel to their own subdirectories
-                if hasattr(data_loader, "save_dataloader_state"):
-                    try:
-                        # directory is {checkpoint_dir}/{step}/assets/
-                        # Each process saves to its own subdirectory
-                        process_idx = jax.process_index()
-                        dataloader_dir = str(directory / f"dataloader_process_{process_idx}")
-                        save_path = data_loader.save_dataloader_state(dataloader_dir)
-                        batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
-                        logging.info(
-                            f"[Process {process_idx}] Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
-                        )
-                    except Exception as e:
-                        logging.warning(f"[Process {jax.process_index()}] Failed to save dataloader state: {e}")
-                        logging.warning("Training will continue but dataloader state will not be checkpointed")
-                else:
-                    if jax.process_index() == 0:
-                        logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
+                
+                # if hasattr(data_loader, "save_dataloader_state"):
+                #     try:
+                #         # directory is {checkpoint_dir}/{step}/assets/
+                #         # Each process saves to its own subdirectory
+                #         process_idx = jax.process_index()
+                #         dataloader_dir = str(directory / f"dataloader_process_{process_idx}")
+                #         save_path = data_loader.save_dataloader_state(dataloader_dir)
+                #         batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
+                #         logging.info(
+                #             f"[Process {process_idx}] Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
+                #         )
+                #     except Exception as e:
+                #         logging.warning(f"[Process {jax.process_index()}] Failed to save dataloader state: {e}")
+                #         logging.warning("Training will continue but dataloader state will not be checkpointed")
+                # else:
+                #     if jax.process_index() == 0:
+                #         logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
 
             # Split params that can be used for inference into a separate item.
             with at.disable_typechecking():

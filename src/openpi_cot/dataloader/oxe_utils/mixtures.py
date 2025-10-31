@@ -184,6 +184,24 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("libero_object_no_noops", 1.0),
         ("libero_goal_no_noops", 1.0),
     ],
+    "oxe_small": [
+        ("droid", 1.0),  # after filter: 54946 trajs, 12825295 frames
+        ("taco_play", 1.0),
+        (
+            "jaco_play",
+            1.0,
+        ),  # gripper state and action still seems incorrect. Action sometimes should be 1 but is 0. State seems random. Ignore for now.
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        ("utaustin_mutex", 1.0),
+        ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
+        ("berkeley_autolab_ur5", 1.0),
+        ("fmb", 1.0),
+        ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
+        ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
+        ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
+        ("viola", 1.0),  # gripper mostly out of view, 135 trajs
+        ("molmoact_dataset", 1.0),
+    ],
     # === Individual Datasets (for isolated visualization/testing) ===
     "kuka": [("kuka", 1.0)],
     "bc_z": [("bc_z", 1.0)],
