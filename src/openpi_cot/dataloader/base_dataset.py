@@ -275,13 +275,12 @@ class _SingleCoTDataset:
 
             # Use unified gather function with proper zero-padding
             traj[action_key] = gather_with_padding(
-                # data=traj[action_key],
-                data=traj["raw_action"],
+                data=traj[action_key],
                 sequence_length=traj_len,
                 window_size=action_horizon,
             )
             # Ensure static shape is preserved: [T, action_horizon, action_dim]
-            traj[action_key].set_shape([None, action_horizon, 7])
+            traj[action_key].set_shape([None, action_horizon, self.action_dim])
             return traj
 
         self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
