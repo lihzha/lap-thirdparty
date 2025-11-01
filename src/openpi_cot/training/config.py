@@ -815,6 +815,7 @@ class TrainConfig(upstream_config.TrainConfig):
     log_interval: int = 50
     keep_period: int | None = 10000
     resume: bool = True
+    ema_decay: float | None = 0.999
     # New field
     do_val: bool = True
     val_interval: int = 2000

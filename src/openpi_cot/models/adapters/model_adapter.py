@@ -165,7 +165,8 @@ def preprocess_observation(
                     augmax.Resize(w_new, h_new),
                     augmax.Rotate((-5, 5)),
                 ]
-            transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
+            # transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
+            transforms += [augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)]
 
             # Apply augmentation
             sub_rngs = jax.random.split(rng, b * t)
