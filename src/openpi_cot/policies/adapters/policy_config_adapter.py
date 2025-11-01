@@ -9,8 +9,10 @@ from openpi.training import config as _config
 import openpi.transforms as transforms
 
 from openpi_cot.policies.adapters.policy_adaptor import CoTPolicy
-from openpi_cot.shared.download import maybe_download
-from openpi_cot.training import checkpoints as _checkpoints
+# Lazy imports to avoid loading TensorFlow (and allocating GPU memory) at import time
+# These will be imported when create_trained_policy() is actually called
+# from openpi_cot.shared.download import maybe_download
+# from openpi_cot.training import checkpoints as _checkpoints
 
 
 def create_trained_policy(
@@ -42,6 +44,9 @@ def create_trained_policy(
         The function automatically detects whether the model is PyTorch-based by checking for the
         presence of "model.safensors" in the checkpoint directory.
     """
+    # Lazy import to avoid loading TensorFlow at module import time
+    from openpi_cot.shared.download import maybe_download
+
     repack_transforms = repack_transforms or transforms.Group()
     checkpoint_dir = maybe_download(str(checkpoint_dir))
     model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
@@ -51,6 +56,8 @@ def create_trained_policy(
         # that the policy is using the same normalization stats as the original training process.
         if data_config.asset_id is None:
             raise ValueError("Asset id is required to load norm stats.")
+        # Lazy import to avoid loading TensorFlow and other heavy dependencies at module import time
+        from openpi_cot.training import checkpoints as _checkpoints
         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
 
     return _policy.Policy(
