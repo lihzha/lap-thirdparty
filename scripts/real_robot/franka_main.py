@@ -17,6 +17,32 @@ import cv2
 faulthandler.enable()
 
 
+def binarize_gripper_actions_np(actions: np.ndarray, threshold: float = 0.95) -> np.ndarray:
+    """
+    Convert continuous gripper actions to binary (0 or 1) using backward propagation logic.
+    """
+    actions = actions.astype(np.float32)
+    n = actions.shape[0]
+    new_actions = np.zeros_like(actions)
+
+    open_mask = actions > threshold
+    closed_mask = actions < (1 - threshold)
+    in_between_mask = ~(open_mask | closed_mask)
+
+    carry = actions[-1] > threshold  # carry as boolean (True=open)
+
+    for i in reversed(range(n)):
+        if not in_between_mask[i]:
+            carry = open_mask[i]
+        new_actions[i] = float(carry)
+
+    return new_actions
+
+
+def invert_gripper_actions_np(actions: np.ndarray) -> np.ndarray:
+    """Invert gripper binary actions: 1 → 0, 0 → 1."""
+    return 1.0 - actions
+
 class FrankaEvalRunner(BaseEvalRunner):
     robot_type: str = "panda"
 
@@ -37,6 +63,7 @@ class FrankaEvalRunner(BaseEvalRunner):
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
         gripper_position = np.array([robot_state["gripper_position"]])
+        gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
 
         # if gripper_position > 0.2:
         #     gripper_position = 1.0
@@ -45,9 +72,9 @@ class FrankaEvalRunner(BaseEvalRunner):
 
         return {
             "image": image_observations["0"][..., ::-1][None],  # Convert BGR to RGB
-            "wrist_image": image_observations["1"][..., ::-1][None],
+            # "wrist_image": image_observations["1"][..., ::-1][None],
             # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=1), # rotate 90 degrees
-            # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=2), # rotate 180 degrees
+            "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=2), # rotate 180 degrees
             # "wrist_image": image_observations["1"][..., ::-1][::-1],  # flip vertically, up -> dowm
             # "wrist_image": rotate_x_degrees(image_observations["1"][..., ::-1], -15.5),
             # "wrist_image": image_observations["14846828_left"][..., :3][..., ::-1],  # drop alpha channel and convert BGR to RGB
