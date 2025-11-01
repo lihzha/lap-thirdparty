@@ -1002,6 +1002,20 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
+        name="paligemma2_eval_rotation",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="droid", asset_id="droid", dataset_type="droid", decoding_schema="verbose_with_rotation"
+        ),
+    ),
+    TrainConfig(
         name="paligemma2_eval_compact",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
@@ -1010,7 +1024,7 @@ _CONFIGS = [
             discrete_state_input=True,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
-            prompt_format="schema_compact"
+            prompt_format="schema_compact",
         ),
         data=RLDSCoTDataConfig(repo_id="droid", asset_id="droid", dataset_type="droid", decoding_schema="compact"),
     ),

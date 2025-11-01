@@ -435,16 +435,17 @@ class ActionDecodingSchema:
         self,
         reasoning: str | list[str],
         in_camera_frame: bool = False,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Parse language action(s) into translation deltas and gripper actions.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Parse language action(s) into translation deltas, rotation deltas, and gripper actions.
 
         Args:
             reasoning: Single sentence or list of reasoning sentences
             in_camera_frame: Whether the output should be in camera frame coordinates
 
         Returns:
-            (translation_deltas, gripper_actions)
+            (translation_deltas, rotation_deltas, gripper_actions)
             - translation_deltas: array of shape (num_steps, 3) in meters
+            - rotation_deltas: array of shape (num_steps, 3) in radians [roll, pitch, yaw]
             - gripper_actions: array of shape (num_steps,)
         """
         if isinstance(reasoning, str):
@@ -454,6 +455,7 @@ class ActionDecodingSchema:
 
         num_steps = len(sentences)
         translations = np.zeros((num_steps, 3), dtype=float)
+        rotations = np.zeros((num_steps, 3), dtype=float)  # [roll, pitch, yaw] in radians
         gripper_actions = np.zeros((num_steps,), dtype=float)
 
         if self.use_schema_format and self.style == "compact":
@@ -468,9 +470,13 @@ class ActionDecodingSchema:
                     if match:
                         dx, dy, dz, droll, dpitch, dyaw, grip = match.groups()
                         translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
+                        # Convert degrees to radians
+                        rotations[i] = [
+                            int(droll) * np.pi / 180.0,
+                            int(dpitch) * np.pi / 180.0,
+                            int(dyaw) * np.pi / 180.0,
+                        ]
                         gripper_actions[i] = float(grip)
-                        # Note: Rotation values are parsed but not currently returned
-                        # Could extend return type to include rotations if needed
             else:
                 # Format without rotation: <+09 +09 -08 1>
                 pattern = re.compile(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>")
@@ -486,7 +492,11 @@ class ActionDecodingSchema:
                 rf"move\s+(right|left|forward|backward|back|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
                 re.IGNORECASE,
             )
-            # grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
+            # Rotation pattern for verbose format
+            rotation_pattern = re.compile(
+                r"(tilt left|tilt right|tilt up|tilt down|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
+                re.IGNORECASE,
+            )
 
             for i, sentence in enumerate(sentences):
                 # Parse movements in language frame (right=+x, forward=+y, up=-z)
@@ -535,6 +545,33 @@ class ActionDecodingSchema:
                 else:
                     translations[i] = v_m
 
+                # Parse rotation actions (if include_rotation is enabled)
+                if self.include_rotation:
+                    droll_deg = dpitch_deg = dyaw_deg = 0.0
+                    for match in rotation_pattern.finditer(sentence):
+                        rotation_type = match.group(1).lower()
+                        value = float(match.group(2))
+
+                        if rotation_type == "tilt left":
+                            droll_deg += value
+                        elif rotation_type == "tilt right":
+                            droll_deg -= value
+                        elif rotation_type == "tilt up":
+                            dpitch_deg += value
+                        elif rotation_type == "tilt down":
+                            dpitch_deg -= value
+                        elif rotation_type == "rotate counterclockwise":
+                            dyaw_deg += value
+                        elif rotation_type == "rotate clockwise":
+                            dyaw_deg -= value
+
+                    # Convert degrees to radians
+                    rotations[i] = [
+                        droll_deg * np.pi / 180.0,
+                        dpitch_deg * np.pi / 180.0,
+                        dyaw_deg * np.pi / 180.0,
+                    ]
+
                 # Parse gripper action
                 # grip_match = grip_pattern.search(sentence)
                 if "open gripper" in sentence.lower():
@@ -549,24 +586,26 @@ class ActionDecodingSchema:
                 #     # Maintain previous gripper state
                 #     gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
 
-        return translations, gripper_actions
+        return translations, rotations, gripper_actions
 
     def parse_bimanual_language_to_deltas(
         self,
         reasoning: str | list[str],
         in_camera_frame: bool = False,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Parse bimanual language action(s) into translation deltas and gripper actions.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Parse bimanual language action(s) into translation deltas, rotation deltas, and gripper actions.
 
         Args:
             reasoning: Single sentence or list of reasoning sentences in format <L ... R ...>
             in_camera_frame: Whether the output should be in camera frame coordinates
 
         Returns:
-            (left_translations, left_grippers, right_translations, right_grippers)
+            (left_translations, left_rotations, left_grippers, right_translations, right_rotations, right_grippers)
             - left_translations: array of shape (num_steps, 3) in meters
+            - left_rotations: array of shape (num_steps, 3) in radians [roll, pitch, yaw]
             - left_grippers: array of shape (num_steps,)
             - right_translations: array of shape (num_steps, 3) in meters
+            - right_rotations: array of shape (num_steps, 3) in radians [roll, pitch, yaw]
             - right_grippers: array of shape (num_steps,)
         """
         if isinstance(reasoning, str):
@@ -576,8 +615,10 @@ class ActionDecodingSchema:
 
         num_steps = len(sentences)
         left_translations = np.zeros((num_steps, 3), dtype=float)
+        left_rotations = np.zeros((num_steps, 3), dtype=float)
         left_grippers = np.zeros((num_steps,), dtype=float)
         right_translations = np.zeros((num_steps, 3), dtype=float)
+        right_rotations = np.zeros((num_steps, 3), dtype=float)
         right_grippers = np.zeros((num_steps,), dtype=float)
 
         if self.use_schema_format and self.style == "compact":
@@ -608,8 +649,18 @@ class ActionDecodingSchema:
                             r_grip,
                         ) = match.groups()
                         left_translations[i] = [int(l_dx) / 100.0, int(l_dy) / 100.0, int(l_dz) / 100.0]
+                        left_rotations[i] = [
+                            int(l_droll) * np.pi / 180.0,
+                            int(l_dpitch) * np.pi / 180.0,
+                            int(l_dyaw) * np.pi / 180.0,
+                        ]
                         left_grippers[i] = float(l_grip)
                         right_translations[i] = [int(r_dx) / 100.0, int(r_dy) / 100.0, int(r_dz) / 100.0]
+                        right_rotations[i] = [
+                            int(r_droll) * np.pi / 180.0,
+                            int(r_dpitch) * np.pi / 180.0,
+                            int(r_dyaw) * np.pi / 180.0,
+                        ]
                         right_grippers[i] = float(r_grip)
             else:
                 # Format without rotation: <L +09 +09 -08 1 R +03 -02 +01 0>
@@ -635,16 +686,18 @@ class ActionDecodingSchema:
                     right_part = parts[1].strip()
 
                     # Parse left arm
-                    left_trans, left_grip = self.parse_language_to_deltas(left_part, in_camera_frame)
+                    left_trans, left_rot, left_grip = self.parse_language_to_deltas(left_part, in_camera_frame)
                     left_translations[i] = left_trans[0]
+                    left_rotations[i] = left_rot[0]
                     left_grippers[i] = left_grip[0]
 
                     # Parse right arm
-                    right_trans, right_grip = self.parse_language_to_deltas(right_part, in_camera_frame)
+                    right_trans, right_rot, right_grip = self.parse_language_to_deltas(right_part, in_camera_frame)
                     right_translations[i] = right_trans[0]
+                    right_rotations[i] = right_rot[0]
                     right_grippers[i] = right_grip[0]
 
-        return left_translations, left_grippers, right_translations, right_grippers
+        return left_translations, left_rotations, left_grippers, right_translations, right_rotations, right_grippers
 
 
 # Predefined decoding schemas matching language action formats
@@ -652,6 +705,14 @@ VERBOSE_DECODING_SCHEMA = ActionDecodingSchema(
     name="verbose",
     style="verbose",
     include_rotation=False,
+    translation_unit="cm",
+    use_schema_format=False,
+)
+
+VERBOSE_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
+    name="verbose",
+    style="verbose",
+    include_rotation=True,
     translation_unit="cm",
     use_schema_format=False,
 )
@@ -690,6 +751,7 @@ COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
 
 DECODING_SCHEMA_REGISTRY = {
     "verbose": VERBOSE_DECODING_SCHEMA,
+    "verbose_with_rotation": VERBOSE_WITH_ROTATION_DECODING_SCHEMA,
     "compact": COMPACT_DECODING_SCHEMA,
     "compact_with_rotation": COMPACT_WITH_ROTATION_DECODING_SCHEMA,
     "compact_bimanual": COMPACT_BIMANUAL_DECODING_SCHEMA,
@@ -727,19 +789,17 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
         assert self.decoding_schema is not None and reasoning is not None
-        # Parse reasoning to translation deltas and gripper actions
-        translations, gripper_actions = self.decoding_schema.parse_language_to_deltas(
+        # Parse reasoning to translation deltas, rotation deltas, and gripper actions
+        translations, rotations, gripper_actions = self.decoding_schema.parse_language_to_deltas(
             reasoning, in_camera_frame=self.in_camera_frame
         )
 
         # If we don't have actions from the model, use the parsed actions
         # Shape: (num_steps, 7) -> [dx, dy, dz, droll, dpitch, dyaw, gripper]
-        # For now, assume zero rotation deltas
-        num_steps = translations.shape[0]
         parsed_actions = np.concatenate(
             [
                 translations,  # (num_steps, 3)
-                np.zeros((num_steps, 3)),  # rotation deltas
+                rotations,  # (num_steps, 3) - rotation deltas in radians
                 gripper_actions[:, None],  # (num_steps, 1)
             ],
             axis=1,
