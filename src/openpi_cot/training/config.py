@@ -1005,11 +1005,12 @@ _CONFIGS = [
         name="paligemma2_eval_compact",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
-            max_token_len=150,
+            max_token_len=180,
             pi05=True,
             discrete_state_input=True,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
+            prompt_format="schema_compact"
         ),
         data=RLDSCoTDataConfig(repo_id="droid", asset_id="droid", dataset_type="droid", decoding_schema="compact"),
     ),

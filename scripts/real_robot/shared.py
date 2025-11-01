@@ -196,7 +196,7 @@ class BaseEvalRunner:
             curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
             curr_grip = float(np.asarray(curr_obs["gripper_position"], dtype=float).reshape(-1)[0])
             next_pos = curr_pos + delta_base
-            next_grip = float(grip_actions[0]) if grip_actions.size > 0 else curr_grip
+            next_grip = float(grip_actions)
             # Linearly interpolate to CHUNK_STEPS actions
             positions = np.linspace(curr_pos, next_pos, self.CHUNK_STEPS, endpoint=True)
             if self.args.predict_rotation:
@@ -262,7 +262,7 @@ class BaseEvalRunner:
                         video.append(curr_obs[f"{self.args.external_camera}_image"][0])
                     else:
                         video.append(curr_obs["image"][0])
-                    wrist_video.append(curr_obs["wrist_image"][0])
+                    wrist_video.append(curr_obs["wrist_image"][0].copy())
                     # Predict a new chunk if needed
                     if pred_action_chunk is None or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0

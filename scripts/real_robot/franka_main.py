@@ -48,7 +48,7 @@ class FrankaEvalRunner(BaseEvalRunner):
 
     def __init__(self, args):
         super().__init__(args)
-        self.side_image_name = "image"
+        self.side_image_name = "right_image"
 
     def init_env(self):
         return RobotEnv(
@@ -71,10 +71,10 @@ class FrankaEvalRunner(BaseEvalRunner):
         #     gripper_position = 0.0
 
         return {
-            "image": image_observations["0"][..., ::-1][None],  # Convert BGR to RGB
-            # "wrist_image": image_observations["1"][..., ::-1][None],
+            "right_image": image_observations["0"][..., ::-1][None],  # Convert BGR to RGB
+            "wrist_image": image_observations["1"][..., ::-1][None],
             # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=1), # rotate 90 degrees
-            "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=2), # rotate 180 degrees
+            # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=2)[None], # rotate 180 degrees
             # "wrist_image": image_observations["1"][..., ::-1][::-1],  # flip vertically, up -> dowm
             # "wrist_image": rotate_x_degrees(image_observations["1"][..., ::-1], -15.5),
             # "wrist_image": image_observations["14846828_left"][..., :3][..., ::-1],  # drop alpha channel and convert BGR to RGB

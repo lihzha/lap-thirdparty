@@ -444,6 +444,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             # text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
             # tokens = image_placeholders + text_tokens
         else:
+            # print(formatted_prompt)
             tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         reasoning_start = len(tokens)
