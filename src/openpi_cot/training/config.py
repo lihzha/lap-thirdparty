@@ -172,8 +172,8 @@ class CoTDataConfig(upstream_config.DataConfig):
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     resize_resolution: tuple[int, int] = (224, 224)
 
-    # Language action configuration
-    language_action_config_name: str = "compact"
+    # Language action format
+    language_action_format_name: str = "compact"
     decoding_schema: str = "verbose"
 
     # Prediction training parameters
@@ -332,7 +332,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     model_type=model_config.model_type,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     action_encoding=base_cfg.action_encoding,
-                    language_action_config=cot_policy.get_language_action_config(base_cfg.language_action_config_name),
+                    language_action_format=cot_policy.get_language_action_format(base_cfg.language_action_format_name),
                     enable_prediction_training=model_config.enable_prediction_training,
                     prediction_prompt=base_cfg.prediction_prompt,
                 )
@@ -1063,7 +1063,7 @@ _CONFIGS = [
             dataset_type="combined",
             data_mix="libero_finetune",
             rlds_data_dir="gs://pi0-cot/OXE",  # Update this path
-            language_action_config_name="default",
+            language_action_format_name="default",
             decoding_schema="default",
         ),
         fsdp_devices=1,
@@ -1096,7 +1096,7 @@ _CONFIGS = [
             dataset_type="combined",
             data_mix="libero_finetune",
             rlds_data_dir="gs://pi0-cot/OXE",  # Update this path
-            language_action_config_name="default",
+            language_action_format_name="default",
             decoding_schema="default",
         ),
         fsdp_devices=1,
@@ -1131,7 +1131,7 @@ _CONFIGS = [
             dataset_type="oxe",
             data_mix="libero_10_no_noops",
             rlds_data_dir="/n/fs/robot-data/libero/tfds",
-            language_action_config_name="compact",
+            language_action_format_name="compact",
             decoding_schema="compact",
         ),
         fsdp_devices=1,
