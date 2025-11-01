@@ -185,7 +185,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("libero_goal_no_noops", 1.0),
     ],
     "oxe_small": [
-        ("droid", 1.0),  # after filter: 54946 trajs, 12825295 frames
+        ("droid", 0.8),  # after filter: 54946 trajs, 12825295 frames
         ("taco_play", 1.0),
         (
             "jaco_play",
@@ -200,7 +200,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 1.0),
+        ("molmoact_dataset", 2.0),
     ],
     # === Individual Datasets (for isolated visualization/testing) ===
     "kuka": [("kuka", 1.0)],

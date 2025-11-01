@@ -8,6 +8,7 @@ from droid.robot_env import RobotEnv
 import tyro
 from scipy.spatial.transform import Rotation as R
 import sys
+
 sys.path.append(".")
 from shared import BaseEvalRunner, Args
 from openpi_client import image_tools
@@ -29,7 +30,6 @@ class FrankaEvalRunner(BaseEvalRunner):
             action_space="cartesian_position",
             gripper_action_space="position",
         )
-    
 
     def _extract_observation(self, obs_dict, *, save_to_disk=False):
         image_observations = obs_dict["image"]
@@ -44,8 +44,8 @@ class FrankaEvalRunner(BaseEvalRunner):
         #     gripper_position = 0.0
 
         return {
-            "image": image_observations["0"][..., ::-1],  # Convert BGR to RGB
-            "wrist_image": image_observations["1"][..., ::-1],
+            "image": image_observations["0"][..., ::-1][None],  # Convert BGR to RGB
+            "wrist_image": image_observations["1"][..., ::-1][None],
             # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=1), # rotate 90 degrees
             # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=2), # rotate 180 degrees
             # "wrist_image": image_observations["1"][..., ::-1][::-1],  # flip vertically, up -> dowm
@@ -57,8 +57,11 @@ class FrankaEvalRunner(BaseEvalRunner):
             "joint_position": np.array(robot_state["joint_positions"]),
         }
 
-def rotate_x_degrees(img, degrees):
+    def get_action_from_response(self, response, curr_obs, use_quaternions=True):
+        return super().get_action_from_response(response, curr_obs, use_quaternions=use_quaternions)
 
+
+def rotate_x_degrees(img, degrees):
     # Rotation parameters
     (h, w) = img.shape[:2]
     center = (w / 2, h / 2)
@@ -78,10 +81,7 @@ def rotate_x_degrees(img, degrees):
 
     # Rotate with black padding
     rotated = cv2.warpAffine(
-        img, M, (new_w, new_h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0)
+        img, M, (new_w, new_h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0)
     )
     cv2.imwrite("rotated_debug.png", rotated)
     return rotated
@@ -92,17 +92,25 @@ class FrankaExtrEvalRunner(FrankaEvalRunner):
         super().__init__(args)
 
     def set_extrinsics(self):
-        extrinsics = [0.7214792, -0.73091813, 0.723, -0.05750051, 0.19751727, 0.90085098, -0.38229326]  # (x,y,z),(w,x,y,z)
+        extrinsics = [
+            0.19344852600560863,
+            -0.4704189157280809,
+            0.968999457340307,
+            -2.3815317980812005,
+            0.1557806728117621,
+            -0.6502647332046341,
+        ]
         # Turn (pos, quat_wxyz) into 4x4 cam->base extrinsics matrix
         pos = np.array(extrinsics[:3], dtype=float)
-        w, x, y, z = extrinsics[3:7]
-        quat_xyzw = np.array([x, y, z, w], dtype=float)  # convert (w,x,y,z) -> (x,y,z,w)
+        roll, pitch, yaw = extrinsics[3:6]
+        r = R.from_euler("xyz", [roll, pitch, yaw], degrees=False)
+        quat_xyzw = r.as_quat()  # (x,y,z,w)
         rot_mat = R.from_quat(quat_xyzw).as_matrix()
         cam_to_base_extrinsics_matrix = np.eye(4, dtype=float)
         cam_to_base_extrinsics_matrix[:3, :3] = rot_mat
         cam_to_base_extrinsics_matrix[:3, 3] = pos
-
         return cam_to_base_extrinsics_matrix
+
 
 class FrankaUpstreamEvalRunner(FrankaEvalRunner):
     def __init__(self, args):
@@ -116,11 +124,8 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
         )
 
     def obs_to_request(self, curr_obs, instruction):
-
         request = {
-            "observation/exterior_image_1_left": image_tools.resize_with_pad(
-                    curr_obs[self.side_image_name], 224, 224
-                ),
+            "observation/exterior_image_1_left": image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
             "observation/cartesian_position": curr_obs["cartesian_position"],
             "observation/gripper_position": curr_obs["gripper_position"],
             "observation/joint_position": curr_obs["joint_position"],
@@ -129,7 +134,7 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
         if self.args.use_wrist_camera:
             request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
         return request
-    
+
 
 if __name__ == "__main__":
     args: Args = tyro.cli(Args)

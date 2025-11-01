@@ -1,18 +1,17 @@
 import contextlib
+import dataclasses
 import datetime
 import signal
-import sys
 import time
-import dataclasses
-from pathlib import Path
 
-
-from openpi_client import image_tools
 from moviepy.editor import ImageSequenceClip
 import numpy as np
+from openpi_client import image_tools
 from openpi_client import websocket_client_policy
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
 import tqdm
-import cv2
+
 AXIS_PERM = np.array([0, 2, 1])
 AXIS_SIGN = np.array([1, 1, 1])
 # DROID data collection frequency -- we slow down execution to match this frequency
@@ -25,11 +24,60 @@ IMAGE_KEYS = (
     # "right_wrist_0_rgb",
 )
 
+
+def interpolate_rpy(curr, delta, steps):
+    """Interpolate roll-pitch-yaw angles using quaternion SLERP.
+
+    This function uses spherical linear interpolation (SLERP) on quaternions
+    to provide smooth rotation interpolation, avoiding gimbal lock and
+    discontinuities that occur with naive linear interpolation of Euler angles.
+
+    Args:
+        curr: Current RPY angles as array of shape (3,) in radians
+        delta: Change in RPY angles as array of shape (3,) or (n, 3) in radians
+        steps: Number of interpolation steps
+
+    Returns:
+        Array of shape (steps, 3) with interpolated RPY values in radians
+    """
+    curr = np.asarray(curr, dtype=float)
+    delta = np.asarray(delta, dtype=float)
+
+    # Handle both 1D and 2D delta inputs
+    if delta.ndim == 1:
+        # Single delta vector - interpolate from curr to curr + delta
+        target_rpy = curr + delta
+    else:
+        # Multiple deltas - use the first one
+        target_rpy = curr + delta[0] if len(delta) > 0 else curr
+
+    # Convert current and target RPY to rotation objects
+    # RPY convention: rotate around x (roll), then y (pitch), then z (yaw)
+    rot_curr = R.from_euler("xyz", curr, degrees=False)
+    rot_target = R.from_euler("xyz", target_rpy, degrees=False)
+
+    # Create SLERP interpolator
+    key_times = np.array([0, 1])
+    key_rots = R.concatenate([rot_curr, rot_target])
+    slerp = Slerp(key_times, key_rots)
+
+    # Generate interpolation times
+    interp_times = np.linspace(0, 1, steps, endpoint=True)
+
+    # Perform SLERP interpolation
+    interpolated_rots = slerp(interp_times)
+
+    # Convert back to RPY
+    rpy_arr = interpolated_rots.as_euler("xyz", degrees=False)
+
+    return rpy_arr
+
+
 @dataclasses.dataclass
 class Args:
     # Hardware parameters
     left_camera_id: str = "31177322"  # e.g., "24259877"
-    right_camera_id: str = "38872458"  # e.g., "24514023"   
+    right_camera_id: str = "38872458"  # e.g., "24514023"
     wrist_camera_id: str = "10501775"  # e.g., "13062452"
     # Policy parameters
     external_camera: str = "right"  # which external camera should be fed to the policy, choose from ["left", "right"]
@@ -46,8 +94,10 @@ class Args:
     in_camera_frame: bool = (
         False  # whether the predicted actions are in camera frame (True) or robot/base frame (False)
     )
-    use_wrist_camera: bool = False  # whether to use the wrist camera image as input to the policy
+    use_wrist_camera: bool = True  # whether to use the wrist camera image as input to the policy
     run_upstream: bool = False  # whether to run the upstream policy server
+    predict_rotation: bool = False  # whether to use roll-pitch-yaw for orientation representation
+
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
 # waiting for a new action chunk, it will raise an exception and the server connection dies.
@@ -76,7 +126,7 @@ class BaseEvalRunner:
 
     def __init__(self, args):
         self.env = self.init_env()
-        self.args = args
+        self.args: Args = args
         self.cam_to_base_extrinsics_matrix = self.set_extrinsics()
         self.in_camera_frame = args.in_camera_frame
         assert self.in_camera_frame == (self.cam_to_base_extrinsics_matrix is not None), (
@@ -99,12 +149,9 @@ class BaseEvalRunner:
         raise NotImplementedError()
 
     def obs_to_request(self, curr_obs, instruction):
-
         request = {
             "observation": {
-                IMAGE_KEYS[0]: image_tools.resize_with_pad(
-                    curr_obs[self.side_image_name], 224, 224
-                ),
+                IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
                 "cartesian_position": curr_obs["cartesian_position"],
                 "gripper_position": curr_obs["gripper_position"],
                 "joint_position": curr_obs["joint_position"],
@@ -120,7 +167,7 @@ class BaseEvalRunner:
     def set_extrinsics(self):
         return None
 
-    def get_action_from_response(self, response, curr_obs):
+    def get_action_from_response(self, response, curr_obs, use_quaternions=False):
         """Extract actions from server response, either directly or by parsing reasoning.
 
         Args:
@@ -130,13 +177,13 @@ class BaseEvalRunner:
             (delta_base, grip_actions) - translation delta and gripper actions
         """
         # If server already parsed actions, use them directly
-        assert  "actions" in response and response["actions"] is not None
+        assert "actions" in response and response["actions"] is not None
         if "reasoning" in response and response["reasoning"] is not None:
             print(response["reasoning"])
             actions = np.asarray(response["actions"])
             # Extract translation delta (first 3 dims) and gripper (last dim)
             delta_base = actions[0, :3]  # Already in meters
-            grip_actions = 1 - actions[:, -1]
+            grip_actions = 1 - actions[0, -1]
             # grip_actions = actions[:, -1]
 
             # If in camera frame, transform to robot/base frame
@@ -152,12 +199,20 @@ class BaseEvalRunner:
             next_grip = float(grip_actions[0]) if grip_actions.size > 0 else curr_grip
             # Linearly interpolate to CHUNK_STEPS actions
             positions = np.linspace(curr_pos, next_pos, self.CHUNK_STEPS, endpoint=True)
-            rpy_arr = np.tile(curr_rpy, (self.CHUNK_STEPS, 1))
+            if self.args.predict_rotation:
+                rpy_arr = interpolate_rpy(curr=curr_rpy, delta=actions[0, 3:6], steps=self.CHUNK_STEPS)
+            else:
+                rpy_arr = np.tile(curr_rpy, (self.CHUNK_STEPS, 1))
             # grip_vals = np.linspace(curr_grip, next_grip, self.CHUNK_STEPS, endpoint=True).reshape(
             #     -1, 1
             # ) # no interpolation for gripper
             grip_vals = np.full((self.CHUNK_STEPS, 1), next_grip)
-            pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
+            if use_quaternions:
+                # Convert RPY to quaternions for action representation
+                quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
+                pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
+            else:
+                pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
 
         else:
             curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
@@ -165,8 +220,19 @@ class BaseEvalRunner:
             pred_action_chunk = response["actions"].copy()
             print(pred_action_chunk)
             pred_action_chunk[:, :3] += curr_pos
-            pred_action_chunk[:, 3:6] = curr_rpy
+            if self.args.predict_rotation:
+                rpy_arr = interpolate_rpy(
+                    curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0]
+                )
+                pred_action_chunk[:, 3:6] = rpy_arr
+            else:
+                pred_action_chunk[:, 3:6] = curr_rpy
             pred_action_chunk[:, 6] = 1 - pred_action_chunk[:, 6]  # invert gripper action
+            if use_quaternions:
+                quat_arr = R.from_euler("xyz", pred_action_chunk[:, 3:6], degrees=False).as_quat()  # (x,y,z,w)
+                pred_action_chunk = np.concatenate(
+                    [pred_action_chunk[:, :3], quat_arr, pred_action_chunk[:, 6:7]], axis=1
+                )
 
         return pred_action_chunk
 
@@ -209,7 +275,7 @@ class BaseEvalRunner:
                             st = time.time()
                             response = policy_client.infer(request_data)
                             pred_action_chunk = self.get_action_from_response(response, curr_obs)
-                            
+
                             et = time.time()
                             print(f"Time taken for inference: {et - st}")
                     # Select current action to execute from chunk
@@ -233,6 +299,7 @@ class BaseEvalRunner:
             if wrist_width != side_width:
                 # Resize wrist video to match side view width while maintaining aspect ratio
                 import cv2
+
                 resized_wrist = []
                 aspect_ratio = wrist_width / wrist_height
                 new_height = int(side_width / aspect_ratio)
@@ -285,7 +352,7 @@ class BaseEvalRunner:
                         video.append(curr_obs["image"])
                     wrist_video.append(curr_obs["wrist_image"].copy())
                     # Predict a new chunk if needed
-                    if actions_from_chunk_completed == 0  or actions_from_chunk_completed >= self.args.open_loop_horizon:
+                    if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0
                         print("running inference again....*****")
                         request_data = self.obs_to_request(curr_obs, instruction)
