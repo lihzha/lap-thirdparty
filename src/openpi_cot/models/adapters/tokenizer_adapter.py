@@ -34,7 +34,7 @@ def _is_number(piece: str) -> bool:
 def _is_direction_natural(piece: str) -> bool:
     """Check if token contains directional words (for natural language formats)."""
     piece_lower = piece.lower()
-    directional_words = ["right", "left", "forward", "up", "down", "back"]
+    directional_words = ["right", "left", "forward", "up", "down", "back", "clockwise", "counterclockwise"]
     return any(word in piece_lower for word in directional_words)
 
 
