@@ -705,6 +705,106 @@ class PiCoT(_pi0.Pi0):
 
         return tokens, input_mask, ar_mask
 
+    def _compute_sequence_loss(
+        self,
+        prefix_tokens: at.Float[at.Array, "b s emb"],
+        prefix_mask: at.Bool[at.Array, "b s"],
+        prefix_ar_mask: at.Bool[at.Array, "b s"],
+        tokenized_sequence: at.Int[at.Array, "b s"],
+        tokenized_sequence_mask: at.Bool[at.Array, "b s"],
+        tokenized_langact_mask: at.Bool[at.Array, "b s"],
+        critical_token_mask: at.Bool[at.Array, "b s"] | None,
+        number_token_mask: at.Bool[at.Array, "b s"] | None,
+        direction_token_mask: at.Bool[at.Array, "b s"] | None,
+        sample_mask: at.Bool[at.Array, "b"] | None,
+        loss_name: str,
+        metric_prefix: str,
+        train: bool,
+    ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
+        """Shared logic for computing sequence prediction loss (language or prediction).
+
+        Args:
+            prefix_tokens: Prefix embeddings (images + text)
+            prefix_mask: Prefix attention mask
+            prefix_ar_mask: Prefix autoregressive mask
+            tokenized_sequence: Tokenized sequence to predict
+            tokenized_sequence_mask: Mask for tokenized sequence
+            tokenized_langact_mask: Language/action mask for the sequence
+            critical_token_mask: Mask for critical tokens
+            number_token_mask: Mask for number tokens
+            direction_token_mask: Mask for direction tokens
+            sample_mask: Per-sample mask for batch-level filtering
+            loss_name: Name to use for loss metric (e.g., "lang_loss", "pred_loss")
+            metric_prefix: Prefix to add to metric names (e.g., "", "pred_")
+            train: If True, return per-sample loss and metrics
+
+        Returns:
+            (loss, metrics)
+        """
+        # Forward pass
+        prefix_out, _ = self._forward_language_model(prefix_tokens, prefix_mask, prefix_ar_mask)
+
+        # Predict next tokens
+        shift_labels = tokenized_sequence[:, 1:]
+        max_len = tokenized_langact_mask.shape[1]
+        shift_tokens = prefix_out[:, -max_len:-1, :]
+        shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
+
+        # Prepare token mask
+        token_mask = self._prepare_token_mask(
+            tokenized_langact_mask[:, 1:],
+            tokenized_sequence_mask[:, 1:],
+            sample_mask,
+        )
+
+        # Prepare additional masks for accuracy computation
+        ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
+
+        def prepare_mask(mask):
+            if mask is None:
+                return None
+            shifted_mask = mask[:, 1:]
+            if ex_mask is not None:
+                return shifted_mask * ex_mask
+            return shifted_mask
+
+        critical_mask = prepare_mask(critical_token_mask)
+        number_mask = prepare_mask(number_token_mask)
+        direction_mask = prepare_mask(direction_token_mask)
+
+        # Compute loss and metrics
+        loss, raw_metrics = self._compute_cross_entropy_with_metrics(
+            logits=shift_logits,
+            labels=shift_labels,
+            token_mask=token_mask,
+            critical_mask=critical_mask,
+            number_mask=number_mask,
+            direction_mask=direction_mask,
+            train=train,
+        )
+
+        # Apply metric prefix if needed
+        metrics = {}
+        metric_rename_map = {
+            "token_accuracy": f"{metric_prefix}token_accuracy",
+            "critical_token_accuracy": f"{metric_prefix}critical_token_accuracy",
+            "number_token_accuracy": f"{metric_prefix}number_token_accuracy",
+            "direction_token_accuracy": f"{metric_prefix}direction_token_accuracy",
+        }
+
+        for key, value in raw_metrics.items():
+            # Rename accuracy metrics with prefix, keep other metrics as-is
+            new_key = metric_rename_map.get(key, key)
+            metrics[new_key] = value
+
+        # Store loss in metrics
+        if train:
+            metrics[loss_name] = loss
+        else:
+            metrics[loss_name] = jnp.mean(loss)
+
+        return loss, metrics
+
     def _compute_language_loss(
         self,
         observation: CoTObservation | Observation,
@@ -725,60 +825,21 @@ class PiCoT(_pi0.Pi0):
         Returns:
             (loss, metrics, token_accuracy_scalar)
         """
-        # Forward pass
-        prefix_out, _ = self._forward_language_model(prefix_tokens, prefix_mask, prefix_ar_mask)
-
-        # Predict next tokens over the reasoning span
-        shift_labels = observation.tokenized_prompt[:, 1:]
-        max_len = observation.tokenized_langact_mask.shape[1]
-        shift_tokens = prefix_out[:, -max_len:-1, :]
-        shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
-
-        # Prepare token mask
-        token_mask = self._prepare_token_mask(
-            observation.tokenized_langact_mask[:, 1:],
-            observation.tokenized_prompt_mask[:, 1:],
-            observation.sample_mask,
-        )
-
-        # Prepare additional masks for accuracy computation
-        ex_mask = jnp.asarray(observation.sample_mask)[..., None] if observation.sample_mask is not None else None
-        critical_mask = (
-            observation.crictical_token_mask[:, 1:] * ex_mask
-            if ex_mask is not None
-            else observation.crictical_token_mask[:, 1:]
-        )
-        number_mask = (
-            observation.number_token_mask[:, 1:] * ex_mask
-            if observation.number_token_mask is not None and ex_mask is not None
-            else observation.number_token_mask[:, 1:]
-            if observation.number_token_mask is not None
-            else None
-        )
-        direction_mask = (
-            observation.direction_token_mask[:, 1:] * ex_mask
-            if observation.direction_token_mask is not None and ex_mask is not None
-            else observation.direction_token_mask[:, 1:]
-            if observation.direction_token_mask is not None
-            else None
-        )
-
-        # Compute loss and metrics
-        loss, metrics = self._compute_cross_entropy_with_metrics(
-            logits=shift_logits,
-            labels=shift_labels,
-            token_mask=token_mask,
-            critical_mask=critical_mask,
-            number_mask=number_mask,
-            direction_mask=direction_mask,
+        loss, metrics = self._compute_sequence_loss(
+            prefix_tokens=prefix_tokens,
+            prefix_mask=prefix_mask,
+            prefix_ar_mask=prefix_ar_mask,
+            tokenized_sequence=observation.tokenized_prompt,
+            tokenized_sequence_mask=observation.tokenized_prompt_mask,
+            tokenized_langact_mask=observation.tokenized_langact_mask,
+            critical_token_mask=observation.crictical_token_mask,
+            number_token_mask=observation.number_token_mask,
+            direction_token_mask=observation.direction_token_mask,
+            sample_mask=observation.sample_mask,
+            loss_name="lang_loss",
+            metric_prefix="",
             train=train,
         )
-
-        # Store loss in metrics
-        if train:
-            metrics["lang_loss"] = loss
-        else:
-            metrics["lang_loss"] = jnp.mean(loss)
 
         # Extract scalar token accuracy for backward compatibility
         token_accuracy = metrics.get("token_accuracy", jnp.array(0.0))
@@ -834,89 +895,27 @@ class PiCoT(_pi0.Pi0):
             prefix_mask_pred = jnp.concatenate([img_mask_all, text_mask_pred], axis=1)
             prefix_ar_mask_pred = jnp.concatenate([img_ar_mask_all, text_ar_mask_pred], axis=1)
 
-        # Forward pass
-        prefix_out_pred, _ = self._forward_language_model(prefix_tokens_pred, prefix_mask_pred, prefix_ar_mask_pred)
+        # Extract prediction-specific masks (with fallback to None if not present)
+        critical_mask = getattr(observation, "prediction_crictical_token_mask", None)
+        number_mask = getattr(observation, "prediction_number_token_mask", None)
+        direction_mask = getattr(observation, "prediction_direction_token_mask", None)
 
-        # Predict next tokens over the prediction span
-        shift_labels_pred = observation.tokenized_prediction[:, 1:]
-        max_len_pred = observation.tokenized_prediction_langact_mask.shape[1]
-        shift_tokens_pred = prefix_out_pred[:, -max_len_pred:-1, :]
-        shift_logits_pred = self.PaliGemma.llm(shift_tokens_pred, method="decode")
-
-        # Prepare token mask
-        token_mask_pred = self._prepare_token_mask(
-            observation.tokenized_prediction_langact_mask[:, 1:],
-            observation.tokenized_prediction_mask[:, 1:],
-            observation.sample_mask,
-        )
-
-        # Prepare additional masks for accuracy computation
-        ex_mask_pred = jnp.asarray(observation.sample_mask)[..., None] if observation.sample_mask is not None else None
-        critical_pred_mask = None
-        if (
-            hasattr(observation, "prediction_crictical_token_mask")
-            and observation.prediction_crictical_token_mask is not None
-        ):
-            critical_pred_mask = (
-                observation.prediction_crictical_token_mask[:, 1:] * ex_mask_pred
-                if ex_mask_pred is not None
-                else observation.prediction_crictical_token_mask[:, 1:]
-            )
-
-        number_pred_mask = None
-        if (
-            hasattr(observation, "prediction_number_token_mask")
-            and observation.prediction_number_token_mask is not None
-        ):
-            number_pred_mask = (
-                observation.prediction_number_token_mask[:, 1:] * ex_mask_pred
-                if ex_mask_pred is not None
-                else observation.prediction_number_token_mask[:, 1:]
-            )
-
-        direction_pred_mask = None
-        if (
-            hasattr(observation, "prediction_direction_token_mask")
-            and observation.prediction_direction_token_mask is not None
-        ):
-            direction_pred_mask = (
-                observation.prediction_direction_token_mask[:, 1:] * ex_mask_pred
-                if ex_mask_pred is not None
-                else observation.prediction_direction_token_mask[:, 1:]
-            )
-
-        # Compute loss and metrics
-        pred_loss, pred_metrics = self._compute_cross_entropy_with_metrics(
-            logits=shift_logits_pred,
-            labels=shift_labels_pred,
-            token_mask=token_mask_pred,
-            critical_mask=critical_pred_mask,
-            number_mask=number_pred_mask,
-            direction_mask=direction_pred_mask,
+        # Compute loss and metrics using shared helper
+        return self._compute_sequence_loss(
+            prefix_tokens=prefix_tokens_pred,
+            prefix_mask=prefix_mask_pred,
+            prefix_ar_mask=prefix_ar_mask_pred,
+            tokenized_sequence=observation.tokenized_prediction,
+            tokenized_sequence_mask=observation.tokenized_prediction_mask,
+            tokenized_langact_mask=observation.tokenized_prediction_langact_mask,
+            critical_token_mask=critical_mask,
+            number_token_mask=number_mask,
+            direction_token_mask=direction_mask,
+            sample_mask=observation.sample_mask,
+            loss_name="pred_loss",
+            metric_prefix="pred_",
             train=train,
         )
-
-        # Rename metrics to add "pred_" prefix
-        metrics = {}
-        for key, value in pred_metrics.items():
-            if key == "token_accuracy":
-                metrics["pred_token_accuracy"] = value
-            elif key == "critical_token_accuracy":
-                metrics["pred_critical_token_accuracy"] = value
-            elif key == "number_token_accuracy":
-                metrics["pred_number_token_accuracy"] = value
-            elif key == "direction_token_accuracy":
-                metrics["pred_direction_token_accuracy"] = value
-            else:
-                metrics[key] = value
-
-        # Store loss
-        if train:
-            metrics["pred_loss"] = pred_loss
-        else:
-            metrics["pred_loss"] = jnp.mean(pred_loss)
-
-        return pred_loss, metrics
 
     def _compute_action_loss(
         self,
