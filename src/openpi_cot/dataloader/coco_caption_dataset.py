@@ -72,6 +72,7 @@ class CocoCaption(_SingleCoTDataset):
         self.standalone = standalone
         self.skip_normalization = skip_normalization
         self.enable_prediction_training = enable_prediction_training
+        self.action_horizon = action_horizon
 
         # VQA-specific settings
         self.control_frequency = 1  # Single frame, no temporal control
