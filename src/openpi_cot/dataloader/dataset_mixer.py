@@ -146,7 +146,10 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
-            datasets.append(ds.dataset.with_ram_budget(1))
+            try:
+                datasets.append(ds.dataset.with_ram_budget(1))
+            except AttributeError:
+                datasets.append(ds.dataset)
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_name] = dataset_statistics
