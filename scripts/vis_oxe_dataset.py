@@ -208,12 +208,11 @@ def _extract_captions(batch) -> list[str]:
             else:
                 caption_str = str(caption)
             out.append(caption_str)
+    # Single value
+    elif isinstance(captions, bytes):
+        out.append(captions.decode("utf-8"))
     else:
-        # Single value
-        if isinstance(captions, bytes):
-            out.append(captions.decode("utf-8"))
-        else:
-            out.append(str(captions))
+        out.append(str(captions))
 
     return out
 
@@ -536,6 +535,8 @@ def main(config: _config.TrainConfig):
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     # Sharding details for the first batch
     log_batch_sharding(batch)
+
+    breakpoint()
 
     for j in range(10):
         # Visualize language-action projection per example

@@ -57,12 +57,15 @@ class TokenizePromptAndReasoning(DataTransformFn):
             tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
         else:
             pad_id = self.tokenizer._tokenizer.pad_id()
-            tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len 
+            tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len
             tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
-            
+
+        is_vqa_mask = data.pop("is_vqa_mask", False)
 
         # Tokenize regular reasoning
-        tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(prompt, language_actions, state)
+        tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(
+            prompt, language_actions, state, is_vqa_mask=is_vqa_mask
+        )
 
         # Combine number_mask and direction_mask for critical tokens
         critical_mask = np.logical_or(numeric_mask, direction_mask)
@@ -94,8 +97,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
             # Skip empty prediction language actions
             if prediction_lang and prediction_lang.strip():
                 # Use prediction-specific tokenization
-                pred_tokens, pred_pad_mask, pred_reasoning_mask, pred_numeric_mask, pred_direction_mask = self.tokenizer.tokenize_prediction(
-                    prediction_prompt_str, prediction_lang
+                pred_tokens, pred_pad_mask, pred_reasoning_mask, pred_numeric_mask, pred_direction_mask = (
+                    self.tokenizer.tokenize_prediction(prediction_prompt_str, prediction_lang)
                 )
 
                 # Combine number_mask and direction_mask for prediction critical tokens
