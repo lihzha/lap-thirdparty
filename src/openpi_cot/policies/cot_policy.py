@@ -6,6 +6,7 @@ import numpy as np
 from openpi import transforms as upstream_transforms
 
 from openpi_cot.dataloader.helpers import ActionEncoding
+from openpi_cot.dataloader.vqa_base import VQA_DATASET_NAMES
 from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 from openpi_cot.policies.utils import is_idle_language_action
@@ -263,11 +264,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         inputs = self._prepare_inputs(data)
 
-        # Check if this is a VQA dataset (e.g., coco_caption)
+        # Check if this is a VQA dataset (e.g., coco_captions, vqav2)
         dataset_name = data.get("dataset_name")
         if isinstance(dataset_name, bytes):
             dataset_name = dataset_name.decode("utf-8")
-        is_vqa_dataset = dataset_name == "coco_caption"
+        is_vqa_dataset = dataset_name in VQA_DATASET_NAMES
         inputs["is_vqa_mask"] = False  # Default to False
 
         # Special handling for VQA datasets

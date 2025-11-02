@@ -165,55 +165,23 @@ def _decode_prompt_strings(obs, tokenizer) -> list[str]:
     return out
 
 
-def _extract_captions(batch) -> list[str]:
-    """Extract captions from batch (for VQA datasets).
-
-    Args:
-        batch: Tuple of (observation, actions) from dataloader
-
-    Returns:
-        List of caption strings, one per batch element
-    """
-    if batch is None or len(batch) < 1:
+def _decode_captions(obs, tokenizer) -> list[str]:
+    """Extract and decode the langact (language action) tokens per example."""
+    if obs.tokenized_prompt is None or obs.tokenized_langact_mask is None:
         return []
+    tokens = _safe_device_get(obs.tokenized_prompt)
+    rmask = _safe_device_get(obs.tokenized_langact_mask)
 
-    obs = batch[0]
-
-    # Try to get caption from observation extras
-    caption_data = None
-    if hasattr(obs, "caption"):
-        caption_data = obs.caption
-    elif hasattr(obs, "__dict__") and "caption" in obs.__dict__:
-        caption_data = obs.__dict__["caption"]
-
-    if caption_data is None:
+    if tokens is None or rmask is None:
         return []
-
-    # Get caption data to host
-    captions = _safe_device_get(caption_data)
-    if captions is None:
-        return []
-
-    # Handle both string arrays and byte arrays
     out: list[str] = []
-    if hasattr(captions, "shape"):
-        batch_size = captions.shape[0] if len(captions.shape) > 0 else 1
-        if batch_size == 1 and len(captions.shape) == 0:
-            # Scalar
-            captions = [captions]
-        for i in range(batch_size):
-            caption = captions[i] if hasattr(captions, "__getitem__") else captions
-            if isinstance(caption, bytes):
-                caption_str = caption.decode("utf-8")
-            else:
-                caption_str = str(caption)
-            out.append(caption_str)
-    # Single value
-    elif isinstance(captions, bytes):
-        out.append(captions.decode("utf-8"))
-    else:
-        out.append(str(captions))
-
+    for i in range(tokens.shape[0]):
+        sel = tokens[i][rmask[i].astype(bool)]
+        try:
+            text = tokenizer.decode(sel.astype(np.int32))
+        except Exception:
+            text = ""
+        out.append(text)
     return out
 
 
@@ -545,7 +513,7 @@ def main(config: _config.TrainConfig):
         langact_texts = _decode_langact_strings(obs, tok)
         prompt_texts = _decode_prompt_strings(obs, tok)
         # Extract captions (for VQA datasets)
-        caption_texts = _extract_captions(batch)
+        caption_texts = _decode_captions(obs, tok)
         # Extract ground truth actions
         gt_action_texts = _extract_gt_actions(batch)
 

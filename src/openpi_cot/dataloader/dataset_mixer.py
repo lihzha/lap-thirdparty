@@ -22,6 +22,8 @@ from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
 from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
+from openpi_cot.dataloader.vqa_base import VQA_DATASET_NAMES
+from openpi_cot.dataloader.vqav2_dataset import Vqav2
 from openpi_cot.transforms import NormalizeActionAndProprio
 
 if TYPE_CHECKING:
@@ -30,7 +32,8 @@ if TYPE_CHECKING:
 
 class OXECoTDatasets:
     spec: ClassVar[CoTRldsDatasetSpec] = CoTRldsDatasetSpec()
-    VQA_DATASETS: ClassVar[set[str]] = {"coco_caption"}
+    # Use centralized VQA dataset registry
+    VQA_DATASETS: ClassVar[set[str]] = VQA_DATASET_NAMES
 
     def __init__(
         self,
@@ -137,8 +140,13 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
-            elif dataset_name == "coco_caption":
+            elif dataset_name == "coco_captions":
                 ds = CocoCaption(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "vqav2":
+                ds = Vqav2(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
