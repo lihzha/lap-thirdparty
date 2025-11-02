@@ -173,6 +173,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 wrist_image = np.zeros_like(base_image)
                 wrist_image_mask = np.False_
 
+            breakpoint()
+
             # Optional dropout: randomly mask out wrist image
             if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
                 wrist_image_mask = np.False_
