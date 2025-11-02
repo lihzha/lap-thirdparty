@@ -29,6 +29,15 @@ VQA_PROMPTS = tf.constant(
 )
 
 
+def ensure_dldataset(ds, is_flattened=False):
+    if isinstance(ds, tf.data.Dataset) and not isinstance(ds, DLataset):
+        Original = ds.__class__
+        MixedDL = type("DLatasetWrapped", (DLataset, Original), {})
+        ds.__class__ = MixedDL
+        ds.is_flattened = is_flattened
+    return ds
+
+
 class CocoCaption(_SingleCoTDataset):
     """COCO Captions dataset for vision-language training.
 
@@ -203,10 +212,7 @@ class CocoCaption(_SingleCoTDataset):
             read_config=read_config,
         )
 
-        if not isinstance(ds, DLataset) and isinstance(ds, tf.data.Dataset):
-            ds.__class__ = DLataset
-            ds.is_flattened = False
-
+        ds = ensure_dldataset(ds, is_flattened=True)
         return ds
 
     def split_val(self, split_seed):
@@ -296,7 +302,7 @@ class CocoCaption(_SingleCoTDataset):
 
             return output
 
-        self.dataset = self.dataset.map(
+        self.dataset = self.dataset.frame_map(
             restructure,
             num_parallel_calls=self.num_parallel_calls,
         )
@@ -363,7 +369,7 @@ class CocoCaption(_SingleCoTDataset):
 
             return example
 
-        self.dataset = self.dataset.map(
+        self.dataset = self.dataset.frame_map(
             transform,
             num_parallel_calls=self.num_parallel_calls,
         )
