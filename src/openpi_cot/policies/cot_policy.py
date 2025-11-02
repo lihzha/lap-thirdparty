@@ -293,8 +293,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             # Skip prediction training for VQA
             # (VQA datasets don't have temporal structure for prediction)
 
-            breakpoint()
-
             return inputs
 
         # Regular robot dataset processing

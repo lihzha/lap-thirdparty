@@ -502,15 +502,16 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             else:
                 pieces.append(self._tokenizer.id_to_piece(t))
 
-        for i in range(start_idx, end_idx):
-            if i < 0 or i >= len(pieces):
-                continue
-            piece = pieces[i]
-            if piece:
-                if _is_number(piece):
-                    number_mask[i] = True
-                if fmt.direction_token_checker(piece):
-                    direction_mask[i] = True
+        if not is_vqa_mask:
+            for i in range(start_idx, end_idx):
+                if i < 0 or i >= len(pieces):
+                    continue
+                piece = pieces[i]
+                if piece:
+                    if _is_number(piece):
+                        number_mask[i] = True
+                    if fmt.direction_token_checker(piece):
+                        direction_mask[i] = True
 
         return (
             np.asarray(tokens, dtype=np.int32),

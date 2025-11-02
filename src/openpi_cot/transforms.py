@@ -85,7 +85,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
         # Additionally tokenize prediction if prediction_language_action is present
         prediction_lang = data.pop("prediction_language_action", None)
         prediction_prompt_str = data.pop("prediction_prompt", self.prediction_prompt)
-        if prediction_lang is not None:
+        if prediction_lang is not None and not is_vqa_mask:
             # Parse prediction language action
             if isinstance(prediction_lang, bytes):
                 prediction_lang = prediction_lang.decode("utf-8")
