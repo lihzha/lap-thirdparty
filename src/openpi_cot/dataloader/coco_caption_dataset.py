@@ -203,6 +203,23 @@ class CocoCaption(_SingleCoTDataset):
 
         return ds
 
+    def split_val(self, split_seed):
+        """Override split_val to work with COCO's native structure."""
+
+        def _split_filter(example):
+            # Create trajectory_id from COCO's image/filename and image/id
+            salt = tf.strings.as_string(split_seed)
+            image_filename = example["image/filename"]
+            image_id = tf.strings.as_string(example["image/id"])
+            anchor = tf.strings.join(["coco_", image_filename, "_", image_id])
+            key = tf.strings.join([salt, anchor])
+            bucket = tf.strings.to_hash_bucket_fast(key, 1000)
+            thr = tf.cast(int(self.val_fraction * 1000), tf.int64)
+            is_val = bucket < thr
+            return is_val if self.want_val else tf.logical_not(is_val)
+
+        self.dataset = self.dataset.filter(_split_filter)
+
     def apply_vqa_restructure(self):
         """Restructure COCO data to match robot dataset format."""
 
@@ -233,6 +250,12 @@ class CocoCaption(_SingleCoTDataset):
             # Encode image to bytes (to match robot dataset format)
             image_encoded = tf.io.encode_jpeg(image, quality=95)
 
+            # Create trajectory_id from image filename and ID
+            # Format: "coco_<filename>_<image_id>"
+            image_filename = example["image/filename"]
+            image_id = tf.strings.as_string(example["image/id"])
+            trajectory_id = tf.strings.join(["coco_", image_filename, "_", image_id])
+
             # Randomly select one caption from the list
             captions = example["captions"]["text"]
             num_captions = tf.shape(captions)[0]
@@ -262,6 +285,7 @@ class CocoCaption(_SingleCoTDataset):
                 "control_frequency": tf.constant(self.control_frequency, dtype=tf.int32),
                 "is_bimanual": tf.constant(False, dtype=tf.bool),
                 "enable_prediction_training_mask": tf.constant(False, dtype=tf.bool),
+                "trajectory_id": tf.expand_dims(trajectory_id, axis=0),  # [1] for compatibility with split_val
             }
 
             return output
