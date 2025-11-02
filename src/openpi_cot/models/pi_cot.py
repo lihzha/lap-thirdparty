@@ -1120,9 +1120,27 @@ class PiCoT(_pi0.Pi0):
 
         # Compute prediction loss (conditionally, only if tokenized_prediction exists)
         if observation.tokenized_prediction is not None:
+            # Check if we should compute prediction loss based on enable_prediction_training_mask
+            # If the mask exists, check if ANY sample has it enabled
+            should_compute_pred = prediction_enabled
+            if observation.enable_prediction_training_mask is not None:
+                # Only compute if at least one sample has prediction training enabled
+                any_enabled = jnp.any(observation.enable_prediction_training_mask)
+                should_compute_pred = prediction_enabled & any_enabled
 
             def compute_pred():
-                return self._compute_prediction_loss(observation, img_tokens_all, img_mask_all, img_ar_mask_all, train)
+                # Create a combined sample mask for prediction loss
+                pred_sample_mask = observation.sample_mask
+                if observation.enable_prediction_training_mask is not None and pred_sample_mask is not None:
+                    # Combine both masks: only include samples that pass both conditions
+                    pred_sample_mask = jnp.logical_and(pred_sample_mask, observation.enable_prediction_training_mask)
+                elif observation.enable_prediction_training_mask is not None:
+                    # Use only the prediction mask if sample_mask doesn't exist
+                    pred_sample_mask = observation.enable_prediction_training_mask
+
+                # Temporarily override observation's sample_mask for prediction computation
+                obs_with_pred_mask = observation.replace(sample_mask=pred_sample_mask)
+                return self._compute_prediction_loss(obs_with_pred_mask, img_tokens_all, img_mask_all, img_ar_mask_all, train)
 
             def skip_pred():
                 # NOTE: Loss is ALWAYS per-sample (batch_size), regardless of train flag
@@ -1148,7 +1166,7 @@ class PiCoT(_pi0.Pi0):
                     dummy_metrics["per_sample_direction_total"] = jnp.zeros(batch_size, dtype=jnp.int32)
                 return dummy_loss, dummy_metrics
 
-            pred_loss, pred_metrics = jax.lax.cond(prediction_enabled, compute_pred, skip_pred)
+            pred_loss, pred_metrics = jax.lax.cond(should_compute_pred, compute_pred, skip_pred)
             total_loss = total_loss + prediction_loss_weight * pred_loss
             metrics.update(pred_metrics)
 

@@ -264,6 +264,39 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # stores as float32 (C,H,W), gets skipped for policy inference
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         inputs = self._prepare_inputs(data)
+
+        # Check if this is a VQA dataset (e.g., coco_caption)
+        dataset_name = data.get("dataset_name")
+        if isinstance(dataset_name, bytes):
+            dataset_name = dataset_name.decode("utf-8")
+        is_vqa_dataset = dataset_name == "coco_caption"
+
+        # Special handling for VQA datasets
+        if is_vqa_dataset:
+            # For VQA, use the caption field as language_actions
+            # Caption is a single string, so wrap it in a list for consistency
+            if "caption" in data:
+                caption = data["caption"]
+                if isinstance(caption, bytes):
+                    caption = caption.decode("utf-8")
+                # Store caption as single-element list for consistency
+                inputs["language_actions"] = [caption]
+            else:
+                # Fallback if caption is missing
+                inputs["language_actions"] = [""]
+
+            # VQA samples are always active (no idle filtering)
+            inputs["sample_mask"] = True
+
+            # VQA datasets should not participate in prediction training
+            inputs["enable_prediction_training_mask"] = False
+
+            # Skip prediction training for VQA
+            # (VQA datasets don't have temporal structure for prediction)
+
+            return inputs
+
+        # Regular robot dataset processing
         if self.language_action_format.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
@@ -297,6 +330,18 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             )
 
         # import wandb; wandb.log({"image": [wandb.Image(inputs["image"]["base_0_rgb"][0]), wandb.Image(inputs["image"]["base_0_rgb"][1])]})
+
+        # Extract enable_prediction_training_mask (default to True for robot datasets)
+        if "enable_prediction_training_mask" in data:
+            enable_pred_mask = data["enable_prediction_training_mask"]
+            if isinstance(enable_pred_mask, bytes):
+                # Should be bool, but handle bytes just in case
+                inputs["enable_prediction_training_mask"] = enable_pred_mask.decode("utf-8").lower() == "true"
+            else:
+                inputs["enable_prediction_training_mask"] = bool(enable_pred_mask)
+        else:
+            # Default to True for robot datasets (backward compatibility)
+            inputs["enable_prediction_training_mask"] = True
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

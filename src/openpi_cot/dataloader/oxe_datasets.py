@@ -182,6 +182,11 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
             traj["prompt"] = traj["language_instruction"]
             traj.pop("language_instruction")
             traj.pop("raw_action")
+            # Add empty caption field for robot datasets (VQA datasets will populate this)
+            traj_len = tf.shape(traj["actions"])[0]
+            traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
+            # Enable prediction training for robot datasets
+            traj["enable_prediction_training_mask"] = tf.repeat(tf.constant(True, dtype=tf.bool), traj_len)
             return traj
 
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)

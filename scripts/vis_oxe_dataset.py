@@ -165,6 +165,59 @@ def _decode_prompt_strings(obs, tokenizer) -> list[str]:
     return out
 
 
+def _extract_captions(batch) -> list[str]:
+    """Extract captions from batch (for VQA datasets).
+
+    Args:
+        batch: Tuple of (observation, actions) from dataloader
+
+    Returns:
+        List of caption strings, one per batch element
+    """
+    if batch is None or len(batch) < 1:
+        return []
+
+    obs = batch[0]
+
+    # Try to get caption from observation extras
+    caption_data = None
+    if hasattr(obs, "caption"):
+        caption_data = obs.caption
+    elif hasattr(obs, "__dict__") and "caption" in obs.__dict__:
+        caption_data = obs.__dict__["caption"]
+
+    if caption_data is None:
+        return []
+
+    # Get caption data to host
+    captions = _safe_device_get(caption_data)
+    if captions is None:
+        return []
+
+    # Handle both string arrays and byte arrays
+    out: list[str] = []
+    if hasattr(captions, "shape"):
+        batch_size = captions.shape[0] if len(captions.shape) > 0 else 1
+        if batch_size == 1 and len(captions.shape) == 0:
+            # Scalar
+            captions = [captions]
+        for i in range(batch_size):
+            caption = captions[i] if hasattr(captions, "__getitem__") else captions
+            if isinstance(caption, bytes):
+                caption_str = caption.decode("utf-8")
+            else:
+                caption_str = str(caption)
+            out.append(caption_str)
+    else:
+        # Single value
+        if isinstance(captions, bytes):
+            out.append(captions.decode("utf-8"))
+        else:
+            out.append(str(captions))
+
+    return out
+
+
 def _format_action_array(actions: np.ndarray, max_steps: int = 3) -> str:
     """Format action array as a human-readable string.
 
@@ -490,6 +543,8 @@ def main(config: _config.TrainConfig):
         # Decode langact and prompt strings
         langact_texts = _decode_langact_strings(obs, tok)
         prompt_texts = _decode_prompt_strings(obs, tok)
+        # Extract captions (for VQA datasets)
+        caption_texts = _extract_captions(batch)
         # Extract ground truth actions
         gt_action_texts = _extract_gt_actions(batch)
 
@@ -509,20 +564,34 @@ def main(config: _config.TrainConfig):
                 end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
                 la_text = langact_texts[i] if i < len(langact_texts) else ""
                 prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
+                caption_text = caption_texts[i] if i < len(caption_texts) else ""
                 gt_action_text = gt_action_texts[i] if i < len(gt_action_texts) else ""
 
-                # Combine prompt, langact, and GT actions for display
+                # Determine if this is a VQA sample (has non-empty caption)
+                is_vqa = bool(caption_text and caption_text.strip())
+
+                # Combine prompt, langact/caption, and GT actions for display
                 text_parts = []
                 if prompt_text:
                     text_parts.append(f"Prompt: {prompt_text}")
-                if la_text:
+
+                # For VQA datasets, show caption instead of language actions
+                if is_vqa:
+                    text_parts.append(f"Caption: {caption_text}")
+                elif la_text:
                     text_parts.append(f"LangAct: {la_text}")
-                if gt_action_text:
+
+                # Only show GT actions for robot datasets (not VQA)
+                if gt_action_text and not is_vqa:
                     text_parts.append(f"GT Action: {gt_action_text}")
+
                 combined_text = " | ".join(text_parts)
 
-                logging.info(f"[{i}] Prompt: {prompt_text} | LangAct: {la_text}")
-                logging.info(f"[{i}] GT Action: {gt_action_text}")
+                if is_vqa:
+                    logging.info(f"[{i}] [VQA] Prompt: {prompt_text} | Caption: {caption_text}")
+                else:
+                    logging.info(f"[{i}] [Robot] Prompt: {prompt_text} | LangAct: {la_text}")
+                    logging.info(f"[{i}] GT Action: {gt_action_text}")
 
                 col1 = np.copy(_ensure_color(start_u8))
                 col2 = np.copy(_ensure_color(end_u8))

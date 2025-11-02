@@ -8,6 +8,7 @@ import dlimp as dl
 import numpy as np
 import tensorflow as tf
 
+from openpi_cot.dataloader.coco_caption_dataset import CocoCaption
 from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 from openpi_cot.dataloader.helpers import NormalizationType
@@ -132,6 +133,11 @@ class OXECoTDatasets:
                 )
             elif dataset_name.startswith("planning"):
                 ds = PlanningDataset(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "coco_caption":
+                ds = CocoCaption(
                     dataset_name=dataset_name,
                     **kwargs,
                 )

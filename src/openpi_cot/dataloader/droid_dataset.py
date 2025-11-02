@@ -358,6 +358,11 @@ class DroidCoTDataset(_SingleCoTDataset):
         def _pop_keys(traj):
             traj.pop("traj_metadata")
             traj.pop("trajectory_id")
+            # Add empty caption field for robot datasets (VQA datasets will populate this)
+            traj_len = tf.shape(traj["actions"])[0]
+            traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
+            # Enable prediction training for robot datasets
+            traj["enable_prediction_training_mask"] = tf.repeat(tf.constant(True, dtype=tf.bool), traj_len)
 
             return traj
 

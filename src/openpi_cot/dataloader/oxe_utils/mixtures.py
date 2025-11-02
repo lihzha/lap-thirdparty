@@ -231,6 +231,26 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "molmoact_dataset": [("molmoact_dataset", 1.0)],
     "planning_dataset": [("planning_dataset", 1.0)],
     "libero_10_no_noops": [("libero_10_no_noops", 1.0)],
+    # === VQA Datasets ===
+    "coco_caption": [("coco_caption", 1.0)],
+    # === Mixed Robot + VQA ===
+    "oxe_small_with_vqa": [
+        ("droid", 0.8),
+        ("taco_play", 1.0),
+        ("jaco_play", 1.0),
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        ("utaustin_mutex", 1.0),
+        ("berkeley_fanuc_manipulation", 2.0),
+        ("berkeley_autolab_ur5", 1.0),
+        ("fmb", 1.0),
+        ("austin_buds_dataset_converted_externally_to_rlds", 1.0),
+        ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),
+        ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),
+        ("viola", 1.0),
+        ("molmoact_dataset", 2.0),
+        # VQA datasets
+        ("coco_caption", 0.1),  # 10% VQA samples
+    ],
 }
 
 
