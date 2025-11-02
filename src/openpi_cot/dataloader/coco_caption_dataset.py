@@ -130,7 +130,7 @@ class CocoCaption(_SingleCoTDataset):
                 std=np.ones(self.action_dim, dtype=np.float32),
                 q01=np.zeros(self.action_dim, dtype=np.float32),
                 q99=np.zeros(self.action_dim, dtype=np.float32),
-                num_transitions=0,
+                num_transitions=82783,
                 num_trajectories=0,
             ),
             "state": ExtendedNormStats(
@@ -138,7 +138,7 @@ class CocoCaption(_SingleCoTDataset):
                 std=np.ones(self.action_dim, dtype=np.float32),
                 q01=np.zeros(self.action_dim, dtype=np.float32),
                 q99=np.zeros(self.action_dim, dtype=np.float32),
-                num_transitions=0,
+                num_transitions=82783,
                 num_trajectories=0,
             ),
         }
