@@ -122,9 +122,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # The action dimension of the model. Will be used to pad state and actions.
     action_dim: int
     # Language action format (how to format/summarize actions)
-    language_action_format: LanguageActionFormat = dataclasses.field(
-        default_factory=lambda: COMPACT_FORMAT
-    )
+    language_action_format: LanguageActionFormat = dataclasses.field(default_factory=lambda: COMPACT_FORMAT)
     # Train-time dropout probs (set to 0.0 for val/inference)
     wrist_image_dropout_prob: float = 0.0
     # Determines which model will be used.
@@ -280,10 +278,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 if isinstance(caption, bytes):
                     caption = caption.decode("utf-8")
                 # Store caption as single-element list for consistency
-                inputs["language_actions"] = [caption]
+                inputs["language_actions"] = caption
             else:
                 # Fallback if caption is missing
-                inputs["language_actions"] = [""]
+                inputs["language_actions"] = ""
 
             # VQA samples are always active (no idle filtering)
             inputs["sample_mask"] = True
@@ -293,6 +291,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
             # Skip prediction training for VQA
             # (VQA datasets don't have temporal structure for prediction)
+
+            breakpoint()
 
             return inputs
 
