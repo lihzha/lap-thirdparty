@@ -504,8 +504,6 @@ def main(config: _config.TrainConfig):
     # Sharding details for the first batch
     log_batch_sharding(batch)
 
-    breakpoint()
-
     for j in range(10):
         # Visualize language-action projection per example
         obs = batch[0]
