@@ -59,6 +59,7 @@ class _SingleCoTDataset:
         self.standalone = standalone
         self.skip_normalization = skip_normalization
         self.enable_prediction_training = enable_prediction_training
+        self.action_horizon = action_horizon
         dataset_kwargs = load_dataset_kwargs(
             dataset_name, data_dir, load_camera_views=("primary", "wrist", "wrist_right")
         )

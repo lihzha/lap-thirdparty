@@ -308,7 +308,7 @@ class CocoCaption(_SingleCoTDataset):
             """Add required fields for training."""
             # Create chunked actions (all zeros for VQA)
             example["actions"] = tf.zeros(
-                [self.config.action_horizon, self.action_dim],
+                [self.action_horizon, self.action_dim],
                 dtype=tf.float32,
             )
 
