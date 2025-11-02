@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 class OXECoTDatasets:
     spec: ClassVar[CoTRldsDatasetSpec] = CoTRldsDatasetSpec()
+    VQA_DATASETS: ClassVar[set[str]] = {"coco_caption"}
 
     def __init__(
         self,
@@ -281,17 +282,22 @@ class OXECoTDatasets:
         # Group datasets by state type
         datasets_by_state_type = {"joint_pos": [], "eef_pose": [], "none": []}
         for dataset_name in dataset_names:
+            if dataset_name in self.VQA_DATASETS:
+                continue  # Skip VQA datasets for action stats
             state_encoding = dataset_state_encodings[dataset_name]
             state_type = state_encoding_to_type(state_encoding)
             datasets_by_state_type[state_type].append(dataset_name)
 
         # Compute weighted global statistics for actions
         # Note: Action stats are shared across ALL datasets regardless of state type
-        total_action_n = sum(stats["actions"].num_transitions for stats in all_dataset_statistics.values())
+        total_action_n = 0
         action_weighted_sum = np.zeros(action_dim, dtype=np.float32)
 
         for dataset_name, stats in all_dataset_statistics.items():
+            if dataset_name in self.VQA_DATASETS:
+                continue  # Skip VQA datasets for action stats
             action_n = stats["actions"].num_transitions
+            total_action_n += action_n
             # Pad each dataset's mean to action_dim before accumulating
             action_mean_padded = np.pad(
                 stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode="constant"
@@ -304,6 +310,8 @@ class OXECoTDatasets:
         action_var_sum = np.zeros_like(action_global_mean)
 
         for dataset_name, stats in all_dataset_statistics.items():
+            if dataset_name in self.VQA_DATASETS:
+                continue  # Skip VQA datasets for action stats
             action_n = stats["actions"].num_transitions
 
             # Pad local stats to action_dim for comparison with global stats
@@ -350,7 +358,7 @@ class OXECoTDatasets:
             ),
         }
 
-        # Compute separate state statistics for each state type
+        # Compute separate state statistics for each state type. VQA datasets already skipped above.
         for state_type, ds_names in datasets_by_state_type.items():
             if not ds_names:
                 continue  # Skip if no datasets of this type
