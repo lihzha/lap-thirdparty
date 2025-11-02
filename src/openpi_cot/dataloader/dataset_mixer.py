@@ -194,6 +194,10 @@ class OXECoTDatasets:
             # This avoids tf.case/tf.cond issues entirely
             normalized_datasets = []
             for ds_name, ds in zip(dataset_names, datasets):
+                if ds_name in self.VQA_DATASETS:
+                    # Skip normalization for VQA datasets
+                    normalized_datasets.append(ds)
+                    continue
                 state_enc = dataset_state_encodings[ds_name]
                 state_type = state_encoding_to_type(state_enc)
 
@@ -214,11 +218,15 @@ class OXECoTDatasets:
                 normalized_datasets.append(ds.map(normalizer, num_parallel_calls=tf.data.AUTOTUNE))
 
             # Interleave the normalized datasets
-            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(normalized_datasets, self.sample_weights)
+            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
+                normalized_datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
+            )
             self.global_statistics = global_stats
         else:
             # No global normalization - just interleave the datasets
-            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(datasets, self.sample_weights)
+            self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
+                datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
+            )
             self.global_statistics = None
 
         # Store parameters needed for creating checkpointable dataset

@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING
 
+from dlimp import DLataset
 import numpy as np
 import tensorflow as tf
 
@@ -201,6 +202,10 @@ class CocoCaption(_SingleCoTDataset):
             shuffle_files=not self.want_val,
             read_config=read_config,
         )
+
+        if not isinstance(ds, DLataset) and isinstance(ds, tf.data.Dataset):
+            ds.__class__ = DLataset
+            ds.is_flattened = False
 
         return ds
 
