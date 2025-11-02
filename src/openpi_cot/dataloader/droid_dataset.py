@@ -10,7 +10,6 @@ import tensorflow as tf
 from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
 from openpi_cot.dataloader.dataset_utils import print_memory_usage
 from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.helpers import convert_action_encoding
 from openpi_cot.dataloader.helpers import state_encoding_to_type
 
 if TYPE_CHECKING:
@@ -361,8 +360,6 @@ class DroidCoTDataset(_SingleCoTDataset):
             # Add empty caption field for robot datasets (VQA datasets will populate this)
             traj_len = tf.shape(traj["actions"])[0]
             traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
-            # Enable prediction training for robot datasets
-            traj["enable_prediction_training_mask"] = tf.repeat(tf.constant(True, dtype=tf.bool), traj_len)
 
             return traj
 

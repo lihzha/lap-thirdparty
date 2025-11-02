@@ -1120,27 +1120,29 @@ class PiCoT(_pi0.Pi0):
 
         # Compute prediction loss (conditionally, only if tokenized_prediction exists)
         if observation.tokenized_prediction is not None:
-            # Check if we should compute prediction loss based on enable_prediction_training_mask
+            # Check if we should compute prediction loss based on is_vqa_mask
             # If the mask exists, check if ANY sample has it enabled
             should_compute_pred = prediction_enabled
-            if observation.enable_prediction_training_mask is not None:
+            if observation.is_vqa_mask is not None:
                 # Only compute if at least one sample has prediction training enabled
-                any_enabled = jnp.any(observation.enable_prediction_training_mask)
+                any_enabled = jnp.any(~observation.is_vqa_mask)
                 should_compute_pred = prediction_enabled & any_enabled
 
             def compute_pred():
                 # Create a combined sample mask for prediction loss
                 pred_sample_mask = observation.sample_mask
-                if observation.enable_prediction_training_mask is not None and pred_sample_mask is not None:
+                if observation.is_vqa_mask is not None and pred_sample_mask is not None:
                     # Combine both masks: only include samples that pass both conditions
-                    pred_sample_mask = jnp.logical_and(pred_sample_mask, observation.enable_prediction_training_mask)
-                elif observation.enable_prediction_training_mask is not None:
+                    pred_sample_mask = jnp.logical_and(pred_sample_mask, ~observation.is_vqa_mask)
+                elif observation.is_vqa_mask is not None:
                     # Use only the prediction mask if sample_mask doesn't exist
-                    pred_sample_mask = observation.enable_prediction_training_mask
+                    pred_sample_mask = ~observation.is_vqa_mask
 
                 # Temporarily override observation's sample_mask for prediction computation
                 obs_with_pred_mask = observation.replace(sample_mask=pred_sample_mask)
-                return self._compute_prediction_loss(obs_with_pred_mask, img_tokens_all, img_mask_all, img_ar_mask_all, train)
+                return self._compute_prediction_loss(
+                    obs_with_pred_mask, img_tokens_all, img_mask_all, img_ar_mask_all, train
+                )
 
             def skip_pred():
                 # NOTE: Loss is ALWAYS per-sample (batch_size), regardless of train flag

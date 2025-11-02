@@ -55,7 +55,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     prediction_number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     prediction_direction_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
-    enable_prediction_training_mask: at.Bool[ArrayT, "*b"] | None = None
+    is_vqa_mask: at.Bool[ArrayT, "*b"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
@@ -103,7 +103,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             prediction_number_token_mask=getk("prediction_number_token_mask"),
             prediction_direction_token_mask=getk("prediction_direction_token_mask"),
             tokenized_dataset_name=getk("tokenized_dataset_name"),
-            enable_prediction_training_mask=getk("enable_prediction_training_mask"),
+            is_vqa_mask=getk("is_vqa_mask"),
         )
 
 
@@ -214,5 +214,5 @@ def preprocess_observation(
         prediction_number_token_mask=getattr(observation, "prediction_number_token_mask", None),
         prediction_direction_token_mask=getattr(observation, "prediction_direction_token_mask", None),
         tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
-        enable_prediction_training_mask=getattr(observation, "enable_prediction_training_mask", None),
+        is_vqa_mask=getattr(observation, "is_vqa_mask", None),
     )

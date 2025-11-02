@@ -268,6 +268,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if isinstance(dataset_name, bytes):
             dataset_name = dataset_name.decode("utf-8")
         is_vqa_dataset = dataset_name == "coco_caption"
+        inputs["is_vqa_mask"] = False  # Default to False
 
         # Special handling for VQA datasets
         if is_vqa_dataset:
@@ -287,7 +288,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             inputs["sample_mask"] = True
 
             # VQA datasets should not participate in prediction training
-            inputs["enable_prediction_training_mask"] = False
+            inputs["is_vqa_mask"] = True
 
             # Skip prediction training for VQA
             # (VQA datasets don't have temporal structure for prediction)
@@ -330,18 +331,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             )
 
         # import wandb; wandb.log({"image": [wandb.Image(inputs["image"]["base_0_rgb"][0]), wandb.Image(inputs["image"]["base_0_rgb"][1])]})
-
-        # Extract enable_prediction_training_mask (default to True for robot datasets)
-        if "enable_prediction_training_mask" in data:
-            enable_pred_mask = data["enable_prediction_training_mask"]
-            if isinstance(enable_pred_mask, bytes):
-                # Should be bool, but handle bytes just in case
-                inputs["enable_prediction_training_mask"] = enable_pred_mask.decode("utf-8").lower() == "true"
-            else:
-                inputs["enable_prediction_training_mask"] = bool(enable_pred_mask)
-        else:
-            # Default to True for robot datasets (backward compatibility)
-            inputs["enable_prediction_training_mask"] = True
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

@@ -296,7 +296,6 @@ class CocoCaption(_SingleCoTDataset):
                 "dataset_name": tf.constant("coco_caption", dtype=tf.string),
                 "control_frequency": tf.constant(self.control_frequency, dtype=tf.int32),
                 "is_bimanual": tf.constant(False, dtype=tf.bool),
-                "enable_prediction_training_mask": tf.constant(False, dtype=tf.bool),
                 "trajectory_id": tf.expand_dims(trajectory_id, axis=0),  # [1] for compatibility with split_val
             }
 
