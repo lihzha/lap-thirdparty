@@ -477,20 +477,22 @@ class _SingleCoTDataset:
         """
         if not self.enable_prediction_training:
             # When prediction is disabled, images are already [1, H, W, C] after add_prediction_pairs
-            # No transformation needed
+            # No transformation needed, just add the prediction mask set to False
             def add_prediction_mask(sample):
                 """Add prediction mask to the sample."""
                 sample["is_prediction_sample"] = tf.constant(False, dtype=tf.bool)
                 return sample
             self.dataset = self.dataset.frame_map(add_prediction_mask, num_parallel_calls=self.num_parallel_calls)
+            return
 
         # When prediction is enabled, randomly convert samples to prediction samples
         def convert_to_prediction_sample(sample):
             """Randomly convert samples to prediction samples based on pred_prob."""
             # Generate deterministic seed from trajectory_id for reproducibility
-            traj_id_str = sample.get("trajectory_id", tf.constant("default", dtype=tf.string))
-            if tf.rank(traj_id_str) > 0:
-                traj_id_str = traj_id_str[0]
+            traj_id_str = sample["trajectory_id"]
+            # Ensure traj_id_str is a scalar - handle both scalar and array inputs
+            # Use tf.reshape to flatten to scalar if needed (works for both [] and [1] shapes)
+            traj_id_str = tf.reshape(traj_id_str, [])
             traj_id_hash = tf.strings.to_hash_bucket_fast(traj_id_str, 2147483647)
             # Also include frame index if available for per-frame randomness
             frame_hash = tf.cast(tf.random.uniform([], 0, 2147483647, dtype=tf.int32), tf.int64)
