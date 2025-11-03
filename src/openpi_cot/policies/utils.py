@@ -207,9 +207,9 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
             elif droll_rad < 0 and droll != 0:
                 parts.append(f"tilt right {droll} degrees")
             if dpitch_rad > 0 and dpitch != 0:
-                parts.append(f"tilt up {dpitch} degrees")
+                parts.append(f"tilt back {dpitch} degrees")
             elif dpitch_rad < 0 and dpitch != 0:
-                parts.append(f"tilt down {dpitch} degrees")
+                parts.append(f"tilt forward {dpitch} degrees")
             if dyaw_rad > 0 and dyaw != 0:
                 parts.append(f"rotate counterclockwise {dyaw} degrees")
             elif dyaw_rad < 0 and dyaw != 0:
@@ -441,7 +441,7 @@ def is_idle_language_action(
         return translation_l2 < translation_threshold
     # Parse rotation commands
     rotation_pattern = re.compile(
-        r"(tilt left|tilt right|tilt up|tilt down|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
+        r"(tilt left|tilt right|tilt up|tilt down|tilt back|tilt forward|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
         re.IGNORECASE,
     )
 
@@ -454,9 +454,9 @@ def is_idle_language_action(
             droll_deg += value
         elif rotation_type == "tilt right":
             droll_deg -= value
-        elif rotation_type == "tilt up":
+        elif rotation_type in {"tilt up", "tilt forward"}:
             dpitch_deg += value
-        elif rotation_type == "tilt down":
+        elif rotation_type in {"tilt down", "tilt back"}:
             dpitch_deg -= value
         elif rotation_type == "rotate counterclockwise":
             dyaw_deg += value

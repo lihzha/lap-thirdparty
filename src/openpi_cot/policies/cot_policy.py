@@ -427,7 +427,7 @@ class ActionDecodingSchema:
             )
             # Rotation pattern for verbose format
             rotation_pattern = re.compile(
-                r"(tilt left|tilt right|tilt up|tilt down|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
+                r"(tilt left|tilt right|tilt up|tilt down|tilt back|tilt forward|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
                 re.IGNORECASE,
             )
 
@@ -489,9 +489,9 @@ class ActionDecodingSchema:
                             droll_deg += value
                         elif rotation_type == "tilt right":
                             droll_deg -= value
-                        elif rotation_type == "tilt up":
+                        elif rotation_type in {"tilt up", "tilt forward"}:
                             dpitch_deg += value
-                        elif rotation_type == "tilt down":
+                        elif rotation_type in {"tilt down", "tilt back"}:
                             dpitch_deg -= value
                         elif rotation_type == "rotate counterclockwise":
                             dyaw_deg += value
