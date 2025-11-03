@@ -4,7 +4,6 @@ from typing import Literal
 
 import numpy as np
 from openpi import transforms as upstream_transforms
-import wandb
 
 from openpi_cot.dataloader.helpers import ActionEncoding
 from openpi_cot.dataloader.vqa_base import VQA_DATASET_NAMES
@@ -167,33 +166,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 wrist_image = parse_image(data["observation"][k])
                 wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
 
-                # stack two timesteps into one image for visualization
-                to_log = np.concatenate([wrist_image[0], wrist_image[1]], axis=0)
-
-                # log as one image
-                wandb.log({"wrist_image_before_rotation": wandb.Image(to_log)})
-
-                wrist_image_rot00 = np.rot90(wrist_image[0], k=2)
-                wrist_image_rot01 = np.rot90(wrist_image[1], k=2)
-
-                to_log = np.concatenate([wrist_image_rot00, wrist_image_rot01], axis=0)
-
-                wandb.log({"wrist_image_after_rotation_way_1": wandb.Image(to_log)})
-
-                wrist_image_rot10 = np.rot90(wrist_image, k=2)[0]
-                wrist_image_rot11 = np.rot90(wrist_image, k=2)[1]
-
-                to_log = np.concatenate([wrist_image_rot10, wrist_image_rot11], axis=0)
-
-                wandb.log({"wrist_image_after_rotation_way_2": wandb.Image(to_log)})
-
                 # Rotate wrist image by 180 degrees for specific datasets
                 if needs_wrist_rotation and wrist_image_mask:
-                    wrist_image = np.rot90(wrist_image, k=2)
-
-                    to_log = np.concatenate([wrist_image[0], wrist_image[1]], axis=0)
-                    wandb.log({"wrist_image_after_rotation_final": wandb.Image(to_log)})
-                breakpoint()
+                    wrist_image = np.stack([np.rot90(img, k=2) for img in wrist_image], axis=0)
             else:
                 wrist_image = np.zeros_like(base_image)
                 wrist_image_mask = np.False_
