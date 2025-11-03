@@ -146,11 +146,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Datasets that need wrist camera rotation by 180 degrees
         DATASETS_REQUIRING_WRIST_ROTATION = {
-            "taco_play",
+            # "taco_play",
             "droid",
-            "furniture_bench_dataset_converted_externally_to_rlds",
+            # "furniture_bench_dataset_converted_externally_to_rlds",
             "berkeley_fanuc_manipulation",
             "berkeley_autolab_ur5",
+            "fmb",
         }
 
         # Check if current dataset requires wrist rotation

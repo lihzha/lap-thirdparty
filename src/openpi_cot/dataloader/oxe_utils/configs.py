@@ -563,12 +563,12 @@ OXE_DATASET_CONFIGS = {
         "image_obs_keys": {
             "primary": "image_side_1",
             "secondary": "image_side_2",
-            "wrist": "image_wrist_1",
+            "wrist": "image_wrist_2",
         },
         "depth_obs_keys": {
             "primary": "image_side_1_depth",
             "secondary": "image_side_2_depth",
-            "wrist": "image_wrist_1_depth",
+            "wrist": "image_wrist_2_depth",
         },
         "state_obs_keys": ["proprio"],
         "state_encoding": StateEncoding.POS_QUAT,
