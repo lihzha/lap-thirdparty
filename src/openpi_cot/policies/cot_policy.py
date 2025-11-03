@@ -168,7 +168,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
 
                 # stack two timesteps into one image for visualization
-                to_log = np.stack([wrist_image[0], wrist_image[1]], axis=0)
+                to_log = np.concatenate([wrist_image[0], wrist_image[1]], axis=0)
 
                 # log as one image
                 wandb.log({"wrist_image_before_rotation": wandb.Image(to_log)})
@@ -176,14 +176,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 wrist_image_rot00 = np.rot90(wrist_image[0], k=2)
                 wrist_image_rot01 = np.rot90(wrist_image[1], k=2)
 
-                to_log = np.stack([wrist_image_rot00, wrist_image_rot01], axis=0)
+                to_log = np.concatenate([wrist_image_rot00, wrist_image_rot01], axis=0)
 
                 wandb.log({"wrist_image_after_rotation_way_1": wandb.Image(to_log)})
 
                 wrist_image_rot10 = np.rot90(wrist_image, k=2)[0]
                 wrist_image_rot11 = np.rot90(wrist_image, k=2)[1]
 
-                to_log = np.stack([wrist_image_rot10, wrist_image_rot11], axis=0)
+                to_log = np.concatenate([wrist_image_rot10, wrist_image_rot11], axis=0)
 
                 wandb.log({"wrist_image_after_rotation_way_2": wandb.Image(to_log)})
 
@@ -191,7 +191,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 if needs_wrist_rotation and wrist_image_mask:
                     wrist_image = np.rot90(wrist_image, k=2)
 
-                    to_log = np.stack([wrist_image[0], wrist_image[1]], axis=0)
+                    to_log = np.concatenate([wrist_image[0], wrist_image[1]], axis=0)
                     wandb.log({"wrist_image_after_rotation_final": wandb.Image(to_log)})
                 breakpoint()
             else:
