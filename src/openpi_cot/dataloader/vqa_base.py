@@ -266,6 +266,7 @@ class _BaseVQADataset(_SingleCoTDataset):
                 "trajectory_id": tf.expand_dims(trajectory_id, axis=0),  # [1] for compatibility
                 "is_vqa_sample": tf.constant(True, dtype=tf.bool),
                 "is_prediction_sample": tf.constant(False, dtype=tf.bool),
+                "pred_use_primary": tf.constant(False, dtype=tf.bool),
             }
 
             return output

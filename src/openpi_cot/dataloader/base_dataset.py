@@ -488,8 +488,10 @@ class _SingleCoTDataset:
             def add_prediction_mask(sample):
                 """Add prediction mask to the sample."""
                 sample["is_prediction_sample"] = tf.constant(False, dtype=tf.bool)
+                sample["pred_use_primary"] = tf.constant(False, dtype=tf.bool)
                 sample.pop("trajectory_id")
                 return sample
+
             self.dataset = self.dataset.frame_map(add_prediction_mask, num_parallel_calls=self.num_parallel_calls)
             return
 
@@ -510,7 +512,9 @@ class _SingleCoTDataset:
             is_pred_sample = tf.random.stateless_uniform([], seed=seed_pair) < self.pred_prob
 
             # Decide which camera to use for prediction (primary vs wrist)
-            use_primary = tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob
+            use_primary = (
+                tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob
+            )
 
             # Get frame 0 and frame 1 for both cameras
             # After flattening, images have shape [t, H, W, C] where t=2 for prediction-enabled
@@ -529,6 +533,8 @@ class _SingleCoTDataset:
                 return wrist_frame0, wrist_frame1
 
             pred_primary_img, pred_wrist_img = tf.cond(use_primary, use_primary_camera, use_wrist_camera)
+
+            sample["pred_use_primary"] = use_primary
 
             # For non-prediction samples, use first frame only
             normal_primary_img = primary_frame0
@@ -555,7 +561,9 @@ class _SingleCoTDataset:
                     dtype=tf.string,
                 )
                 sample["prompt"] = tf.cond(
-                    is_pred_sample, lambda: prediction_prompt, lambda: sample.get("prompt", tf.constant("", dtype=tf.string))
+                    is_pred_sample,
+                    lambda: prediction_prompt,
+                    lambda: sample.get("prompt", tf.constant("", dtype=tf.string)),
                 )
 
             # For prediction samples, use prediction_language_action if available
