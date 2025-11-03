@@ -100,8 +100,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("bc_z", 1.0),
         ("droid", 1.0),
         ("fractal20220817_data", 1.0),
-        ("bridge_v2_oxe", 2.0),
-        ("bridge_v2_oxe", 2.0),
+        ("bridge_v2_oxe", 1.0),
         ("taco_play", 1.0),
         (
             "jaco_play",
