@@ -481,6 +481,7 @@ class _SingleCoTDataset:
             def add_prediction_mask(sample):
                 """Add prediction mask to the sample."""
                 sample["is_prediction_sample"] = tf.constant(False, dtype=tf.bool)
+                sample.pop("trajectory_id")
                 return sample
             self.dataset = self.dataset.frame_map(add_prediction_mask, num_parallel_calls=self.num_parallel_calls)
             return
@@ -568,6 +569,7 @@ class _SingleCoTDataset:
 
             # Add is_prediction_sample mask
             sample["is_prediction_sample"] = is_pred_sample
+            sample.pop("trajectory_id")
 
             return sample
 

@@ -182,7 +182,7 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
 
     def apply_repack_transforms(self):
         def _pop_and_rename_keys(traj):
-            traj.pop("trajectory_id")
+            # traj.pop("trajectory_id")
             traj["prompt"] = traj["language_instruction"]
             traj.pop("language_instruction")
             traj.pop("raw_action")

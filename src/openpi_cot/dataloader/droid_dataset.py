@@ -357,7 +357,7 @@ class DroidCoTDataset(_SingleCoTDataset):
     def apply_repack_transforms(self):
         def _pop_keys(traj):
             traj.pop("traj_metadata")
-            traj.pop("trajectory_id")
+            # traj.pop("trajectory_id")
             # Add empty caption field for robot datasets (VQA datasets will populate this)
             traj_len = tf.shape(traj["actions"])[0]
             traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
