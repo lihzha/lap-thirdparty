@@ -80,6 +80,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "number_token_mask": numeric_mask,
             "direction_token_mask": direction_mask,
             "tokenized_dataset_name": tokenized_dataset_name,
+            "is_vqa_mask": is_vqa_mask,
         }
 
         # Additionally tokenize prediction if prediction_language_action is present
