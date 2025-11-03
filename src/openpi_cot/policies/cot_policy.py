@@ -166,14 +166,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 wrist_image = parse_image(data["observation"][k])
                 wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
 
+                breakpoint()
+
                 # Rotate wrist image by 180 degrees for specific datasets
                 if needs_wrist_rotation and wrist_image_mask:
                     wrist_image = np.rot90(wrist_image, k=2)
             else:
                 wrist_image = np.zeros_like(base_image)
                 wrist_image_mask = np.False_
-
-            breakpoint()
 
             # Optional dropout: randomly mask out wrist image
             if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
