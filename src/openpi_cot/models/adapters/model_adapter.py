@@ -47,15 +47,9 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
-    # Tokenized prediction fields (prediction_prompt + prediction_language_action combined)
-    tokenized_prediction: at.Int[ArrayT, "*b l"] | None = None
-    tokenized_prediction_mask: at.Bool[ArrayT, "*b l"] | None = None
-    tokenized_prediction_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
-    prediction_crictical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
-    prediction_number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
-    prediction_direction_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
     is_vqa_mask: at.Bool[ArrayT, "*b"] | None = None
+    is_prediction_sample: at.Bool[ArrayT, "*b"] | None = None
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
@@ -96,14 +90,9 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             camera_intrinsics=getk("camera_intrinsics"),
             camera_extrinsics=getk("camera_extrinsics"),
             cartesian_position_window=getk("cartesian_position_window"),
-            tokenized_prediction=getk("tokenized_prediction"),
-            tokenized_prediction_mask=getk("tokenized_prediction_mask"),
-            tokenized_prediction_langact_mask=getk("tokenized_prediction_langact_mask"),
-            prediction_crictical_token_mask=getk("prediction_crictical_token_mask"),
-            prediction_number_token_mask=getk("prediction_number_token_mask"),
-            prediction_direction_token_mask=getk("prediction_direction_token_mask"),
             tokenized_dataset_name=getk("tokenized_dataset_name"),
             is_vqa_mask=getk("is_vqa_mask"),
+            is_prediction_sample=getk("is_prediction_sample"),
         )
 
 
@@ -207,12 +196,6 @@ def preprocess_observation(
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),
         cartesian_position_window=getattr(observation, "cartesian_position_window", None),
-        tokenized_prediction=getattr(observation, "tokenized_prediction", None),
-        tokenized_prediction_mask=getattr(observation, "tokenized_prediction_mask", None),
-        tokenized_prediction_langact_mask=getattr(observation, "tokenized_prediction_langact_mask", None),
-        prediction_crictical_token_mask=getattr(observation, "prediction_crictical_token_mask", None),
-        prediction_number_token_mask=getattr(observation, "prediction_number_token_mask", None),
-        prediction_direction_token_mask=getattr(observation, "prediction_direction_token_mask", None),
         tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
         is_vqa_mask=getattr(observation, "is_vqa_mask", None),
     )

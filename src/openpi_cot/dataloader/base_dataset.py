@@ -47,6 +47,8 @@ class _SingleCoTDataset:
         max_samples: int | None = None,
         skip_normalization: bool = False,
         enable_prediction_training: bool = False,
+        pred_prob: float = 0.2,
+        primary_pred_prob: float = 0.5,
     ):
         self.config = config
         self.seed = seed
@@ -59,6 +61,8 @@ class _SingleCoTDataset:
         self.standalone = standalone
         self.skip_normalization = skip_normalization
         self.enable_prediction_training = enable_prediction_training
+        self.pred_prob = pred_prob
+        self.primary_pred_prob = primary_pred_prob
         dataset_kwargs = load_dataset_kwargs(
             dataset_name, data_dir, load_camera_views=("primary", "wrist", "wrist_right")
         )
@@ -145,6 +149,8 @@ class _SingleCoTDataset:
         # self.dataset = self.dataset.shuffle(60_000, seed=self.seed)
 
         self.apply_flatten()
+
+        self.apply_prediction_frame_transform()
 
         self.apply_frame_filters()
 
@@ -461,6 +467,105 @@ class _SingleCoTDataset:
     def apply_flatten(self):
         # Flatten: map from trajectory dataset to dataset of individual action chunks
         self.dataset = self.dataset.flatten(num_parallel_calls=self.num_parallel_calls)
+
+    def apply_prediction_frame_transform(self):
+        """Apply prediction frame transformation after flattening.
+
+        This method randomly samples frames based on pred_prob and converts them to prediction samples by:
+        - Replacing prompt with prediction_prompt
+        - Swapping image frames based on primary_pred_prob
+        """
+        if not self.enable_prediction_training:
+            # When prediction is disabled, images are already [1, H, W, C] after add_prediction_pairs
+            # No transformation needed
+            return
+
+        # When prediction is enabled, randomly convert samples to prediction samples
+        def convert_to_prediction_sample(sample):
+            """Randomly convert samples to prediction samples based on pred_prob."""
+            # Generate deterministic seed from trajectory_id for reproducibility
+            traj_id_str = sample.get("trajectory_id", tf.constant("default", dtype=tf.string))
+            if tf.rank(traj_id_str) > 0:
+                traj_id_str = traj_id_str[0]
+            traj_id_hash = tf.strings.to_hash_bucket_fast(traj_id_str, 2147483647)
+            # Also include frame index if available for per-frame randomness
+            frame_hash = tf.cast(tf.random.uniform([], 0, 2147483647, dtype=tf.int32), tf.int64)
+            seed_pair = [self.seed + traj_id_hash, frame_hash]
+
+            # Decide if this sample should be a prediction sample
+            is_pred_sample = tf.random.stateless_uniform([], seed=seed_pair) < self.pred_prob
+
+            # Decide which camera to use for prediction (primary vs wrist)
+            use_primary = tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob
+
+            # Get frame 0 and frame 1 for both cameras
+            # After flattening, images have shape [t, H, W, C] where t=2 for prediction-enabled
+            primary_frame0 = sample["observation"][self.spec.primary_image_key][0:1]  # [1, H, W, C]
+            primary_frame1 = sample["observation"][self.spec.primary_image_key][1:2]  # [1, H, W, C]
+            wrist_frame0 = sample["observation"][self.spec.wrist_image_key][0:1]  # [1, H, W, C]
+            wrist_frame1 = sample["observation"][self.spec.wrist_image_key][1:2]  # [1, H, W, C]
+
+            # Swap frames based on camera choice
+            def use_primary_camera():
+                # Use primary camera frames: primary_image = frame 0, wrist_image = frame 1
+                return primary_frame0, primary_frame1
+
+            def use_wrist_camera():
+                # Use wrist camera frames: primary_image = frame 0, wrist_image = frame 1
+                return wrist_frame0, wrist_frame1
+
+            pred_primary_img, pred_wrist_img = tf.cond(use_primary, use_primary_camera, use_wrist_camera)
+
+            # For non-prediction samples, use first frame only
+            normal_primary_img = primary_frame0
+            normal_wrist_img = wrist_frame0
+
+            # Select images based on whether this is a prediction sample
+            final_primary_img = tf.cond(is_pred_sample, lambda: pred_primary_img, lambda: normal_primary_img)
+            final_wrist_img = tf.cond(is_pred_sample, lambda: pred_wrist_img, lambda: normal_wrist_img)
+
+            sample["observation"][self.spec.primary_image_key] = final_primary_img
+            sample["observation"][self.spec.wrist_image_key] = final_wrist_img
+
+            # Handle right wrist image if present
+            if self.spec.wrist_image_right_key in sample["observation"]:
+                # For now, just use first frame for right wrist
+                sample["observation"][self.spec.wrist_image_right_key] = sample["observation"][
+                    self.spec.wrist_image_right_key
+                ][0:1]
+
+            # Replace prompt with prediction_prompt for prediction samples
+            if "prompt" in sample:
+                prediction_prompt = tf.constant(
+                    getattr(self.config, "prediction_prompt", "What is the robot's movement between two frames?"),
+                    dtype=tf.string,
+                )
+                sample["prompt"] = tf.cond(
+                    is_pred_sample, lambda: prediction_prompt, lambda: sample.get("prompt", tf.constant("", dtype=tf.string))
+                )
+
+            # For prediction samples, use prediction_language_action if available
+            if "prediction_language_action" in sample and "language_action" in sample:
+                sample["language_action"] = tf.cond(
+                    is_pred_sample,
+                    lambda: sample["prediction_language_action"],
+                    lambda: sample["language_action"],
+                )
+
+            # Replace control_frequency with prediction_delta for prediction samples
+            if "control_frequency" in sample and "prediction_delta" in sample:
+                sample["control_frequency"] = tf.cond(
+                    is_pred_sample,
+                    lambda: sample["prediction_delta"],
+                    lambda: sample["control_frequency"],
+                )
+
+            # Add is_prediction_sample mask
+            sample["is_prediction_sample"] = is_pred_sample
+
+            return sample
+
+        self.dataset = self.dataset.map(convert_to_prediction_sample, self.num_parallel_calls)
 
     def __iter__(self):
         assert self.standalone, "This dataset is not standalone"

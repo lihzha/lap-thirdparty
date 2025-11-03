@@ -544,20 +544,3 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
         return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
-
-    def tokenize_prediction(
-        self, prediction_prompt: str, prediction_language: str
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Tokenize for prediction task.
-
-        Uses the prediction language action as the reasoning to be predicted.
-
-        Args:
-            prediction_prompt: The prompt for prediction task
-            prediction_language: The prediction language action (reasoning target)
-        """
-        # The reasoning is the prediction language action
-        # Use VQA format (no state) for prediction tasks
-        return self.tokenize_cot(
-            prediction_prompt, reasoning=prediction_language, state=None, prompt_format=VQA_PROMPT_FORMAT
-        )

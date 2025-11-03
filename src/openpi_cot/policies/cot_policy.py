@@ -117,7 +117,7 @@ def get_language_action_format(name: str) -> LanguageActionFormat:
     return LANGUAGE_ACTION_FORMAT_REGISTRY[name]
 
 
-# TODO: during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
+# during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
 @dataclasses.dataclass(frozen=True)
 class CoTInputs(upstream_transforms.DataTransformFn):
     # The action dimension of the model. Will be used to pad state and actions.
@@ -129,9 +129,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # Determines which model will be used.
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
-    # Prediction training parameters
-    enable_prediction_training: bool = False
-    prediction_prompt: str = "What is the robot's movement between two frames?"
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type == ExtendedModelType.PI_COT
@@ -269,6 +266,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         dataset_name = data.get("dataset_name")
         if isinstance(dataset_name, bytes):
             dataset_name = dataset_name.decode("utf-8")
+
+        # TODO: move to dataset level
         is_vqa_dataset = dataset_name in VQA_DATASET_NAMES
         inputs["is_vqa_mask"] = False  # Default to False
 
@@ -289,11 +288,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             # VQA samples are always active (no idle filtering)
             inputs["sample_mask"] = True
 
-            # VQA datasets should not participate in prediction training
+            # TODO: move to dataset level
             inputs["is_vqa_mask"] = True
-
-            # Skip prediction training for VQA
-            # (VQA datasets don't have temporal structure for prediction)
 
             return inputs
 
@@ -301,7 +297,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if self.language_action_format.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
-        # Always prepare regular language actions for reasoning loss
+        # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data:
             inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
 
@@ -316,21 +312,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             # If no language actions, default to active sample
             inputs["sample_mask"] = True
 
-        # Additionally prepare prediction if available (independent of regular reasoning)
-        if "prediction_language_action" in data:
-            assert self.enable_prediction_training, (
-                "Prediction language action found in data but prediction training not enabled in policy."
-            )
-            inputs["prediction_language_action"] = self._prepare_text(
-                data, "prediction_language_action", "prediction_delta"
-            )
-            inputs["prediction_prompt"] = self.prediction_prompt
-        else:
-            assert not self.enable_prediction_training, (
-                "Prediction training enabled in policy but no prediction language action found in data."
-            )
-
-        # import wandb; wandb.log({"image": [wandb.Image(inputs["image"]["base_0_rgb"][0]), wandb.Image(inputs["image"]["base_0_rgb"][1])]})
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

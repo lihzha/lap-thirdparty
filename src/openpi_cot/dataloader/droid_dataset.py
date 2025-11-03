@@ -387,6 +387,8 @@ class DroidCoTDataset(_SingleCoTDataset):
         hash_tables: dict = None,
         skip_normalization: bool = False,
         enable_prediction_training: bool = False,
+        pred_prob: float = 0.2,
+        primary_pred_prob: float = 0.5,
     ):
         self.use_json_actions = config.use_json_actions
 
@@ -445,4 +447,6 @@ class DroidCoTDataset(_SingleCoTDataset):
             max_samples=max_samples,
             skip_normalization=skip_normalization,
             enable_prediction_training=enable_prediction_training,
+            pred_prob=pred_prob,
+            primary_pred_prob=primary_pred_prob,
         )

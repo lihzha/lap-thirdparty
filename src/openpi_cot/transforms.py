@@ -26,7 +26,6 @@ DataDict: TypeAlias = at.PyTree
 class TokenizePromptAndReasoning(DataTransformFn):
     tokenizer: PaligemmaCoTTokenizer
     discrete_state_input: bool = False
-    prediction_prompt: str = "What is the robot's movement between two frames?"
     dataset_name_pad_len: int = 100
 
     def __call__(self, data: DataDict) -> DataDict:
@@ -83,35 +82,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "is_vqa_mask": is_vqa_mask,
         }
 
-        # Additionally tokenize prediction if prediction_language_action is present
-        prediction_lang = data.pop("prediction_language_action", None)
-        prediction_prompt_str = data.pop("prediction_prompt", self.prediction_prompt)
-        if prediction_lang is not None and not is_vqa_mask:
-            # Parse prediction language action
-            if isinstance(prediction_lang, bytes):
-                prediction_lang = prediction_lang.decode("utf-8")
-            elif not isinstance(prediction_lang, str):
-                prediction_lang = (
-                    str(prediction_lang) if hasattr(prediction_lang, "__str__") else prediction_lang.item()
-                )
-
-            # Skip empty prediction language actions
-            if prediction_lang and prediction_lang.strip():
-                # Use prediction-specific tokenization
-                pred_tokens, pred_pad_mask, pred_reasoning_mask, pred_numeric_mask, pred_direction_mask = (
-                    self.tokenizer.tokenize_prediction(prediction_prompt_str, prediction_lang)
-                )
-
-                # Combine number_mask and direction_mask for prediction critical tokens
-                pred_critical_mask = np.logical_or(pred_numeric_mask, pred_direction_mask)
-
-                # Add prediction-specific fields
-                result["tokenized_prediction"] = pred_tokens
-                result["tokenized_prediction_mask"] = pred_pad_mask
-                result["tokenized_prediction_langact_mask"] = pred_reasoning_mask
-                result["prediction_crictical_token_mask"] = pred_critical_mask
-                result["prediction_number_token_mask"] = pred_numeric_mask
-                result["prediction_direction_token_mask"] = pred_direction_mask
 
         return result
 

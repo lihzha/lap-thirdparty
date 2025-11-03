@@ -9,7 +9,7 @@ from openpi_cot.policies.cot_policy import CoTInputs
 from openpi_cot.policies.utils import parse_image
 
 
-# TODO: during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
+# during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
 @dataclasses.dataclass(frozen=True)
 class VQAInputs(CoTInputs):
     # Determines which model will be used.

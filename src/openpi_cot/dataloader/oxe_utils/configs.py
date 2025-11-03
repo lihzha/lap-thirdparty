@@ -590,7 +590,7 @@ OXE_DATASET_CONFIGS = {
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["proprio"],
         "state_encoding": StateEncoding.JOINT,
-        "action_encoding": ActionEncoding.EEF_POS,  # TODO
+        "action_encoding": ActionEncoding.EEF_POS,
     },
     "rh20t": {
         "image_obs_keys": {

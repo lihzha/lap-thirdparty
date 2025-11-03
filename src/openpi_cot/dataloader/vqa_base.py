@@ -84,7 +84,6 @@ class _BaseVQADataset(_SingleCoTDataset):
         self.use_wrist_image = False  # VQA has no wrist images
         self.standalone = standalone
         self.skip_normalization = skip_normalization
-        self.enable_prediction_training = enable_prediction_training
         self.action_horizon = action_horizon
 
         # VQA-specific settings (shared across all VQA datasets)
@@ -291,41 +290,16 @@ class _BaseVQADataset(_SingleCoTDataset):
             serialized = tf.io.serialize_tensor(dummy_tensor)
             example["language_actions"] = tf.repeat(serialized, summation_steps)
 
-            # Add time dimension to images (single frame for VQA)
-            if not self.enable_prediction_training:
-                # Single frame: [H, W, 3] -> [1, H, W, 3]
-                example["observation"][self.spec.primary_image_key] = tf.expand_dims(
-                    example["observation"][self.spec.primary_image_key], axis=0
-                )
-                example["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-                    example["observation"][self.spec.wrist_image_key], axis=0
-                )
-                example["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                    example["observation"][self.spec.wrist_image_right_key], axis=0
-                )
-            else:
-                # Prediction training: duplicate frame
-                example["observation"][self.spec.primary_image_key] = tf.stack(
-                    [
-                        example["observation"][self.spec.primary_image_key],
-                        example["observation"][self.spec.primary_image_key],
-                    ],
-                    axis=0,
-                )
-                example["observation"][self.spec.wrist_image_key] = tf.stack(
-                    [
-                        example["observation"][self.spec.wrist_image_key],
-                        example["observation"][self.spec.wrist_image_key],
-                    ],
-                    axis=0,
-                )
-                example["observation"][self.spec.wrist_image_right_key] = tf.stack(
-                    [
-                        example["observation"][self.spec.wrist_image_right_key],
-                        example["observation"][self.spec.wrist_image_right_key],
-                    ],
-                    axis=0,
-                )
+            # Single frame: [H, W, 3] -> [1, H, W, 3]
+            example["observation"][self.spec.primary_image_key] = tf.expand_dims(
+                example["observation"][self.spec.primary_image_key], axis=0
+            )
+            example["observation"][self.spec.wrist_image_key] = tf.expand_dims(
+                example["observation"][self.spec.wrist_image_key], axis=0
+            )
+            example["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+                example["observation"][self.spec.wrist_image_right_key], axis=0
+            )
 
             return example
 

@@ -38,6 +38,8 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
         max_samples: int | None = None,
         skip_normalization: bool = False,
         enable_prediction_training: bool = False,
+        pred_prob: float = 0.2,
+        primary_pred_prob: float = 0.5,
     ):
         self.use_json_actions = False
 
@@ -58,6 +60,8 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
             max_samples=max_samples,
             skip_normalization=skip_normalization,
             enable_prediction_training=enable_prediction_training,
+            pred_prob=pred_prob,
+            primary_pred_prob=primary_pred_prob,
         )
 
     def apply_restructure(self):
