@@ -266,6 +266,7 @@ class DroidCoTDataset(_SingleCoTDataset):
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # DROID is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
+                "is_vqa_sample": tf.fill([traj_len], tf.constant(False)),
             }
 
             step_id = (

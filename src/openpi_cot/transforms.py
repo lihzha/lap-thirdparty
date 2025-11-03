@@ -59,11 +59,11 @@ class TokenizePromptAndReasoning(DataTransformFn):
             tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len
             tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
 
-        is_vqa_mask = data.pop("is_vqa_mask", False)
+        is_vqa_sample = data.pop("is_vqa_sample", False)
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(
-            prompt, language_actions, state, is_vqa_mask=is_vqa_mask
+            prompt, language_actions, state, is_vqa_sample=is_vqa_sample
         )
 
         # Combine number_mask and direction_mask for critical tokens
@@ -79,7 +79,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "number_token_mask": numeric_mask,
             "direction_token_mask": direction_mask,
             "tokenized_dataset_name": tokenized_dataset_name,
-            "is_vqa_mask": is_vqa_mask,
+            "is_vqa_sample": is_vqa_sample,
         }
 
 

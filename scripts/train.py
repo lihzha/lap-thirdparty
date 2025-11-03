@@ -1382,17 +1382,21 @@ def main(config: _config.TrainConfig):
         dataloader_initialized = False
         raise  # Re-raise the exception as this is critical
 
+    breakpoint()
+
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     sharding.log_batch_sharding(batch)
 
     train_runner = TrainingStepRunner(config)
-    ptrain_step = jax.jit(
-        train_runner,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-        out_shardings=(train_state_sharding, replicated_sharding),
-        donate_argnums=(1,),
-    )
+    # ptrain_step = jax.jit(
+    #     train_runner,
+    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    #     out_shardings=(train_state_sharding, replicated_sharding),
+    #     donate_argnums=(1,),
+    # )
+
+    ptrain_step = train_runner
 
     if config.do_val:
         dataset = getattr(data_loader, "dataset", None)

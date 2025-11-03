@@ -394,11 +394,11 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         state: np.ndarray | None = None,
         state_type: str | None = None,
         prompt_format: PromptFormat | str | None = None,
-        is_vqa_mask: bool = False,
+        is_vqa_sample: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Resolve prompt format
 
-        if not is_vqa_mask:
+        if not is_vqa_sample:
             if prompt_format is None:
                 fmt = self._prompt_format
             elif isinstance(prompt_format, str):
@@ -502,7 +502,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             else:
                 pieces.append(self._tokenizer.id_to_piece(t))
 
-        if not is_vqa_mask:
+        if not is_vqa_sample:
             for i in range(start_idx, end_idx):
                 if i < 0 or i >= len(pieces):
                     continue

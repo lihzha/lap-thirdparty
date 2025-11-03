@@ -267,12 +267,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if isinstance(dataset_name, bytes):
             dataset_name = dataset_name.decode("utf-8")
 
-        # TODO: move to dataset level
-        is_vqa_dataset = dataset_name in VQA_DATASET_NAMES
-        inputs["is_vqa_mask"] = False  # Default to False
+        is_vqa_sample = data.get("is_vqa_sample")
+        inputs["is_vqa_sample"] = is_vqa_sample
 
         # Special handling for VQA datasets
-        if is_vqa_dataset:
+        if is_vqa_sample:
             # For VQA, use the caption field as language_actions
             # Caption is a single string, so wrap it in a list for consistency
             if "caption" in data:
@@ -287,9 +286,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
             # VQA samples are always active (no idle filtering)
             inputs["sample_mask"] = True
-
-            # TODO: move to dataset level
-            inputs["is_vqa_mask"] = True
 
             return inputs
 

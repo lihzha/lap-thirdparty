@@ -478,7 +478,11 @@ class _SingleCoTDataset:
         if not self.enable_prediction_training:
             # When prediction is disabled, images are already [1, H, W, C] after add_prediction_pairs
             # No transformation needed
-            return
+            def add_prediction_mask(sample):
+                """Add prediction mask to the sample."""
+                sample["is_prediction_sample"] = tf.constant(False, dtype=tf.bool)
+                return sample
+            self.dataset = self.dataset.frame_map(add_prediction_mask, num_parallel_calls=self.num_parallel_calls)
 
         # When prediction is enabled, randomly convert samples to prediction samples
         def convert_to_prediction_sample(sample):
@@ -565,7 +569,7 @@ class _SingleCoTDataset:
 
             return sample
 
-        self.dataset = self.dataset.map(convert_to_prediction_sample, self.num_parallel_calls)
+        self.dataset = self.dataset.frame_map(convert_to_prediction_sample, self.num_parallel_calls)
 
     def __iter__(self):
         assert self.standalone, "This dataset is not standalone"

@@ -763,7 +763,6 @@ class PiCoT(_pi0.Pi0):
 
         return loss, metrics, token_accuracy
 
-
     def _compute_action_loss(
         self,
         observation: CoTObservation | Observation,
@@ -908,6 +907,8 @@ class PiCoT(_pi0.Pi0):
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(
             observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
         )
+
+        breakpoint()
 
         # Initialize loss accumulator and metrics
         total_loss = 0.0

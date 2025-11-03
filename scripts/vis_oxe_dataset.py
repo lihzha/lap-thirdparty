@@ -127,22 +127,7 @@ def log_batch_sharding(batch):
 
 def _decode_langact_strings(obs, tokenizer) -> list[str]:
     """Extract and decode the langact (language action) tokens per example."""
-    if obs.tokenized_prediction is None or obs.tokenized_prediction_langact_mask is None:
-        return []
-    tokens = _safe_device_get(obs.tokenized_prediction)
-    rmask = _safe_device_get(obs.tokenized_prediction_langact_mask)
-
-    if tokens is None or rmask is None:
-        return []
-    out: list[str] = []
-    for i in range(tokens.shape[0]):
-        sel = tokens[i][rmask[i].astype(bool)]
-        try:
-            text = tokenizer.decode(sel.astype(np.int32))
-        except Exception:
-            text = ""
-        out.append(text)
-    return out
+    return _decode_captions(obs, tokenizer)
 
 
 def _decode_prompt_strings(obs, tokenizer) -> list[str]:
@@ -536,7 +521,7 @@ def main(config: _config.TrainConfig):
 
                 # Determine if this is a VQA sample (has non-empty caption)
                 is_vqa = bool(caption_text and caption_text.strip())
-                is_vqa = obs.is_vqa_mask[i]
+                is_vqa = obs.is_vqa_sample[i]
 
                 # Combine prompt, langact/caption, and GT actions for display
                 text_parts = []

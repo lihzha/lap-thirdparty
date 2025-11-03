@@ -48,7 +48,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
     tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
-    is_vqa_mask: at.Bool[ArrayT, "*b"] | None = None
+    is_vqa_sample: at.Bool[ArrayT, "*b"] | None = None
     is_prediction_sample: at.Bool[ArrayT, "*b"] | None = None
 
     @classmethod
@@ -91,7 +91,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             camera_extrinsics=getk("camera_extrinsics"),
             cartesian_position_window=getk("cartesian_position_window"),
             tokenized_dataset_name=getk("tokenized_dataset_name"),
-            is_vqa_mask=getk("is_vqa_mask"),
+            is_vqa_sample=getk("is_vqa_sample"),
             is_prediction_sample=getk("is_prediction_sample"),
         )
 
@@ -197,5 +197,6 @@ def preprocess_observation(
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),
         cartesian_position_window=getattr(observation, "cartesian_position_window", None),
         tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
-        is_vqa_mask=getattr(observation, "is_vqa_mask", None),
+        is_vqa_sample=getattr(observation, "is_vqa_sample", None),
+        is_prediction_sample=getattr(observation, "is_prediction_sample", None),
     )
