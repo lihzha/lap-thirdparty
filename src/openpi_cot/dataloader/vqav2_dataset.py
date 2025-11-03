@@ -68,7 +68,7 @@ class Vqav2(_BaseVQADataset):
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""
-        return "vqav2"
+        return "vqa"
 
     def get_num_transitions(self) -> int:
         """Return approximate number of VQAv2 samples."""
@@ -78,7 +78,7 @@ class Vqav2(_BaseVQADataset):
         """Create trajectory ID from VQAv2 question_id and image_id."""
         question_id = tf.strings.as_string(example["question_id"])
         image_id = tf.strings.as_string(example["image/id"])
-        return tf.strings.join(["vqav2_", question_id, "_", image_id])
+        return tf.strings.join(["vqa_", question_id, "_", image_id])
 
     def extract_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
         """Extract prompt and caption from VQAv2 example.
@@ -99,6 +99,5 @@ class Vqav2(_BaseVQADataset):
         if image.dtype == tf.string:
             # Already encoded
             return image
-        else:
-            # Encode image to bytes
-            return tf.io.encode_jpeg(image, quality=95)
+        # Encode image to bytes
+        return tf.io.encode_jpeg(image, quality=95)

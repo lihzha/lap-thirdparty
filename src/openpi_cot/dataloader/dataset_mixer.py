@@ -145,7 +145,7 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
-            elif dataset_name == "vqav2":
+            elif dataset_name == "vqa":
                 ds = Vqav2(
                     dataset_name=dataset_name,
                     **kwargs,

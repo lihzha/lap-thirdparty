@@ -233,7 +233,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "libero_10_no_noops": [("libero_10_no_noops", 1.0)],
     # === VQA Datasets ===
     "coco_captions": [("coco_captions", 1.0)],
-    "vqav2": [("vqav2", 1.0)],
+    "vqa": [("vqa", 1.0)],
     # === Mixed Robot + VQA ===
     "oxe_small_with_vqa": [
         ("droid", 0.8),
@@ -252,7 +252,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # VQA datasets
         ("coco_captions", 0.1),  # 10% COCO caption samples
     ],
-    "oxe_small_with_vqa_and_vqav2": [
+    "oxe_small_with_vqa_and_vqa": [
         ("droid", 0.8),
         ("taco_play", 1.0),
         ("jaco_play", 1.0),
@@ -268,7 +268,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("molmoact_dataset", 2.0),
         # VQA datasets
         ("coco_captions", 0.1),  # 10% COCO caption samples
-        ("vqav2", 0.1),  # 10% VQAv2 samples
+        ("vqa", 0.1),  # 10% vqa samples
     ],
 }
 

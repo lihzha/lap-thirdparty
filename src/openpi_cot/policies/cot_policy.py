@@ -264,7 +264,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         inputs = self._prepare_inputs(data)
 
-        # Check if this is a VQA dataset (e.g., coco_captions, vqav2)
+        # Check if this is a VQA dataset (e.g., coco_captions, vqa)
         dataset_name = data.get("dataset_name")
         if isinstance(dataset_name, bytes):
             dataset_name = dataset_name.decode("utf-8")
