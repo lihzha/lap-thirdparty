@@ -399,17 +399,19 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Resolve prompt format
 
+
+        if prompt_format is None:
+            fmt = self._prompt_format
+        elif isinstance(prompt_format, str):
+            if prompt_format not in PROMPT_FORMAT_REGISTRY:
+                raise ValueError(
+                    f"Unknown prompt format: {prompt_format}. Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                )
+            fmt = PROMPT_FORMAT_REGISTRY[prompt_format]
+        else:
+            fmt = prompt_format
+
         if not is_vqa_sample and not is_prediction_sample:
-            if prompt_format is None:
-                fmt = self._prompt_format
-            elif isinstance(prompt_format, str):
-                if prompt_format not in PROMPT_FORMAT_REGISTRY:
-                    raise ValueError(
-                        f"Unknown prompt format: {prompt_format}. Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
-                    )
-                fmt = PROMPT_FORMAT_REGISTRY[prompt_format]
-            else:
-                fmt = prompt_format
 
             # Format the prompt using the PromptFormat
             formatted_prompt = fmt.format_prompt(prompt, state, state_type)
