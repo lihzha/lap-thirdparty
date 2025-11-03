@@ -450,7 +450,14 @@ class _SingleCoTDataset:
         self.dataset = self.dataset.traj_map(add_prediction_pairs, self.num_parallel_calls)
 
     def apply_repack_transforms(self):
-        raise NotImplementedError
+        def common(traj):
+            # Add empty caption field for robot datasets (VQA datasets will populate this)
+            traj_len = tf.shape(traj["actions"])[0]
+            traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
+            traj["is_vqa_sample"] = tf.repeat(tf.constant(False, dtype=tf.bool), traj_len)
+            return traj
+
+        self.dataset = self.dataset.traj_map(common, self.num_parallel_calls)
 
     def get_traj_identifier(self):
         raise NotImplementedError

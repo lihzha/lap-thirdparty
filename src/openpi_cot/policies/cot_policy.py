@@ -218,7 +218,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "actions" in data:
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
-
+        
+        inputs["is_prediction_sample"] = data["is_prediction_sample"]
+    
         return inputs
 
     def _prepare_text(self, data: dict, lang_action_key: str, trimmed_len_key: str) -> dict:

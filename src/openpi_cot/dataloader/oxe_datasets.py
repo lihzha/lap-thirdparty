@@ -181,16 +181,13 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
         self.dataset = self.dataset.filter(_non_empty_prompt)
 
     def apply_repack_transforms(self):
+        super().apply_repack_transforms()
         def _pop_and_rename_keys(traj):
             # traj.pop("trajectory_id")
             traj["prompt"] = traj["language_instruction"]
             traj.pop("language_instruction")
             traj.pop("raw_action")
-            # Add empty caption field for robot datasets (VQA datasets will populate this)
-            traj_len = tf.shape(traj["actions"])[0]
-            traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
             return traj
-
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
 
 

@@ -266,7 +266,6 @@ class DroidCoTDataset(_SingleCoTDataset):
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # DROID is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
-                "is_vqa_sample": tf.fill([traj_len], tf.constant(False)),
             }
 
             step_id = (
@@ -355,12 +354,10 @@ class DroidCoTDataset(_SingleCoTDataset):
         # self.dataset = self.dataset.filter(_id_ok)
 
     def apply_repack_transforms(self):
+        super().apply_repack_transforms()
         def _pop_keys(traj):
             traj.pop("traj_metadata")
             # traj.pop("trajectory_id")
-            # Add empty caption field for robot datasets (VQA datasets will populate this)
-            traj_len = tf.shape(traj["actions"])[0]
-            traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
 
             return traj
 

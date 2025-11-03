@@ -395,10 +395,11 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         state_type: str | None = None,
         prompt_format: PromptFormat | str | None = None,
         is_vqa_sample: bool = False,
+        is_prediction_sample: bool = False
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Resolve prompt format
 
-        if not is_vqa_sample:
+        if not is_vqa_sample and not is_prediction_sample:
             if prompt_format is None:
                 fmt = self._prompt_format
             elif isinstance(prompt_format, str):
