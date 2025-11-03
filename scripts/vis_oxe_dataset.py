@@ -536,6 +536,7 @@ def main(config: _config.TrainConfig):
 
                 # Determine if this is a VQA sample (has non-empty caption)
                 is_vqa = bool(caption_text and caption_text.strip())
+                is_vqa = obs.is_vqa_mask[i]
 
                 # Combine prompt, langact/caption, and GT actions for display
                 text_parts = []

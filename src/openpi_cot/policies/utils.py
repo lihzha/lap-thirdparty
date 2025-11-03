@@ -178,9 +178,9 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
             elif droll_rad < 0:
                 parts.append("tilt right")
             if dpitch_rad > 0:
-                parts.append("tilt up")
+                parts.append("tilt back")
             elif dpitch_rad < 0:
-                parts.append("tilt down")
+                parts.append("tilt forward")
             if dyaw_rad > 0:
                 parts.append("rotate counterclockwise")
             elif dyaw_rad < 0:
