@@ -323,7 +323,7 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     block_h = max(1, y1 - y0)
     base_scale = 2.5
     scale = max(0.4, min(1.5, block_h / 110.0)) * base_scale
-    font_size = int(13 * scale * 0.8)
+    font_size = int(13 * scale * 0.4)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
