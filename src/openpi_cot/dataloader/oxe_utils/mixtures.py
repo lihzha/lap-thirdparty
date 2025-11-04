@@ -244,6 +244,11 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("coco_captions", 1.0),  # 10% COCO caption samples
         ("vqa", 1.0),  # 10% vqa samples
     ],
+    "cotrain_test": [
+        ("fmb", 1.0),
+        ("coco_captions", 1.0),  # 10% COCO caption samples
+        ("vqa", 1.0),  # 10% vqa samples
+    ],
     # === Individual Datasets (for isolated visualization/testing) ===
     "kuka": [("kuka", 1.0)],
     "bc_z": [("bc_z", 1.0)],
