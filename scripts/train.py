@@ -733,15 +733,8 @@ def main(config: _config.TrainConfig):
             persistent_iterator=False,
         )
 
-        # Log validation dataset configuration for debugging
-        logging.info("=" * 80)
-        logging.info("VALIDATION DATASET CONFIGURATION")
-        logging.info("=" * 80)
-        logging.info(f"Global batch_size: {config.batch_size}")
-        logging.info(f"JAX process_count: {jax.process_count()}")
-        logging.info(f"Per-host batch_size: {max(1, config.batch_size // jax.process_count())}")
-        logging.info(f"val_max_samples from config: {getattr(config.data, 'val_max_samples', None)}")
-
+        num_val_batches = val_loader.num_val_batches if config.do_val else 0
+        logging.info(f"Number of validation batches: {num_val_batches}")
         # Try to get dataset statistics
         val_dataset = getattr(val_loader, "dataset", None)
         if val_dataset:
@@ -798,8 +791,6 @@ def main(config: _config.TrainConfig):
                 current_stage_idx = i
                 logging.info(f"Starting training at step {start_step} in stage {i}")
                 break
-
-    num_val_batches = val_loader.num_val_batches if config.do_val else 0
 
     for step in pbar:
         # Detect and log stage transitions
