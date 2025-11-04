@@ -646,6 +646,58 @@ def gather_dataset_info_multihost(
     return all_decoded_names, all_losses
 
 
+def _create_bar_plot(
+    dataset_names: list[str],
+    values: list[float],
+    ylabel: str,
+    title: str,
+    color: str,
+    value_format: str = "{:.4f}",
+    ylim: tuple[float, float] | None = None,
+) -> plt.Figure:
+    """Helper function to create a bar plot with consistent styling.
+
+    Args:
+        dataset_names: List of dataset names for x-axis
+        values: List of values for y-axis
+        ylabel: Label for y-axis
+        title: Plot title
+        color: Bar color
+        value_format: Format string for value labels
+        ylim: Optional y-axis limits
+
+    Returns:
+        Matplotlib figure
+    """
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars = ax.bar(range(len(dataset_names)), values, color=color)
+    ax.set_xlabel("Dataset", fontsize=12)
+    ax.set_ylabel(ylabel, fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.set_xticks(range(len(dataset_names)))
+    ax.set_xticklabels(dataset_names, rotation=45, ha="right")
+    ax.grid(axis="y", alpha=0.3)
+
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    # Add value labels on top of bars
+    for bar, value in zip(bars, values):
+        height = bar.get_height()
+        label = value_format.format(value) if isinstance(value, float) else str(int(value))
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            label,
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+    plt.tight_layout()
+    return fig
+
+
 def create_dataset_stats_plots(
     dataset_stats: dict[str, dict[str, float]],
     cumulative_stats: dict[str, dict[str, float]] | None = None,
@@ -705,30 +757,55 @@ def create_dataset_stats_plots(
 
     plots = {}
 
-    # Create counts bar plot
-    fig_counts, ax_counts = plt.subplots(figsize=(12, 6))
-    bars_counts = ax_counts.bar(range(len(dataset_names_sorted)), counts_sorted, color="steelblue")
-    ax_counts.set_xlabel("Dataset", fontsize=12)
-    ax_counts.set_ylabel("Number of Examples", fontsize=12)
-    ax_counts.set_title("Dataset Example Counts", fontsize=14, fontweight="bold")
-    ax_counts.set_xticks(range(len(dataset_names_sorted)))
-    ax_counts.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-    ax_counts.grid(axis="y", alpha=0.3)
+    # Create interval plots using helper function
+    plots["counts"] = _create_bar_plot(
+        dataset_names_sorted,
+        counts_sorted,
+        "Number of Examples",
+        "Dataset Example Counts",
+        "steelblue",
+        value_format="{:.0f}",
+    )
 
-    # Add value labels on top of bars
-    for i, (bar, count) in enumerate(zip(bars_counts, counts_sorted)):
-        height = bar.get_height()
-        ax_counts.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            height,
-            f"{int(count)}",
-            ha="center",
-            va="bottom",
-            fontsize=9,
+    # Create average loss plot
+    plots["avg_loss"] = _create_bar_plot(
+        dataset_names_sorted,
+        avg_losses_sorted,
+        "Average Loss",
+        "Dataset Average Loss",
+        "coral",
+    )
+
+    # Create accuracy plots if data is available
+    if any(acc > 0 for acc in avg_critical_accs_sorted):
+        plots["avg_critical_token_acc"] = _create_bar_plot(
+            dataset_names_sorted,
+            avg_critical_accs_sorted,
+            "Average Critical Token Accuracy",
+            "Dataset Average Critical Token Accuracy",
+            "mediumseagreen",
+            ylim=(0, 1),
         )
 
-    plt.tight_layout()
-    plots["counts"] = fig_counts
+    if any(acc > 0 for acc in avg_number_accs_sorted):
+        plots["avg_number_token_acc"] = _create_bar_plot(
+            dataset_names_sorted,
+            avg_number_accs_sorted,
+            "Average Number Token Accuracy",
+            "Dataset Average Number Token Accuracy",
+            "skyblue",
+            ylim=(0, 1),
+        )
+
+    if any(acc > 0 for acc in avg_direction_accs_sorted):
+        plots["avg_direction_token_acc"] = _create_bar_plot(
+            dataset_names_sorted,
+            avg_direction_accs_sorted,
+            "Average Direction Token Accuracy",
+            "Dataset Average Direction Token Accuracy",
+            "lightcoral",
+            ylim=(0, 1),
+        )
 
     # Create cumulative (since-start) plots if cumulative_stats is provided
     if cumulative_stats:
@@ -759,248 +836,53 @@ def create_dataset_stats_plots(
             for name in dataset_names_sorted
         ]
 
-        # Cumulative counts plot
-        fig_cumulative, ax_cumulative = plt.subplots(figsize=(12, 6))
-        bars_cumulative = ax_cumulative.bar(
-            range(len(dataset_names_sorted)), cumulative_counts_list, color="mediumseagreen"
+        # Create cumulative plots using helper function
+        plots["cumulative_counts"] = _create_bar_plot(
+            dataset_names_sorted,
+            cumulative_counts_list,
+            "Cumulative Number of Examples (Since Start)",
+            "Dataset Cumulative Example Counts (Since Start)",
+            "mediumseagreen",
+            value_format="{:.0f}",
         )
-        ax_cumulative.set_xlabel("Dataset", fontsize=12)
-        ax_cumulative.set_ylabel("Cumulative Number of Examples (Since Start)", fontsize=12)
-        ax_cumulative.set_title("Dataset Cumulative Example Counts (Since Start)", fontsize=14, fontweight="bold")
-        ax_cumulative.set_xticks(range(len(dataset_names_sorted)))
-        ax_cumulative.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-        ax_cumulative.grid(axis="y", alpha=0.3)
 
-        for i, (bar, count) in enumerate(zip(bars_cumulative, cumulative_counts_list)):
-            height = bar.get_height()
-            ax_cumulative.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height,
-                f"{int(count)}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-            )
-        plt.tight_layout()
-        plots["cumulative_counts"] = fig_cumulative
-
-        # Cumulative average loss plot
-        fig_cumulative_loss, ax_cumulative_loss = plt.subplots(figsize=(12, 6))
-        bars_cumulative_loss = ax_cumulative_loss.bar(
-            range(len(dataset_names_sorted)), cumulative_avg_losses, color="coral"
+        plots["cumulative_avg_loss"] = _create_bar_plot(
+            dataset_names_sorted,
+            cumulative_avg_losses,
+            "Cumulative Average Loss (Since Start)",
+            "Dataset Cumulative Average Loss (Since Start)",
+            "coral",
         )
-        ax_cumulative_loss.set_xlabel("Dataset", fontsize=12)
-        ax_cumulative_loss.set_ylabel("Cumulative Average Loss (Since Start)", fontsize=12)
-        ax_cumulative_loss.set_title("Dataset Cumulative Average Loss (Since Start)", fontsize=14, fontweight="bold")
-        ax_cumulative_loss.set_xticks(range(len(dataset_names_sorted)))
-        ax_cumulative_loss.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-        ax_cumulative_loss.grid(axis="y", alpha=0.3)
 
-        for i, (bar, loss) in enumerate(zip(bars_cumulative_loss, cumulative_avg_losses)):
-            height = bar.get_height()
-            ax_cumulative_loss.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height,
-                f"{loss:.4f}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-            )
-        plt.tight_layout()
-        plots["cumulative_avg_loss"] = fig_cumulative_loss
-
-        # Cumulative critical token accuracy plot
         if any(acc > 0 for acc in cumulative_avg_critical_accs):
-            fig_cumulative_crit, ax_cumulative_crit = plt.subplots(figsize=(12, 6))
-            bars_cumulative_crit = ax_cumulative_crit.bar(
-                range(len(dataset_names_sorted)), cumulative_avg_critical_accs, color="mediumseagreen"
+            plots["cumulative_avg_critical_token_acc"] = _create_bar_plot(
+                dataset_names_sorted,
+                cumulative_avg_critical_accs,
+                "Cumulative Avg Critical Token Accuracy (Since Start)",
+                "Dataset Cumulative Average Critical Token Accuracy (Since Start)",
+                "mediumseagreen",
+                ylim=(0, 1),
             )
-            ax_cumulative_crit.set_xlabel("Dataset", fontsize=12)
-            ax_cumulative_crit.set_ylabel("Cumulative Avg Critical Token Accuracy (Since Start)", fontsize=12)
-            ax_cumulative_crit.set_title(
-                "Dataset Cumulative Average Critical Token Accuracy (Since Start)", fontsize=14, fontweight="bold"
-            )
-            ax_cumulative_crit.set_xticks(range(len(dataset_names_sorted)))
-            ax_cumulative_crit.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-            ax_cumulative_crit.grid(axis="y", alpha=0.3)
-            ax_cumulative_crit.set_ylim([0, 1])
 
-            for i, (bar, acc) in enumerate(zip(bars_cumulative_crit, cumulative_avg_critical_accs)):
-                height = bar.get_height()
-                ax_cumulative_crit.text(
-                    bar.get_x() + bar.get_width() / 2.0,
-                    height,
-                    f"{acc:.4f}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                )
-            plt.tight_layout()
-            plots["cumulative_avg_critical_token_acc"] = fig_cumulative_crit
-
-        # Cumulative number token accuracy plot
         if any(acc > 0 for acc in cumulative_avg_number_accs):
-            fig_cumulative_num, ax_cumulative_num = plt.subplots(figsize=(12, 6))
-            bars_cumulative_num = ax_cumulative_num.bar(
-                range(len(dataset_names_sorted)), cumulative_avg_number_accs, color="skyblue"
+            plots["cumulative_avg_number_token_acc"] = _create_bar_plot(
+                dataset_names_sorted,
+                cumulative_avg_number_accs,
+                "Cumulative Avg Number Token Accuracy (Since Start)",
+                "Dataset Cumulative Average Number Token Accuracy (Since Start)",
+                "skyblue",
+                ylim=(0, 1),
             )
-            ax_cumulative_num.set_xlabel("Dataset", fontsize=12)
-            ax_cumulative_num.set_ylabel("Cumulative Avg Number Token Accuracy (Since Start)", fontsize=12)
-            ax_cumulative_num.set_title(
-                "Dataset Cumulative Average Number Token Accuracy (Since Start)", fontsize=14, fontweight="bold"
-            )
-            ax_cumulative_num.set_xticks(range(len(dataset_names_sorted)))
-            ax_cumulative_num.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-            ax_cumulative_num.grid(axis="y", alpha=0.3)
-            ax_cumulative_num.set_ylim([0, 1])
 
-            for i, (bar, acc) in enumerate(zip(bars_cumulative_num, cumulative_avg_number_accs)):
-                height = bar.get_height()
-                ax_cumulative_num.text(
-                    bar.get_x() + bar.get_width() / 2.0,
-                    height,
-                    f"{acc:.4f}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                )
-            plt.tight_layout()
-            plots["cumulative_avg_number_token_acc"] = fig_cumulative_num
-
-        # Cumulative direction token accuracy plot
         if any(acc > 0 for acc in cumulative_avg_direction_accs):
-            fig_cumulative_dir, ax_cumulative_dir = plt.subplots(figsize=(12, 6))
-            bars_cumulative_dir = ax_cumulative_dir.bar(
-                range(len(dataset_names_sorted)), cumulative_avg_direction_accs, color="lightcoral"
+            plots["cumulative_avg_direction_token_acc"] = _create_bar_plot(
+                dataset_names_sorted,
+                cumulative_avg_direction_accs,
+                "Cumulative Avg Direction Token Accuracy (Since Start)",
+                "Dataset Cumulative Average Direction Token Accuracy (Since Start)",
+                "lightcoral",
+                ylim=(0, 1),
             )
-            ax_cumulative_dir.set_xlabel("Dataset", fontsize=12)
-            ax_cumulative_dir.set_ylabel("Cumulative Avg Direction Token Accuracy (Since Start)", fontsize=12)
-            ax_cumulative_dir.set_title(
-                "Dataset Cumulative Average Direction Token Accuracy (Since Start)", fontsize=14, fontweight="bold"
-            )
-            ax_cumulative_dir.set_xticks(range(len(dataset_names_sorted)))
-            ax_cumulative_dir.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-            ax_cumulative_dir.grid(axis="y", alpha=0.3)
-            ax_cumulative_dir.set_ylim([0, 1])
-
-            for i, (bar, acc) in enumerate(zip(bars_cumulative_dir, cumulative_avg_direction_accs)):
-                height = bar.get_height()
-                ax_cumulative_dir.text(
-                    bar.get_x() + bar.get_width() / 2.0,
-                    height,
-                    f"{acc:.4f}",
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                )
-            plt.tight_layout()
-            plots["cumulative_avg_direction_token_acc"] = fig_cumulative_dir
-
-    # Create average loss bar plot
-    fig_loss, ax_loss = plt.subplots(figsize=(12, 6))
-    bars_loss = ax_loss.bar(range(len(dataset_names_sorted)), avg_losses_sorted, color="coral")
-    ax_loss.set_xlabel("Dataset", fontsize=12)
-    ax_loss.set_ylabel("Average Loss", fontsize=12)
-    ax_loss.set_title("Dataset Average Loss", fontsize=14, fontweight="bold")
-    ax_loss.set_xticks(range(len(dataset_names_sorted)))
-    ax_loss.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-    ax_loss.grid(axis="y", alpha=0.3)
-
-    # Add value labels on top of bars
-    for i, (bar, loss) in enumerate(zip(bars_loss, avg_losses_sorted)):
-        height = bar.get_height()
-        ax_loss.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            height,
-            f"{loss:.4f}",
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
-
-    plt.tight_layout()
-    plots["avg_loss"] = fig_loss
-
-    # Create average critical token accuracy bar plot (if data is available)
-    if any(acc > 0 for acc in avg_critical_accs_sorted):
-        fig_acc, ax_acc = plt.subplots(figsize=(12, 6))
-        bars_acc = ax_acc.bar(range(len(dataset_names_sorted)), avg_critical_accs_sorted, color="mediumseagreen")
-        ax_acc.set_xlabel("Dataset", fontsize=12)
-        ax_acc.set_ylabel("Average Critical Token Accuracy", fontsize=12)
-        ax_acc.set_title("Dataset Average Critical Token Accuracy", fontsize=14, fontweight="bold")
-        ax_acc.set_xticks(range(len(dataset_names_sorted)))
-        ax_acc.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-        ax_acc.grid(axis="y", alpha=0.3)
-        ax_acc.set_ylim([0, 1])  # Accuracy should be between 0 and 1
-
-        # Add value labels on top of bars
-        for i, (bar, acc) in enumerate(zip(bars_acc, avg_critical_accs_sorted)):
-            height = bar.get_height()
-            ax_acc.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height,
-                f"{acc:.4f}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-            )
-
-        plt.tight_layout()
-        plots["avg_critical_token_acc"] = fig_acc
-
-    # Create average number token accuracy bar plot (if data is available)
-    if any(acc > 0 for acc in avg_number_accs_sorted):
-        fig_num_acc, ax_num_acc = plt.subplots(figsize=(12, 6))
-        bars_num_acc = ax_num_acc.bar(range(len(dataset_names_sorted)), avg_number_accs_sorted, color="skyblue")
-        ax_num_acc.set_xlabel("Dataset", fontsize=12)
-        ax_num_acc.set_ylabel("Average Number Token Accuracy", fontsize=12)
-        ax_num_acc.set_title("Dataset Average Number Token Accuracy", fontsize=14, fontweight="bold")
-        ax_num_acc.set_xticks(range(len(dataset_names_sorted)))
-        ax_num_acc.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-        ax_num_acc.grid(axis="y", alpha=0.3)
-        ax_num_acc.set_ylim([0, 1])  # Accuracy should be between 0 and 1
-
-        # Add value labels on top of bars
-        for i, (bar, acc) in enumerate(zip(bars_num_acc, avg_number_accs_sorted)):
-            height = bar.get_height()
-            ax_num_acc.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height,
-                f"{acc:.4f}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-            )
-
-        plt.tight_layout()
-        plots["avg_number_token_acc"] = fig_num_acc
-
-    # Create average direction token accuracy bar plot (if data is available)
-    if any(acc > 0 for acc in avg_direction_accs_sorted):
-        fig_dir_acc, ax_dir_acc = plt.subplots(figsize=(12, 6))
-        bars_dir_acc = ax_dir_acc.bar(range(len(dataset_names_sorted)), avg_direction_accs_sorted, color="lightcoral")
-        ax_dir_acc.set_xlabel("Dataset", fontsize=12)
-        ax_dir_acc.set_ylabel("Average Direction Token Accuracy", fontsize=12)
-        ax_dir_acc.set_title("Dataset Average Direction Token Accuracy", fontsize=14, fontweight="bold")
-        ax_dir_acc.set_xticks(range(len(dataset_names_sorted)))
-        ax_dir_acc.set_xticklabels(dataset_names_sorted, rotation=45, ha="right")
-        ax_dir_acc.grid(axis="y", alpha=0.3)
-        ax_dir_acc.set_ylim([0, 1])  # Accuracy should be between 0 and 1
-
-        # Add value labels on top of bars
-        for i, (bar, acc) in enumerate(zip(bars_dir_acc, avg_direction_accs_sorted)):
-            height = bar.get_height()
-            ax_dir_acc.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height,
-                f"{acc:.4f}",
-                ha="center",
-                va="bottom",
-                fontsize=9,
-            )
-
-        plt.tight_layout()
-        plots["avg_direction_token_acc"] = fig_dir_acc
 
     return plots
 
@@ -1382,8 +1264,6 @@ def main(config: _config.TrainConfig):
         dataloader_initialized = False
         raise  # Re-raise the exception as this is critical
 
-    breakpoint()
-
     log_mem("After getting batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     sharding.log_batch_sharding(batch)
@@ -1525,28 +1405,61 @@ def main(config: _config.TrainConfig):
             raise ValueError("Training step info missing per_sample_loss")
 
         # Buffer local dataset info (no multihost gathering at every step)
+        # NOTE: We now track pred_ and langact_ metrics separately
         if hasattr(batch[0], "tokenized_dataset_name"):
             try:
-                # Extract per-sample token counts for micro-averaging
-                critical_data = None
-                if "per_sample_critical_correct" in info and "per_sample_critical_total" in info:
-                    critical_data = (info["per_sample_critical_correct"], info["per_sample_critical_total"])
+                # Helper function to extract per-sample data for a metric prefix
+                def extract_metric_data(prefix: str):
+                    critical_data = None
+                    if f"{prefix}per_sample_critical_correct" in info and f"{prefix}per_sample_critical_total" in info:
+                        critical_data = (info[f"{prefix}per_sample_critical_correct"], info[f"{prefix}per_sample_critical_total"])
 
-                number_data = None
-                if "per_sample_number_correct" in info and "per_sample_number_total" in info:
-                    number_data = (info["per_sample_number_correct"], info["per_sample_number_total"])
+                    number_data = None
+                    if f"{prefix}per_sample_number_correct" in info and f"{prefix}per_sample_number_total" in info:
+                        number_data = (info[f"{prefix}per_sample_number_correct"], info[f"{prefix}per_sample_number_total"])
 
-                direction_data = None
-                if "per_sample_direction_correct" in info and "per_sample_direction_total" in info:
-                    direction_data = (info["per_sample_direction_correct"], info["per_sample_direction_total"])
+                    direction_data = None
+                    if f"{prefix}per_sample_direction_correct" in info and f"{prefix}per_sample_direction_total" in info:
+                        direction_data = (info[f"{prefix}per_sample_direction_correct"], info[f"{prefix}per_sample_direction_total"])
 
-                dataset_info_buffer.add_local_batch(
-                    batch[0].tokenized_dataset_name,
-                    per_sample_loss,
-                    critical_data,
-                    number_data,
-                    direction_data,
-                )
+                    per_sample_loss_key = f"{prefix}per_sample_loss"
+                    loss_data = info.get(per_sample_loss_key, per_sample_loss)
+
+                    return loss_data, critical_data, number_data, direction_data
+
+                # Buffer data for both pred and langact samples if available
+                # Try prediction samples first
+                if "pred_per_sample_loss" in info or "pred_per_sample_critical_correct" in info:
+                    loss_data, critical_data, number_data, direction_data = extract_metric_data("pred_")
+                    dataset_info_buffer.add_local_batch(
+                        batch[0].tokenized_dataset_name,
+                        loss_data,
+                        critical_data,
+                        number_data,
+                        direction_data,
+                    )
+
+                # Try langact samples
+                if "langact_per_sample_loss" in info or "langact_per_sample_critical_correct" in info:
+                    loss_data, critical_data, number_data, direction_data = extract_metric_data("langact_")
+                    dataset_info_buffer.add_local_batch(
+                        batch[0].tokenized_dataset_name,
+                        loss_data,
+                        critical_data,
+                        number_data,
+                        direction_data,
+                    )
+
+                # Fallback to overall metrics if neither pred nor langact are available
+                if "pred_per_sample_loss" not in info and "langact_per_sample_loss" not in info:
+                    loss_data, critical_data, number_data, direction_data = extract_metric_data("")
+                    dataset_info_buffer.add_local_batch(
+                        batch[0].tokenized_dataset_name,
+                        loss_data,
+                        critical_data,
+                        number_data,
+                        direction_data,
+                    )
             except Exception as e:
                 logging.warning(f"Failed to buffer dataset info at step {step}: {e}")
 
@@ -1584,6 +1497,8 @@ def main(config: _config.TrainConfig):
             }
             reduced_info = {}
             per_sample_losses_chunk: list[np.ndarray] = []
+
+            # Process metrics: average metrics go directly to logging, per_sample metrics are skipped
             for key, value in stacked_infos.items():
                 if key == "per_sample_loss":
                     per_sample_losses_chunk.append(np.asarray(training_utils.to_local_array(value)).reshape(-1))
@@ -1592,7 +1507,10 @@ def main(config: _config.TrainConfig):
                     # Skip per_sample_* metrics - they're only used for dataset-level statistics
                     continue
                 else:
+                    # All other metrics (including pred_loss, langact_loss, pred_critical_token_accuracy, etc.)
+                    # are averaged and logged directly
                     reduced_info[key] = reduce_overrides.get(key, jnp.mean)(value)
+
             reduced_info = jax.device_get(reduced_info)
 
             # Add dataset statistics to logging

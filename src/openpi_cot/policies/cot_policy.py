@@ -341,15 +341,17 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "language_actions" in data:
             inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
 
-            # Check if the language action represents idle movement
-            is_idle = is_idle_language_action(
-                inputs["language_actions"],
-                self.language_action_format.get_sum_decimal(),
-                self.language_action_format.include_rotation,
-            )
-            inputs["sample_mask"] = not is_idle
+            # Only apply idle filtering for language actions
+            if not is_vqa_sample and not inputs["is_prediction_sample"]:
+                is_idle = is_idle_language_action(
+                    inputs["language_actions"],
+                    self.language_action_format.get_sum_decimal(),
+                    self.language_action_format.include_rotation,
+                )
+                inputs["sample_mask"] = not is_idle
+            else:
+                inputs["sample_mask"] = True
         else:
-            # If no language actions, default to active sample
             inputs["sample_mask"] = True
 
         # Optional calibration/context passthroughs for visualization
