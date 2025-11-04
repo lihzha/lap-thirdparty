@@ -511,7 +511,7 @@ class TrainingStepRunner:
             actions: _model.Actions,
         ):
             metrics = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
-            return jnp.mean(metrics["total_loss"]), metrics
+            return jnp.mean(metrics["per_sample_loss"]), metrics
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
