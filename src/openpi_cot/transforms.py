@@ -76,12 +76,11 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_langact_mask": reasoning_mask,
             # Critical tokens are both numbers AND directional indicators
-            "crictical_token_mask": critical_mask,
+            "critical_token_mask": critical_mask,
             "number_token_mask": numeric_mask,
             "direction_token_mask": direction_mask,
             "tokenized_dataset_name": tokenized_dataset_name,
         }
-
 
         return result
 

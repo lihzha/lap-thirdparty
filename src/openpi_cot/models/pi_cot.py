@@ -169,7 +169,6 @@ class PiCoT(_pi0.Pi0):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
-
     def _embed_images(
         self, obs: CoTObservation | Observation, num_frames: int | None = None
     ) -> tuple[
@@ -749,7 +748,7 @@ class PiCoT(_pi0.Pi0):
             tokenized_sequence=observation.tokenized_prompt,
             tokenized_sequence_mask=observation.tokenized_prompt_mask,
             tokenized_langact_mask=observation.tokenized_langact_mask,
-            critical_token_mask=observation.crictical_token_mask,
+            critical_token_mask=observation.critical_token_mask,
             number_token_mask=observation.number_token_mask,
             direction_token_mask=observation.direction_token_mask,
             sample_mask=effective_sample_mask,
@@ -928,14 +927,7 @@ class PiCoT(_pi0.Pi0):
         *,
         train: bool = False,
         stage_config: dict | None = None,
-    ) -> tuple[
-        at.Float[at.Array, "*b ah"],
-        at.Float[at.Array, ""],
-        at.Float[at.Array, ""],
-        at.Float[at.Array, ""],
-        at.Float[at.Array, ""],
-        dict[str, at.Array],
-    ]:
+    ) -> dict[str, at.Array]:
         preprocess_rng, stochastic_rng, noise_rng, time_rng = jax.random.split(rng, 4)
 
         # Preprocess observation
@@ -1059,24 +1051,30 @@ class PiCoT(_pi0.Pi0):
         # Add overall lang_metrics to metrics dict
         metrics.update(lang_metrics)
 
-        # Compute action diffusion loss with per-sample masking
-        action_loss, action_metrics = self._compute_action_loss(
-            observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
-        )
+        # Compute action diffusion loss only if action training is enabled
+        if action_enabled:
+            action_loss, action_metrics = self._compute_action_loss(
+                observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
+            )
+            # Apply loss only to masked samples
+            action_loss = action_loss * action_sample_mask
+            total_loss = total_loss + action_loss_weight * action_loss
+            metrics.update(action_metrics)
+        else:
+            # Skip action loss computation entirely when not enabled
+            if train:
+                metrics["action_loss"] = jnp.zeros(batch_size)
+            else:
+                metrics["action_loss"] = jnp.array(0.0)
 
-        # Apply loss only to masked samples
-        action_loss = action_loss * action_sample_mask
-        total_loss = total_loss + action_loss_weight * action_loss
-        metrics.update(action_metrics)
+        # Add main metrics to dict
+        metrics["total_loss"] = total_loss
+        metrics["token_accuracy"] = token_accuracy
+        metrics["critical_token_accuracy"] = critical_token_accuracy
+        metrics["number_token_accuracy"] = number_token_accuracy
+        metrics["direction_token_accuracy"] = direction_token_accuracy
 
-        return (
-            total_loss,
-            token_accuracy,
-            critical_token_accuracy,
-            number_token_accuracy,
-            direction_token_accuracy,
-            metrics,
-        )
+        return metrics
 
     def _slide_window_cache(
         self,

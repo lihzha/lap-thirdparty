@@ -11,10 +11,10 @@ import logging
 from typing import Any
 
 import jax
-import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
 import openpi.shared.array_typing as at
+
 import openpi_cot.training.utils as training_utils
 
 
@@ -38,7 +38,7 @@ class DatasetStatsTracker:
         critical_token_data: tuple[np.ndarray, np.ndarray] | None = None,
         number_token_data: tuple[np.ndarray, np.ndarray] | None = None,
         direction_token_data: tuple[np.ndarray, np.ndarray] | None = None,
-        sample_type: str = "all",
+        sample_type: str = "langact",
     ):
         """Update statistics with new batch data using micro-averaging.
 
@@ -48,7 +48,7 @@ class DatasetStatsTracker:
             critical_token_data: Tuple of (correct_counts, total_counts) for critical tokens (optional)
             number_token_data: Tuple of (correct_counts, total_counts) for number tokens (optional)
             direction_token_data: Tuple of (correct_counts, total_counts) for direction tokens (optional)
-            sample_type: Type of samples (e.g., 'pred', 'langact', 'all')
+            sample_type: Type of samples (e.g., 'pred', 'langact')
         """
         for idx, name in enumerate(dataset_names):
             key = (name, sample_type)
@@ -79,7 +79,9 @@ class DatasetStatsTracker:
             if direction_token_data is not None:
                 correct_counts, total_counts = direction_token_data
                 self._update_token_stats(self.dataset_stats[key], "direction", correct_counts[idx], total_counts[idx])
-                self._update_token_stats(self.cumulative_stats[key], "direction", correct_counts[idx], total_counts[idx])
+                self._update_token_stats(
+                    self.cumulative_stats[key], "direction", correct_counts[idx], total_counts[idx]
+                )
 
     @staticmethod
     def _create_empty_stats() -> dict[str, Any]:
@@ -191,7 +193,7 @@ class LocalDatasetInfoBuffer:
         per_sample_critical_token_data: tuple[at.Array, at.Array] | None = None,
         per_sample_number_token_data: tuple[at.Array, at.Array] | None = None,
         per_sample_direction_token_data: tuple[at.Array, at.Array] | None = None,
-        sample_type: str = "all",
+        sample_type: str = "langact",
     ):
         """Add local batch data (no multihost gathering here).
 
@@ -201,16 +203,20 @@ class LocalDatasetInfoBuffer:
             per_sample_critical_token_data: Tuple of (correct_counts, total_counts) for critical tokens (optional)
             per_sample_number_token_data: Tuple of (correct_counts, total_counts) for number tokens (optional)
             per_sample_direction_token_data: Tuple of (correct_counts, total_counts) for direction tokens (optional)
-            sample_type: Type of samples (e.g., 'pred', 'langact', 'all')
+            sample_type: Type of samples (e.g., 'pred', 'langact')
         """
         # Convert to numpy and store with sample_type
-        self.tokenized_names_buffer.append((np.asarray(training_utils.to_local_array(tokenized_dataset_names)), sample_type))
+        self.tokenized_names_buffer.append(
+            (np.asarray(training_utils.to_local_array(tokenized_dataset_names)), sample_type)
+        )
         self.losses_buffer.append((np.asarray(training_utils.to_local_array(per_sample_losses)), sample_type))
 
         # Buffer token-level counts for micro-averaging
         if per_sample_critical_token_data is not None:
             correct_counts, total_counts = per_sample_critical_token_data
-            self.critical_correct_buffer.append((np.asarray(training_utils.to_local_array(correct_counts)), sample_type))
+            self.critical_correct_buffer.append(
+                (np.asarray(training_utils.to_local_array(correct_counts)), sample_type)
+            )
             self.critical_total_buffer.append((np.asarray(training_utils.to_local_array(total_counts)), sample_type))
 
         if per_sample_number_token_data is not None:
@@ -220,7 +226,9 @@ class LocalDatasetInfoBuffer:
 
         if per_sample_direction_token_data is not None:
             correct_counts, total_counts = per_sample_direction_token_data
-            self.direction_correct_buffer.append((np.asarray(training_utils.to_local_array(correct_counts)), sample_type))
+            self.direction_correct_buffer.append(
+                (np.asarray(training_utils.to_local_array(correct_counts)), sample_type)
+            )
             self.direction_total_buffer.append((np.asarray(training_utils.to_local_array(total_counts)), sample_type))
 
     def gather_and_update_stats(self, dataset_stats_tracker: DatasetStatsTracker) -> None:
@@ -293,7 +301,12 @@ class LocalDatasetInfoBuffer:
 
             # Update stats with token-level data for this sample_type
             dataset_stats_tracker.update(
-                decoded_names, all_losses, all_critical_data, all_number_data, all_direction_data, sample_type=sample_type
+                decoded_names,
+                all_losses,
+                all_critical_data,
+                all_number_data,
+                all_direction_data,
+                sample_type=sample_type,
             )
 
         # Clear buffers
@@ -413,7 +426,7 @@ def create_dataset_stats_plots(
         return {}
 
     # Extract dataset names and statistics (group by dataset name, across all sample types)
-    dataset_names = sorted(set(name for name, _ in dataset_stats.keys()))
+    dataset_names = sorted(set(name for name, _ in dataset_stats))
 
     # For now, create plots for "all" sample type if it exists
     # TODO: Consider creating separate plots per sample_type
@@ -428,7 +441,8 @@ def create_dataset_stats_plots(
     counts = [all_stats[name]["count"] for name in dataset_names if name in all_stats]
     avg_losses = [
         all_stats[name]["total_loss"] / all_stats[name]["count"] if all_stats[name]["count"] > 0 else 0.0
-        for name in dataset_names if name in all_stats
+        for name in dataset_names
+        if name in all_stats
     ]
 
     # Compute token accuracies
@@ -630,7 +644,10 @@ def buffer_dataset_metrics_from_batch(
 
             pred_direction_data = None
             if "pred_per_sample_direction_correct" in info and "pred_per_sample_direction_total" in info:
-                pred_direction_data = (info["pred_per_sample_direction_correct"], info["pred_per_sample_direction_total"])
+                pred_direction_data = (
+                    info["pred_per_sample_direction_correct"],
+                    info["pred_per_sample_direction_total"],
+                )
 
             buffer.add_local_batch(
                 obs.tokenized_dataset_name,
@@ -645,15 +662,24 @@ def buffer_dataset_metrics_from_batch(
         if "langact_per_sample_loss" in info:
             langact_critical_data = None
             if "langact_per_sample_critical_correct" in info and "langact_per_sample_critical_total" in info:
-                langact_critical_data = (info["langact_per_sample_critical_correct"], info["langact_per_sample_critical_total"])
+                langact_critical_data = (
+                    info["langact_per_sample_critical_correct"],
+                    info["langact_per_sample_critical_total"],
+                )
 
             langact_number_data = None
             if "langact_per_sample_number_correct" in info and "langact_per_sample_number_total" in info:
-                langact_number_data = (info["langact_per_sample_number_correct"], info["langact_per_sample_number_total"])
+                langact_number_data = (
+                    info["langact_per_sample_number_correct"],
+                    info["langact_per_sample_number_total"],
+                )
 
             langact_direction_data = None
             if "langact_per_sample_direction_correct" in info and "langact_per_sample_direction_total" in info:
-                langact_direction_data = (info["langact_per_sample_direction_correct"], info["langact_per_sample_direction_total"])
+                langact_direction_data = (
+                    info["langact_per_sample_direction_correct"],
+                    info["langact_per_sample_direction_total"],
+                )
 
             buffer.add_local_batch(
                 obs.tokenized_dataset_name,
@@ -664,28 +690,6 @@ def buffer_dataset_metrics_from_batch(
                 sample_type="langact",
             )
 
-        # Fallback to overall metrics if neither pred nor langact are available
-        if "pred_per_sample_loss" not in info and "langact_per_sample_loss" not in info and "per_sample_loss" in info:
-            critical_data = None
-            if "per_sample_critical_correct" in info and "per_sample_critical_total" in info:
-                critical_data = (info["per_sample_critical_correct"], info["per_sample_critical_total"])
-
-            number_data = None
-            if "per_sample_number_correct" in info and "per_sample_number_total" in info:
-                number_data = (info["per_sample_number_correct"], info["per_sample_number_total"])
-
-            direction_data = None
-            if "per_sample_direction_correct" in info and "per_sample_direction_total" in info:
-                direction_data = (info["per_sample_direction_correct"], info["per_sample_direction_total"])
-
-            buffer.add_local_batch(
-                obs.tokenized_dataset_name,
-                info["per_sample_loss"],
-                critical_data,
-                number_data,
-                direction_data,
-                sample_type="all",
-            )
     except Exception as e:
         logging.warning(f"Failed to buffer dataset info: {e}")
 
@@ -706,13 +710,24 @@ def log_dataset_plots(plots: dict[str, plt.Figure], step: int, prefix: str = "")
     log_dict = {}
 
     # Interval plots
-    for plot_name in ["counts", "avg_loss", "avg_critical_token_acc", "avg_number_token_acc", "avg_direction_token_acc"]:
+    for plot_name in [
+        "counts",
+        "avg_loss",
+        "avg_critical_token_acc",
+        "avg_number_token_acc",
+        "avg_direction_token_acc",
+    ]:
         if plot_name in plots:
             log_dict[f"{prefix}dataset_stats/interval_{plot_name}_plot"] = wandb.Image(plots[plot_name])
 
     # Cumulative plots
-    for plot_name in ["cumulative_counts", "cumulative_avg_loss", "cumulative_avg_critical_token_acc",
-                      "cumulative_avg_number_token_acc", "cumulative_avg_direction_token_acc"]:
+    for plot_name in [
+        "cumulative_counts",
+        "cumulative_avg_loss",
+        "cumulative_avg_critical_token_acc",
+        "cumulative_avg_number_token_acc",
+        "cumulative_avg_direction_token_acc",
+    ]:
         if plot_name in plots:
             log_dict[f"{prefix}dataset_stats/{plot_name}_plot"] = wandb.Image(plots[plot_name])
 

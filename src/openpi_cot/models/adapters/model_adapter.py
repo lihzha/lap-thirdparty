@@ -40,7 +40,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
     images: dict[str, at.Float[ArrayT, "*b t h w c"]]
     tokenized_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
-    crictical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
+    critical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     direction_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     sample_mask: at.Bool[ArrayT, "*b"] | None = None
@@ -83,7 +83,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         return cls(
             **base_dict,
             tokenized_langact_mask=getk("tokenized_langact_mask"),
-            crictical_token_mask=getk("crictical_token_mask"),
+            critical_token_mask=getk("critical_token_mask"),
             number_token_mask=getk("number_token_mask"),
             direction_token_mask=getk("direction_token_mask"),
             sample_mask=getk("sample_mask"),
@@ -189,7 +189,7 @@ def preprocess_observation(
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
         tokenized_langact_mask=getattr(observation, "tokenized_langact_mask", None),
-        crictical_token_mask=getattr(observation, "crictical_token_mask", None),
+        critical_token_mask=getattr(observation, "critical_token_mask", None),
         number_token_mask=getattr(observation, "number_token_mask", None),
         direction_token_mask=getattr(observation, "direction_token_mask", None),
         sample_mask=getattr(observation, "sample_mask", None),

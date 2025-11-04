@@ -167,6 +167,105 @@ def log_mem(msg: str):
     logging.info(f"{msg}: RAM: {ram_gb:.2f}GB")
 
 
+def process_and_log_metrics(
+    step: int,
+    infos: list[dict[str, at.Array]],
+    batch: tuple[CoTObservation | Observation, _model.Actions],
+    dataset_stats_tracker: log_util.DatasetStatsTracker,
+    dataset_info_buffer: log_util.LocalDatasetInfoBuffer,
+    config: _config.TrainConfig,
+    host_batch_cache: "HostBatchCache | None" = None,
+    dataset_log_tracker: vis_tools.DatasetLogTracker | None = None,
+    tok: PaligemmaCoTTokenizer | None = None,
+    prefix: str = "",
+) -> dict[str, float]:
+    """
+    Unified function to process and log training/validation metrics.
+
+    Args:
+        step: Current training step
+        infos: List of metric dictionaries to aggregate
+        batch: Current batch data
+        dataset_stats_tracker: Tracker for dataset-level statistics
+        dataset_info_buffer: Buffer for local dataset info
+        config: Training configuration
+        host_batch_cache: Cache for host batches (only for training with langact)
+        dataset_log_tracker: Tracker for dataset logging counts (only for training with langact)
+        tok: Tokenizer for decoding (only for training with langact)
+        prefix: Prefix for metric names (empty for train, "val_" for validation)
+
+    Returns:
+        Dictionary of reduced metrics
+    """
+    # Gather and update dataset stats from buffered local data
+    dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
+
+    # Stack and reduce metrics
+    stacked_infos = common_utils.stack_forest(infos)
+    reduce_overrides = {
+        "grad_norm": jnp.mean,
+        "loss": jnp.mean,
+        "param_norm": jnp.mean,
+    }
+    reduced_info = {}
+
+    # Process metrics: average metrics go directly to logging, per_sample metrics are skipped
+    for key, value in stacked_infos.items():
+        if "per_sample_loss" in key:
+            reduced_info[f"{prefix}max_{key}"] = jnp.max(value)
+        elif "per_sample" in key:
+            # Skip per_sample_* metrics - they're only used for dataset-level statistics
+            continue
+        else:
+            # All other metrics are averaged and logged directly
+            # For validation, add prefix to non-prefixed keys
+            metric_key = key if key.startswith(prefix) else f"{prefix}{key}"
+            reduced_info[metric_key] = reduce_overrides.get(key, jnp.mean)(value)
+
+    reduced_info = jax.device_get(reduced_info)
+
+    # Add dataset statistics to logging
+    dataset_metrics = dataset_stats_tracker.get_metrics(prefix=prefix)
+    reduced_info.update(dataset_metrics)
+
+    info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+    mode = "val" if prefix else "train"
+    logging.info(f"Step {step} ({mode}): {info_str}")
+
+    if jax.process_index() == 0:
+        wandb.log(reduced_info, step=step)
+
+        # Create and log dataset statistics bar plots
+        if dataset_stats_tracker.dataset_stats:
+            plots = log_util.create_dataset_stats_plots(
+                dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
+            )
+            log_util.log_dataset_plots(plots, step, prefix=prefix)
+
+        # Training-specific logging: random examples and dataset log counts
+        if not prefix and config.model.enable_langact_training:
+            if host_batch_cache is not None and tok is not None and dataset_log_tracker is not None:
+                host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+                vis_tools.log_random_examples(
+                    step,
+                    host_batch_local,
+                    tok,
+                    local_batch_size=local_size,
+                    dataset_log_tracker=dataset_log_tracker,
+                )
+
+                # Log dataset logging statistics periodically
+                if step % (config.log_interval * 10) == 0:
+                    log_stats = dataset_log_tracker.get_stats()
+                    if log_stats:
+                        logging.info(f"Dataset logging counts: {log_stats}")
+                        # Log to wandb as well
+                        wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
+                        wandb.log(wandb_log_stats, step=step)
+
+    return reduced_info
+
+
 def init_logging():
     """Custom logging format for better readability."""
     level_mapping = {
@@ -307,63 +406,6 @@ class HostBatchCache:
         return self.host_batch, self.local_batch_size
 
 
-# Note: DatasetStatsTracker and LocalDatasetInfoBuffer have been moved to log_util.py
-
-
-def gather_dataset_info_multihost(
-    tokenized_dataset_names: at.Array,
-    per_sample_losses: at.Array,
-    tokenizer,
-) -> tuple[list[str], np.ndarray]:
-    """Gather dataset names and losses from all hosts.
-
-    Args:
-        tokenized_dataset_names: Tokenized dataset names [batch_size, seq_len]
-        per_sample_losses: Per-sample losses [batch_size]
-        tokenizer: Tokenizer to decode dataset names
-
-    Returns:
-        Tuple of (dataset_names, losses) where both are gathered from all hosts
-    """
-    # Convert to local arrays (process-specific)
-    local_dataset_names_tokens = np.asarray(training_utils.to_local_array(tokenized_dataset_names))
-    local_losses = np.asarray(training_utils.to_local_array(per_sample_losses))
-
-    # For multi-host: gather tokenized names and losses (both numeric)
-    process_count = jax.process_count()
-    if process_count > 1:
-        # Gather numeric arrays using JAX (works fine with int/float dtypes)
-        all_dataset_names_tokens = jax.experimental.multihost_utils.process_allgather(local_dataset_names_tokens)
-        all_losses = jax.experimental.multihost_utils.process_allgather(local_losses)
-
-        # Flatten: shape goes from [num_processes, batch_per_process, seq_len] to [total_batch, seq_len]
-        # For losses: [num_processes, batch_per_process] to [total_batch]
-        all_dataset_names_tokens = np.asarray(all_dataset_names_tokens).reshape(
-            -1, local_dataset_names_tokens.shape[-1]
-        )
-        all_losses = np.asarray(all_losses).flatten()
-    else:
-        all_dataset_names_tokens = local_dataset_names_tokens
-        all_losses = local_losses
-
-    # Now decode all the gathered tokenized names (on all hosts, but with same data)
-    all_decoded_names = []
-    for i in range(all_dataset_names_tokens.shape[0]):
-        try:
-            name = tokenizer.decode(all_dataset_names_tokens[i])
-            # Clean up any special tokens or padding
-            name = name.strip()
-            all_decoded_names.append(name)
-        except Exception as e:
-            logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
-            all_decoded_names.append("unknown")
-
-    return all_decoded_names, all_losses
-
-
-# Note: Plotting functions have been moved to log_util.py
-
-
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
     """Loads and validates the weights. Returns a loaded subset of the weights."""
     loaded_params = loader.load(params_shape)
@@ -467,41 +509,15 @@ class TrainingStepRunner:
             observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
-            (
-                per_sample_loss,
-                token_accuracy,
-                critical_token_accuracy,
-                number_token_accuracy,
-                direction_token_accuracy,
-                metrics,
-            ) = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
-            breakpoint()
-            return jnp.mean(per_sample_loss), (
-                per_sample_loss,
-                token_accuracy,
-                critical_token_accuracy,
-                number_token_accuracy,
-                direction_token_accuracy,
-                metrics,
-            )
+            metrics = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
+            return jnp.mean(metrics["total_loss"]), metrics
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
-        (
-            (
-                loss,
-                (
-                    per_sample_loss,
-                    token_accuracy,
-                    critical_token_accuracy,
-                    number_token_accuracy,
-                    direction_token_accuracy,
-                    loss_metrics,
-                ),
-            ),
-            grads,
-        ) = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(model, train_rng, observation, actions)
+        (loss, loss_metrics), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
+            model, train_rng, observation, actions
+        )
 
         params = state.params.filter(self.config.trainable_filter)
         updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -531,22 +547,20 @@ class TrainingStepRunner:
 
         info = {
             "loss": loss,
-            "per_sample_loss": per_sample_loss,
             "grad_norm": optax.global_norm(grads),
             "param_norm": optax.global_norm(kernel_params),
-            "token_accuracy": token_accuracy,
-            "critical_token_accuracy": critical_token_accuracy,
-            "number_token_accuracy": number_token_accuracy,
-            "direction_token_accuracy": direction_token_accuracy,
         }
 
-        # Add individual loss components from metrics
+        # Add all metrics from compute_loss
         for key, value in loss_metrics.items():
-            if key.endswith("_loss"):
+            if key == "total_loss":
+                # total_loss is per-sample during training, store it separately for dataset tracking
+                info["per_sample_loss"] = value
+            elif key.endswith("_loss"):
                 # For loss components, compute mean
                 info[key] = jnp.mean(value)
             else:
-                # For accuracies, use as-is
+                # For accuracies and other metrics, use as-is
                 info[key] = value
 
         return new_state, info
@@ -572,34 +586,32 @@ class ValidationStepRunner:
         # Call compute_loss to get per-sample metrics for dataset tracking
         # Note: We use the model in eval mode but request per-sample metrics by passing train=True
         # This is to enable dataset-level tracking during validation
-        (
-            per_sample_loss,
-            token_accuracy,
-            critical_token_accuracy,
-            number_token_accuracy,
-            direction_token_accuracy,
-            val_metrics,
-        ) = model.compute_loss(eval_rng, observation, actions, train=True)
+        val_metrics = model.compute_loss(eval_rng, observation, actions, train=True)
 
-        result = {
-            "val_loss": jnp.mean(per_sample_loss),
-            "val_token_accuracy": token_accuracy,
-            "val_critical_token_accuracy": critical_token_accuracy,
-            "val_number_token_accuracy": number_token_accuracy,
-            "val_direction_token_accuracy": direction_token_accuracy,
-            "per_sample_loss": per_sample_loss,  # Include for dataset tracking
-        }
+        result = {}
 
-        # Add individual validation loss components and per-sample metrics from metrics
+        # Process all metrics from compute_loss
         for key, value in val_metrics.items():
-            if key.startswith("per_sample_"):
+            if key == "total_loss":
+                # total_loss is per-sample during validation, store it for dataset tracking
+                result["per_sample_loss"] = value
+                result["val_loss"] = jnp.mean(value)
+            elif key.startswith("per_sample_"):
                 # Include per-sample metrics for dataset tracking (no val_ prefix)
                 result[key] = value
             elif key.endswith("_loss"):
                 # For loss components, compute mean and prefix with val_
                 result[f"val_{key}"] = jnp.mean(value)
+            elif key in [
+                "token_accuracy",
+                "critical_token_accuracy",
+                "number_token_accuracy",
+                "direction_token_accuracy",
+            ]:
+                # For main accuracy metrics, prefix with val_
+                result[f"val_{key}"] = value
             else:
-                # For accuracies, prefix with val_
+                # For other metrics (like pred_token_accuracy, langact_critical_token_accuracy), prefix with val_
                 result[f"val_{key}"] = value
 
         return result
@@ -683,14 +695,6 @@ def main(config: _config.TrainConfig):
     # Initialize dataset log tracker for uniform sample logging across datasets
     dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
 
-    # # Initialize hard example tracker for logging difficult samples
-    # hard_example_tracker = vis_tools.HardExampleTracker(
-    #     tokenizer=tok,
-    #     max_hard_examples=50,
-    #     buffer_ratio=0.1,  # Maintain buffer of top candidates
-    #     resize_hw=(128, 128),
-    # )
-
     log_mem("Before init train state")
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
@@ -761,19 +765,6 @@ def main(config: _config.TrainConfig):
             val_runner,
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
         )
-
-        # Jitted reasoning sampler returning only (id_buf, t)
-        # def _sample_reasoning_ids_t(state: training_utils.TrainState, observation: CoTObservation):
-        #     model_local = nnx.merge(state.model_def, state.params)
-        #     id_buf, t, *_ = model_local.sample_reasoning(observation)
-        #     return id_buf, t
-
-        # psample_reasoning = jax.jit(
-        #     _sample_reasoning_ids_t,
-        #     # Expect observation replicated; return replicated outputs for consistent host access
-        #     in_shardings=(train_state_sharding, replicated_sharding),
-        #     out_shardings=(replicated_sharding, replicated_sharding),
-        # )
         # Determine how many validation batches to evaluate each time.
         # If a fixed validation subset size is configured, compute batches from it;
         # otherwise fall back to a heuristic constant divided by global batch size.
@@ -862,103 +853,25 @@ def main(config: _config.TrainConfig):
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
-        per_sample_loss = info.get("per_sample_loss")
-        if per_sample_loss is None:
-            raise ValueError("Training step info missing per_sample_loss")
 
         # Buffer local dataset info (no multihost gathering at every step)
         # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
         log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
 
-        # Update hard example tracker with per-sample losses from current batch
-        # per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
-        # hard_example_tracker.update(per_sample_loss_local)
-
-        # Add hard examples from current batch to buffer (if they qualify)
-        # This needs to happen for every step, not just at log_interval
-        # host_batch_local_curr, local_size_curr = host_batch_cache.ensure(step=step, batch=batch)
-        # if per_sample_loss_local is not None and local_size_curr > 0:
-        #     process_idx = jax.process_index()
-        #     # Compute global index base for this process
-        #     global_batch_idx = step * config.batch_size
-        #     local_batch_offset = process_idx * local_size_curr
-
-        # hard_example_tracker.add_local_examples(
-        #     step_idx=step,
-        #     host_batch_local=host_batch_local_curr,
-        #     local_losses=per_sample_loss_local,
-        #     global_idx_base=global_batch_idx + local_batch_offset,
-        #     process_idx=process_idx,
-        # )
-
         if step % config.log_interval == 0:
-            # Gather and update dataset stats from buffered local data (batched at log_interval)
-            dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
-
-            # infos appended above
-            stacked_infos = common_utils.stack_forest(infos)
-            reduce_overrides = {
-                "grad_norm": jnp.mean,
-                "loss": jnp.mean,
-                "param_norm": jnp.mean,
-            }
-            reduced_info = {}
-            per_sample_losses_chunk: list[np.ndarray] = []
-
-            # Process metrics: average metrics go directly to logging, per_sample metrics are skipped
-            for key, value in stacked_infos.items():
-                if key == "per_sample_loss":
-                    per_sample_losses_chunk.append(np.asarray(training_utils.to_local_array(value)).reshape(-1))
-                    reduced_info["max_per_sample_loss"] = jnp.max(value)
-                elif key.startswith("per_sample_"):
-                    # Skip per_sample_* metrics - they're only used for dataset-level statistics
-                    continue
-                else:
-                    # All other metrics (including pred_loss, langact_loss, pred_critical_token_accuracy, etc.)
-                    # are averaged and logged directly
-                    reduced_info[key] = reduce_overrides.get(key, jnp.mean)(value)
-
-            reduced_info = jax.device_get(reduced_info)
-
-            # Add dataset statistics to logging
-            dataset_metrics = dataset_stats_tracker.get_metrics()
-            reduced_info.update(dataset_metrics)
-
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-            pbar.write(f"Step {step}: {info_str}")
-            if jax.process_index() == 0:
-                wandb.log(reduced_info, step=step)
-
-                # Create and log dataset statistics bar plots
-                if dataset_stats_tracker.dataset_stats:
-                    plots = log_util.create_dataset_stats_plots(
-                        dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
-                    )
-                    log_util.log_dataset_plots(plots, step)
-
-                if config.model.enable_langact_training:
-                    host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-                    vis_tools.log_random_examples(
-                        step,
-                        host_batch_local,
-                        tok,
-                        local_batch_size=local_size,
-                        dataset_log_tracker=dataset_log_tracker,
-                    )
-
-                    # Log dataset logging statistics periodically
-                    if step % (config.log_interval * 10) == 0:
-                        log_stats = dataset_log_tracker.get_stats()
-                        if log_stats:
-                            logging.info(f"Dataset logging counts: {log_stats}")
-                            # Log to wandb as well
-                            wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
-                            wandb.log(wandb_log_stats, step=step)
-
-            # Log hard examples from the interval (multi-host gathering happens inside)
-            # payload = hard_example_tracker.log_if_ready(step)
-            # if payload is not None:
-            #     vis_tools.log_hard_examples_payload(payload)
+            # Use unified logging function for training metrics
+            process_and_log_metrics(
+                step=step,
+                infos=infos,
+                batch=batch,
+                dataset_stats_tracker=dataset_stats_tracker,
+                dataset_info_buffer=dataset_info_buffer,
+                config=config,
+                host_batch_cache=host_batch_cache,
+                dataset_log_tracker=dataset_log_tracker,
+                tok=tok,
+                prefix="",
+            )
 
             infos = []
             # Reset dataset stats tracker to only track the next log_interval window
@@ -991,32 +904,19 @@ def main(config: _config.TrainConfig):
                     # Buffer validation dataset metrics
                     log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
 
-                # Gather and update validation dataset stats
-                val_dataset_info_buffer.gather_and_update_stats(val_dataset_stats_tracker)
-
-                # Stack and reduce validation metrics (excluding per-sample metrics)
-                # Filter out per_sample_* keys from val_infos before stacking
-                filtered_val_infos = [
-                    {k: v for k, v in info.items() if not k.startswith("per_sample_")} for info in val_infos
-                ]
-                stacked_val = common_utils.stack_forest(filtered_val_infos)
-                reduced_val = jax.tree.map(jnp.mean, stacked_val)
-
-                # Add validation dataset-level metrics
-                val_dataset_metrics = val_dataset_stats_tracker.get_metrics(prefix="val_")
-                reduced_val.update(val_dataset_metrics)
-
-                val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val.items())
-                val_pbar.write(f"Step {step} (val): {val_info_str}")
-                if jax.process_index() == 0:
-                    wandb.log(reduced_val, step=step)
-
-                    # Create and log validation dataset statistics bar plots
-                    if val_dataset_stats_tracker.dataset_stats:
-                        val_plots = log_util.create_dataset_stats_plots(
-                            val_dataset_stats_tracker.dataset_stats, val_dataset_stats_tracker.cumulative_stats
-                        )
-                        log_util.log_dataset_plots(val_plots, step, prefix="val_")
+                # Use unified logging function for validation metrics
+                process_and_log_metrics(
+                    step=step,
+                    infos=val_infos,
+                    batch=val_batch,  # Use last val_batch for dataset info
+                    dataset_stats_tracker=val_dataset_stats_tracker,
+                    dataset_info_buffer=val_dataset_info_buffer,
+                    config=config,
+                    host_batch_cache=None,
+                    dataset_log_tracker=None,
+                    tok=None,
+                    prefix="val_",
+                )
 
         batch = next(data_iter)
 
