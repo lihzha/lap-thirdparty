@@ -95,7 +95,6 @@ class PiCoT(_pi0.Pi0):
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
         self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 1.0))
         # Backward compatibility flag used in a few places
-        self.lang_action_only = not self.enable_action_training
         self.use_gemma3 = False
         self.EOS_TOKEN = 1
         if "gemma2" in config.paligemma_variant:

@@ -156,8 +156,6 @@ def build_cosine_lr(
 
 @dataclasses.dataclass(frozen=True)
 class CoTDataConfig(upstream_config.DataConfig):
-    # TODO: remove the cot argument
-    cot: bool = False
     shuffle_buffer_size: int = 250_000
     # Optional cap on number of unique flattened samples for overfitting tests
     max_samples: int | None = None
