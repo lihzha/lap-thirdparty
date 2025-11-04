@@ -237,8 +237,25 @@ class LocalDatasetInfoBuffer:
         This should be called at log_interval to batch multihost communication.
         Handles data grouped by sample_type.
         """
-        if not self.tokenized_names_buffer:
-            return
+        # Check if any process has data - all processes must agree to proceed or skip
+        process_count = jax.process_count()
+        has_local_data = len(self.tokenized_names_buffer) > 0
+
+        if process_count > 1:
+            # Gather has_data flags from all processes
+            has_data_array = np.array([has_local_data], dtype=bool)
+            all_has_data = jax.experimental.multihost_utils.process_allgather(has_data_array)
+            any_process_has_data = np.any(all_has_data)
+
+            # If no process has data, all can skip
+            if not any_process_has_data:
+                return
+
+            # If some but not all processes have data, those without data need to participate
+            # but with empty buffers - they'll be handled below
+        else:
+            if not has_local_data:
+                return
 
         # Group buffered data by sample_type
         data_by_type = {}
@@ -273,25 +290,79 @@ class LocalDatasetInfoBuffer:
                 data_by_type[sample_type]["direction_correct"].append(correct)
                 data_by_type[sample_type]["direction_total"].append(total)
 
-        # Process each sample_type separately
-        process_count = jax.process_count()
-        for sample_type, data in data_by_type.items():
-            # Concatenate data for this sample_type
-            all_local_names = np.concatenate(data["names"], axis=0)
-            all_local_losses = np.concatenate(data["losses"], axis=0)
+        # Synchronize sample_types across all processes to ensure deterministic order
+        if process_count > 1:
+            # Get local sample types as a sorted list
+            local_sample_types = sorted(data_by_type.keys())
+            # Pad to a fixed size and convert to array for gathering
+            max_types = 100  # Should be enough for any realistic scenario
+            padded_types = local_sample_types + [""] * (max_types - len(local_sample_types))
+            type_array = np.array(padded_types, dtype='U100')
 
-            # Multihost gather
+            # Gather all sample types from all processes
+            all_types_nested = jax.experimental.multihost_utils.process_allgather(type_array)
+            all_types_flat = np.asarray(all_types_nested).flatten()
+
+            # Get unique non-empty sample types in sorted order
+            unique_types = sorted(set(t for t in all_types_flat if t != ""))
+        else:
+            unique_types = sorted(data_by_type.keys())
+
+        # Process each sample_type separately
+        for sample_type in unique_types:
+            # Check if this process has data for this sample_type
+            has_data = sample_type in data_by_type
+
+            if has_data:
+                data = data_by_type[sample_type]
+                # Concatenate data for this sample_type
+                all_local_names = np.concatenate(data["names"], axis=0)
+                all_local_losses = np.concatenate(data["losses"], axis=0)
+                local_seq_len = all_local_names.shape[-1] if all_local_names.size > 0 else 0
+            else:
+                # Will create empty arrays after broadcasting shape info
+                all_local_names = None
+                all_local_losses = None
+                local_seq_len = 0
+                data = {
+                    "critical_correct": [],
+                    "critical_total": [],
+                    "number_correct": [],
+                    "number_total": [],
+                    "direction_correct": [],
+                    "direction_total": [],
+                }
+
+            # Broadcast sequence length so all processes know the correct shape for empty arrays
             if process_count > 1:
+                seq_len_array = np.array([local_seq_len], dtype=np.int32)
+                all_seq_lens = jax.experimental.multihost_utils.process_allgather(seq_len_array)
+                # Get the max non-zero seq_len (should be consistent across processes that have data)
+                seq_len = int(np.max(all_seq_lens))
+
+                # Create properly shaped empty arrays if this process has no data
+                if not has_data:
+                    all_local_names = np.empty((0, seq_len), dtype=np.int32)
+                    all_local_losses = np.empty((0,), dtype=np.float32)
+
+                # Multihost gather - all processes must participate
                 all_names = jax.experimental.multihost_utils.process_allgather(all_local_names)
                 all_losses = jax.experimental.multihost_utils.process_allgather(all_local_losses)
+
                 # Flatten: [num_processes, batch_per_process, seq_len] -> [total_batch, seq_len]
-                all_names = np.asarray(all_names).reshape(-1, all_local_names.shape[-1])
+                all_names = np.asarray(all_names).reshape(-1, seq_len)
                 all_losses = np.asarray(all_losses).flatten()
             else:
+                if not has_data:
+                    continue
                 all_names = all_local_names
                 all_losses = all_local_losses
 
-            # Gather token counts
+            # Skip update if there's no data after gathering (all processes had empty data)
+            if all_names.shape[0] == 0:
+                continue
+
+            # Gather token counts (only processes with data will contribute)
             all_critical_data = self._gather_token_data(data, "critical", process_count)
             all_number_data = self._gather_token_data(data, "number", process_count)
             all_direction_data = self._gather_token_data(data, "direction", process_count)
@@ -300,14 +371,16 @@ class LocalDatasetInfoBuffer:
             decoded_names = self._decode_names(all_names)
 
             # Update stats with token-level data for this sample_type
-            dataset_stats_tracker.update(
-                decoded_names,
-                all_losses,
-                all_critical_data,
-                all_number_data,
-                all_direction_data,
-                sample_type=sample_type,
-            )
+            # Only the process with rank 0 should update to avoid duplicate updates
+            if process_count == 1 or jax.process_index() == 0:
+                dataset_stats_tracker.update(
+                    decoded_names,
+                    all_losses,
+                    all_critical_data,
+                    all_number_data,
+                    all_direction_data,
+                    sample_type=sample_type,
+                )
 
         # Clear buffers
         self.tokenized_names_buffer = []
@@ -322,24 +395,39 @@ class LocalDatasetInfoBuffer:
     def _gather_token_data(
         self, data: dict, token_type: str, process_count: int
     ) -> tuple[np.ndarray, np.ndarray] | None:
-        """Gather token count data across hosts."""
+        """Gather token count data across hosts.
+
+        All processes must participate in gather even if they have no data.
+        """
         correct_key = f"{token_type}_correct"
         total_key = f"{token_type}_total"
 
-        if not data[correct_key] or not data[total_key]:
-            return None
+        has_data = bool(data[correct_key] and data[total_key])
 
-        all_local_correct = np.concatenate(data[correct_key], axis=0)
-        all_local_total = np.concatenate(data[total_key], axis=0)
+        if has_data:
+            all_local_correct = np.concatenate(data[correct_key], axis=0)
+            all_local_total = np.concatenate(data[total_key], axis=0)
+        else:
+            # Empty arrays for processes without this token type data
+            all_local_correct = np.empty((0,), dtype=np.int32)
+            all_local_total = np.empty((0,), dtype=np.int32)
 
         if process_count > 1:
+            # All processes must participate in gather
             all_correct = jax.experimental.multihost_utils.process_allgather(all_local_correct)
             all_total = jax.experimental.multihost_utils.process_allgather(all_local_total)
             all_correct = np.asarray(all_correct).flatten()
             all_total = np.asarray(all_total).flatten()
+
+            # Return None if no process had data
+            if all_correct.size == 0:
+                return None
         else:
             all_correct = all_local_correct
             all_total = all_local_total
+
+            if not has_data:
+                return None
 
         return (all_correct, all_total)
 
