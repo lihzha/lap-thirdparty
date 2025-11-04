@@ -6,7 +6,6 @@ import numpy as np
 from openpi import transforms as upstream_transforms
 
 from openpi_cot.dataloader.helpers import ActionEncoding
-from openpi_cot.dataloader.vqa_base import VQA_DATASET_NAMES
 from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 from openpi_cot.policies.utils import is_idle_language_action
@@ -137,9 +136,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         base_image = parse_image(data["observation"][IMAGE_KEYS[0]])
         if base_image is None:
             raise ValueError("Base image missing from observation")
-        base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
-        images = [base_image]
-        image_masks = [base_image_mask]
 
         # Datasets that need wrist camera rotation by 180 degrees
         DATASETS_REQUIRING_WRIST_ROTATION = {
@@ -157,26 +153,72 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             if isinstance(data.get("dataset_name"), bytes)
             else data.get("dataset_name", "")
         )
+
         needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
+        is_prediction_sample = data["is_prediction_sample"]
+        pred_use_primary = data["pred_use_primary"]
 
-        for k in IMAGE_KEYS[1:]:
-            if k in data["observation"]:
-                wrist_image = parse_image(data["observation"][k])
-                wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
+        images = []
+        image_masks = []
 
-                # Rotate wrist image by 180 degrees for specific datasets
-                if needs_wrist_rotation and wrist_image_mask:
-                    wrist_image = np.stack([np.rot90(img, k=2) for img in wrist_image], axis=0)
-            else:
-                wrist_image = np.zeros_like(base_image)
-                wrist_image_mask = np.False_
+        if not is_prediction_sample:
+            # Training/validation: base image without rotation, wrist images with rotation if needed
+            base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
+            images.append(base_image)
+            image_masks.append(base_image_mask)
 
-            # Optional dropout: randomly mask out wrist image
-            if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
-                wrist_image_mask = np.False_
+            # Process wrist images (may need rotation)
+            for k in IMAGE_KEYS[1:]:
+                if k in data["observation"]:
+                    wrist_image = parse_image(data["observation"][k])
+                    wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
 
-            images.append(wrist_image)
-            image_masks.append(wrist_image_mask)
+                    # Rotate wrist image by 180 degrees for specific datasets
+                    if needs_wrist_rotation and wrist_image_mask:
+                        wrist_image = np.stack([np.rot90(img, k=2) for img in wrist_image], axis=0)
+                else:
+                    wrist_image = np.zeros_like(base_image)
+                    wrist_image_mask = np.False_
+
+                # Optional dropout: randomly mask out wrist image
+                if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
+                    wrist_image_mask = np.False_
+
+                images.append(wrist_image)
+                image_masks.append(wrist_image_mask)
+        elif not pred_use_primary:
+            # Prediction with secondary camera: both base and wrist images may need rotation
+            for k in IMAGE_KEYS:
+                if k in data["observation"]:
+                    image = parse_image(data["observation"][k])
+                    image_mask = np.False_ if np.all(image == 0.0) else np.True_
+
+                    # Rotate both images by 180 degrees for specific datasets
+                    if needs_wrist_rotation and image_mask:
+                        image = np.stack([np.rot90(img, k=2) for img in image], axis=0)
+                else:
+                    image = np.zeros_like(base_image)
+                    image_mask = np.False_
+
+                images.append(image)
+                image_masks.append(image_mask)
+        else:
+            # Prediction with primary camera: both base and wrist images, no rotation needed
+            base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
+            images.append(base_image)
+            image_masks.append(base_image_mask)
+
+            # Process wrist images (no rotation needed)
+            for k in IMAGE_KEYS[1:]:
+                if k in data["observation"]:
+                    wrist_image = parse_image(data["observation"][k])
+                    wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
+                else:
+                    wrist_image = np.zeros_like(base_image)
+                    wrist_image_mask = np.False_
+
+                images.append(wrist_image)
+                image_masks.append(wrist_image_mask)
 
         inputs = {
             "state": data["observation"]["state"],
@@ -218,6 +260,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "actions" in data:
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
+
+        inputs["is_prediction_sample"] = data["is_prediction_sample"]
 
         return inputs
 
@@ -267,12 +311,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if isinstance(dataset_name, bytes):
             dataset_name = dataset_name.decode("utf-8")
 
-        # TODO: move to dataset level
-        is_vqa_dataset = dataset_name in VQA_DATASET_NAMES
-        inputs["is_vqa_mask"] = False  # Default to False
+        is_vqa_sample = data.get("is_vqa_sample")
+        inputs["is_vqa_sample"] = is_vqa_sample
 
         # Special handling for VQA datasets
-        if is_vqa_dataset:
+        if is_vqa_sample:
             # For VQA, use the caption field as language_actions
             # Caption is a single string, so wrap it in a list for consistency
             if "caption" in data:
@@ -288,9 +331,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             # VQA samples are always active (no idle filtering)
             inputs["sample_mask"] = True
 
-            # TODO: move to dataset level
-            inputs["is_vqa_mask"] = True
-
             return inputs
 
         # Regular robot dataset processing
@@ -301,17 +341,18 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "language_actions" in data:
             inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
 
-            # Check if the language action represents idle movement
-            is_idle = is_idle_language_action(
-                inputs["language_actions"],
-                self.language_action_format.get_sum_decimal(),
-                self.language_action_format.include_rotation,
-            )
-            inputs["sample_mask"] = not is_idle
+            # Only apply idle filtering for language actions
+            if not is_vqa_sample and not inputs["is_prediction_sample"]:
+                is_idle = is_idle_language_action(
+                    inputs["language_actions"],
+                    self.language_action_format.get_sum_decimal(),
+                    self.language_action_format.include_rotation,
+                )
+                inputs["sample_mask"] = not is_idle
+            else:
+                inputs["sample_mask"] = True
         else:
-            # If no language actions, default to active sample
             inputs["sample_mask"] = True
-
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):

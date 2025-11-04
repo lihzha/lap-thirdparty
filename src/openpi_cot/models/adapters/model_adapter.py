@@ -40,7 +40,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
     images: dict[str, at.Float[ArrayT, "*b t h w c"]]
     tokenized_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
-    crictical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
+    critical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     direction_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     sample_mask: at.Bool[ArrayT, "*b"] | None = None
@@ -48,7 +48,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
     cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
     tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
-    is_vqa_mask: at.Bool[ArrayT, "*b"] | None = None
+    is_vqa_sample: at.Bool[ArrayT, "*b"] | None = None
     is_prediction_sample: at.Bool[ArrayT, "*b"] | None = None
 
     @classmethod
@@ -83,7 +83,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         return cls(
             **base_dict,
             tokenized_langact_mask=getk("tokenized_langact_mask"),
-            crictical_token_mask=getk("crictical_token_mask"),
+            critical_token_mask=getk("critical_token_mask"),
             number_token_mask=getk("number_token_mask"),
             direction_token_mask=getk("direction_token_mask"),
             sample_mask=getk("sample_mask"),
@@ -91,7 +91,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             camera_extrinsics=getk("camera_extrinsics"),
             cartesian_position_window=getk("cartesian_position_window"),
             tokenized_dataset_name=getk("tokenized_dataset_name"),
-            is_vqa_mask=getk("is_vqa_mask"),
+            is_vqa_sample=getk("is_vqa_sample"),
             is_prediction_sample=getk("is_prediction_sample"),
         )
 
@@ -189,7 +189,7 @@ def preprocess_observation(
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
         tokenized_langact_mask=getattr(observation, "tokenized_langact_mask", None),
-        crictical_token_mask=getattr(observation, "crictical_token_mask", None),
+        critical_token_mask=getattr(observation, "critical_token_mask", None),
         number_token_mask=getattr(observation, "number_token_mask", None),
         direction_token_mask=getattr(observation, "direction_token_mask", None),
         sample_mask=getattr(observation, "sample_mask", None),
@@ -197,5 +197,6 @@ def preprocess_observation(
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),
         cartesian_position_window=getattr(observation, "cartesian_position_window", None),
         tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
-        is_vqa_mask=getattr(observation, "is_vqa_mask", None),
+        is_vqa_sample=getattr(observation, "is_vqa_sample", None),
+        is_prediction_sample=getattr(observation, "is_prediction_sample", None),
     )

@@ -106,8 +106,13 @@ def prepare_batched_dataset(
         #     import logging
         #     logging.info(f"Checkpointable mode: reducing shuffle buffer from {shuffle_buffer_size} to {actual_shuffle_size}")
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
-    if max_samples is not None:
-        dataset = dataset.take(int(max_samples)).cache().repeat()
+    elif want_val:
+        if max_samples is not None:
+            dataset = dataset.take(int(max_samples)).cache()
+        else:
+            dataset = dataset.cache()
+    else:
+        raise NotImplementedError("Mode with max_samples and no val not implemented")
 
     decode_fn = make_decode_images_fn(
         primary_key=primary_image_key,

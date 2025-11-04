@@ -99,7 +99,7 @@ class PiCoTConfig(_model.BaseModelConfig):
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
                 tokenized_langact_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
-                crictical_token_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
+                critical_token_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 

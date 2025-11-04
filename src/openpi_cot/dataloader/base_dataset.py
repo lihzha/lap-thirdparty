@@ -450,7 +450,14 @@ class _SingleCoTDataset:
         self.dataset = self.dataset.traj_map(add_prediction_pairs, self.num_parallel_calls)
 
     def apply_repack_transforms(self):
-        raise NotImplementedError
+        def common(traj):
+            # Add empty caption field for robot datasets (VQA datasets will populate this)
+            traj_len = tf.shape(traj["actions"])[0]
+            traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
+            traj["is_vqa_sample"] = tf.repeat(tf.constant(False, dtype=tf.bool), traj_len)
+            return traj
+
+        self.dataset = self.dataset.traj_map(common, self.num_parallel_calls)
 
     def get_traj_identifier(self):
         raise NotImplementedError
@@ -477,16 +484,25 @@ class _SingleCoTDataset:
         """
         if not self.enable_prediction_training:
             # When prediction is disabled, images are already [1, H, W, C] after add_prediction_pairs
-            # No transformation needed
+            # No transformation needed, just add the prediction mask set to False
+            def add_prediction_mask(sample):
+                """Add prediction mask to the sample."""
+                sample["is_prediction_sample"] = tf.constant(False, dtype=tf.bool)
+                sample["pred_use_primary"] = tf.constant(False, dtype=tf.bool)
+                sample.pop("trajectory_id")
+                return sample
+
+            self.dataset = self.dataset.frame_map(add_prediction_mask, num_parallel_calls=self.num_parallel_calls)
             return
 
         # When prediction is enabled, randomly convert samples to prediction samples
         def convert_to_prediction_sample(sample):
             """Randomly convert samples to prediction samples based on pred_prob."""
             # Generate deterministic seed from trajectory_id for reproducibility
-            traj_id_str = sample.get("trajectory_id", tf.constant("default", dtype=tf.string))
-            if tf.rank(traj_id_str) > 0:
-                traj_id_str = traj_id_str[0]
+            traj_id_str = sample["trajectory_id"]
+            # Ensure traj_id_str is a scalar - handle both scalar and array inputs
+            # Use tf.reshape to flatten to scalar if needed (works for both [] and [1] shapes)
+            traj_id_str = tf.reshape(traj_id_str, [])
             traj_id_hash = tf.strings.to_hash_bucket_fast(traj_id_str, 2147483647)
             # Also include frame index if available for per-frame randomness
             frame_hash = tf.cast(tf.random.uniform([], 0, 2147483647, dtype=tf.int32), tf.int64)
@@ -495,8 +511,18 @@ class _SingleCoTDataset:
             # Decide if this sample should be a prediction sample
             is_pred_sample = tf.random.stateless_uniform([], seed=seed_pair) < self.pred_prob
 
+            # Check if wrist image is available (not padded with empty strings)
+            # Padded images are empty strings with length 0
+            wrist_sample = sample["observation"][self.spec.wrist_image_key][0]
+            has_wrist_image = tf.greater(tf.strings.length(wrist_sample), 0)
+
             # Decide which camera to use for prediction (primary vs wrist)
-            use_primary = tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob
+            # Force primary camera if wrist image is not available
+            use_primary = tf.cond(
+                has_wrist_image,
+                lambda: tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob,
+                lambda: tf.constant(True, dtype=tf.bool)
+            )
 
             # Get frame 0 and frame 1 for both cameras
             # After flattening, images have shape [t, H, W, C] where t=2 for prediction-enabled
@@ -515,6 +541,8 @@ class _SingleCoTDataset:
                 return wrist_frame0, wrist_frame1
 
             pred_primary_img, pred_wrist_img = tf.cond(use_primary, use_primary_camera, use_wrist_camera)
+
+            sample["pred_use_primary"] = use_primary
 
             # For non-prediction samples, use first frame only
             normal_primary_img = primary_frame0
@@ -541,7 +569,9 @@ class _SingleCoTDataset:
                     dtype=tf.string,
                 )
                 sample["prompt"] = tf.cond(
-                    is_pred_sample, lambda: prediction_prompt, lambda: sample.get("prompt", tf.constant("", dtype=tf.string))
+                    is_pred_sample,
+                    lambda: prediction_prompt,
+                    lambda: sample.get("prompt", tf.constant("", dtype=tf.string)),
                 )
 
             # For prediction samples, use prediction_language_action if available
@@ -562,10 +592,11 @@ class _SingleCoTDataset:
 
             # Add is_prediction_sample mask
             sample["is_prediction_sample"] = is_pred_sample
+            sample.pop("trajectory_id")
 
             return sample
 
-        self.dataset = self.dataset.map(convert_to_prediction_sample, self.num_parallel_calls)
+        self.dataset = self.dataset.frame_map(convert_to_prediction_sample, self.num_parallel_calls)
 
     def __iter__(self):
         assert self.standalone, "This dataset is not standalone"

@@ -169,7 +169,6 @@ class PiCoT(_pi0.Pi0):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
-
     def _embed_images(
         self, obs: CoTObservation | Observation, num_frames: int | None = None
     ) -> tuple[
@@ -749,7 +748,7 @@ class PiCoT(_pi0.Pi0):
             tokenized_sequence=observation.tokenized_prompt,
             tokenized_sequence_mask=observation.tokenized_prompt_mask,
             tokenized_langact_mask=observation.tokenized_langact_mask,
-            critical_token_mask=observation.crictical_token_mask,
+            critical_token_mask=observation.critical_token_mask,
             number_token_mask=observation.number_token_mask,
             direction_token_mask=observation.direction_token_mask,
             sample_mask=effective_sample_mask,
@@ -762,7 +761,6 @@ class PiCoT(_pi0.Pi0):
         token_accuracy = metrics.get("token_accuracy", jnp.array(0.0))
 
         return loss, metrics, token_accuracy
-
 
     def _compute_action_loss(
         self,
@@ -843,6 +841,83 @@ class PiCoT(_pi0.Pi0):
 
         return action_loss, metrics
 
+    def _compute_sample_specific_metrics(
+        self,
+        per_sample_loss: at.Float[at.Array, "b"],
+        lang_metrics: dict[str, at.Array],
+        sample_mask: at.Bool[at.Array, "b"],
+        prefix: str,
+        train: bool,
+    ) -> dict[str, at.Array]:
+        """Compute comprehensive metrics for a specific subset of samples (pred or langact).
+
+        Args:
+            per_sample_loss: Per-sample losses [b]
+            lang_metrics: Metrics dict from _compute_language_loss
+            sample_mask: Boolean mask indicating which samples to include [b]
+            prefix: Prefix for metric names (e.g., "pred_" or "langact_")
+            train: If True, include per-sample metrics for dataset tracking
+
+        Returns:
+            Dictionary containing all metrics for this sample subset
+        """
+        metrics = {}
+
+        # Masked per-sample loss
+        masked_loss = per_sample_loss * sample_mask
+        num_samples = jnp.maximum(jnp.sum(sample_mask), 1.0)
+
+        # Average loss for this subset
+        metrics[f"{prefix}loss"] = jnp.sum(masked_loss) / num_samples
+
+        # Per-sample losses (for dataset-level micro-averaging)
+        if train:
+            metrics[f"{prefix}per_sample_loss"] = masked_loss
+
+        # Critical token metrics
+        if "per_sample_critical_correct" in lang_metrics:
+            critical_correct = lang_metrics["per_sample_critical_correct"] * sample_mask
+            critical_total = lang_metrics["per_sample_critical_total"] * sample_mask
+            num_critical_tokens = jnp.maximum(jnp.sum(critical_total), 1.0)
+
+            # Average critical token accuracy
+            metrics[f"{prefix}critical_token_accuracy"] = jnp.sum(critical_correct) / num_critical_tokens
+
+            # Per-sample counts (for dataset-level micro-averaging)
+            if train:
+                metrics[f"{prefix}per_sample_critical_correct"] = critical_correct
+                metrics[f"{prefix}per_sample_critical_total"] = critical_total
+
+        # Number token metrics
+        if "per_sample_number_correct" in lang_metrics:
+            number_correct = lang_metrics["per_sample_number_correct"] * sample_mask
+            number_total = lang_metrics["per_sample_number_total"] * sample_mask
+            num_number_tokens = jnp.maximum(jnp.sum(number_total), 1.0)
+
+            # Average number token accuracy
+            metrics[f"{prefix}number_token_accuracy"] = jnp.sum(number_correct) / num_number_tokens
+
+            # Per-sample counts (for dataset-level micro-averaging)
+            if train:
+                metrics[f"{prefix}per_sample_number_correct"] = number_correct
+                metrics[f"{prefix}per_sample_number_total"] = number_total
+
+        # Direction token metrics
+        if "per_sample_direction_correct" in lang_metrics:
+            direction_correct = lang_metrics["per_sample_direction_correct"] * sample_mask
+            direction_total = lang_metrics["per_sample_direction_total"] * sample_mask
+            num_direction_tokens = jnp.maximum(jnp.sum(direction_total), 1.0)
+
+            # Average direction token accuracy
+            metrics[f"{prefix}direction_token_accuracy"] = jnp.sum(direction_correct) / num_direction_tokens
+
+            # Per-sample counts (for dataset-level micro-averaging)
+            if train:
+                metrics[f"{prefix}per_sample_direction_correct"] = direction_correct
+                metrics[f"{prefix}per_sample_direction_total"] = direction_total
+
+        return metrics
+
     @override
     def compute_loss(
         self,
@@ -852,14 +927,7 @@ class PiCoT(_pi0.Pi0):
         *,
         train: bool = False,
         stage_config: dict | None = None,
-    ) -> tuple[
-        at.Float[at.Array, "*b ah"],
-        at.Float[at.Array, ""],
-        at.Float[at.Array, ""],
-        at.Float[at.Array, ""],
-        at.Float[at.Array, ""],
-        dict[str, at.Array],
-    ]:
+    ) -> dict[str, at.Array]:
         preprocess_rng, stochastic_rng, noise_rng, time_rng = jax.random.split(rng, 4)
 
         # Preprocess observation
@@ -889,6 +957,7 @@ class PiCoT(_pi0.Pi0):
             # Get loss weights
             language_loss_weight = stage_config.get("language_loss_weight", self.language_loss_weight)
             action_loss_weight = stage_config.get("action_loss_weight", self.action_loss_weight)
+            prediction_loss_weight = stage_config.get("prediction_loss_weight", self.prediction_loss_weight)
         else:
             # Use model's static configuration
             langact_enabled = self.enable_langact_training
@@ -900,6 +969,7 @@ class PiCoT(_pi0.Pi0):
 
             language_loss_weight = self.language_loss_weight
             action_loss_weight = self.action_loss_weight
+            prediction_loss_weight = self.prediction_loss_weight
 
         # Encode images (only first frame needed since prediction is handled at dataset level)
         img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
@@ -911,10 +981,6 @@ class PiCoT(_pi0.Pi0):
 
         # Initialize loss accumulator and metrics
         total_loss = 0.0
-        token_accuracy = jnp.array(0.0)
-        critical_token_accuracy = jnp.array(0.0)
-        number_token_accuracy = jnp.array(0.0)
-        direction_token_accuracy = jnp.array(0.0)
         metrics = {}
 
         # Compute language/reasoning loss with per-sample masking
@@ -924,73 +990,61 @@ class PiCoT(_pi0.Pi0):
             combined_langact_mask = jnp.logical_and(combined_langact_mask, observation.sample_mask)
 
         # Pass combined mask to language loss computation
-        lang_loss, lang_metrics, lang_token_accuracy = self._compute_language_loss(
+        lang_loss, lang_metrics, _ = self._compute_language_loss(
             observation, prefix_tokens, prefix_mask, prefix_ar_mask, train, sample_mask=combined_langact_mask
         )
-
-        # Apply loss only to masked samples and separate prediction loss from language loss
-        lang_loss = lang_loss * combined_langact_mask
 
         # Separate prediction and regular language samples based on is_prediction_sample mask
         if observation.is_prediction_sample is not None:
             is_pred = jnp.asarray(observation.is_prediction_sample, dtype=bool)
             is_lang = jnp.logical_not(is_pred)
 
-            # Apply separate weights to prediction and language losses
-            prediction_loss_weight_cfg = stage_config.get("prediction_loss_weight", self.prediction_loss_weight) if stage_config else self.prediction_loss_weight
+            # Combine with langact mask to get final masks
+            pred_mask = jnp.logical_and(is_pred, combined_langact_mask)
+            lang_mask = jnp.logical_and(is_lang, combined_langact_mask)
 
-            # Split losses: prediction samples get prediction_loss_weight, language samples get language_loss_weight
-            pred_loss = lang_loss * is_pred
-            regular_lang_loss = lang_loss * is_lang
+            # Compute comprehensive metrics for prediction samples
+            pred_metrics = self._compute_sample_specific_metrics(
+                per_sample_loss=lang_loss,
+                lang_metrics=lang_metrics,
+                sample_mask=pred_mask,
+                prefix="pred_",
+                train=train,
+            )
+            metrics.update(pred_metrics)
 
-            total_loss = total_loss + prediction_loss_weight_cfg * pred_loss + language_loss_weight * regular_lang_loss
+            # Compute comprehensive metrics for language-action samples
+            langact_metrics = self._compute_sample_specific_metrics(
+                per_sample_loss=lang_loss,
+                lang_metrics=lang_metrics,
+                sample_mask=lang_mask,
+                prefix="langact_",
+                train=train,
+            )
+            metrics.update(langact_metrics)
 
-            # Track separate metrics for prediction vs language samples
-            # Compute per-type token accuracies using the existing metrics
-            if train and "per_sample_critical_correct" in lang_metrics:
-                # Prediction metrics
-                pred_critical_correct = lang_metrics["per_sample_critical_correct"] * is_pred
-                pred_critical_total = lang_metrics["per_sample_critical_total"] * is_pred
-                pred_num_tokens = jnp.maximum(jnp.sum(pred_critical_total), 1.0)
-                metrics["pred_critical_token_accuracy"] = jnp.sum(pred_critical_correct) / pred_num_tokens
-
-                # Language metrics
-                lang_critical_correct = lang_metrics["per_sample_critical_correct"] * is_lang
-                lang_critical_total = lang_metrics["per_sample_critical_total"] * is_lang
-                lang_num_tokens = jnp.maximum(jnp.sum(lang_critical_total), 1.0)
-                metrics["lang_critical_token_accuracy"] = jnp.sum(lang_critical_correct) / lang_num_tokens
-
-            # Store prediction and language loss separately
-            metrics["pred_loss"] = jnp.mean(pred_loss) if not train else jnp.mean(pred_loss)
-            metrics["lang_loss_only"] = jnp.mean(regular_lang_loss) if not train else jnp.mean(regular_lang_loss)
+            # Add weighted losses to total
+            pred_loss = lang_loss * pred_mask
+            regular_lang_loss = lang_loss * lang_mask
+            total_loss = total_loss + prediction_loss_weight * pred_loss + language_loss_weight * regular_lang_loss
         else:
             # No prediction mask available, use original behavior
             total_loss = total_loss + language_loss_weight * lang_loss
 
-        metrics.update(lang_metrics)
-        token_accuracy = lang_token_accuracy
-        critical_token_accuracy = lang_metrics.get("critical_token_accuracy", jnp.array(0.0))
-        number_token_accuracy = lang_metrics.get("number_token_accuracy", jnp.array(0.0))
-        direction_token_accuracy = lang_metrics.get("direction_token_accuracy", jnp.array(0.0))
+        # Compute action diffusion loss only if action training is enabled
+        if action_enabled:
+            action_loss, action_metrics = self._compute_action_loss(
+                observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
+            )
+            # Apply loss only to masked samples
+            action_loss = action_loss * action_sample_mask
+            total_loss = total_loss + action_loss_weight * action_loss
+            metrics.update(action_metrics)
 
-        # Compute action diffusion loss with per-sample masking
-        action_loss, action_metrics = self._compute_action_loss(
-            observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng, train
-        )
+        # Add main metrics to dict
+        metrics["per_sample_loss"] = total_loss
 
-        # Apply loss only to masked samples
-        action_loss = action_loss * action_sample_mask
-        total_loss = total_loss + action_loss_weight * action_loss
-        metrics.update(action_metrics)
-
-        return (
-            total_loss,
-            token_accuracy,
-            critical_token_accuracy,
-            number_token_accuracy,
-            direction_token_accuracy,
-            metrics,
-        )
+        return metrics
 
     def _slide_window_cache(
         self,
