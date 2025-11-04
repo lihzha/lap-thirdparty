@@ -442,7 +442,7 @@ class _SingleCoTDataset:
                 [traj_len, summation_steps],
             )
 
-            traj["prediction_language_action"] = prediction_lang_actions  # [T, summation_steps]
+            traj["prediction_language_actions"] = prediction_lang_actions  # [T, summation_steps]
             traj["prediction_delta"] = deltas
 
             return traj
@@ -521,7 +521,7 @@ class _SingleCoTDataset:
             use_primary = tf.cond(
                 has_wrist_image,
                 lambda: tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob,
-                lambda: tf.constant(True, dtype=tf.bool)
+                lambda: tf.constant(True, dtype=tf.bool),
             )
 
             # Get frame 0 and frame 1 for both cameras
@@ -574,12 +574,12 @@ class _SingleCoTDataset:
                     lambda: sample.get("prompt", tf.constant("", dtype=tf.string)),
                 )
 
-            # For prediction samples, use prediction_language_action if available
-            if "prediction_language_action" in sample and "language_action" in sample:
-                sample["language_action"] = tf.cond(
+            # For prediction samples, use prediction_language_actions if available
+            if "prediction_language_actions" in sample and "language_actions" in sample:
+                sample["language_actions"] = tf.cond(
                     is_pred_sample,
-                    lambda: sample["prediction_language_action"],
-                    lambda: sample["language_action"],
+                    lambda: sample["prediction_language_actions"],
+                    lambda: sample["language_actions"],
                 )
 
             # Replace control_frequency with prediction_delta for prediction samples
@@ -595,7 +595,7 @@ class _SingleCoTDataset:
             sample.pop("trajectory_id")
 
             # Remove temporary prediction fields after use
-            sample.pop("prediction_language_action", None)
+            sample.pop("prediction_language_actions", None)
             sample.pop("prediction_delta", None)
 
             return sample
