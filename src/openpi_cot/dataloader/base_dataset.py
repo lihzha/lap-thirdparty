@@ -511,9 +511,17 @@ class _SingleCoTDataset:
             # Decide if this sample should be a prediction sample
             is_pred_sample = tf.random.stateless_uniform([], seed=seed_pair) < self.pred_prob
 
+            # Check if wrist image is available (not padded with empty strings)
+            # Padded images are empty strings with length 0
+            wrist_sample = sample["observation"][self.spec.wrist_image_key][0]
+            has_wrist_image = tf.greater(tf.strings.length(wrist_sample), 0)
+
             # Decide which camera to use for prediction (primary vs wrist)
-            use_primary = (
-                tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob
+            # Force primary camera if wrist image is not available
+            use_primary = tf.cond(
+                has_wrist_image,
+                lambda: tf.random.stateless_uniform([], seed=[seed_pair[0] + 1, seed_pair[1]]) < self.primary_pred_prob,
+                lambda: tf.constant(True, dtype=tf.bool)
             )
 
             # Get frame 0 and frame 1 for both cameras
