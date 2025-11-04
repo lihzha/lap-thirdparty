@@ -780,7 +780,9 @@ def main(config: _config.TrainConfig):
                 logging.info(f"Starting training at step {start_step} in stage {i}")
                 break
 
-    num_val_batches = None
+    # For validation: use a large enough fixed limit and handle StopIteration per-host
+    # All hosts will participate in collective ops even after local data is exhausted
+    max_val_iterations = 10000  # Large enough for any reasonable validation set
 
     for step in pbar:
         # Detect and log stage transitions
@@ -857,58 +859,60 @@ def main(config: _config.TrainConfig):
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
 
-                # If num_val_batches not yet determined, count batches first without running inference
-                if num_val_batches is None:
-                    logging.info("First validation run - determining total number of validation batches...")
-                    # Count batches WITHOUT running pval_step to avoid collective ops desync
-                    val_batch_count = 0
-                    temp_iter = iter(val_loader)
-                    try:
-                        while True:
-                            _ = next(temp_iter)
-                            val_batch_count += 1
-                    except StopIteration:
-                        pass
+                # Run validation with synchronized termination across all hosts
+                # Each host may have different number of batches due to data sharding
+                import numpy as np
+                val_iteration = 0
+                local_done = False
+                val_batch = None  # Track last valid batch for dummy iterations
 
-                    # Synchronize batch count across all hosts to ensure consistency
-                    # Use MINIMUM to ensure all hosts have enough data and execute same number of collectives
-                    import numpy as np
-                    local_count = np.array([val_batch_count], dtype=np.int32)
+                while val_iteration < max_val_iterations:
+                    # Check if this host has more data
+                    if not local_done:
+                        try:
+                            val_batch = next(val_iter)
+                        except StopIteration:
+                            local_done = True
+                            logging.info(f"Validation exhausted local data at iteration {val_iteration}")
+
+                    # Synchronize done status across all hosts (allgather is a collective op)
                     if jax.process_count() > 1:
-                        all_counts = jax.experimental.multihost_utils.process_allgather(local_count)
-                        num_val_batches = int(np.min(all_counts))
-                        if np.min(all_counts) != np.max(all_counts):
-                            logging.warning(
-                                f"Validation batch counts differ across hosts: {all_counts}. "
-                                f"Using minimum ({num_val_batches}) to avoid synchronization issues."
-                            )
+                        done_array = np.array([int(local_done)], dtype=np.int32)
+                        all_done = jax.experimental.multihost_utils.process_allgather(done_array)
+                        all_hosts_done = bool(np.all(all_done))
                     else:
-                        num_val_batches = val_batch_count
-                    logging.info(f"Determined validation dataset has {num_val_batches} batches")
+                        all_hosts_done = local_done
 
-                    # Now run validation with the known batch count
-                    val_iter = iter(val_loader)  # Recreate iterator
+                    # If all hosts are done, exit loop
+                    if all_hosts_done:
+                        logging.info(f"All hosts completed validation after {val_iteration} iterations")
+                        break
 
-                # Run validation with known batch count
-                val_pbar = tqdm.tqdm(
-                    range(num_val_batches),
-                    initial=0,
-                    total=num_val_batches,
-                    dynamic_ncols=True,
-                    disable=(jax.process_index() != 0),
-                )
-                try:
-                    for _ in val_pbar:
-                        val_batch = next(val_iter)
+                    # All hosts must call pval_step (contains collective ops), but only save results if not done
+                    if not local_done:
+                        # Process real batch
                         val_info = pval_step(train_rng, train_state, val_batch)
                         val_info_local = jax.device_get(val_info)
                         val_infos.append(val_info_local)
                         log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                except StopIteration:
-                    logging.warning(
-                        f"Validation ended early at {len(val_infos)} batches (expected {num_val_batches}). "
-                        "This may indicate dataset size changed."
-                    )
+                    elif val_batch is not None:
+                        # This host is done but must still participate in collective ops
+                        # Reuse the last batch as a dummy (results will be discarded)
+                        _ = pval_step(train_rng, train_state, val_batch)
+                    else:
+                        # This host has no data at all - should not happen in practice
+                        # but if it does, we can't participate in pval_step without a dummy batch
+                        logging.error("Host has no validation data but other hosts do - skipping collective participation")
+                        # This will likely cause an error, but at least we log it
+
+                    val_iteration += 1
+
+                    # Update progress bar (only on host 0)
+                    if jax.process_index() == 0 and val_iteration % 10 == 0:
+                        logging.info(f"Validation progress: {val_iteration} iterations, {len(val_infos)} batches processed")
+
+                if val_iteration >= max_val_iterations:
+                    logging.warning(f"Validation hit max iterations ({max_val_iterations}) - this may indicate an issue")
 
                 # Use unified logging function for validation metrics
                 process_and_log_metrics(

@@ -161,7 +161,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     max_samples: int | None = None
     # Validation controls for RLDS-CoT dataset splitting/visualization
     val_max_samples: int | None = None
-    val_fraction: float | None = 0.03
+    val_fraction: float | None = 0.02
     use_wrist_image: bool = True
     wrist_image_dropout_prob: float = 0.0
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
