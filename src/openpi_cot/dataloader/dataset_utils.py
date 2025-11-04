@@ -108,9 +108,9 @@ def prepare_batched_dataset(
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
     elif want_val:
         if max_samples is not None:
-            dataset = dataset.take(int(max_samples)).cache().repeat()
+            dataset = dataset.take(int(max_samples)).cache()
         else:
-            dataset = dataset.cache().repeat()
+            dataset = dataset.cache()
     else:
         raise NotImplementedError("Mode with max_samples and no val not implemented")
 
