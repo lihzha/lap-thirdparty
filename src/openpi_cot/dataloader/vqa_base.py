@@ -257,13 +257,12 @@ class _BaseVQADataset(_SingleCoTDataset):
             # Create output matching robot dataset structure (shared)
             output = {
                 "observation": observation,
-                "action": tf.zeros([self.action_dim], dtype=tf.float32),
                 "prompt": prompt,
                 "caption": caption,
                 "dataset_name": tf.constant(self.get_dataset_name(), dtype=tf.string),
                 "control_frequency": tf.constant(self.control_frequency, dtype=tf.int32),
                 "is_bimanual": tf.constant(False, dtype=tf.bool),
-                "trajectory_id": tf.expand_dims(trajectory_id, axis=0),  # [1] for compatibility
+                "state_type": tf.constant("none", dtype=tf.string),
                 "is_vqa_sample": tf.constant(True, dtype=tf.bool),
                 "is_prediction_sample": tf.constant(False, dtype=tf.bool),
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
@@ -288,7 +287,8 @@ class _BaseVQADataset(_SingleCoTDataset):
             )
 
             # Create dummy language_actions (empty serialized tensors)
-            summation_steps = getattr(self.config, "summation_steps", 1)
+            # Use 30 to match robot datasets' default summation_steps
+            summation_steps = getattr(self.config, "summation_steps", 30)
             dummy_tensor = tf.zeros([self.action_dim], dtype=tf.float32)
             serialized = tf.io.serialize_tensor(dummy_tensor)
             example["language_actions"] = tf.repeat(serialized, summation_steps)

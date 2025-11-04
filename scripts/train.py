@@ -857,42 +857,58 @@ def main(config: _config.TrainConfig):
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
 
-                # If num_val_batches not yet determined, iterate until StopIteration to count
+                # If num_val_batches not yet determined, count batches first without running inference
                 if num_val_batches is None:
                     logging.info("First validation run - determining total number of validation batches...")
+                    # Count batches WITHOUT running pval_step to avoid collective ops desync
                     val_batch_count = 0
+                    temp_iter = iter(val_loader)
                     try:
                         while True:
-                            val_batch = next(val_iter)
-                            val_info = pval_step(train_rng, train_state, val_batch)
-                            val_info_local = jax.device_get(val_info)
-                            val_infos.append(val_info_local)
-                            log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                            _ = next(temp_iter)
                             val_batch_count += 1
                     except StopIteration:
+                        pass
+
+                    # Synchronize batch count across all hosts to ensure consistency
+                    # Use MINIMUM to ensure all hosts have enough data and execute same number of collectives
+                    import numpy as np
+                    local_count = np.array([val_batch_count], dtype=np.int32)
+                    if jax.process_count() > 1:
+                        all_counts = jax.experimental.multihost_utils.process_allgather(local_count)
+                        num_val_batches = int(np.min(all_counts))
+                        if np.min(all_counts) != np.max(all_counts):
+                            logging.warning(
+                                f"Validation batch counts differ across hosts: {all_counts}. "
+                                f"Using minimum ({num_val_batches}) to avoid synchronization issues."
+                            )
+                    else:
                         num_val_batches = val_batch_count
-                        logging.info(f"Determined validation dataset has {num_val_batches} batches")
-                else:
-                    # Subsequent validation runs: use progress bar with known batch count
-                    val_pbar = tqdm.tqdm(
-                        range(num_val_batches),
-                        initial=0,
-                        total=num_val_batches,
-                        dynamic_ncols=True,
-                        disable=(jax.process_index() != 0),
+                    logging.info(f"Determined validation dataset has {num_val_batches} batches")
+
+                    # Now run validation with the known batch count
+                    val_iter = iter(val_loader)  # Recreate iterator
+
+                # Run validation with known batch count
+                val_pbar = tqdm.tqdm(
+                    range(num_val_batches),
+                    initial=0,
+                    total=num_val_batches,
+                    dynamic_ncols=True,
+                    disable=(jax.process_index() != 0),
+                )
+                try:
+                    for _ in val_pbar:
+                        val_batch = next(val_iter)
+                        val_info = pval_step(train_rng, train_state, val_batch)
+                        val_info_local = jax.device_get(val_info)
+                        val_infos.append(val_info_local)
+                        log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                except StopIteration:
+                    logging.warning(
+                        f"Validation ended early at {len(val_infos)} batches (expected {num_val_batches}). "
+                        "This may indicate dataset size changed."
                     )
-                    try:
-                        for _ in val_pbar:
-                            val_batch = next(val_iter)
-                            val_info = pval_step(train_rng, train_state, val_batch)
-                            val_info_local = jax.device_get(val_info)
-                            val_infos.append(val_info_local)
-                            log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                    except StopIteration:
-                        logging.warning(
-                            f"Validation ended early at {len(val_infos)} batches (expected {num_val_batches}). "
-                            "This may indicate dataset size changed."
-                        )
 
                 # Use unified logging function for validation metrics
                 process_and_log_metrics(

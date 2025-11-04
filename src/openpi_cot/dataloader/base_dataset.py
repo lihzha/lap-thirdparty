@@ -594,6 +594,10 @@ class _SingleCoTDataset:
             sample["is_prediction_sample"] = is_pred_sample
             sample.pop("trajectory_id")
 
+            # Remove temporary prediction fields after use
+            sample.pop("prediction_language_action", None)
+            sample.pop("prediction_delta", None)
+
             return sample
 
         self.dataset = self.dataset.frame_map(convert_to_prediction_sample, self.num_parallel_calls)
