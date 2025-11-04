@@ -197,6 +197,7 @@ def process_and_log_metrics(
     Returns:
         Dictionary of reduced metrics
     """
+    breakpoint()
     # Gather and update dataset stats from buffered local data
     dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
 
