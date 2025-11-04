@@ -511,4 +511,5 @@ class OXECoTDatasets:
             self.global_statistics["actions"].num_transitions
             // (self.batch_size * jax.process_count())
             * self.config.val_fraction
+            * 0.8  # empirically estimated ratio for filtering
         )
