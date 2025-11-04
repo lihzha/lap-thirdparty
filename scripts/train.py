@@ -15,7 +15,6 @@ import jax.numpy as jnp
 import matplotlib
 
 matplotlib.use("Agg")  # Use non-interactive backend for remote environments
-import matplotlib.pyplot as plt
 import numpy as np
 from openpi.models import model as _model
 from openpi.models.model import Observation
@@ -33,6 +32,7 @@ from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
+import openpi_cot.training.log_util as log_util
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.training.vis_tools as vis_tools
@@ -307,292 +307,7 @@ class HostBatchCache:
         return self.host_batch, self.local_batch_size
 
 
-class DatasetStatsTracker:
-    """Tracks per-dataset loss, critical/number/direction token accuracy (micro-averaged), and example counts across training."""
-
-    def __init__(self):
-        # Use micro-averaging: track total correct tokens and total tokens per dataset
-        self.dataset_stats = {}  # {dataset_name: {"total_loss": float, "count": int,
-        #  "critical_correct": int, "critical_total": int,
-        #  "number_correct": int, "number_total": int,
-        #  "direction_correct": int, "direction_total": int}}
-        # Track cumulative stats (never reset) - for since-start averages
-        self.cumulative_stats = {}  # {dataset_name: {"total_loss": float, "count": int,
-        #  "critical_correct": int, "critical_total": int,
-        #  "number_correct": int, "number_total": int,
-        #  "direction_correct": int, "direction_total": int}}
-
-    def update(
-        self,
-        dataset_names: list[str],
-        losses: np.ndarray,
-        critical_token_data: tuple[np.ndarray, np.ndarray] | None = None,
-        number_token_data: tuple[np.ndarray, np.ndarray] | None = None,
-        direction_token_data: tuple[np.ndarray, np.ndarray] | None = None,
-    ):
-        """Update statistics with new batch data using micro-averaging.
-
-        Args:
-            dataset_names: List of dataset names for each sample
-            losses: Array of per-sample losses
-            critical_token_data: Tuple of (correct_counts, total_counts) for critical tokens (optional)
-            number_token_data: Tuple of (correct_counts, total_counts) for number tokens (optional)
-            direction_token_data: Tuple of (correct_counts, total_counts) for direction tokens (optional)
-        """
-        for idx, name in enumerate(dataset_names):
-            # Update current interval stats
-            if name not in self.dataset_stats:
-                self.dataset_stats[name] = {
-                    "total_loss": 0.0,
-                    "count": 0,
-                    "critical_correct": 0,
-                    "critical_total": 0,
-                    "number_correct": 0,
-                    "number_total": 0,
-                    "direction_correct": 0,
-                    "direction_total": 0,
-                }
-            self.dataset_stats[name]["total_loss"] += float(losses[idx])
-            self.dataset_stats[name]["count"] += 1
-
-            # Update cumulative stats (never reset) - for since-start averages
-            if name not in self.cumulative_stats:
-                self.cumulative_stats[name] = {
-                    "total_loss": 0.0,
-                    "count": 0,
-                    "critical_correct": 0,
-                    "critical_total": 0,
-                    "number_correct": 0,
-                    "number_total": 0,
-                    "direction_correct": 0,
-                    "direction_total": 0,
-                }
-            self.cumulative_stats[name]["total_loss"] += float(losses[idx])
-            self.cumulative_stats[name]["count"] += 1
-
-            # Micro-averaging: accumulate token-level counts (both interval and cumulative)
-            if critical_token_data is not None:
-                correct_counts, total_counts = critical_token_data
-                self.dataset_stats[name]["critical_correct"] += int(correct_counts[idx])
-                self.dataset_stats[name]["critical_total"] += int(total_counts[idx])
-                self.cumulative_stats[name]["critical_correct"] += int(correct_counts[idx])
-                self.cumulative_stats[name]["critical_total"] += int(total_counts[idx])
-            if number_token_data is not None:
-                correct_counts, total_counts = number_token_data
-                self.dataset_stats[name]["number_correct"] += int(correct_counts[idx])
-                self.dataset_stats[name]["number_total"] += int(total_counts[idx])
-                self.cumulative_stats[name]["number_correct"] += int(correct_counts[idx])
-                self.cumulative_stats[name]["number_total"] += int(total_counts[idx])
-            if direction_token_data is not None:
-                correct_counts, total_counts = direction_token_data
-                self.dataset_stats[name]["direction_correct"] += int(correct_counts[idx])
-                self.dataset_stats[name]["direction_total"] += int(total_counts[idx])
-                self.cumulative_stats[name]["direction_correct"] += int(correct_counts[idx])
-                self.cumulative_stats[name]["direction_total"] += int(total_counts[idx])
-
-    def get_metrics(self) -> dict[str, float]:
-        """Get current average losses and micro-averaged token accuracies for all datasets."""
-        metrics = {}
-
-        # Current interval metrics
-        for dataset_name, stats in self.dataset_stats.items():
-            if stats["count"] > 0:
-                # Loss (macro-averaged per sample)
-                avg_loss = stats["total_loss"] / stats["count"]
-                metrics[f"dataset/{dataset_name}/avg_loss"] = avg_loss
-                metrics[f"dataset/{dataset_name}/count"] = stats["count"]
-
-                # Micro-averaged critical token accuracy
-                if stats["critical_total"] > 0:
-                    avg_critical_acc = stats["critical_correct"] / stats["critical_total"]
-                    metrics[f"dataset/{dataset_name}/avg_critical_token_acc"] = avg_critical_acc
-                    metrics[f"dataset/{dataset_name}/critical_token_count"] = stats["critical_total"]
-
-                # Micro-averaged number token accuracy
-                if stats["number_total"] > 0:
-                    avg_number_acc = stats["number_correct"] / stats["number_total"]
-                    metrics[f"dataset/{dataset_name}/avg_number_token_acc"] = avg_number_acc
-                    metrics[f"dataset/{dataset_name}/number_token_count"] = stats["number_total"]
-
-                # Micro-averaged direction token accuracy
-                if stats["direction_total"] > 0:
-                    avg_direction_acc = stats["direction_correct"] / stats["direction_total"]
-                    metrics[f"dataset/{dataset_name}/avg_direction_token_acc"] = avg_direction_acc
-                    metrics[f"dataset/{dataset_name}/direction_token_count"] = stats["direction_total"]
-
-        # Cumulative (since-start) metrics
-        for dataset_name, stats in self.cumulative_stats.items():
-            if stats["count"] > 0:
-                # Cumulative loss (macro-averaged per sample)
-                cumulative_avg_loss = stats["total_loss"] / stats["count"]
-                metrics[f"dataset/{dataset_name}/cumulative_avg_loss"] = cumulative_avg_loss
-                metrics[f"dataset/{dataset_name}/cumulative_count"] = stats["count"]
-
-                # Cumulative micro-averaged critical token accuracy
-                if stats["critical_total"] > 0:
-                    cumulative_avg_critical_acc = stats["critical_correct"] / stats["critical_total"]
-                    metrics[f"dataset/{dataset_name}/cumulative_avg_critical_token_acc"] = cumulative_avg_critical_acc
-
-                # Cumulative micro-averaged number token accuracy
-                if stats["number_total"] > 0:
-                    cumulative_avg_number_acc = stats["number_correct"] / stats["number_total"]
-                    metrics[f"dataset/{dataset_name}/cumulative_avg_number_token_acc"] = cumulative_avg_number_acc
-
-                # Cumulative micro-averaged direction token accuracy
-                if stats["direction_total"] > 0:
-                    cumulative_avg_direction_acc = stats["direction_correct"] / stats["direction_total"]
-                    metrics[f"dataset/{dataset_name}/cumulative_avg_direction_token_acc"] = cumulative_avg_direction_acc
-
-        return metrics
-
-    def reset(self):
-        """Reset accumulated statistics for the current log interval. Cumulative counts are preserved."""
-        self.dataset_stats = {}
-
-
-class LocalDatasetInfoBuffer:
-    """Buffers local dataset info per step (without multihost gathering). Only gathers at log_interval."""
-
-    def __init__(self, tokenizer):
-        self.tokenizer = tokenizer
-        # Accumulate local tokenized names, losses, and token-level counts across steps
-        self.tokenized_names_buffer = []  # List of arrays, one per step
-        self.losses_buffer = []  # List of arrays, one per step
-        # For micro-averaging: buffer (correct_count, total_count) tuples
-        self.critical_correct_buffer = []  # List of arrays, one per step (may be empty)
-        self.critical_total_buffer = []  # List of arrays, one per step (may be empty)
-        self.number_correct_buffer = []  # List of arrays, one per step (may be empty)
-        self.number_total_buffer = []  # List of arrays, one per step (may be empty)
-        self.direction_correct_buffer = []  # List of arrays, one per step (may be empty)
-        self.direction_total_buffer = []  # List of arrays, one per step (may be empty)
-
-    def add_local_batch(
-        self,
-        tokenized_dataset_names: at.Array,
-        per_sample_losses: at.Array,
-        per_sample_critical_token_data: tuple[at.Array, at.Array] | None = None,
-        per_sample_number_token_data: tuple[at.Array, at.Array] | None = None,
-        per_sample_direction_token_data: tuple[at.Array, at.Array] | None = None,
-    ):
-        """Add local batch data (no multihost gathering here).
-
-        Args:
-            tokenized_dataset_names: Local tokenized dataset names
-            per_sample_losses: Local per-sample losses
-            per_sample_critical_token_data: Tuple of (correct_counts, total_counts) for critical tokens (optional)
-            per_sample_number_token_data: Tuple of (correct_counts, total_counts) for number tokens (optional)
-            per_sample_direction_token_data: Tuple of (correct_counts, total_counts) for direction tokens (optional)
-        """
-        # Convert to numpy and store
-        self.tokenized_names_buffer.append(np.asarray(training_utils.to_local_array(tokenized_dataset_names)))
-        self.losses_buffer.append(np.asarray(training_utils.to_local_array(per_sample_losses)))
-
-        # Buffer token-level counts for micro-averaging
-        if per_sample_critical_token_data is not None:
-            correct_counts, total_counts = per_sample_critical_token_data
-            self.critical_correct_buffer.append(np.asarray(training_utils.to_local_array(correct_counts)))
-            self.critical_total_buffer.append(np.asarray(training_utils.to_local_array(total_counts)))
-        if per_sample_number_token_data is not None:
-            correct_counts, total_counts = per_sample_number_token_data
-            self.number_correct_buffer.append(np.asarray(training_utils.to_local_array(correct_counts)))
-            self.number_total_buffer.append(np.asarray(training_utils.to_local_array(total_counts)))
-        if per_sample_direction_token_data is not None:
-            correct_counts, total_counts = per_sample_direction_token_data
-            self.direction_correct_buffer.append(np.asarray(training_utils.to_local_array(correct_counts)))
-            self.direction_total_buffer.append(np.asarray(training_utils.to_local_array(total_counts)))
-
-    def gather_and_update_stats(self, dataset_stats_tracker: DatasetStatsTracker) -> None:
-        """Gather buffered data from all hosts and update dataset statistics.
-
-        This should be called at log_interval to batch multihost communication.
-        """
-        if not self.tokenized_names_buffer:
-            return
-
-        # Concatenate all buffered local data
-        all_local_names = np.concatenate(self.tokenized_names_buffer, axis=0)
-        all_local_losses = np.concatenate(self.losses_buffer, axis=0)
-
-        # Multihost gather
-        process_count = jax.process_count()
-        if process_count > 1:
-            all_names = jax.experimental.multihost_utils.process_allgather(all_local_names)
-            all_losses = jax.experimental.multihost_utils.process_allgather(all_local_losses)
-            # Flatten: [num_processes, batch_per_process, seq_len] -> [total_batch, seq_len]
-            all_names = np.asarray(all_names).reshape(-1, all_local_names.shape[-1])
-            all_losses = np.asarray(all_losses).flatten()
-        else:
-            all_names = all_local_names
-            all_losses = all_local_losses
-
-        # Gather critical token counts if available
-        all_critical_data = None
-        if self.critical_correct_buffer and self.critical_total_buffer:
-            all_local_critical_correct = np.concatenate(self.critical_correct_buffer, axis=0)
-            all_local_critical_total = np.concatenate(self.critical_total_buffer, axis=0)
-            if process_count > 1:
-                all_critical_correct = jax.experimental.multihost_utils.process_allgather(all_local_critical_correct)
-                all_critical_total = jax.experimental.multihost_utils.process_allgather(all_local_critical_total)
-                all_critical_correct = np.asarray(all_critical_correct).flatten()
-                all_critical_total = np.asarray(all_critical_total).flatten()
-            else:
-                all_critical_correct = all_local_critical_correct
-                all_critical_total = all_local_critical_total
-            all_critical_data = (all_critical_correct, all_critical_total)
-
-        # Gather number token counts if available
-        all_number_data = None
-        if self.number_correct_buffer and self.number_total_buffer:
-            all_local_number_correct = np.concatenate(self.number_correct_buffer, axis=0)
-            all_local_number_total = np.concatenate(self.number_total_buffer, axis=0)
-            if process_count > 1:
-                all_number_correct = jax.experimental.multihost_utils.process_allgather(all_local_number_correct)
-                all_number_total = jax.experimental.multihost_utils.process_allgather(all_local_number_total)
-                all_number_correct = np.asarray(all_number_correct).flatten()
-                all_number_total = np.asarray(all_number_total).flatten()
-            else:
-                all_number_correct = all_local_number_correct
-                all_number_total = all_local_number_total
-            all_number_data = (all_number_correct, all_number_total)
-
-        # Gather direction token counts if available
-        all_direction_data = None
-        if self.direction_correct_buffer and self.direction_total_buffer:
-            all_local_direction_correct = np.concatenate(self.direction_correct_buffer, axis=0)
-            all_local_direction_total = np.concatenate(self.direction_total_buffer, axis=0)
-            if process_count > 1:
-                all_direction_correct = jax.experimental.multihost_utils.process_allgather(all_local_direction_correct)
-                all_direction_total = jax.experimental.multihost_utils.process_allgather(all_local_direction_total)
-                all_direction_correct = np.asarray(all_direction_correct).flatten()
-                all_direction_total = np.asarray(all_direction_total).flatten()
-            else:
-                all_direction_correct = all_local_direction_correct
-                all_direction_total = all_local_direction_total
-            all_direction_data = (all_direction_correct, all_direction_total)
-
-        # Decode gathered tokenized names
-        decoded_names = []
-        for i in range(all_names.shape[0]):
-            try:
-                name = self.tokenizer.decode(all_names[i])
-                name = name.strip()
-                decoded_names.append(name)
-            except Exception as e:
-                logging.warning(f"Failed to decode dataset name for sample {i}: {e}")
-                decoded_names.append("unknown")
-
-        # Update stats with token-level data
-        dataset_stats_tracker.update(decoded_names, all_losses, all_critical_data, all_number_data, all_direction_data)
-
-        # Clear buffers
-        self.tokenized_names_buffer = []
-        self.losses_buffer = []
-        self.critical_correct_buffer = []
-        self.critical_total_buffer = []
-        self.number_correct_buffer = []
-        self.number_total_buffer = []
-        self.direction_correct_buffer = []
-        self.direction_total_buffer = []
+# Note: DatasetStatsTracker and LocalDatasetInfoBuffer have been moved to log_util.py
 
 
 def gather_dataset_info_multihost(
@@ -646,245 +361,7 @@ def gather_dataset_info_multihost(
     return all_decoded_names, all_losses
 
 
-def _create_bar_plot(
-    dataset_names: list[str],
-    values: list[float],
-    ylabel: str,
-    title: str,
-    color: str,
-    value_format: str = "{:.4f}",
-    ylim: tuple[float, float] | None = None,
-) -> plt.Figure:
-    """Helper function to create a bar plot with consistent styling.
-
-    Args:
-        dataset_names: List of dataset names for x-axis
-        values: List of values for y-axis
-        ylabel: Label for y-axis
-        title: Plot title
-        color: Bar color
-        value_format: Format string for value labels
-        ylim: Optional y-axis limits
-
-    Returns:
-        Matplotlib figure
-    """
-    fig, ax = plt.subplots(figsize=(12, 6))
-    bars = ax.bar(range(len(dataset_names)), values, color=color)
-    ax.set_xlabel("Dataset", fontsize=12)
-    ax.set_ylabel(ylabel, fontsize=12)
-    ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.set_xticks(range(len(dataset_names)))
-    ax.set_xticklabels(dataset_names, rotation=45, ha="right")
-    ax.grid(axis="y", alpha=0.3)
-
-    if ylim is not None:
-        ax.set_ylim(ylim)
-
-    # Add value labels on top of bars
-    for bar, value in zip(bars, values):
-        height = bar.get_height()
-        label = value_format.format(value) if isinstance(value, float) else str(int(value))
-        ax.text(
-            bar.get_x() + bar.get_width() / 2.0,
-            height,
-            label,
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
-
-    plt.tight_layout()
-    return fig
-
-
-def create_dataset_stats_plots(
-    dataset_stats: dict[str, dict[str, float]],
-    cumulative_stats: dict[str, dict[str, float]] | None = None,
-) -> dict[str, plt.Figure]:
-    """Create bar plots for dataset statistics.
-
-    Args:
-        dataset_stats: Dictionary mapping dataset names to {
-            "total_loss": float, "count": int,
-            "critical_correct": int, "critical_total": int,
-            "number_correct": int, "number_total": int,
-            "direction_correct": int, "direction_total": int
-        }
-        cumulative_stats: Optional dictionary with same structure for cumulative (since-start) metrics
-
-    Returns:
-        Dictionary with plots for interval and cumulative metrics
-    """
-    if not dataset_stats:
-        return {}
-
-    # Extract dataset names and statistics
-    dataset_names = list(dataset_stats.keys())
-    counts = [dataset_stats[name]["count"] for name in dataset_names]
-    avg_losses = [
-        dataset_stats[name]["total_loss"] / dataset_stats[name]["count"] if dataset_stats[name]["count"] > 0 else 0.0
-        for name in dataset_names
-    ]
-    # Micro-averaged accuracies: correct_tokens / total_tokens
-    avg_critical_accs = [
-        dataset_stats[name]["critical_correct"] / dataset_stats[name]["critical_total"]
-        if dataset_stats[name]["critical_total"] > 0
-        else 0.0
-        for name in dataset_names
-    ]
-    avg_number_accs = [
-        dataset_stats[name]["number_correct"] / dataset_stats[name]["number_total"]
-        if dataset_stats[name]["number_total"] > 0
-        else 0.0
-        for name in dataset_names
-    ]
-    avg_direction_accs = [
-        dataset_stats[name]["direction_correct"] / dataset_stats[name]["direction_total"]
-        if dataset_stats[name]["direction_total"] > 0
-        else 0.0
-        for name in dataset_names
-    ]
-
-    # Sort by count (descending) for better visualization
-    sorted_indices = np.argsort(counts)[::-1]
-    dataset_names_sorted = [dataset_names[i] for i in sorted_indices]
-    counts_sorted = [counts[i] for i in sorted_indices]
-    avg_losses_sorted = [avg_losses[i] for i in sorted_indices]
-    avg_critical_accs_sorted = [avg_critical_accs[i] for i in sorted_indices]
-    avg_number_accs_sorted = [avg_number_accs[i] for i in sorted_indices]
-    avg_direction_accs_sorted = [avg_direction_accs[i] for i in sorted_indices]
-
-    plots = {}
-
-    # Create interval plots using helper function
-    plots["counts"] = _create_bar_plot(
-        dataset_names_sorted,
-        counts_sorted,
-        "Number of Examples",
-        "Dataset Example Counts",
-        "steelblue",
-        value_format="{:.0f}",
-    )
-
-    # Create average loss plot
-    plots["avg_loss"] = _create_bar_plot(
-        dataset_names_sorted,
-        avg_losses_sorted,
-        "Average Loss",
-        "Dataset Average Loss",
-        "coral",
-    )
-
-    # Create accuracy plots if data is available
-    if any(acc > 0 for acc in avg_critical_accs_sorted):
-        plots["avg_critical_token_acc"] = _create_bar_plot(
-            dataset_names_sorted,
-            avg_critical_accs_sorted,
-            "Average Critical Token Accuracy",
-            "Dataset Average Critical Token Accuracy",
-            "mediumseagreen",
-            ylim=(0, 1),
-        )
-
-    if any(acc > 0 for acc in avg_number_accs_sorted):
-        plots["avg_number_token_acc"] = _create_bar_plot(
-            dataset_names_sorted,
-            avg_number_accs_sorted,
-            "Average Number Token Accuracy",
-            "Dataset Average Number Token Accuracy",
-            "skyblue",
-            ylim=(0, 1),
-        )
-
-    if any(acc > 0 for acc in avg_direction_accs_sorted):
-        plots["avg_direction_token_acc"] = _create_bar_plot(
-            dataset_names_sorted,
-            avg_direction_accs_sorted,
-            "Average Direction Token Accuracy",
-            "Dataset Average Direction Token Accuracy",
-            "lightcoral",
-            ylim=(0, 1),
-        )
-
-    # Create cumulative (since-start) plots if cumulative_stats is provided
-    if cumulative_stats:
-        # Extract cumulative statistics (sorted by same order as interval plots)
-        cumulative_counts_list = [cumulative_stats.get(name, {}).get("count", 0) for name in dataset_names_sorted]
-        cumulative_avg_losses = [
-            cumulative_stats[name]["total_loss"] / cumulative_stats[name]["count"]
-            if name in cumulative_stats and cumulative_stats[name]["count"] > 0
-            else 0.0
-            for name in dataset_names_sorted
-        ]
-        cumulative_avg_critical_accs = [
-            cumulative_stats[name]["critical_correct"] / cumulative_stats[name]["critical_total"]
-            if name in cumulative_stats and cumulative_stats[name]["critical_total"] > 0
-            else 0.0
-            for name in dataset_names_sorted
-        ]
-        cumulative_avg_number_accs = [
-            cumulative_stats[name]["number_correct"] / cumulative_stats[name]["number_total"]
-            if name in cumulative_stats and cumulative_stats[name]["number_total"] > 0
-            else 0.0
-            for name in dataset_names_sorted
-        ]
-        cumulative_avg_direction_accs = [
-            cumulative_stats[name]["direction_correct"] / cumulative_stats[name]["direction_total"]
-            if name in cumulative_stats and cumulative_stats[name]["direction_total"] > 0
-            else 0.0
-            for name in dataset_names_sorted
-        ]
-
-        # Create cumulative plots using helper function
-        plots["cumulative_counts"] = _create_bar_plot(
-            dataset_names_sorted,
-            cumulative_counts_list,
-            "Cumulative Number of Examples (Since Start)",
-            "Dataset Cumulative Example Counts (Since Start)",
-            "mediumseagreen",
-            value_format="{:.0f}",
-        )
-
-        plots["cumulative_avg_loss"] = _create_bar_plot(
-            dataset_names_sorted,
-            cumulative_avg_losses,
-            "Cumulative Average Loss (Since Start)",
-            "Dataset Cumulative Average Loss (Since Start)",
-            "coral",
-        )
-
-        if any(acc > 0 for acc in cumulative_avg_critical_accs):
-            plots["cumulative_avg_critical_token_acc"] = _create_bar_plot(
-                dataset_names_sorted,
-                cumulative_avg_critical_accs,
-                "Cumulative Avg Critical Token Accuracy (Since Start)",
-                "Dataset Cumulative Average Critical Token Accuracy (Since Start)",
-                "mediumseagreen",
-                ylim=(0, 1),
-            )
-
-        if any(acc > 0 for acc in cumulative_avg_number_accs):
-            plots["cumulative_avg_number_token_acc"] = _create_bar_plot(
-                dataset_names_sorted,
-                cumulative_avg_number_accs,
-                "Cumulative Avg Number Token Accuracy (Since Start)",
-                "Dataset Cumulative Average Number Token Accuracy (Since Start)",
-                "skyblue",
-                ylim=(0, 1),
-            )
-
-        if any(acc > 0 for acc in cumulative_avg_direction_accs):
-            plots["cumulative_avg_direction_token_acc"] = _create_bar_plot(
-                dataset_names_sorted,
-                cumulative_avg_direction_accs,
-                "Cumulative Avg Direction Token Accuracy (Since Start)",
-                "Dataset Cumulative Average Direction Token Accuracy (Since Start)",
-                "lightcoral",
-                ylim=(0, 1),
-            )
-
-    return plots
+# Note: Plotting functions have been moved to log_util.py
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -998,6 +475,7 @@ class TrainingStepRunner:
                 direction_token_accuracy,
                 metrics,
             ) = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
+            breakpoint()
             return jnp.mean(per_sample_loss), (
                 per_sample_loss,
                 token_accuracy,
@@ -1088,52 +566,36 @@ class ValidationStepRunner:
         model = nnx.merge(state.model_def, state.params)
         model.eval()
 
-        @at.typecheck
-        def loss_fn(
-            model: _model.BaseModel,
-            rng: at.KeyArrayLike,
-            observation: CoTObservation | Observation,
-            actions: _model.Actions,
-        ):
-            (
-                per_sample_loss,
-                token_accuracy,
-                critical_token_accuracy,
-                number_token_accuracy,
-                direction_token_accuracy,
-                metrics,
-            ) = model.compute_loss(rng, observation, actions, train=False)
-            return (
-                jnp.mean(per_sample_loss),
-                token_accuracy,
-                critical_token_accuracy,
-                number_token_accuracy,
-                direction_token_accuracy,
-                metrics,
-            )
-
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
+
+        # Call compute_loss to get per-sample metrics for dataset tracking
+        # Note: We use the model in eval mode but request per-sample metrics by passing train=True
+        # This is to enable dataset-level tracking during validation
         (
-            loss,
+            per_sample_loss,
             token_accuracy,
             critical_token_accuracy,
             number_token_accuracy,
             direction_token_accuracy,
             val_metrics,
-        ) = loss_fn(model, eval_rng, observation, actions)
+        ) = model.compute_loss(eval_rng, observation, actions, train=True)
 
         result = {
-            "val_loss": loss,
+            "val_loss": jnp.mean(per_sample_loss),
             "val_token_accuracy": token_accuracy,
             "val_critical_token_accuracy": critical_token_accuracy,
             "val_number_token_accuracy": number_token_accuracy,
             "val_direction_token_accuracy": direction_token_accuracy,
+            "per_sample_loss": per_sample_loss,  # Include for dataset tracking
         }
 
-        # Add individual validation loss components from metrics
+        # Add individual validation loss components and per-sample metrics from metrics
         for key, value in val_metrics.items():
-            if key.endswith("_loss"):
+            if key.startswith("per_sample_"):
+                # Include per-sample metrics for dataset tracking (no val_ prefix)
+                result[key] = value
+            elif key.endswith("_loss"):
                 # For loss components, compute mean and prefix with val_
                 result[f"val_{key}"] = jnp.mean(value)
             else:
@@ -1346,8 +808,8 @@ def main(config: _config.TrainConfig):
 
     infos = []
     host_batch_cache = HostBatchCache()
-    dataset_stats_tracker = DatasetStatsTracker()
-    dataset_info_buffer = LocalDatasetInfoBuffer(tok)
+    dataset_stats_tracker = log_util.DatasetStatsTracker()
+    dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
 
     # Track current training stage for transition detection
     current_stage_idx = None
@@ -1405,63 +867,8 @@ def main(config: _config.TrainConfig):
             raise ValueError("Training step info missing per_sample_loss")
 
         # Buffer local dataset info (no multihost gathering at every step)
-        # NOTE: We now track pred_ and langact_ metrics separately
-        if hasattr(batch[0], "tokenized_dataset_name"):
-            try:
-                # Helper function to extract per-sample data for a metric prefix
-                def extract_metric_data(prefix: str):
-                    critical_data = None
-                    if f"{prefix}per_sample_critical_correct" in info and f"{prefix}per_sample_critical_total" in info:
-                        critical_data = (info[f"{prefix}per_sample_critical_correct"], info[f"{prefix}per_sample_critical_total"])
-
-                    number_data = None
-                    if f"{prefix}per_sample_number_correct" in info and f"{prefix}per_sample_number_total" in info:
-                        number_data = (info[f"{prefix}per_sample_number_correct"], info[f"{prefix}per_sample_number_total"])
-
-                    direction_data = None
-                    if f"{prefix}per_sample_direction_correct" in info and f"{prefix}per_sample_direction_total" in info:
-                        direction_data = (info[f"{prefix}per_sample_direction_correct"], info[f"{prefix}per_sample_direction_total"])
-
-                    per_sample_loss_key = f"{prefix}per_sample_loss"
-                    loss_data = info.get(per_sample_loss_key, per_sample_loss)
-
-                    return loss_data, critical_data, number_data, direction_data
-
-                # Buffer data for both pred and langact samples if available
-                # Try prediction samples first
-                if "pred_per_sample_loss" in info or "pred_per_sample_critical_correct" in info:
-                    loss_data, critical_data, number_data, direction_data = extract_metric_data("pred_")
-                    dataset_info_buffer.add_local_batch(
-                        batch[0].tokenized_dataset_name,
-                        loss_data,
-                        critical_data,
-                        number_data,
-                        direction_data,
-                    )
-
-                # Try langact samples
-                if "langact_per_sample_loss" in info or "langact_per_sample_critical_correct" in info:
-                    loss_data, critical_data, number_data, direction_data = extract_metric_data("langact_")
-                    dataset_info_buffer.add_local_batch(
-                        batch[0].tokenized_dataset_name,
-                        loss_data,
-                        critical_data,
-                        number_data,
-                        direction_data,
-                    )
-
-                # Fallback to overall metrics if neither pred nor langact are available
-                if "pred_per_sample_loss" not in info and "langact_per_sample_loss" not in info:
-                    loss_data, critical_data, number_data, direction_data = extract_metric_data("")
-                    dataset_info_buffer.add_local_batch(
-                        batch[0].tokenized_dataset_name,
-                        loss_data,
-                        critical_data,
-                        number_data,
-                        direction_data,
-                    )
-            except Exception as e:
-                logging.warning(f"Failed to buffer dataset info at step {step}: {e}")
+        # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
+        log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
 
         # Update hard example tracker with per-sample losses from current batch
         # per_sample_loss_local = training_utils.to_local_array(per_sample_loss)
@@ -1524,54 +931,10 @@ def main(config: _config.TrainConfig):
 
                 # Create and log dataset statistics bar plots
                 if dataset_stats_tracker.dataset_stats:
-                    plots = create_dataset_stats_plots(
+                    plots = log_util.create_dataset_stats_plots(
                         dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
                     )
-                    if plots:
-                        log_dict = {}
-                        # Interval plots
-                        if "counts" in plots:
-                            log_dict["dataset_stats/interval_counts_plot"] = wandb.Image(plots["counts"])
-                        if "avg_loss" in plots:
-                            log_dict["dataset_stats/interval_avg_loss_plot"] = wandb.Image(plots["avg_loss"])
-                        if "avg_critical_token_acc" in plots:
-                            log_dict["dataset_stats/interval_avg_critical_token_acc_plot"] = wandb.Image(
-                                plots["avg_critical_token_acc"]
-                            )
-                        if "avg_number_token_acc" in plots:
-                            log_dict["dataset_stats/interval_avg_number_token_acc_plot"] = wandb.Image(
-                                plots["avg_number_token_acc"]
-                            )
-                        if "avg_direction_token_acc" in plots:
-                            log_dict["dataset_stats/interval_avg_direction_token_acc_plot"] = wandb.Image(
-                                plots["avg_direction_token_acc"]
-                            )
-
-                        # Cumulative (since-start) plots
-                        if "cumulative_counts" in plots:
-                            log_dict["dataset_stats/cumulative_counts_plot"] = wandb.Image(plots["cumulative_counts"])
-                        if "cumulative_avg_loss" in plots:
-                            log_dict["dataset_stats/cumulative_avg_loss_plot"] = wandb.Image(
-                                plots["cumulative_avg_loss"]
-                            )
-                        if "cumulative_avg_critical_token_acc" in plots:
-                            log_dict["dataset_stats/cumulative_avg_critical_token_acc_plot"] = wandb.Image(
-                                plots["cumulative_avg_critical_token_acc"]
-                            )
-                        if "cumulative_avg_number_token_acc" in plots:
-                            log_dict["dataset_stats/cumulative_avg_number_token_acc_plot"] = wandb.Image(
-                                plots["cumulative_avg_number_token_acc"]
-                            )
-                        if "cumulative_avg_direction_token_acc" in plots:
-                            log_dict["dataset_stats/cumulative_avg_direction_token_acc_plot"] = wandb.Image(
-                                plots["cumulative_avg_direction_token_acc"]
-                            )
-
-                        wandb.log(log_dict, step=step)
-
-                        # Close all figures to prevent memory leaks
-                        for plot_fig in plots.values():
-                            plt.close(plot_fig)
+                    log_util.log_dataset_plots(plots, step)
 
                 if config.model.enable_langact_training:
                     host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
@@ -1602,6 +965,10 @@ def main(config: _config.TrainConfig):
             dataset_stats_tracker.reset()
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
+            # Initialize validation dataset trackers
+            val_dataset_stats_tracker = log_util.DatasetStatsTracker()
+            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
+
             # use a pbar to track the validation progress
             val_pbar = tqdm.tqdm(
                 range(num_val_batches),
@@ -1621,12 +988,35 @@ def main(config: _config.TrainConfig):
                     val_info_local = jax.device_get(val_info)
                     val_infos.append(val_info_local)
 
-                stacked_val = common_utils.stack_forest(val_infos)
+                    # Buffer validation dataset metrics
+                    log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+
+                # Gather and update validation dataset stats
+                val_dataset_info_buffer.gather_and_update_stats(val_dataset_stats_tracker)
+
+                # Stack and reduce validation metrics (excluding per-sample metrics)
+                # Filter out per_sample_* keys from val_infos before stacking
+                filtered_val_infos = [
+                    {k: v for k, v in info.items() if not k.startswith("per_sample_")} for info in val_infos
+                ]
+                stacked_val = common_utils.stack_forest(filtered_val_infos)
                 reduced_val = jax.tree.map(jnp.mean, stacked_val)
+
+                # Add validation dataset-level metrics
+                val_dataset_metrics = val_dataset_stats_tracker.get_metrics(prefix="val_")
+                reduced_val.update(val_dataset_metrics)
+
                 val_info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_val.items())
                 val_pbar.write(f"Step {step} (val): {val_info_str}")
                 if jax.process_index() == 0:
                     wandb.log(reduced_val, step=step)
+
+                    # Create and log validation dataset statistics bar plots
+                    if val_dataset_stats_tracker.dataset_stats:
+                        val_plots = log_util.create_dataset_stats_plots(
+                            val_dataset_stats_tracker.dataset_stats, val_dataset_stats_tracker.cumulative_stats
+                        )
+                        log_util.log_dataset_plots(val_plots, step, prefix="val_")
 
         batch = next(data_iter)
 
