@@ -93,7 +93,8 @@ class PiCoT(_pi0.Pi0):
         self.enable_langact_training = bool(getattr(config, "enable_langact_training", True))
         self.language_loss_weight = float(getattr(config, "language_loss_weight", 1.0))
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
-        self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 1.0))
+        self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 0.2))
+        self.vqa_loss_weight = float(getattr(config, "vqa_loss_weight", 0.1))
         # Backward compatibility flag used in a few places
         self.use_gemma3 = False
         self.EOS_TOKEN = 1
@@ -957,6 +958,7 @@ class PiCoT(_pi0.Pi0):
             language_loss_weight = stage_config.get("language_loss_weight", self.language_loss_weight)
             action_loss_weight = stage_config.get("action_loss_weight", self.action_loss_weight)
             prediction_loss_weight = stage_config.get("prediction_loss_weight", self.prediction_loss_weight)
+            vqa_loss_weight = stage_config.get("vqa_loss_weight", self.vqa_loss_weight)
         else:
             # Use model's static configuration
             langact_enabled = self.enable_langact_training
@@ -969,6 +971,7 @@ class PiCoT(_pi0.Pi0):
             language_loss_weight = self.language_loss_weight
             action_loss_weight = self.action_loss_weight
             prediction_loss_weight = self.prediction_loss_weight
+            vqa_loss_weight = self.vqa_loss_weight
 
         # Encode images (only first frame needed since prediction is handled at dataset level)
         img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
@@ -993,24 +996,42 @@ class PiCoT(_pi0.Pi0):
             observation, prefix_tokens, prefix_mask, prefix_ar_mask, train, sample_mask=combined_langact_mask
         )
 
-        # Separate prediction and regular language samples based on is_prediction_sample mask
-        if observation.is_prediction_sample is not None:
-            is_pred = jnp.asarray(observation.is_prediction_sample, dtype=bool)
-            is_lang = jnp.logical_not(is_pred)
+        # Separate VQA, prediction, and regular language samples
+        has_vqa = observation.is_vqa_sample is not None
+        has_pred = observation.is_prediction_sample is not None
+
+        if has_vqa or has_pred:
+            # Create masks for each sample type
+            is_vqa = jnp.asarray(observation.is_vqa_sample, dtype=bool) if has_vqa else jnp.zeros(batch_size, dtype=bool)
+            is_pred = jnp.asarray(observation.is_prediction_sample, dtype=bool) if has_pred else jnp.zeros(batch_size, dtype=bool)
+            is_lang = jnp.logical_not(jnp.logical_or(is_vqa, is_pred))
 
             # Combine with langact mask to get final masks
+            vqa_mask = jnp.logical_and(is_vqa, combined_langact_mask)
             pred_mask = jnp.logical_and(is_pred, combined_langact_mask)
             lang_mask = jnp.logical_and(is_lang, combined_langact_mask)
 
+            # Compute comprehensive metrics for VQA samples
+            if has_vqa:
+                vqa_metrics = self._compute_sample_specific_metrics(
+                    per_sample_loss=lang_loss,
+                    lang_metrics=lang_metrics,
+                    sample_mask=vqa_mask,
+                    prefix="vqa_",
+                    train=train,
+                )
+                metrics.update(vqa_metrics)
+
             # Compute comprehensive metrics for prediction samples
-            pred_metrics = self._compute_sample_specific_metrics(
-                per_sample_loss=lang_loss,
-                lang_metrics=lang_metrics,
-                sample_mask=pred_mask,
-                prefix="pred_",
-                train=train,
-            )
-            metrics.update(pred_metrics)
+            if has_pred:
+                pred_metrics = self._compute_sample_specific_metrics(
+                    per_sample_loss=lang_loss,
+                    lang_metrics=lang_metrics,
+                    sample_mask=pred_mask,
+                    prefix="pred_",
+                    train=train,
+                )
+                metrics.update(pred_metrics)
 
             # Compute comprehensive metrics for language-action samples
             langact_metrics = self._compute_sample_specific_metrics(
@@ -1023,11 +1044,12 @@ class PiCoT(_pi0.Pi0):
             metrics.update(langact_metrics)
 
             # Add weighted losses to total
-            pred_loss = lang_loss * pred_mask
-            regular_lang_loss = lang_loss * lang_mask
-            total_loss = total_loss + prediction_loss_weight * pred_loss + language_loss_weight * regular_lang_loss
+            vqa_loss_weighted = lang_loss * vqa_mask
+            pred_loss_weighted = lang_loss * pred_mask
+            lang_loss_weighted = lang_loss * lang_mask
+            total_loss = total_loss + vqa_loss_weight * vqa_loss_weighted + prediction_loss_weight * pred_loss_weighted + language_loss_weight * lang_loss_weighted
         else:
-            # No prediction mask available, use original behavior
+            # No VQA or prediction masks available, use original behavior
             total_loss = total_loss + language_loss_weight * lang_loss
 
         # Compute action diffusion loss only if action training is enabled

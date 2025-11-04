@@ -60,7 +60,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     # Scalar weights to combine losses when multiple are enabled
     language_loss_weight: float = 1.0
     action_loss_weight: float = 1.0
-    prediction_loss_weight: float = 1.0
+    prediction_loss_weight: float = 0.2
+    vqa_loss_weight: float = 0.1
 
     def __post_init__(self):
         if self.max_token_len is None:
