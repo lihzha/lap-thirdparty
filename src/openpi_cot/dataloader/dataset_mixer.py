@@ -507,4 +507,8 @@ class OXECoTDatasets:
         """Compute number of batches per epoch based on dataset length and batch size."""
         import jax
 
-        return int(self.dataset_length // (self.batch_size * jax.process_count()) * self.config.val_fraction)
+        return int(
+            self.global_statistics["actions"].num_transitions
+            // (self.batch_size * jax.process_count())
+            * self.config.val_fraction
+        )
