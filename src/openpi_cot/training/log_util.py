@@ -291,20 +291,25 @@ class LocalDatasetInfoBuffer:
                 data_by_type[sample_type]["direction_total"].append(total)
 
         # Synchronize sample_types across all processes to ensure deterministic order
+        # Known sample types are 'langact' and 'pred' - use fixed order for simplicity
+        all_possible_types = ["langact", "pred"]
+
         if process_count > 1:
-            # Get local sample types as a sorted list
-            local_sample_types = sorted(data_by_type.keys())
-            # Pad to a fixed size and convert to array for gathering
-            max_types = 100  # Should be enough for any realistic scenario
-            padded_types = local_sample_types + [""] * (max_types - len(local_sample_types))
-            type_array = np.array(padded_types, dtype='U100')
+            # Use a simple boolean array to indicate which types each process has
+            local_has_types = np.array([
+                "langact" in data_by_type,
+                "pred" in data_by_type
+            ], dtype=np.int32)
 
-            # Gather all sample types from all processes
-            all_types_nested = jax.experimental.multihost_utils.process_allgather(type_array)
-            all_types_flat = np.asarray(all_types_nested).flatten()
+            # Gather flags from all processes
+            all_has_types = jax.experimental.multihost_utils.process_allgather(local_has_types)
+            all_has_types = np.asarray(all_has_types)  # [num_processes, 2]
 
-            # Get unique non-empty sample types in sorted order
-            unique_types = sorted(set(t for t in all_types_flat if t != ""))
+            # Determine which types any process has (OR across processes)
+            any_has_types = np.any(all_has_types, axis=0)
+
+            # Build list of types to process
+            unique_types = [t for t, has in zip(all_possible_types, any_has_types) if has]
         else:
             unique_types = sorted(data_by_type.keys())
 
