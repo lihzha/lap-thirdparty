@@ -237,45 +237,49 @@ class LocalDatasetInfoBuffer:
         This should be called at log_interval to batch multihost communication.
         Handles data grouped by sample_type.
         """
-        # Simple early return like old code - if no local data, just return
-        # All processes should have the same behavior (data or no data) when called at log_interval
-        if not self.tokenized_names_buffer:
-            return
-
         process_count = jax.process_count()
 
-        # Group buffered data by sample_type
-        data_by_type = {}
-        for (names, sample_type), (losses, _) in zip(self.tokenized_names_buffer, self.losses_buffer):
-            if sample_type not in data_by_type:
-                data_by_type[sample_type] = {
-                    "names": [],
-                    "losses": [],
-                    "critical_correct": [],
-                    "critical_total": [],
-                    "number_correct": [],
-                    "number_total": [],
-                    "direction_correct": [],
-                    "direction_total": [],
-                }
-            data_by_type[sample_type]["names"].append(names)
-            data_by_type[sample_type]["losses"].append(losses)
+        # In multiprocess mode, we must participate in collective ops even with no data
+        # to avoid sync issues (e.g., during validation when processes may have different batch counts)
+        if not self.tokenized_names_buffer:
+            if process_count == 1:
+                # Single process: safe to return early
+                return
+            # Multi-process with no local data: still participate in collectives with empty data
+            data_by_type = {}
+        else:
+            # Group buffered data by sample_type
+            data_by_type = {}
+            for (names, sample_type), (losses, _) in zip(self.tokenized_names_buffer, self.losses_buffer):
+                if sample_type not in data_by_type:
+                    data_by_type[sample_type] = {
+                        "names": [],
+                        "losses": [],
+                        "critical_correct": [],
+                        "critical_total": [],
+                        "number_correct": [],
+                        "number_total": [],
+                        "direction_correct": [],
+                        "direction_total": [],
+                    }
+                data_by_type[sample_type]["names"].append(names)
+                data_by_type[sample_type]["losses"].append(losses)
 
-        # Add token count data grouped by sample_type
-        for (correct, sample_type), (total, _) in zip(self.critical_correct_buffer, self.critical_total_buffer):
-            if sample_type in data_by_type:
-                data_by_type[sample_type]["critical_correct"].append(correct)
-                data_by_type[sample_type]["critical_total"].append(total)
+            # Add token count data grouped by sample_type
+            for (correct, sample_type), (total, _) in zip(self.critical_correct_buffer, self.critical_total_buffer):
+                if sample_type in data_by_type:
+                    data_by_type[sample_type]["critical_correct"].append(correct)
+                    data_by_type[sample_type]["critical_total"].append(total)
 
-        for (correct, sample_type), (total, _) in zip(self.number_correct_buffer, self.number_total_buffer):
-            if sample_type in data_by_type:
-                data_by_type[sample_type]["number_correct"].append(correct)
-                data_by_type[sample_type]["number_total"].append(total)
+            for (correct, sample_type), (total, _) in zip(self.number_correct_buffer, self.number_total_buffer):
+                if sample_type in data_by_type:
+                    data_by_type[sample_type]["number_correct"].append(correct)
+                    data_by_type[sample_type]["number_total"].append(total)
 
-        for (correct, sample_type), (total, _) in zip(self.direction_correct_buffer, self.direction_total_buffer):
-            if sample_type in data_by_type:
-                data_by_type[sample_type]["direction_correct"].append(correct)
-                data_by_type[sample_type]["direction_total"].append(total)
+            for (correct, sample_type), (total, _) in zip(self.direction_correct_buffer, self.direction_total_buffer):
+                if sample_type in data_by_type:
+                    data_by_type[sample_type]["direction_correct"].append(correct)
+                    data_by_type[sample_type]["direction_total"].append(total)
 
         # Determine which sample_types to process
         # All processes must process the same types in the same order to avoid sync issues
