@@ -732,6 +732,25 @@ def main(config: _config.TrainConfig):
             hash_tables=hash_tables,
             persistent_iterator=False,
         )
+
+        # Log validation dataset configuration for debugging
+        logging.info("=" * 80)
+        logging.info("VALIDATION DATASET CONFIGURATION")
+        logging.info("=" * 80)
+        logging.info(f"Global batch_size: {config.batch_size}")
+        logging.info(f"JAX process_count: {jax.process_count()}")
+        logging.info(f"Per-host batch_size: {max(1, config.batch_size // jax.process_count())}")
+        logging.info(f"val_max_samples from config: {getattr(config.data, 'val_max_samples', None)}")
+
+        # Try to get dataset statistics
+        val_dataset = getattr(val_loader, "dataset", None)
+        if val_dataset:
+            if hasattr(val_dataset, "dataset_statistics"):
+                logging.info(f"Validation dataset statistics: {val_dataset.dataset_statistics}")
+            if hasattr(val_dataset, "dataset_length"):
+                logging.info(f"Validation dataset length: {val_dataset.dataset_length}")
+        logging.info("=" * 80)
+
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
         val_runner = ValidationStepRunner(config)
@@ -780,9 +799,7 @@ def main(config: _config.TrainConfig):
                 logging.info(f"Starting training at step {start_step} in stage {i}")
                 break
 
-    # For validation: use a large enough fixed limit and handle StopIteration per-host
-    # All hosts will participate in collective ops even after local data is exhausted
-    max_val_iterations = 10000  # Large enough for any reasonable validation set
+    num_val_batches = None
 
     for step in pbar:
         # Detect and log stage transitions
@@ -859,60 +876,42 @@ def main(config: _config.TrainConfig):
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
 
-                # Run validation with synchronized termination across all hosts
-                # Each host may have different number of batches due to data sharding
-                import numpy as np
-                val_iteration = 0
-                local_done = False
-                val_batch = None  # Track last valid batch for dummy iterations
-
-                while val_iteration < max_val_iterations:
-                    # Check if this host has more data
-                    if not local_done:
-                        try:
-                            val_batch = next(val_iter)
-                        except StopIteration:
-                            local_done = True
-                            logging.info(f"Validation exhausted local data at iteration {val_iteration}")
-
-                    # Synchronize done status across all hosts (allgather is a collective op)
-                    if jax.process_count() > 1:
-                        done_array = np.array([int(local_done)], dtype=np.int32)
-                        all_done = jax.experimental.multihost_utils.process_allgather(done_array)
-                        all_hosts_done = bool(np.all(all_done))
-                    else:
-                        all_hosts_done = local_done
-
-                    # If all hosts are done, exit loop
-                    if all_hosts_done:
-                        logging.info(f"All hosts completed validation after {val_iteration} iterations")
-                        break
-
-                    # All hosts must call pval_step (contains collective ops), but only save results if not done
-                    if not local_done:
-                        # Process real batch
+                # If num_val_batches not yet determined, iterate until StopIteration to count
+                # if num_val_batches is None:
+                #     logging.info("First validation run - determining total number of validation batches...")
+                #     val_batch_count = 0
+                #     try:
+                #         while True:
+                #             val_batch = next(val_iter)
+                #             val_info = pval_step(train_rng, train_state, val_batch)
+                #             val_info_local = jax.device_get(val_info)
+                #             val_infos.append(val_info_local)
+                #             log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                #             val_batch_count += 1
+                #     except StopIteration:
+                #         num_val_batches = val_batch_count
+                #         logging.info(f"Determined validation dataset has {num_val_batches} batches")
+                # else:
+                # Subsequent validation runs: use progress bar with known batch count
+                val_pbar = tqdm.tqdm(
+                    range(5),
+                    initial=0,
+                    total=5,
+                    dynamic_ncols=True,
+                    disable=(jax.process_index() != 0),
+                )
+                try:
+                    for _ in val_pbar:
+                        val_batch = next(val_iter)
                         val_info = pval_step(train_rng, train_state, val_batch)
                         val_info_local = jax.device_get(val_info)
                         val_infos.append(val_info_local)
                         log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                    elif val_batch is not None:
-                        # This host is done but must still participate in collective ops
-                        # Reuse the last batch as a dummy (results will be discarded)
-                        _ = pval_step(train_rng, train_state, val_batch)
-                    else:
-                        # This host has no data at all - should not happen in practice
-                        # but if it does, we can't participate in pval_step without a dummy batch
-                        logging.error("Host has no validation data but other hosts do - skipping collective participation")
-                        # This will likely cause an error, but at least we log it
-
-                    val_iteration += 1
-
-                    # Update progress bar (only on host 0)
-                    if jax.process_index() == 0 and val_iteration % 10 == 0:
-                        logging.info(f"Validation progress: {val_iteration} iterations, {len(val_infos)} batches processed")
-
-                if val_iteration >= max_val_iterations:
-                    logging.warning(f"Validation hit max iterations ({max_val_iterations}) - this may indicate an issue")
+                except StopIteration:
+                    logging.warning(
+                        f"Validation ended early at {len(val_infos)} batches (expected {num_val_batches}). "
+                        "This may indicate dataset size changed."
+                    )
 
                 # Use unified logging function for validation metrics
                 process_and_log_metrics(
