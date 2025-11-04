@@ -275,7 +275,6 @@ class LocalDatasetInfoBuffer:
 
         # Process each sample_type separately
         process_count = jax.process_count()
-        breakpoint()
         for sample_type, data in data_by_type.items():
             # Concatenate data for this sample_type
             all_local_names = np.concatenate(data["names"], axis=0)

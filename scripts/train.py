@@ -1,7 +1,6 @@
 import dataclasses
 import datetime
 import logging
-import math
 import os
 import platform
 from typing import Any
@@ -197,7 +196,6 @@ def process_and_log_metrics(
     Returns:
         Dictionary of reduced metrics
     """
-    breakpoint()
     # Gather and update dataset stats from buffered local data
     dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
 
@@ -586,6 +584,9 @@ class ValidationStepRunner:
                 # total_loss is per-sample during validation, store it for dataset tracking
                 result["per_sample_loss"] = value
                 result["val_loss"] = jnp.mean(value)
+            else:
+                # Include all other metrics (accuracy, etc.)
+                result[key] = value
 
         return result
 
@@ -742,13 +743,6 @@ def main(config: _config.TrainConfig):
         # Determine how many validation batches to evaluate each time.
         # If a fixed validation subset size is configured, compute batches from it;
         # otherwise fall back to a heuristic constant divided by global batch size.
-        if getattr(config.data, "val_max_samples", None):
-            # local batch size per host mirrors RLDS dataset batching
-            process_count = getattr(jax, "process_count", lambda: 1)()
-            local_bs = max(1, config.batch_size // process_count)
-            num_val_batches = math.ceil(config.data.val_max_samples / local_bs)
-        else:
-            num_val_batches = int(60000 / config.batch_size)  # adjust if needed
     start_step = int(train_state.step)
 
     # Log preemption tracking information to wandb
@@ -785,6 +779,8 @@ def main(config: _config.TrainConfig):
                 current_stage_idx = i
                 logging.info(f"Starting training at step {start_step} in stage {i}")
                 break
+
+    num_val_batches = None
 
     for step in pbar:
         # Detect and log stage transitions
@@ -856,27 +852,47 @@ def main(config: _config.TrainConfig):
             val_dataset_stats_tracker = log_util.DatasetStatsTracker()
             val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
 
-            # use a pbar to track the validation progress
-            val_pbar = tqdm.tqdm(
-                range(num_val_batches),
-                initial=0,
-                total=num_val_batches,
-                dynamic_ncols=True,
-                disable=(jax.process_index() != 0),
-            )
             with sharding.set_mesh(mesh):
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
-                for _ in val_pbar:
-                    val_batch = next(val_iter)
-                    val_info = pval_step(train_rng, train_state, val_batch)
-                    # Convert to local array to avoid multi-host array issues during stacking
-                    val_info_local = jax.device_get(val_info)
-                    val_infos.append(val_info_local)
 
-                    # Buffer validation dataset metrics
-                    log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                # If num_val_batches not yet determined, iterate until StopIteration to count
+                if num_val_batches is None:
+                    logging.info("First validation run - determining total number of validation batches...")
+                    val_batch_count = 0
+                    try:
+                        while True:
+                            val_batch = next(val_iter)
+                            val_info = pval_step(train_rng, train_state, val_batch)
+                            val_info_local = jax.device_get(val_info)
+                            val_infos.append(val_info_local)
+                            log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                            val_batch_count += 1
+                    except StopIteration:
+                        num_val_batches = val_batch_count
+                        logging.info(f"Determined validation dataset has {num_val_batches} batches")
+                else:
+                    # Subsequent validation runs: use progress bar with known batch count
+                    val_pbar = tqdm.tqdm(
+                        range(num_val_batches),
+                        initial=0,
+                        total=num_val_batches,
+                        dynamic_ncols=True,
+                        disable=(jax.process_index() != 0),
+                    )
+                    try:
+                        for _ in val_pbar:
+                            val_batch = next(val_iter)
+                            val_info = pval_step(train_rng, train_state, val_batch)
+                            val_info_local = jax.device_get(val_info)
+                            val_infos.append(val_info_local)
+                            log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                    except StopIteration:
+                        logging.warning(
+                            f"Validation ended early at {len(val_infos)} batches (expected {num_val_batches}). "
+                            "This may indicate dataset size changed."
+                        )
 
                 # Use unified logging function for validation metrics
                 process_and_log_metrics(

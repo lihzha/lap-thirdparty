@@ -981,10 +981,6 @@ class PiCoT(_pi0.Pi0):
 
         # Initialize loss accumulator and metrics
         total_loss = 0.0
-        token_accuracy = jnp.array(0.0)
-        critical_token_accuracy = jnp.array(0.0)
-        number_token_accuracy = jnp.array(0.0)
-        direction_token_accuracy = jnp.array(0.0)
         metrics = {}
 
         # Compute language/reasoning loss with per-sample masking
@@ -994,7 +990,7 @@ class PiCoT(_pi0.Pi0):
             combined_langact_mask = jnp.logical_and(combined_langact_mask, observation.sample_mask)
 
         # Pass combined mask to language loss computation
-        lang_loss, lang_metrics, lang_token_accuracy = self._compute_language_loss(
+        lang_loss, lang_metrics, _ = self._compute_language_loss(
             observation, prefix_tokens, prefix_mask, prefix_ar_mask, train, sample_mask=combined_langact_mask
         )
 
@@ -1034,22 +1030,9 @@ class PiCoT(_pi0.Pi0):
             pred_loss = lang_loss * pred_mask
             regular_lang_loss = lang_loss * lang_mask
             total_loss = total_loss + prediction_loss_weight * pred_loss + language_loss_weight * regular_lang_loss
-
-            # Use overall metrics for backward compatibility
-            token_accuracy = lang_token_accuracy
-            critical_token_accuracy = lang_metrics.get("critical_token_accuracy", jnp.array(0.0))
-            number_token_accuracy = lang_metrics.get("number_token_accuracy", jnp.array(0.0))
-            direction_token_accuracy = lang_metrics.get("direction_token_accuracy", jnp.array(0.0))
         else:
             # No prediction mask available, use original behavior
             total_loss = total_loss + language_loss_weight * lang_loss
-            token_accuracy = lang_token_accuracy
-            critical_token_accuracy = lang_metrics.get("critical_token_accuracy", jnp.array(0.0))
-            number_token_accuracy = lang_metrics.get("number_token_accuracy", jnp.array(0.0))
-            direction_token_accuracy = lang_metrics.get("direction_token_accuracy", jnp.array(0.0))
-
-        # Add overall lang_metrics to metrics dict
-        metrics.update(lang_metrics)
 
         # Compute action diffusion loss only if action training is enabled
         if action_enabled:
@@ -1060,18 +1043,9 @@ class PiCoT(_pi0.Pi0):
             action_loss = action_loss * action_sample_mask
             total_loss = total_loss + action_loss_weight * action_loss
             metrics.update(action_metrics)
-        # Skip action loss computation entirely when not enabled
-        elif train:
-            metrics["action_loss"] = jnp.zeros(batch_size)
-        else:
-            metrics["action_loss"] = jnp.array(0.0)
 
         # Add main metrics to dict
         metrics["per_sample_loss"] = total_loss
-        metrics["token_accuracy"] = token_accuracy
-        metrics["critical_token_accuracy"] = critical_token_accuracy
-        metrics["number_token_accuracy"] = number_token_accuracy
-        metrics["direction_token_accuracy"] = direction_token_accuracy
 
         return metrics
 

@@ -11,8 +11,8 @@ import openpi.training.data_loader as up  # upstream module
 import openpi.transforms as up_tf
 import tensorflow as tf
 
-from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 from openpi_cot.dataloader.dataset_mixer import OXECoTDatasets
+from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
@@ -181,6 +181,7 @@ def create_data_loader(
     framework: Literal["jax", "pytorch"] = "jax",
     hash_tables: dict | None = None,
     persistent_iterator: bool = False,
+    auto_recreate_on_stop: bool | None = None,
 ) -> up.DataLoader[tuple[CoTObservation, _model.Actions]]:
     # Avoid import-time side effects:
     # Only clear LEROBOT_HOME if we are about to construct a LeRobot dataset.
@@ -194,6 +195,10 @@ def create_data_loader(
     if data_cfg.rlds_data_dir is not None:
         if framework == "pytorch":
             raise NotImplementedError("PyTorch RLDS data loader is not supported yet")
+
+        # Default auto_recreate_on_stop based on split: True for train, False for validation
+        if auto_recreate_on_stop is None:
+            auto_recreate_on_stop = (split == "train")
 
         # 1) dataset
         ds = _create_rlds_dataset(
@@ -225,6 +230,7 @@ def create_data_loader(
             num_batches=num_batches,
             data_cfg=data_cfg,
             persistent_iterator=persistent_iterator,
+            auto_recreate_on_stop=auto_recreate_on_stop,
         )
 
     # Non-RLDS: delegate entirely to upstream (this will require torch if used)
@@ -258,6 +264,7 @@ class CoTRLDSDataLoader:
         num_batches: int | None = None,
         data_cfg: _config.CoTDataConfig,
         persistent_iterator: bool = False,
+        auto_recreate_on_stop: bool = True,
     ):
         self._dataset = dataset
         self._num_batches = num_batches
@@ -265,6 +272,7 @@ class CoTRLDSDataLoader:
         self._n_proc = jax.process_count()
         self._proc_idx = jax.process_index()
         self._persistent_iterator = persistent_iterator
+        self._auto_recreate_on_stop = auto_recreate_on_stop
         self._iterator = None
         self._checkpoint = None
         self._seen_batches = 0
@@ -335,8 +343,12 @@ class CoTRLDSDataLoader:
             try:
                 batch = next(data_iter)
             except StopIteration:
-                data_iter = iter(self._dataset)
-                continue
+                if self._auto_recreate_on_stop:
+                    data_iter = iter(self._dataset)
+                    continue
+                else:
+                    # For validation: propagate StopIteration to allow dynamic batch counting
+                    return
 
             self._assert_divisible(batch)
             batch = self._to_device(batch)
@@ -423,7 +435,7 @@ class CoTRLDSDataLoader:
                     "Please ensure you're using IterableTransformedDataset with persistent_iterator=True."
                 )
 
-        logging.info(f"Creating checkpoint with iterator and batch counter...")
+        logging.info("Creating checkpoint with iterator and batch counter...")
         # Create checkpoint with iterator and batch counter
         step = tf.Variable(self._seen_batches, dtype=tf.int64, name="batch_counter")
         self._checkpoint = tf.train.Checkpoint(step=step, iterator=self._iterator)
