@@ -994,9 +994,6 @@ class PiCoT(_pi0.Pi0):
             observation, prefix_tokens, prefix_mask, prefix_ar_mask, train, sample_mask=combined_langact_mask
         )
 
-        # Apply loss only to masked samples
-        lang_loss = lang_loss * combined_langact_mask
-
         # Separate prediction and regular language samples based on is_prediction_sample mask
         if observation.is_prediction_sample is not None:
             is_pred = jnp.asarray(observation.is_prediction_sample, dtype=bool)
