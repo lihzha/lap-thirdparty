@@ -733,7 +733,7 @@ def main(config: _config.TrainConfig):
             persistent_iterator=False,
         )
 
-        num_val_batches = val_loader.num_val_batches if config.do_val else 0
+        num_val_batches = val_loader.num_val_batches()
         logging.info(f"Number of validation batches: {num_val_batches}")
         # Try to get dataset statistics
         val_dataset = getattr(val_loader, "dataset", None)

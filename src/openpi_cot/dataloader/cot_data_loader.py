@@ -505,7 +505,7 @@ class CoTRLDSDataLoader:
         """
         return self._seen_batches
 
-    def num_val_batches(self) -> int | None:
+    def num_val_batches(self) -> int:
         """Get the configured number of batches per epoch.
 
         Returns:
