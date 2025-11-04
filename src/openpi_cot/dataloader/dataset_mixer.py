@@ -54,6 +54,7 @@ class OXECoTDatasets:
         enable_prediction_training: bool = False,
     ):
         self.hash_tables = hash_tables
+        self.batch_size = batch_size
 
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
@@ -499,3 +500,10 @@ class OXECoTDatasets:
 
     def __len__(self):
         return self.dataset_length
+
+    @property
+    def num_batches_per_epoch(self) -> int:
+        """Compute number of batches per epoch based on dataset length and batch size."""
+        import jax
+
+        return self.dataset_length // (self.batch_size * jax.process_count())
