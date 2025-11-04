@@ -88,6 +88,8 @@ class PlanningInputs(upstream_transforms.DataTransformFn):
         # Planning dataset doesn't use language actions for reasoning
         # Set sample_mask to True (always use these samples)
         inputs["sample_mask"] = True
+        inputs["is_prediction_sample"] = False
+        inputs["is_vqa_sample"] = False
 
         return inputs
 
@@ -129,6 +131,7 @@ class PlanningOutputs(upstream_transforms.DataTransformFn):
             output["reasoning"] = data["reasoning"]
 
         return output
+
 
 def rot6_to_quat(r6: np.ndarray) -> np.ndarray:
     """
