@@ -505,12 +505,12 @@ class CoTRLDSDataLoader:
         """
         return self._seen_batches
 
-    def num_batches(self) -> int | None:
+    def num_val_batches(self) -> int | None:
         """Get the configured number of batches per epoch.
 
         Returns:
             The number of batches if set, else None.
         """
-        if hasattr(self.dataset, "num_batches_per_epoch"):
-            return self.dataset.num_batches_per_epoch
+        if hasattr(self.dataset, "num_val_batches_per_epoch"):
+            return self.dataset.num_val_batches_per_epoch
         return 300  # Fallback value if not implemented

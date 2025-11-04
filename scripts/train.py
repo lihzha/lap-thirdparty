@@ -799,7 +799,7 @@ def main(config: _config.TrainConfig):
                 logging.info(f"Starting training at step {start_step} in stage {i}")
                 break
 
-    num_val_batches = val_loader.num_batches if config.do_val else 0
+    num_val_batches = val_loader.num_val_batches if config.do_val else 0
 
     for step in pbar:
         # Detect and log stage transitions

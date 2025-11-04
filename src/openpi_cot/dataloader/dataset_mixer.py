@@ -59,6 +59,7 @@ class OXECoTDatasets:
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
         mixture_spec = OXE_NAMED_MIXTURES[config.data_mix]
+        self.config = config
 
         dataset_names = [l[0] for l in mixture_spec]
         sample_weights = [l[1] for l in mixture_spec]
@@ -502,8 +503,8 @@ class OXECoTDatasets:
         return self.dataset_length
 
     @property
-    def num_batches_per_epoch(self) -> int:
+    def num_val_batches_per_epoch(self) -> int:
         """Compute number of batches per epoch based on dataset length and batch size."""
         import jax
 
-        return self.dataset_length // (self.batch_size * jax.process_count())
+        return int(self.dataset_length // (self.batch_size * jax.process_count()) * self.config.val_fraction)
