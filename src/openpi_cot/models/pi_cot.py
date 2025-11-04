@@ -1060,15 +1060,14 @@ class PiCoT(_pi0.Pi0):
             action_loss = action_loss * action_sample_mask
             total_loss = total_loss + action_loss_weight * action_loss
             metrics.update(action_metrics)
+        # Skip action loss computation entirely when not enabled
+        elif train:
+            metrics["action_loss"] = jnp.zeros(batch_size)
         else:
-            # Skip action loss computation entirely when not enabled
-            if train:
-                metrics["action_loss"] = jnp.zeros(batch_size)
-            else:
-                metrics["action_loss"] = jnp.array(0.0)
+            metrics["action_loss"] = jnp.array(0.0)
 
         # Add main metrics to dict
-        metrics["total_loss"] = total_loss
+        metrics["per_sample_loss"] = total_loss
         metrics["token_accuracy"] = token_accuracy
         metrics["critical_token_accuracy"] = critical_token_accuracy
         metrics["number_token_accuracy"] = number_token_accuracy

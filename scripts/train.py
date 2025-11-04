@@ -550,19 +550,8 @@ class TrainingStepRunner:
             "loss": loss,
             "grad_norm": optax.global_norm(grads),
             "param_norm": optax.global_norm(kernel_params),
+            **loss_metrics,
         }
-
-        # Add all metrics from compute_loss
-        for key, value in loss_metrics.items():
-            if key == "total_loss":
-                # total_loss is per-sample during training, store it separately for dataset tracking
-                info["per_sample_loss"] = value
-            elif key.endswith("_loss"):
-                # For loss components, compute mean
-                info[key] = jnp.mean(value)
-            else:
-                # For accuracies and other metrics, use as-is
-                info[key] = value
 
         return new_state, info
 
@@ -593,27 +582,10 @@ class ValidationStepRunner:
 
         # Process all metrics from compute_loss
         for key, value in val_metrics.items():
-            if key == "total_loss":
+            if key == "per_sample_loss":
                 # total_loss is per-sample during validation, store it for dataset tracking
                 result["per_sample_loss"] = value
                 result["val_loss"] = jnp.mean(value)
-            elif key.startswith("per_sample_"):
-                # Include per-sample metrics for dataset tracking (no val_ prefix)
-                result[key] = value
-            elif key.endswith("_loss"):
-                # For loss components, compute mean and prefix with val_
-                result[f"val_{key}"] = jnp.mean(value)
-            elif key in [
-                "token_accuracy",
-                "critical_token_accuracy",
-                "number_token_accuracy",
-                "direction_token_accuracy",
-            ]:
-                # For main accuracy metrics, prefix with val_
-                result[f"val_{key}"] = value
-            else:
-                # For other metrics (like pred_token_accuracy, langact_critical_token_accuracy), prefix with val_
-                result[f"val_{key}"] = value
 
         return result
 
