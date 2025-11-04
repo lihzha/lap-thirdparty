@@ -708,14 +708,14 @@ def main(config: _config.TrainConfig):
     sharding.log_batch_sharding(batch)
 
     train_runner = TrainingStepRunner(config)
-    # ptrain_step = jax.jit(
-    #     train_runner,
-    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-    #     out_shardings=(train_state_sharding, replicated_sharding),
-    #     donate_argnums=(1,),
-    # )
+    ptrain_step = jax.jit(
+        train_runner,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(train_state_sharding, replicated_sharding),
+        donate_argnums=(1,),
+    )
 
-    ptrain_step = train_runner
+    # ptrain_step = train_runner
 
     if config.do_val:
         dataset = getattr(data_loader, "dataset", None)
@@ -737,6 +737,7 @@ def main(config: _config.TrainConfig):
         pval_step = jax.jit(
             val_runner,
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=replicated_sharding,
         )
         # Determine how many validation batches to evaluate each time.
         # If a fixed validation subset size is configured, compute batches from it;
