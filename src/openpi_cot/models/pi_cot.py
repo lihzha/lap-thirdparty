@@ -657,20 +657,23 @@ class PiCoT(_pi0.Pi0):
             sample_mask,
         )
 
-        # Prepare additional masks for accuracy computation
-        ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
 
-        def prepare_mask(mask):
-            if mask is None:
-                return None
-            shifted_mask = mask[:, 1:]
-            if ex_mask is not None:
-                return shifted_mask * ex_mask
-            return shifted_mask
+        if self.verbose_mode:
+            # Prepare additional masks for accuracy computation
+            ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
+            def prepare_mask(mask):
+                if mask is None:
+                    return None
+                shifted_mask = mask[:, 1:]
+                if ex_mask is not None:
+                    return shifted_mask * ex_mask
+                return shifted_mask
 
-        critical_mask = prepare_mask(critical_token_mask)
-        number_mask = prepare_mask(number_token_mask)
-        direction_mask = prepare_mask(direction_token_mask)
+            critical_mask = prepare_mask(critical_token_mask)
+            number_mask = prepare_mask(number_token_mask)
+            direction_mask = prepare_mask(direction_token_mask)
+        else:
+            critical_mask, number_mask, direction_mask = None, None, None
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
@@ -971,7 +974,7 @@ class PiCoT(_pi0.Pi0):
 
             if self.enable_vqa_training or self.enable_prediction_training:
                 # Create masks for each sample type
-                vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool) if self.enable_vqa_trainingqa else jnp.zeros(batch_size, dtype=bool)
+                vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool) if self.enable_vqa_training else jnp.zeros(batch_size, dtype=bool)
                 pred_mask = jnp.asarray(observation.is_prediction_sample, dtype=bool) if self.enable_prediction_training else jnp.zeros(batch_size, dtype=bool)
                 lang_mask = jnp.logical_not(jnp.logical_or(vqa_mask, pred_mask))
 

@@ -3,6 +3,7 @@ import datetime
 import logging
 import os
 import platform
+import time
 from typing import Any
 
 import etils.epath as epath
@@ -783,6 +784,15 @@ def main(config: _config.TrainConfig):
     dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
     dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
+    # Profiling: Track timing metrics
+    # - batch_load_times: Time to fetch and transfer batch from data loader
+    # - train_step_times: Time for forward + backward pass + optimizer update
+    # Note: train_step_times includes both forward and backward since they're combined in value_and_grad
+    # To separate forward/backward, you would need to run without JIT or use JAX profiler tools
+    timing_metrics = {
+        "batch_load_times": [],
+    }
+
     # Track current training stage for transition detection
     current_stage_idx = None
     if config.training_schedule is not None:
@@ -856,9 +866,28 @@ def main(config: _config.TrainConfig):
                 verbose_mode=verbose_mode
             )
 
+            # Log profiling metrics
+            if timing_metrics["batch_load_times"]:
+                avg_batch_time = sum(timing_metrics["batch_load_times"]) / len(timing_metrics["batch_load_times"])
+
+                profiling_info = {
+                    "profiling/avg_batch_load_time": avg_batch_time,
+                }
+
+                logging.info(
+                    f"Profiling - Batch load: {avg_batch_time*1000:.2f}ms, "
+                )
+
+                if jax.process_index() == 0:
+                    wandb.log(profiling_info, step=step)
+
+                # Reset timing metrics for next interval
+                timing_metrics["batch_load_times"] = []
+
             infos = []
             # Reset dataset stats tracker to only track the next log_interval window
-            dataset_stats_tracker.reset()
+            if verbose_mode:
+                dataset_stats_tracker.reset()
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
             # Initialize validation dataset trackers
@@ -935,7 +964,13 @@ def main(config: _config.TrainConfig):
                     verbose_mode=verbose_mode
                 )
 
+        # Profiling: Time batch loading
+        batch_start = time.perf_counter()
         batch = next(data_iter)
+        jax.block_until_ready(batch)
+        batch_end = time.perf_counter()
+        batch_time = batch_end - batch_start
+        timing_metrics["batch_load_times"].append(batch_time)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
             checkpoint_manager = _checkpoints.save_state(
