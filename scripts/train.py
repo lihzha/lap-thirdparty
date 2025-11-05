@@ -170,13 +170,14 @@ def process_and_log_metrics(
     step: int,
     infos: list[dict[str, at.Array]],
     batch: tuple[CoTObservation | Observation, _model.Actions],
-    dataset_stats_tracker: log_util.DatasetStatsTracker,
-    dataset_info_buffer: log_util.LocalDatasetInfoBuffer,
+    dataset_stats_tracker: log_util.DatasetStatsTracker | None,
+    dataset_info_buffer: log_util.LocalDatasetInfoBuffer | None,
     config: _config.TrainConfig,
     host_batch_cache: "HostBatchCache | None" = None,
     dataset_log_tracker: vis_tools.DatasetLogTracker | None = None,
     tok: PaligemmaCoTTokenizer | None = None,
     prefix: str = "",
+    verbose_mode: bool = False
 ) -> dict[str, float]:
     """
     Unified function to process and log training/validation metrics.
@@ -196,8 +197,9 @@ def process_and_log_metrics(
     Returns:
         Dictionary of reduced metrics
     """
-    # Gather and update dataset stats from buffered local data
-    dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
+    if verbose_mode:
+        # Gather and update dataset stats from buffered local data
+        dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
 
     # Stack and reduce metrics
     stacked_infos = common_utils.stack_forest(infos)
@@ -223,9 +225,10 @@ def process_and_log_metrics(
 
     reduced_info = jax.device_get(reduced_info)
 
-    # Add dataset statistics to logging
-    dataset_metrics = dataset_stats_tracker.get_metrics(prefix=prefix)
-    reduced_info.update(dataset_metrics)
+    if verbose_mode:
+        # Add dataset statistics to logging
+        dataset_metrics = dataset_stats_tracker.get_metrics(prefix=prefix)
+        reduced_info.update(dataset_metrics)
 
     info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
     mode = "val" if prefix else "train"
@@ -234,12 +237,14 @@ def process_and_log_metrics(
     if jax.process_index() == 0:
         wandb.log(reduced_info, step=step)
 
-        # Create and log dataset statistics bar plots
-        if dataset_stats_tracker.dataset_stats:
-            plots = log_util.create_dataset_stats_plots(
-                dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
-            )
-            log_util.log_dataset_plots(plots, step, prefix=prefix)
+        if verbose_mode:
+
+            # Create and log dataset statistics bar plots
+            if dataset_stats_tracker.dataset_stats:
+                plots = log_util.create_dataset_stats_plots(
+                    dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
+                )
+                log_util.log_dataset_plots(plots, step, prefix=prefix)
 
         # Training-specific logging: random examples and dataset log counts
         if not prefix and config.model.enable_langact_training:
@@ -508,8 +513,8 @@ class TrainingStepRunner:
             observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
-            metrics = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
-            return jnp.mean(metrics["per_sample_loss"]), metrics
+            loss, metrics = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
+            return loss, metrics
 
         train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
@@ -574,21 +579,11 @@ class ValidationStepRunner:
         # Call compute_loss to get per-sample metrics for dataset tracking
         # Note: We use the model in eval mode but request per-sample metrics by passing train=True
         # This is to enable dataset-level tracking during validation
-        val_metrics = model.compute_loss(eval_rng, observation, actions, train=True)
+        val_loss, val_metrics = model.compute_loss(eval_rng, observation, actions, train=False)
 
-        result = {}
+        val_metrics["val_loss"] = val_loss
 
-        # Process all metrics from compute_loss
-        for key, value in val_metrics.items():
-            if key == "per_sample_loss":
-                # total_loss is per-sample during validation, store it for dataset tracking
-                result["per_sample_loss"] = value
-                result["val_loss"] = jnp.mean(value)
-            else:
-                # Include all other metrics (accuracy, etc.)
-                result[key] = value
-
-        return result
+        return val_metrics
 
 
 def main(config: _config.TrainConfig):
@@ -779,8 +774,11 @@ def main(config: _config.TrainConfig):
 
     infos = []
     host_batch_cache = HostBatchCache()
-    dataset_stats_tracker = log_util.DatasetStatsTracker()
-    dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
+
+    verbose_mode = config.model.verbose_mode
+
+    dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
+    dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
     # Track current training stage for transition detection
     current_stage_idx = None
@@ -834,9 +832,10 @@ def main(config: _config.TrainConfig):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
 
-        # Buffer local dataset info (no multihost gathering at every step)
-        # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
-        log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
+        if verbose_mode:
+            # Buffer local dataset info (no multihost gathering at every step)
+            # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
+            log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
 
         if step % config.log_interval == 0:
             # Use unified logging function for training metrics
@@ -851,6 +850,7 @@ def main(config: _config.TrainConfig):
                 dataset_log_tracker=dataset_log_tracker,
                 tok=tok,
                 prefix="",
+                verbose_mode=verbose_mode
             )
 
             infos = []
@@ -859,8 +859,8 @@ def main(config: _config.TrainConfig):
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
             # Initialize validation dataset trackers
-            val_dataset_stats_tracker = log_util.DatasetStatsTracker()
-            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
+            val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
+            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
             with sharding.set_mesh(mesh):
                 val_infos = []
@@ -880,7 +880,8 @@ def main(config: _config.TrainConfig):
                     val_info = pval_step(train_rng, train_state, val_batch)
                     val_info_local = jax.device_get(val_info)
                     val_infos.append(val_info_local)
-                    log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                    if verbose_mode:
+                        log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
 
                 # Use unified logging function for validation metrics
                 process_and_log_metrics(
@@ -894,6 +895,7 @@ def main(config: _config.TrainConfig):
                     dataset_log_tracker=None,
                     tok=None,
                     prefix="val_",
+                    verbose_mode=verbose_mode
                 )
 
         batch = next(data_iter)
