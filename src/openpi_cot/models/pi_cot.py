@@ -88,8 +88,10 @@ class PiCoT(_pi0.Pi0):
         self.aug_wrist_image = config.aug_wrist_image
         self.image_keys = config.image_keys
         # Loss/control knobs
-        self.enable_action_training = bool(getattr(config, "enable_action_training", False))
-        self.enable_langact_training = bool(getattr(config, "enable_langact_training", True))
+        self.enable_action_training = bool(config.enable_action_training)
+        self.enable_langact_training = bool(config.enable_langact_training)
+        self.enable_prediction_training = bool(config.enable_prediction_training)
+        self.enable_vqa_training = bool(config.enable_vqa_training)
         self.language_loss_weight = float(getattr(config, "language_loss_weight", 1.0))
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
         self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 0.2))
@@ -906,40 +908,40 @@ class PiCoT(_pi0.Pi0):
         # Determine loss configuration from stage_config or model defaults
         batch_size = observation.tokenized_prompt.shape[0]
 
-        if stage_config is not None:
-            langact_rng, action_rng = jax.random.split(stochastic_rng, 2)
+        # if stage_config is not None:
+        #     langact_rng, action_rng = jax.random.split(stochastic_rng, 2)
 
-            # Per-sample stochastic masking using probabilities
-            langact_enabled = stage_config.get("enable_langact_training", self.enable_langact_training)
-            langact_prob = stage_config.get("langact_prob", 1.0)
-            # Create per-sample mask: True for samples that should compute this loss
-            langact_sample_mask = jax.random.uniform(langact_rng, (batch_size,)) < langact_prob
-            # Combine with enable flag
-            langact_sample_mask = jnp.where(langact_enabled, langact_sample_mask, jnp.zeros(batch_size, dtype=bool))
+        #     # Per-sample stochastic masking using probabilities
+        #     langact_enabled = stage_config.get("enable_langact_training", self.enable_langact_training)
+        #     langact_prob = stage_config.get("langact_prob", 1.0)
+        #     # Create per-sample mask: True for samples that should compute this loss
+        #     langact_sample_mask = jax.random.uniform(langact_rng, (batch_size,)) < langact_prob
+        #     # Combine with enable flag
+        #     langact_sample_mask = jnp.where(langact_enabled, langact_sample_mask, jnp.zeros(batch_size, dtype=bool))
 
-            action_enabled = stage_config.get("enable_action_training", self.enable_action_training)
-            action_prob = stage_config.get("action_prob", 1.0)
-            action_sample_mask = jax.random.uniform(action_rng, (batch_size,)) < action_prob
-            action_sample_mask = jnp.where(action_enabled, action_sample_mask, jnp.zeros(batch_size, dtype=bool))
+        #     action_enabled = stage_config.get("enable_action_training", self.enable_action_training)
+        #     action_prob = stage_config.get("action_prob", 1.0)
+        #     action_sample_mask = jax.random.uniform(action_rng, (batch_size,)) < action_prob
+        #     action_sample_mask = jnp.where(action_enabled, action_sample_mask, jnp.zeros(batch_size, dtype=bool))
 
-            # Get loss weights
-            language_loss_weight = stage_config.get("language_loss_weight", self.language_loss_weight)
-            action_loss_weight = stage_config.get("action_loss_weight", self.action_loss_weight)
-            prediction_loss_weight = stage_config.get("prediction_loss_weight", self.prediction_loss_weight)
-            vqa_loss_weight = stage_config.get("vqa_loss_weight", self.vqa_loss_weight)
-        else:
-            # Use model's static configuration
-            langact_enabled = self.enable_langact_training
-            action_enabled = self.enable_action_training
+        #     # Get loss weights
+        #     language_loss_weight = stage_config.get("language_loss_weight", self.language_loss_weight)
+        #     action_loss_weight = stage_config.get("action_loss_weight", self.action_loss_weight)
+        #     prediction_loss_weight = stage_config.get("prediction_loss_weight", self.prediction_loss_weight)
+        #     vqa_loss_weight = stage_config.get("vqa_loss_weight", self.vqa_loss_weight)
+        # else:
+            # # Use model's static configuration
+            # langact_enabled = self.enable_langact_training
+            # action_enabled = self.enable_action_training
 
-            # Create full masks when no stage_config (all samples included if enabled)
-            langact_sample_mask = jnp.full(batch_size, langact_enabled, dtype=bool)
-            action_sample_mask = jnp.full(batch_size, action_enabled, dtype=bool)
+            # # Create full masks when no stage_config (all samples included if enabled)
+            # langact_sample_mask = jnp.full(batch_size, langact_enabled, dtype=bool)
+            # action_sample_mask = jnp.full(batch_size, action_enabled, dtype=bool)
 
-            language_loss_weight = self.language_loss_weight
-            action_loss_weight = self.action_loss_weight
-            prediction_loss_weight = self.prediction_loss_weight
-            vqa_loss_weight = self.vqa_loss_weight
+            # language_loss_weight = self.language_loss_weight
+            # action_loss_weight = self.action_loss_weight
+            # prediction_loss_weight = self.prediction_loss_weight
+            # vqa_loss_weight = self.vqa_loss_weight
 
         # Encode images (only first frame needed since prediction is handled at dataset level)
         img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
@@ -955,24 +957,22 @@ class PiCoT(_pi0.Pi0):
 
         # Compute language/reasoning loss with per-sample masking
         # Combine langact_sample_mask with existing sample_mask
-        if langact_enabled:
-            combined_langact_mask = langact_sample_mask
-            if observation.sample_mask is not None:
-                combined_langact_mask = jnp.logical_and(combined_langact_mask, observation.sample_mask)
+        if self.enable_langact_training:
+            combined_langact_mask = observation.sample_mask
+            # combined_langact_mask = langact_sample_mask
+            # if observation.sample_mask is not None:
+            #     combined_langact_mask = jnp.logical_and(combined_langact_mask, observation.sample_mask)
 
             # Pass combined mask to language loss computation
             lang_loss, lang_metrics = self._compute_language_loss(
                 observation, prefix_tokens, prefix_mask, prefix_ar_mask, sample_mask=combined_langact_mask
             )
 
-            # Separate VQA, prediction, and regular language samples
-            has_vqa = jnp.any(observation.is_vqa_sample)
-            has_pred = jnp.any(observation.is_prediction_sample)
 
-            if has_vqa or has_pred:
+            if self.enable_vqa_training or self.enable_prediction_training:
                 # Create masks for each sample type
-                vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool) if has_vqa else jnp.zeros(batch_size, dtype=bool)
-                pred_mask = jnp.asarray(observation.is_prediction_sample, dtype=bool) if has_pred else jnp.zeros(batch_size, dtype=bool)
+                vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool) if self.enable_vqa_trainingqa else jnp.zeros(batch_size, dtype=bool)
+                pred_mask = jnp.asarray(observation.is_prediction_sample, dtype=bool) if self.enable_prediction_training else jnp.zeros(batch_size, dtype=bool)
                 lang_mask = jnp.logical_not(jnp.logical_or(vqa_mask, pred_mask))
 
                 # Combine with langact mask to get final masks
@@ -981,7 +981,7 @@ class PiCoT(_pi0.Pi0):
                 lang_mask = jnp.logical_and(lang_mask, combined_langact_mask)
 
                 # Compute comprehensive metrics for VQA samples
-                if has_vqa:
+                if self.enable_vqa_training:
                     vqa_metrics = self._compute_sample_specific_metrics(
                         per_sample_loss=lang_loss,
                         lang_metrics=lang_metrics,
@@ -991,7 +991,7 @@ class PiCoT(_pi0.Pi0):
                     metrics.update(vqa_metrics)
 
                 # Compute comprehensive metrics for prediction samples
-                if has_pred:
+                if self.enable_prediction_training:
                     pred_metrics = self._compute_sample_specific_metrics(
                         per_sample_loss=lang_loss,
                         lang_metrics=lang_metrics,
@@ -1009,20 +1009,21 @@ class PiCoT(_pi0.Pi0):
                 )
                 metrics.update(langact_metrics)
 
-                total_per_sample_loss += vqa_loss_weight * lang_loss * vqa_mask \
-                        + prediction_loss_weight * lang_loss * pred_mask \
-                        + language_loss_weight * lang_loss * lang_mask
+                total_per_sample_loss += self.vqa_loss_weight * lang_loss * vqa_mask \
+                        + self.prediction_loss_weight * lang_loss * pred_mask \
+                        + self.language_loss_weight * lang_loss * lang_mask
             else:
                 # No VQA or prediction masks available, use original behavior
-                total_per_sample_loss += language_loss_weight * lang_loss
+                total_per_sample_loss += self.language_loss_weight * lang_loss
 
         # Compute action diffusion loss only if action training is enabled
-        if action_enabled:
+        if self.enable_action_training:
             action_loss, action_metrics = self._compute_action_loss(
                 observation, actions, prefix_tokens, prefix_mask, noise_rng, time_rng
             )
             # Apply loss only to masked samples
-            total_per_sample_loss += action_loss_weight * action_loss * action_sample_mask
+            # total_per_sample_loss += self.action_loss_weight * action_loss * action_sample_mask
+            total_per_sample_loss += self.action_loss_weight * action_loss
             metrics.update(action_metrics)
 
         # Add main metrics to dict

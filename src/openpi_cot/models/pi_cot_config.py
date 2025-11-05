@@ -60,6 +60,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     enable_langact_training: bool = True
     # When True, enables prediction loss (predicting movement between current and future frame).
     enable_prediction_training: bool = False
+    # When True, enables VQA weighted loss.
+    enable_vqa_training: bool = False
     # Scalar weights to combine losses when multiple are enabled
     language_loss_weight: float = 1.0
     action_loss_weight: float = 1.0
