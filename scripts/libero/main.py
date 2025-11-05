@@ -1,6 +1,8 @@
 import collections
 import dataclasses
+import datetime
 import enum
+import json
 import logging
 import math
 import pathlib
@@ -24,6 +26,7 @@ class PolicyType(str, enum.Enum):
 
     PI05 = "PI05"
     COT = "COT"
+    FT = "FT"
 
 
 @dataclasses.dataclass
@@ -45,11 +48,13 @@ class Args:
     )
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
+    control_mode: str = "OSC_POSE"  # Controller type. Options: OSC_POSE, IK_POSE, OSC_POSITION, JOINT_POSITION, etc.
 
     #################################################################################################################
     # Utils
     #################################################################################################################
     video_out_path: str = "data/libero/videos"  # Path to save videos
+    results_out_path: str = "data/libero/results"  # Path to save evaluation results
 
     seed: int = 7  # Random Seed (for reproducibility)
 
@@ -65,6 +70,23 @@ def eval_libero(args: Args) -> None:
     logging.info(f"Task suite: {args.task_suite_name}")
 
     pathlib.Path(args.video_out_path).mkdir(parents=True, exist_ok=True)
+    pathlib.Path(args.results_out_path).mkdir(parents=True, exist_ok=True)
+
+    # Initialize results tracking
+    all_results = {
+        "metadata": {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "task_suite": args.task_suite_name,
+            "policy_type": args.policy_type.value,
+            "control_mode": args.control_mode,
+            "seed": args.seed,
+            "num_trials_per_task": args.num_trials_per_task,
+            "replan_steps": args.replan_steps,
+        },
+        "episodes": [],
+        "per_task_results": [],
+        "summary": {},
+    }
 
     if args.task_suite_name == "libero_spatial":
         max_steps = 220  # longest training demo has 193 steps
@@ -91,7 +113,7 @@ def eval_libero(args: Args) -> None:
         initial_states = task_suite.get_task_init_states(task_id)
 
         # Initialize LIBERO environment and task description
-        env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed)
+        env, task_description = _get_libero_env(task, LIBERO_ENV_RESOLUTION, args.seed, args.control_mode)
 
         # Start episodes
         task_episodes, task_successes = 0, 0
@@ -108,6 +130,7 @@ def eval_libero(args: Args) -> None:
             # Setup
             t = 0
             replay_images = []
+            episode_start_time = datetime.datetime.now()
 
             logging.info(f"Starting episode {task_episodes+1}...")
             while t < max_steps + args.num_steps_wait:
@@ -125,8 +148,8 @@ def eval_libero(args: Args) -> None:
                         img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
                         wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
                     else:
-                        img = np.ascontiguousarray(obs["agentview_image"])
-                        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"])
+                        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+                        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
                     img = image_tools.convert_to_uint8(
                         image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
                     )
@@ -140,7 +163,7 @@ def eval_libero(args: Args) -> None:
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
                         # Prepare observations dict
-                        if args.policy_type == PolicyType.COT:
+                        if args.policy_type == PolicyType.COT or args.policy_type == PolicyType.FT:
                             eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
                             eef_euler = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
                             gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
@@ -152,7 +175,7 @@ def eval_libero(args: Args) -> None:
                                 "observation/state": state,
                                 "prompt": str(task_description),
                             }
-                        else:
+                        elif args.policy_type == PolicyType.PI05:
                             # PI05 expects DROID-style observation keys
                             joint_pos = obs.get("robot0_joint_pos")
                             if joint_pos is None:
@@ -189,10 +212,10 @@ def eval_libero(args: Args) -> None:
                             )
                         if args.policy_type == PolicyType.COT and "reasoning" in response:
                             logging.debug("Policy reasoning: %s", response["reasoning"])
-                        if args.policy_type == PolicyType.PI05:
+                        # if args.policy_type == PolicyType.PI05:
                             # PI05 droid outputs are typically 8-D (7 joints + gripper). Env expects 7.
-                            if action_chunk.shape[1] > 7:
-                                action_chunk = action_chunk[:, :7]
+                            # if action_chunk.shape[1] > 7:
+                            #     action_chunk = action_chunk[:, :7]
                         assert (
                             len(action_chunk) >= args.replan_steps
                         ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
@@ -215,6 +238,22 @@ def eval_libero(args: Args) -> None:
             task_episodes += 1
             total_episodes += 1
 
+            # Calculate episode duration
+            episode_duration = (datetime.datetime.now() - episode_start_time).total_seconds()
+
+            # Record episode results
+            episode_result = {
+                "task_id": task_id,
+                "task_description": task_description,
+                "episode_id": episode_idx,
+                "global_episode_id": total_episodes - 1,
+                "success": bool(done),
+                "num_steps": t - args.num_steps_wait,
+                "total_steps_with_wait": t,
+                "duration_seconds": episode_duration,
+            }
+            all_results["episodes"].append(episode_result)
+
             # Save a replay video of the episode
             suffix = "success" if done else "failure"
             task_segment = task_description.replace(" ", "_")
@@ -229,19 +268,52 @@ def eval_libero(args: Args) -> None:
             logging.info(f"# episodes completed so far: {total_episodes}")
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
 
+        # Record per-task results
+        task_success_rate = float(task_successes) / float(task_episodes) if task_episodes > 0 else 0.0
+        task_result = {
+            "task_id": task_id,
+            "task_description": task_description,
+            "num_episodes": task_episodes,
+            "num_successes": task_successes,
+            "success_rate": task_success_rate,
+        }
+        all_results["per_task_results"].append(task_result)
+
         # Log final results
-        logging.info(f"Current task success rate: {float(task_successes) / float(task_episodes)}")
+        logging.info(f"Current task success rate: {task_success_rate}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
 
-    logging.info(f"Total success rate: {float(total_successes) / float(total_episodes)}")
+    # Calculate and save final summary
+    overall_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
+    all_results["summary"] = {
+        "total_episodes": total_episodes,
+        "total_successes": total_successes,
+        "overall_success_rate": overall_success_rate,
+        "num_tasks": num_tasks_in_suite,
+    }
+
+    # Save results to JSON file
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    results_filename = f"results_{args.task_suite_name}_{args.policy_type.value}_{timestamp}.json"
+    results_path = pathlib.Path(args.results_out_path) / results_filename
+    with open(results_path, "w") as f:
+        json.dump(all_results, f, indent=2)
+
+    logging.info(f"Total success rate: {overall_success_rate}")
     logging.info(f"Total episodes: {total_episodes}")
+    logging.info(f"Results saved to: {results_path}")
 
 
-def _get_libero_env(task, resolution, seed):
+def _get_libero_env(task, resolution, seed, controller="OSC_POSE"):
     """Initializes and returns the LIBERO environment, along with the task description."""
     task_description = task.language
     task_bddl_file = pathlib.Path(get_libero_path("bddl_files")) / task.problem_folder / task.bddl_file
-    env_args = {"bddl_file_name": task_bddl_file, "camera_heights": resolution, "camera_widths": resolution}
+    env_args = {
+        "bddl_file_name": task_bddl_file,
+        "camera_heights": resolution,
+        "camera_widths": resolution,
+        "controller": controller,
+    }
     env = OffScreenRenderEnv(**env_args)
     env.seed(seed)  # IMPORTANT: seed seems to affect object positions even when using fixed initial state
     return env, task_description

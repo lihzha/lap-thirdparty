@@ -30,6 +30,7 @@ class Checkpoint:
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
     dir: str
+    type: str
 
 
 @dataclasses.dataclass
@@ -59,18 +60,22 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
     EnvMode.ALOHA: Checkpoint(
         config="pi05_aloha",
         dir="gs://openpi-assets/checkpoints/pi05_base",
+        type="raw"
     ),
     EnvMode.ALOHA_SIM: Checkpoint(
         config="pi0_aloha_sim",
         dir="gs://openpi-assets/checkpoints/pi0_aloha_sim",
+        type="raw"
     ),
     EnvMode.DROID: Checkpoint(
         config="pi05_droid",
         dir="gs://openpi-assets/checkpoints/pi05_droid",
+        type="raw"
     ),
     EnvMode.LIBERO: Checkpoint(
         config="pi05_libero",
         dir="gs://openpi-assets/checkpoints/pi05_libero",
+        type="raw"
     ),
 }
 
@@ -88,17 +93,17 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
-            if "cot" in args.policy.config or ("eval" in args.policy.config and "action" not in args.policy.config):
+            if args.policy.type == "cot":
                 return _policy_config.create_trained_policy_cot(
                     _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
                 )
-            elif "eval" in args.policy.config and "action" in args.policy.config:
+            elif args.policy.type == "raw":
                 return _policy_config.create_trained_policy(
                     _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
                 )
-            return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
-            )
+            else:
+                raise NotImplementedError
+
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)
 

@@ -32,7 +32,11 @@ def serialize_json(norm_stats: dict[str, ExtendedNormStats]) -> str:
 
 def deserialize_json(data: str) -> dict[str, ExtendedNormStats]:
     """Deserialize the running statistics from a JSON string."""
-    return _NormStatsDict(**json.loads(data)).norm_stats
+    # TODO: hard-coded for eef control mode
+    raw_norm_stats = json.loads(data)
+    raw_norm_stats["norm_stats"] = {k.replace("state_eef_pose", "state"): v for k, v in raw_norm_stats["norm_stats"].items()}
+
+    return _NormStatsDict(**raw_norm_stats).norm_stats
 
 
 def save(directory: str, norm_stats: dict[str, ExtendedNormStats]) -> None:

@@ -1538,7 +1538,7 @@ def tdroid_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def libero_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # gripper action is in -1 (open)...1 (close) --> clip to 0...1, flip --> +1 = open, 0 = close
     gripper_action = trajectory["action"][:, -1:]
-    gripper_action = invert_gripper_actions(tf.clip_by_value(gripper_action, 0, 1))
+    # gripper_action = invert_gripper_actions(tf.clip_by_value(gripper_action, 0, 1))
 
     trajectory["action"] = tf.concat(
         [

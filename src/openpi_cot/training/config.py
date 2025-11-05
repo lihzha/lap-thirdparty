@@ -207,7 +207,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
         "schema_compact_with_rotation",
         "schema_compact_bimanual",
         "schema_compact_bimanual_with_rotation",
-    ] = "schema_compact"
+    ] = "pi05"
     tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
     include_outputs: bool = True  # Toggle output transforms (e.g., detokenization)
 
@@ -396,6 +396,7 @@ class LiberoFinetuneDataConfig(BaseCoTDataConfigFactory):
         self, base_cfg: CoTDataConfig, model_config: _model.BaseModelConfig
     ) -> upstream_transforms.Group:
         return ModelTransformFactory(
+            prompt_format=model_config.prompt_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
             include_outputs=False,  # Libero doesn't need output detokenization
         )(model_config)
@@ -1048,6 +1049,7 @@ _CONFIGS = [
             enable_langact_training=False,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
+
         ),
         data=LiberoFinetuneDataConfig(
             repo_id="libero",
@@ -1115,16 +1117,19 @@ _CONFIGS = [
             pi05=True,
             discrete_state_input=True,
             enable_action_training=True,
-            enable_langact_training=True,
+            enable_langact_training=False,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+            prompt_format="schema_compact"
         ),
         data=LiberoFinetuneDataConfig(
-            repo_id="libero_10_no_noops",
+            repo_id="libero",
             asset_id="libero",
-            dataset_type="oxe",
-            data_mix="libero_10_no_noops",
+            dataset_type="combined",
+            data_mix="libero_finetune",
             rlds_data_dir="/n/fs/robot-data/libero/tfds",
-            language_action_format_name="compact",
-            decoding_schema="compact",
+            language_action_format_name="default",
+            decoding_schema="default",
         ),
         fsdp_devices=1,
         batch_size=8,
@@ -1133,7 +1138,6 @@ _CONFIGS = [
         log_interval=100,
         keep_period=5000,
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
     ),
     TrainConfig(
         name="paligemma2_vqa",
