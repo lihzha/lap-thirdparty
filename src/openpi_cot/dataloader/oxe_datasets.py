@@ -377,21 +377,6 @@ class LiberoCoTDataset(_SingleOXECoTDataset):
     # which uses action-based hashing for robust trajectory identification.
     # This avoids issues with missing or malformed trajectory metadata.
 
-    def apply_repack_transforms(self):
-        """Repack trajectory data for LIBERO dataset."""
-
-        def _pop_and_rename_keys(traj):
-            # Remove trajectory_id as it's no longer needed
-            # Rename language_instruction to prompt
-            traj["prompt"] = traj.get("language_instruction", tf.constant("", dtype=tf.string))
-            traj.pop("language_instruction", None)
-            # Remove raw_action
-            traj.pop("raw_action", None)
-            return traj
-
-        self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
-
-
 
 class SampleR1LiteCoTDataset(_SingleOXECoTDataset):
     """Custom dataset for sample_r1_lite with EEF pose lookup table."""
