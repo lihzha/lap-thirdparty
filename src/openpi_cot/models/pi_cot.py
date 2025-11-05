@@ -841,47 +841,48 @@ class PiCoT(_pi0.Pi0):
         # Average loss for this subset
         metrics[f"{prefix}loss"] = jnp.sum(masked_loss) / num_samples
 
-        # Per-sample losses (for dataset-level micro-averaging)
-        metrics[f"{prefix}per_sample_loss"] = masked_loss
+        if self.verbose_mode:
+            # Per-sample losses (for dataset-level micro-averaging)
+            metrics[f"{prefix}per_sample_loss"] = masked_loss
 
-        # Critical token metrics
-        if "per_sample_critical_correct" in lang_metrics:
-            critical_correct = lang_metrics["per_sample_critical_correct"] * sample_mask
-            critical_total = lang_metrics["per_sample_critical_total"] * sample_mask
-            num_critical_tokens = jnp.maximum(jnp.sum(critical_total), 1.0)
+            # Critical token metrics
+            if "per_sample_critical_correct" in lang_metrics:
+                critical_correct = lang_metrics["per_sample_critical_correct"] * sample_mask
+                critical_total = lang_metrics["per_sample_critical_total"] * sample_mask
+                num_critical_tokens = jnp.maximum(jnp.sum(critical_total), 1.0)
 
-            # Average critical token accuracy
-            metrics[f"{prefix}critical_token_accuracy"] = jnp.sum(critical_correct) / num_critical_tokens
+                # Average critical token accuracy
+                metrics[f"{prefix}critical_token_accuracy"] = jnp.sum(critical_correct) / num_critical_tokens
 
-            # Per-sample counts (for dataset-level micro-averaging)
-            metrics[f"{prefix}per_sample_critical_correct"] = critical_correct
-            metrics[f"{prefix}per_sample_critical_total"] = critical_total
+                # Per-sample counts (for dataset-level micro-averaging)
+                metrics[f"{prefix}per_sample_critical_correct"] = critical_correct
+                metrics[f"{prefix}per_sample_critical_total"] = critical_total
 
-        # Number token metrics
-        if "per_sample_number_correct" in lang_metrics:
-            number_correct = lang_metrics["per_sample_number_correct"] * sample_mask
-            number_total = lang_metrics["per_sample_number_total"] * sample_mask
-            num_number_tokens = jnp.maximum(jnp.sum(number_total), 1.0)
+            # Number token metrics
+            if "per_sample_number_correct" in lang_metrics:
+                number_correct = lang_metrics["per_sample_number_correct"] * sample_mask
+                number_total = lang_metrics["per_sample_number_total"] * sample_mask
+                num_number_tokens = jnp.maximum(jnp.sum(number_total), 1.0)
 
-            # Average number token accuracy
-            metrics[f"{prefix}number_token_accuracy"] = jnp.sum(number_correct) / num_number_tokens
+                # Average number token accuracy
+                metrics[f"{prefix}number_token_accuracy"] = jnp.sum(number_correct) / num_number_tokens
 
-            # Per-sample counts (for dataset-level micro-averaging)
-            metrics[f"{prefix}per_sample_number_correct"] = number_correct
-            metrics[f"{prefix}per_sample_number_total"] = number_total
+                # Per-sample counts (for dataset-level micro-averaging)
+                metrics[f"{prefix}per_sample_number_correct"] = number_correct
+                metrics[f"{prefix}per_sample_number_total"] = number_total
 
-        # Direction token metrics
-        if "per_sample_direction_correct" in lang_metrics:
-            direction_correct = lang_metrics["per_sample_direction_correct"] * sample_mask
-            direction_total = lang_metrics["per_sample_direction_total"] * sample_mask
-            num_direction_tokens = jnp.maximum(jnp.sum(direction_total), 1.0)
+            # Direction token metrics
+            if "per_sample_direction_correct" in lang_metrics:
+                direction_correct = lang_metrics["per_sample_direction_correct"] * sample_mask
+                direction_total = lang_metrics["per_sample_direction_total"] * sample_mask
+                num_direction_tokens = jnp.maximum(jnp.sum(direction_total), 1.0)
 
-            # Average direction token accuracy
-            metrics[f"{prefix}direction_token_accuracy"] = jnp.sum(direction_correct) / num_direction_tokens
+                # Average direction token accuracy
+                metrics[f"{prefix}direction_token_accuracy"] = jnp.sum(direction_correct) / num_direction_tokens
 
-            # Per-sample counts (for dataset-level micro-averaging)
-            metrics[f"{prefix}per_sample_direction_correct"] = direction_correct
-            metrics[f"{prefix}per_sample_direction_total"] = direction_total
+                # Per-sample counts (for dataset-level micro-averaging)
+                metrics[f"{prefix}per_sample_direction_correct"] = direction_correct
+                metrics[f"{prefix}per_sample_direction_total"] = direction_total
 
         return metrics
 
