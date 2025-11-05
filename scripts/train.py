@@ -646,23 +646,6 @@ def main(config: _config.TrainConfig):
     else:
         logging.info("No training schedule configured - using static model configuration")
 
-    log_mem("Before init")
-    data_loader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=True,
-        seed=config.seed,
-        persistent_iterator=True,
-    )
-
-    try:
-        tok = data_loader.tokenizer
-    except:
-        tok = PaligemmaCoTTokenizer(max_len=200)
-
-    # Initialize dataset log tracker for uniform sample logging across datasets
-    dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
-
     log_mem("Before init train state")
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
@@ -678,12 +661,30 @@ def main(config: _config.TrainConfig):
     dataloader_restored = False
     if resuming:
         try:
-            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader)
+            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, None)
             dataloader_restored = True
             logging.info("Successfully restored checkpoint and dataloader state")
         except Exception as e:
             logging.error(f"Failed to restore dataloader state: {e}")
             dataloader_restored = False
+
+    start_step = int(train_state.step)
+
+    data_loader = _data_loader.create_data_loader(
+        config,
+        sharding=data_sharding,
+        shuffle=True,
+        seed=config.seed + start_step,
+        persistent_iterator=True,
+    )
+
+    try:
+        tok = data_loader.tokenizer
+    except:
+        tok = PaligemmaCoTTokenizer(max_len=200)
+
+    # Initialize dataset log tracker for uniform sample logging across datasets
+    dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
 
     # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
     try:
@@ -752,7 +753,6 @@ def main(config: _config.TrainConfig):
         # Determine how many validation batches to evaluate each time.
         # If a fixed validation subset size is configured, compute batches from it;
         # otherwise fall back to a heuristic constant divided by global batch size.
-    start_step = int(train_state.step)
 
     # Log preemption tracking information to wandb
     if jax.process_index() == 0:

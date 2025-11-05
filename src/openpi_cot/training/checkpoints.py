@@ -234,7 +234,7 @@ def save_state(
                 # - Each host has a DIFFERENT iterator seeing different data shards
                 # - Each host MUST save its own checkpoint to restore correctly
                 # - All hosts save in parallel to their own subdirectories
-                
+
                 # if hasattr(data_loader, "save_dataloader_state"):
                 #     try:
                 #         # directory is {checkpoint_dir}/{step}/assets/
@@ -316,7 +316,7 @@ def save_state(
 def restore_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
-    data_loader: _data_loader.DataLoader,
+    data_loader: _data_loader.DataLoader | None,
     step: int | None = None,
 ) -> training_utils.TrainState:
     """Restore training state and dataloader state from checkpoint.
@@ -344,7 +344,7 @@ def restore_state(
     # Restore dataloader state if available
     # Multi-host: Each host restores from its own checkpoint (saved per-process)
     # This ensures each host resumes its correct data shard position
-    
+
     # if hasattr(data_loader, "load_dataloader_state"):
     #     try:
     #         # Determine which step to restore from
