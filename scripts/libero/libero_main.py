@@ -1,6 +1,5 @@
 import collections
 import dataclasses
-import enum
 import logging
 import math
 import pathlib
@@ -19,13 +18,6 @@ LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
 
 
-class PolicyType(str, enum.Enum):
-    """Supported policy serving modes for LIBERO eval."""
-
-    PI05 = "PI05"
-    COT = "COT"
-
-
 @dataclasses.dataclass
 class Args:
     #################################################################################################################
@@ -35,7 +27,6 @@ class Args:
     port: int = 8000
     resize_size: int = 224
     replan_steps: int = 5
-    policy_type: PolicyType = PolicyType.PI05
 
     #################################################################################################################
     # LIBERO environment-specific parameters
@@ -121,12 +112,8 @@ def eval_libero(args: Args) -> None:
 
                     # Get preprocessed image
                     # IMPORTANT: rotate 180 degrees to match train preprocessing
-                    if args.policy_type == PolicyType.PI05:
-                        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-                        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-                    else:
-                        img = np.ascontiguousarray(obs["agentview_image"])
-                        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"])
+                    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+                    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
                     img = image_tools.convert_to_uint8(
                         image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
                     )
@@ -139,66 +126,51 @@ def eval_libero(args: Args) -> None:
 
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
-                        # Prepare observations dict
-                        if args.policy_type == PolicyType.COT:
-                            eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-                            eef_euler = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
-                            gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-                            gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
-                            state = np.concatenate((eef_pos, eef_euler, gripper_state)).astype(np.float32, copy=False)
-                            element = {
-                                "observation/image": img,
-                                "observation/wrist_image": wrist_img,
-                                "observation/state": state,
-                                "prompt": str(task_description),
-                            }
-                        else:
-                            # PI05 expects DROID-style observation keys
-                            joint_pos = obs.get("robot0_joint_pos")
-                            if joint_pos is None:
-                                joint_pos = obs.get("joint_pos")
-                            if joint_pos is None:
-                                raise KeyError("Observation missing joint positions for PI05 policy.")
-                            joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
-                            if joint_pos.size > 7:
-                                joint_pos = joint_pos[:7]
-                            gripper_qpos = obs.get("robot0_gripper_qpos")
-                            if gripper_qpos is None:
-                                gripper_qpos = obs.get("gripper_qpos")
-                            if gripper_qpos is None:
-                                raise KeyError("Observation missing gripper position for PI05 policy.")
-                            gripper_pos = float(np.mean(np.asarray(gripper_qpos, dtype=np.float32)))
-                            element = {
-                                "observation/exterior_image_1_left": img,
-                                "observation/wrist_image_left": wrist_img,
-                                "observation/joint_position": joint_pos,
-                                "observation/gripper_position": np.array([gripper_pos], dtype=np.float32),
-                                "prompt": str(task_description),
-                            }
+                        # Prepare observations dict in DROID (PI05) format
+                        joint_pos = obs.get("robot0_joint_pos")
+                        if joint_pos is None:
+                            joint_pos = obs.get("joint_pos")
+                        if joint_pos is None:
+                            raise KeyError("Observation missing joint positions for PI05 policy.")
+                        joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
+                        if joint_pos.size > 7:
+                            joint_pos = joint_pos[:7]
+
+                        gripper_qpos = obs.get("robot0_gripper_qpos")
+                        if gripper_qpos is None:
+                            gripper_qpos = obs.get("gripper_qpos")
+                        if gripper_qpos is None:
+                            raise KeyError("Observation missing gripper position for PI05 policy.")
+                        gripper_pos = np.array([float(np.mean(np.asarray(gripper_qpos, dtype=np.float32)))], dtype=np.float32)
+
+                        element = {
+                            "observation/exterior_image_1_left": img,
+                            "observation/wrist_image_left": wrist_img,
+                            "observation/joint_position": joint_pos,
+                            "observation/gripper_position": gripper_pos,
+                            "prompt": str(task_description),
+                        }
 
                         # Query model to get action
-                        response = client.infer(element)
-                        if "actions" not in response:
-                            raise KeyError("Policy response missing 'actions' field")
-                        action_chunk = np.asarray(response["actions"], dtype=np.float32)
+                        action_chunk = client.infer(element)["actions"]
+                        action_chunk = np.asarray(action_chunk, dtype=np.float32)
                         if action_chunk.ndim == 1:
                             action_chunk = action_chunk[None, ...]
-                        if action_chunk.ndim != 2:
-                            raise ValueError(
-                                f"Expected action chunk with shape (T, D), got {action_chunk.shape}"
-                            )
-                        if args.policy_type == PolicyType.COT and "reasoning" in response:
-                            logging.debug("Policy reasoning: %s", response["reasoning"])
-                        if args.policy_type == PolicyType.PI05:
-                            # PI05 droid outputs are typically 8-D (7 joints + gripper). Env expects 7.
-                            if action_chunk.shape[1] > 7:
-                                action_chunk = action_chunk[:, :7]
+                        # PI05 policies may return 8-D (7 joints + gripper). Env expects 7-D deltas.
+                        if action_chunk.shape[1] > 7:
+                            g = action_chunk[:, -1].copy()
+                            action_chunk = action_chunk[:, :7]
+                            action_chunk[:, -1] = g
                         assert (
                             len(action_chunk) >= args.replan_steps
                         ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
                         action_plan.extend(action_chunk[: args.replan_steps])
 
-                    action = action_plan.popleft()
+                    action = np.asarray(action_plan.popleft(), dtype=np.float32)
+                    if action.shape[-1] > 7:
+                        g = float(action[-1])
+                        action = action[:7]
+                        action[-1] = g
 
                     # Execute action in environment
                     obs, reward, done, info = env.step(action.tolist())
@@ -263,36 +235,6 @@ def _quat2axisangle(quat):
         return np.zeros(3)
 
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
-
-
-def _quat2euler(quat):
-    q = np.asarray(quat, dtype=np.float64)
-    if q.shape != (4,):
-        raise ValueError("quat must be shape (4,), ordered as [x, y, z, w]")
-
-    # Normalize quaternion to guard against numerical drift
-    norm = np.linalg.norm(q)
-    if norm == 0.0:
-        return np.zeros(3, dtype=np.float64)
-    x, y, z, w = q / norm
-
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    sinp = 2.0 * (w * y - z * x)
-    if sinp >= 1.0:
-        pitch = math.pi / 2.0
-    elif sinp <= -1.0:
-        pitch = -math.pi / 2.0
-    else:
-        pitch = math.asin(sinp)
-
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-
-    return np.array([roll, pitch, yaw], dtype=np.float64)
 
 
 if __name__ == "__main__":

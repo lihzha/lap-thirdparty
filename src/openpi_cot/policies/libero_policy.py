@@ -298,18 +298,25 @@ class LiberoInputs(transforms.DataTransformFn):
         # you should change it below.
         # Pi0 models support three image inputs at the moment: one third-person view,
         # and two wrist views (left and right). If your dataset does not have a particular type
-        # of image, e.g. wrist images, you can comment it out here and replace it with zeros like we do for the
-        # right wrist image below.
-        base_image = parse_image(data["observation/image"])
-        wrist_image = parse_image(data["observation/wrist_image"])
-        image = [base_image, wrist_image, np.zeros_like(base_image)]
-        image_mask = [np.True_, np.True_, np.True_ if self.model_type == ExtendedModelType.PI0_FAST else np.False_]
+        # of image, e.g. wrist images, replace the missing ones with zeros.
+        base_image = parse_image(data["observation/image"])  # (H, W, C)
+        wrist_image = parse_image(data["observation/wrist_image"])  # (H, W, C)
+        # Add a singleton time dimension T=1 so downstream expects [B, T, H, W, C]
+        base_image_t = np.expand_dims(base_image, axis=0)  # (1, H, W, C)
+        wrist_image_t = np.expand_dims(wrist_image, axis=0)  # (1, H, W, C)
+        # If the model defines only two image keys, don't add a third entry.
 
         # Create inputs dict. Do not change the keys in the dict below.
         inputs = {
             "state": data["observation/state"],
-            "image": dict.fromkeys(IMAGE_KEYS, image),
-            "image_mask": dict.fromkeys(IMAGE_KEYS, image_mask),
+            "image": {
+                IMAGE_KEYS[0]: base_image_t,
+                IMAGE_KEYS[1]: wrist_image_t,
+            },
+            "image_mask": {
+                IMAGE_KEYS[0]: np.True_,
+                IMAGE_KEYS[1]: np.True_,
+            },
         }
 
         # Pad actions to the model action dimension. Keep this for your own dataset.
