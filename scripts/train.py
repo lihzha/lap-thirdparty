@@ -791,6 +791,7 @@ def main(config: _config.TrainConfig):
     # To separate forward/backward, you would need to run without JIT or use JAX profiler tools
     timing_metrics = {
         "batch_load_times": [],
+        "train_step_times": [],
     }
 
     # Track current training stage for transition detection
@@ -841,8 +842,17 @@ def main(config: _config.TrainConfig):
                         )
                     break
 
+        # Profiling: Time training step
+        train_start = time.perf_counter()
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
+
+        # Block to ensure training step completes before measuring batch loading
+        jax.block_until_ready(train_state)
+        train_end = time.perf_counter()
+        train_time = train_end - train_start
+        timing_metrics["train_step_times"].append(train_time)
+
         infos.append(info)
 
         if verbose_mode:
@@ -867,15 +877,18 @@ def main(config: _config.TrainConfig):
             )
 
             # Log profiling metrics
-            if timing_metrics["batch_load_times"]:
+            if timing_metrics["batch_load_times"] and timing_metrics["train_step_times"]:
                 avg_batch_time = sum(timing_metrics["batch_load_times"]) / len(timing_metrics["batch_load_times"])
+                avg_train_time = sum(timing_metrics["train_step_times"]) / len(timing_metrics["train_step_times"])
 
                 profiling_info = {
                     "profiling/avg_batch_load_time": avg_batch_time,
+                    "profiling/avg_train_step_time": avg_train_time,
                 }
 
                 logging.info(
-                    f"Profiling - Batch load: {avg_batch_time*1000:.2f}ms, "
+                    f"Profiling - Train step: {avg_train_time*1000:.2f}ms, "
+                    f"Batch load: {avg_batch_time*1000:.2f}ms"
                 )
 
                 if jax.process_index() == 0:
@@ -883,6 +896,7 @@ def main(config: _config.TrainConfig):
 
                 # Reset timing metrics for next interval
                 timing_metrics["batch_load_times"] = []
+                timing_metrics["train_step_times"] = []
 
             infos = []
             # Reset dataset stats tracker to only track the next log_interval window
