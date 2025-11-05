@@ -3,7 +3,6 @@ import datetime
 import logging
 import os
 import platform
-import time
 from typing import Any
 
 import etils.epath as epath
@@ -178,7 +177,7 @@ def process_and_log_metrics(
     dataset_log_tracker: vis_tools.DatasetLogTracker | None = None,
     tok: PaligemmaCoTTokenizer | None = None,
     prefix: str = "",
-    verbose_mode: bool = False
+    verbose_mode: bool = False,
 ) -> dict[str, float]:
     """
     Unified function to process and log training/validation metrics.
@@ -239,7 +238,6 @@ def process_and_log_metrics(
         wandb.log(reduced_info, step=step)
 
         if verbose_mode:
-
             # Create and log dataset statistics bar plots
             if dataset_stats_tracker.dataset_stats:
                 plots = log_util.create_dataset_stats_plots(
@@ -789,10 +787,10 @@ def main(config: _config.TrainConfig):
     # - train_step_times: Time for forward + backward pass + optimizer update
     # Note: train_step_times includes both forward and backward since they're combined in value_and_grad
     # To separate forward/backward, you would need to run without JIT or use JAX profiler tools
-    timing_metrics = {
-        "batch_load_times": [],
-        "train_step_times": [],
-    }
+    # timing_metrics = {
+    #     "batch_load_times": [],
+    #     "train_step_times": [],
+    # }
 
     # Track current training stage for transition detection
     current_stage_idx = None
@@ -843,15 +841,15 @@ def main(config: _config.TrainConfig):
                     break
 
         # Profiling: Time training step
-        train_start = time.perf_counter()
+        # train_start = time.perf_counter()
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
 
         # Block to ensure training step completes before measuring batch loading
-        jax.block_until_ready(train_state)
-        train_end = time.perf_counter()
-        train_time = train_end - train_start
-        timing_metrics["train_step_times"].append(train_time)
+        # jax.block_until_ready(train_state)
+        # train_end = time.perf_counter()
+        # train_time = train_end - train_start
+        # timing_metrics["train_step_times"].append(train_time)
 
         infos.append(info)
 
@@ -873,30 +871,29 @@ def main(config: _config.TrainConfig):
                 dataset_log_tracker=dataset_log_tracker,
                 tok=tok,
                 prefix="",
-                verbose_mode=verbose_mode
+                verbose_mode=verbose_mode,
             )
 
-            # Log profiling metrics
-            if timing_metrics["batch_load_times"] and timing_metrics["train_step_times"]:
-                avg_batch_time = sum(timing_metrics["batch_load_times"]) / len(timing_metrics["batch_load_times"])
-                avg_train_time = sum(timing_metrics["train_step_times"]) / len(timing_metrics["train_step_times"])
+            # # Log profiling metrics
+            # if timing_metrics["batch_load_times"] and timing_metrics["train_step_times"]:
+            #     avg_batch_time = sum(timing_metrics["batch_load_times"]) / len(timing_metrics["batch_load_times"])
+            #     avg_train_time = sum(timing_metrics["train_step_times"]) / len(timing_metrics["train_step_times"])
 
-                profiling_info = {
-                    "profiling/avg_batch_load_time": avg_batch_time,
-                    "profiling/avg_train_step_time": avg_train_time,
-                }
+            #     profiling_info = {
+            #         "profiling/avg_batch_load_time": avg_batch_time,
+            #         "profiling/avg_train_step_time": avg_train_time,
+            #     }
 
-                logging.info(
-                    f"Profiling - Train step: {avg_train_time*1000:.2f}ms, "
-                    f"Batch load: {avg_batch_time*1000:.2f}ms"
-                )
+            #     logging.info(
+            #         f"Profiling - Train step: {avg_train_time * 1000:.2f}ms, Batch load: {avg_batch_time * 1000:.2f}ms"
+            #     )
 
-                if jax.process_index() == 0:
-                    wandb.log(profiling_info, step=step)
+            #     if jax.process_index() == 0:
+            #         wandb.log(profiling_info, step=step)
 
-                # Reset timing metrics for next interval
-                timing_metrics["batch_load_times"] = []
-                timing_metrics["train_step_times"] = []
+            #     # Reset timing metrics for next interval
+            #     timing_metrics["batch_load_times"] = []
+            #     timing_metrics["train_step_times"] = []
 
             infos = []
             # Reset dataset stats tracker to only track the next log_interval window
@@ -975,16 +972,16 @@ def main(config: _config.TrainConfig):
                     dataset_log_tracker=None,
                     tok=None,
                     prefix="val_",
-                    verbose_mode=verbose_mode
+                    verbose_mode=verbose_mode,
                 )
 
         # Profiling: Time batch loading
-        batch_start = time.perf_counter()
+        # batch_start = time.perf_counter()
         batch = next(data_iter)
-        jax.block_until_ready(batch)
-        batch_end = time.perf_counter()
-        batch_time = batch_end - batch_start
-        timing_metrics["batch_load_times"].append(batch_time)
+        # jax.block_until_ready(batch)
+        # batch_end = time.perf_counter()
+        # batch_time = batch_end - batch_start
+        # timing_metrics["batch_load_times"].append(batch_time)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
             checkpoint_manager = _checkpoints.save_state(
