@@ -330,8 +330,8 @@ class LiberoCoTDataset(_SingleOXECoTDataset):
 
         def restructure(traj):
             # Extract required fields
-            if self.standardize_fn is not None:
-                traj = self.standardize_fn(traj)
+            # NOTE: standardize_fn is already applied in get_traj_identifier() before trajectory_id is added
+            # Calling it again here can cause trajectory_id to be lost due to TF graph optimization/caching
             traj_len = tf.shape(traj["action"])[0]
             old_obs = traj["observation"]
             new_obs = {}

@@ -111,7 +111,7 @@ echo "=========================================="
 
 LOG_FILE="/tmp/policy_server_test.log"
 echo "Starting policy server in background..."
-JAX_PLATFORMS=cuda OPENPI_DATA_HOME=~/.cache/openpi uv run --group cuda --active scripts/serve_policy.py policy:checkpoint --policy.config=pi05_libero_finetune_local --policy.dir=$EPOCH_DIR > "$LOG_FILE" 2>&1 &
+JAX_PLATFORMS=cuda OPENPI_DATA_HOME=~/.cache/openpi uv run --group cuda --active scripts/serve_policy.py policy:checkpoint --policy.config=pi05_libero_finetune_local --policy.dir=$EPOCH_DIR --policy.type=raw > "$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 
 echo "Policy server started with PID: $SERVER_PID (log: $LOG_FILE)"

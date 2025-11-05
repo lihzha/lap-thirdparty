@@ -132,7 +132,7 @@ def eval_libero(args: Args) -> None:
             replay_images = []
             episode_start_time = datetime.datetime.now()
 
-            logging.info(f"Starting episode {task_episodes+1}...")
+            logging.info(f"Starting episode {task_episodes + 1}...")
             while t < max_steps + args.num_steps_wait:
                 try:
                     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
@@ -163,12 +163,26 @@ def eval_libero(args: Args) -> None:
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
                         # Prepare observations dict
-                        if args.policy_type == PolicyType.COT or args.policy_type == PolicyType.FT:
+                        if args.policy_type == PolicyType.COT:
                             eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
                             eef_euler = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
                             gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
                             gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
                             state = np.concatenate((eef_pos, eef_euler, gripper_state)).astype(np.float32, copy=False)
+                            element = {
+                                "observation/image": img,
+                                "observation/wrist_image": wrist_img,
+                                "observation/state": state,
+                                "prompt": str(task_description),
+                            }
+                        elif args.policy_type == PolicyType.FT:
+                            eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
+                            eef_axisangle = _quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
+                            gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
+                            gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
+                            state = np.concatenate((eef_pos, eef_axisangle, gripper_state)).astype(
+                                np.float32, copy=False
+                            )
                             element = {
                                 "observation/image": img,
                                 "observation/wrist_image": wrist_img,
@@ -207,18 +221,16 @@ def eval_libero(args: Args) -> None:
                         if action_chunk.ndim == 1:
                             action_chunk = action_chunk[None, ...]
                         if action_chunk.ndim != 2:
-                            raise ValueError(
-                                f"Expected action chunk with shape (T, D), got {action_chunk.shape}"
-                            )
+                            raise ValueError(f"Expected action chunk with shape (T, D), got {action_chunk.shape}")
                         if args.policy_type == PolicyType.COT and "reasoning" in response:
                             logging.debug("Policy reasoning: %s", response["reasoning"])
                         # if args.policy_type == PolicyType.PI05:
-                            # PI05 droid outputs are typically 8-D (7 joints + gripper). Env expects 7.
-                            # if action_chunk.shape[1] > 7:
-                            #     action_chunk = action_chunk[:, :7]
-                        assert (
-                            len(action_chunk) >= args.replan_steps
-                        ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        # PI05 droid outputs are typically 8-D (7 joints + gripper). Env expects 7.
+                        # if action_chunk.shape[1] > 7:
+                        #     action_chunk = action_chunk[:, :7]
+                        assert len(action_chunk) >= args.replan_steps, (
+                            f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        )
                         action_plan.extend(action_chunk[: args.replan_steps])
 
                     action = action_plan.popleft()
@@ -322,6 +334,15 @@ def _get_libero_env(task, resolution, seed, controller="OSC_POSE"):
 def _quat2axisangle(quat):
     """
     Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
+
+    Converts quaternion to axis-angle format.
+    Returns a unit vector direction scaled by its angle in radians.
+
+    Args:
+        quat (np.array): (x,y,z,w) vec4 float angles
+
+    Returns:
+        np.array: (ax,ay,az) axis-angle exponential coordinates
     """
     # clip quaternion
     if quat[3] > 1.0:
