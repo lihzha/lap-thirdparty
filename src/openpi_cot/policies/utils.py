@@ -149,8 +149,6 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     dy = round(abs(dy_m * 100.0), decimals)
     dz = round(abs(dz_m * 100.0), decimals)
 
-    breakpoint()
-
     if include_rotation:
         droll_rad = float(arr[..., 3].sum())
         dpitch_rad = float(arr[..., 4].sum())

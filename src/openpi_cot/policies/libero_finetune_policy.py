@@ -57,14 +57,12 @@ class LiberoFinetuneInputs(transforms.DataTransformFn):
                 if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
                     wrist_image_mask = np.False_
 
-        
+        elif "observation/wrist_image" in data:
+            wrist_image = parse_image(data["observation/wrist_image"])
+            wrist_image_mask = np.True_
         else:
-            if "observation/wrist_image" in data:
-                wrist_image = parse_image(data["observation/wrist_image"])
-                wrist_image_mask = np.True_
-            else:
-                wrist_image = np.zeros_like(base_image)
-                wrist_image_mask = np.False_
+            wrist_image = np.zeros_like(base_image)
+            wrist_image_mask = np.False_
         images.append(wrist_image)
         image_masks.append(wrist_image_mask)
         inputs = {
@@ -87,7 +85,7 @@ class LiberoFinetuneInputs(transforms.DataTransformFn):
         if "actions" in data:
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
-        
+
         inputs["is_vqa_sample"] = False
         inputs["is_prediction_sample"] = False
 
@@ -111,5 +109,7 @@ class LiberoFinetuneOutputs(transforms.DataTransformFn):
         # Only return the first 7 dims.
         actions = np.asarray(data["actions"][:, :7])
         # LIBERO gripper action: -1 is open, 1 is close. Our policy: 0 is close, 1 is open
-        actions[:, -1:] = 1 - 2*actions[:, -1:]
+        actions[:, -1:] = 1 - 2 * actions[:, -1:]
+        actions[:, -1:] = np.sign(actions[:, -1:])
+        print(actions[:, -1:])
         return {"actions": actions}

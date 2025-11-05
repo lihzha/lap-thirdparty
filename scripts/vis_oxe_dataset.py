@@ -492,7 +492,6 @@ def main(config: _config.TrainConfig):
     for j in range(10):
         # Visualize language-action projection per example
         obs = batch[0]
-        breakpoint()
         # Decode langact and prompt strings
         langact_texts = _decode_langact_strings(obs, tok)
         prompt_texts = _decode_prompt_strings(obs, tok)
