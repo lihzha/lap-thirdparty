@@ -382,7 +382,6 @@ class LiberoCoTDataset(_SingleOXECoTDataset):
 
         def _pop_and_rename_keys(traj):
             # Remove trajectory_id as it's no longer needed
-            traj.pop("trajectory_id", None)
             # Rename language_instruction to prompt
             traj["prompt"] = traj.get("language_instruction", tf.constant("", dtype=tf.string))
             traj.pop("language_instruction", None)
