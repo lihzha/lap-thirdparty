@@ -84,7 +84,7 @@ class PiCoT(_pi0.Pi0):
     def __init__(self, config: _pi_cot_config.PiCoTConfig, rngs: nnx.Rngs):
         _model.BaseModel.__init__(self, config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
-        self.fast_mode = config.fast_mode
+        self.verbose_mode = config.verbose_mode
         self.aug_wrist_image = config.aug_wrist_image
         self.image_keys = config.image_keys
         # Loss/control knobs
@@ -486,7 +486,7 @@ class PiCoT(_pi0.Pi0):
         )
 
         # Compute accuracy metrics
-        if not self.fast_mode:
+        if self.verbose_mode:
             predictions = jnp.argmax(logits, axis=-1)
             accuracy_metrics = self._compute_token_accuracy_metrics(
                 predictions=predictions,
@@ -683,7 +683,7 @@ class PiCoT(_pi0.Pi0):
         # Apply metric prefix if needed
         metrics = {loss_name: jnp.mean(per_sample_loss)}
 
-        if not self.fast_mode:
+        if self.verbose_mode:
             metric_rename_map = {
                 "token_accuracy": f"{metric_prefix}token_accuracy",
                 "critical_token_accuracy": f"{metric_prefix}critical_token_accuracy",
@@ -1025,7 +1025,7 @@ class PiCoT(_pi0.Pi0):
             metrics.update(action_metrics)
 
         # Add main metrics to dict
-        if not self.fast_mode:
+        if self.verbose_mode:
             metrics["per_sample_loss"] = total_per_sample_loss
 
         return jnp.mean(total_per_sample_loss), metrics

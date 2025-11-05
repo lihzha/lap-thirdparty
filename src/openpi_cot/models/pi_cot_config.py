@@ -32,7 +32,7 @@ class PiCoTConfig(_model.BaseModelConfig):
     action_horizon: int = 50
     max_token_len: int = None
 
-    # if fast_mode=True, log per sample metrics 
+    # if verbose_mode=True, log per sample metrics 
     verbose_mode: bool = False
 
     pi05: bool = False
