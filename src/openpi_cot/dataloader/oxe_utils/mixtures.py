@@ -96,7 +96,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("agibot_large_dataset", 0.2),
     ],
     "oxe_pi_magic_soup_with_other_states_with_bimanual": [
-        ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
+        # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
         ("bc_z", 1.0),
         ("droid", 1.0),
         ("fractal20220817_data", 1.0),
@@ -109,21 +109,21 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
-        (
-            "cmu_stretch",
-            2.0,
-        ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
+        # (
+        #     "cmu_stretch",
+        #     2.0,
+        # ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
         ("fmb", 1.0),
-        ("dobbe", 0.2),  # question
+        # ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
-        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
+        # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss to high.
         ### To be tested
         ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 4.0),
+        ("molmoact_dataset", 3.0),
         ### Bimanual
         # ("agibot_large_dataset", 0.2),
         # ("sample_r1_lite", 1.0),
@@ -202,7 +202,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("molmoact_dataset", 2.0),
     ],
     "oxe_magic_soup_vqa": [
-        ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
+        # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
         ("bc_z", 1.0),
         ("droid", 1.0),
         ("fractal20220817_data", 1.0),
@@ -215,21 +215,21 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
-        (
-            "cmu_stretch",
-            2.0,
-        ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
+        # (
+        #     "cmu_stretch",
+        #     2.0,
+        # ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
         ("fmb", 1.0),
-        ("dobbe", 0.2),  # question
+        # ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
-        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
+        # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
         # ("roboturk", 2.0),  # no prio, 2144 trajs. delta actions slightly sketchy sometimes. loss to high.
         ### To be tested
         ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 4.0),
+        ("molmoact_dataset", 3.0),
         ### Bimanual
         # ("agibot_large_dataset", 0.2),
         # ("sample_r1_lite", 1.0),
