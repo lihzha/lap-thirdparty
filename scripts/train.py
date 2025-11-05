@@ -729,7 +729,7 @@ def main(config: _config.TrainConfig):
         )
 
         num_val_batches = val_loader.num_val_batches()
-        logging.info(f"Number of validation batches: {num_val_batches}")
+        logging.info(f"Initial number of validation batches (from loader): {num_val_batches}")
         # Try to get dataset statistics
         val_dataset = getattr(val_loader, "dataset", None)
         if val_dataset:
@@ -738,6 +738,9 @@ def main(config: _config.TrainConfig):
             if hasattr(val_dataset, "dataset_length"):
                 logging.info(f"Validation dataset length: {val_dataset.dataset_length}")
         logging.info("=" * 80)
+
+        # Track first validation run to determine actual batch count
+        first_val_run = True
 
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
@@ -882,7 +885,41 @@ def main(config: _config.TrainConfig):
                     val_infos.append(val_info_local)
                     if verbose_mode:
                         log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-
+                # if first_val_run:
+                #     # First validation run: iterate until StopIteration to determine actual batch count
+                #     logging.info("First validation run - determining actual number of batches...")
+                #     batch_count = 0
+                #     try:
+                #         while True:
+                #             val_batch = next(val_iter)
+                #             val_info = pval_step(train_rng, train_state, val_batch)
+                #             val_info_local = jax.device_get(val_info)
+                #             val_infos.append(val_info_local)
+                #             log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                #             batch_count += 1
+                #     except StopIteration:
+                #         # Update num_val_batches with actual count minus 1
+                #         num_val_batches = max(1, batch_count - 1)
+                #         logging.info(f"Captured actual validation batches: {batch_count}")
+                #         logging.info(f"Updated num_val_batches to: {num_val_batches}")
+                #         # Remove the last batch info since we went one too far
+                #         if val_infos:
+                #             val_infos = val_infos[:-1]
+                #         first_val_run = False
+                # else:
+                #     # Subsequent validation runs: use progress bar with known batch count
+                #     val_pbar = tqdm.tqdm(
+                #         range(num_val_batches),
+                #         initial=0,
+                #         total=num_val_batches,
+                #         dynamic_ncols=True,
+                #         disable=(jax.process_index() != 0),
+                #     )
+                #     for _ in val_pbar:
+                #         val_batch = next(val_iter)
+                #         val_info = pval_step(train_rng, train_state, val_batch)
+                #         val_info_local = jax.device_get(val_info)
+                #         val_infos.append(val_info_local)
                 # Use unified logging function for validation metrics
                 process_and_log_metrics(
                     step=step,
