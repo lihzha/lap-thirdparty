@@ -58,6 +58,9 @@ class VQAInputs(CoTInputs):
         if prompt_str is not None:
             inputs["prompt"] = prompt_str
 
+        inputs["is_vqa_sample"] = True
+        inputs["is_prediction_sample"] = False
+
         return inputs
 
 
