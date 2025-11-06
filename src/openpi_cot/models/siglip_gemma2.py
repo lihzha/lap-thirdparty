@@ -14,21 +14,16 @@
 
 """A refactored and simplified ViT adoptation for Pi, taken from big_vision."""
 
-"""ADDING RMSNORM FOR GEMMA3"""
-
 from collections.abc import Sequence
 
-import einops
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
 import openpi.training.sharding as sharding
 
-from openpi_cot.models.gemma_common import RMSNorm as CommonRMSNorm
 
-
-def posemb_sincos_2d(h, w, width, temperature=10_000.0, dtype=jnp.float32):
+def posemb_sincos_2d(h, w, width, temperature=10_000.0, dtype=jnp.bfloat16):
     """Follows the MoCo v3 logic."""
     y, x = jnp.mgrid[:h, :w]
 
@@ -41,7 +36,7 @@ def posemb_sincos_2d(h, w, width, temperature=10_000.0, dtype=jnp.float32):
     return jnp.asarray(pe, dtype)[None, :, :]
 
 
-def get_posemb(self, typ, seqshape, width, name, dtype=jnp.float32):
+def get_posemb(self, typ, seqshape, width, name, dtype=jnp.bfloat16):
     if typ == "learn":
         return self.param(
             name,
@@ -59,7 +54,7 @@ class MlpBlock(nn.Module):
 
     mlp_dim: int | None = None  # Defaults to 4x input dim
     dropout: float = 0.0
-    dtype_mm: str = "float32"
+    dtype_mm: str = "bfloat16"
 
     @nn.compact
     def __call__(self, x, deterministic=True):  # noqa: FBT002
@@ -82,7 +77,7 @@ class Encoder1DBlock(nn.Module):
     mlp_dim: int | None = None  # Defaults to 4x input dim
     num_heads: int = 12
     dropout: float = 0.0
-    dtype_mm: str = "float32"
+    dtype_mm: str = "bfloat16"
 
     @nn.compact
     def __call__(self, x, deterministic=True):  # noqa: FBT002
@@ -121,7 +116,7 @@ class Encoder(nn.Module):
     dropout: float = 0.0
     scan: bool = False
     remat_policy: str = "nothing_saveable"
-    dtype_mm: str = "float32"
+    dtype_mm: str = "bfloat16"
 
     @nn.compact
     def __call__(self, x, deterministic=True):  # noqa: FBT002
@@ -170,7 +165,7 @@ class MAPHead(nn.Module):
 
     mlp_dim: int | None = None  # Defaults to 4x input dim
     num_heads: int = 12
-    dtype_mm: str = "float32"
+    dtype_mm: str = "bfloat16"
 
     @nn.compact
     def __call__(self, x):
@@ -187,43 +182,6 @@ class MAPHead(nn.Module):
         y = nn.LayerNorm(dtype=self.dtype_mm)(x)
         x = x + MlpBlock(mlp_dim=self.mlp_dim, dtype=self.dtype_mm)(y)
         return x[:, 0]
-
-
-def patchify_images(
-    images: jnp.ndarray,
-    *,
-    patch_size: tuple[int, int],
-    padding: str = "VALID",
-) -> jnp.ndarray:
-    """Extract patches from images.
-
-    This function is a wrapper for jax.lax.conv_general_dilated_patches
-    to conform to the same interface as tf.image.extract_patches.
-    The function extracts patches of shape sizes from the input images in the same
-    manner as a convolution with kernel of shape sizes, stride equal to strides,
-    and the given padding scheme.
-    The patches are stacked in the channel dimension.
-
-    Args:
-        images: input batch of images of shape [B, H, W, C].
-        patch_size: size of extracted patches.
-        padding: padding algorithm to use.
-
-    Returns:
-        Tensor of shape [batch, num patches, patch_size * patch_size * C]
-    """
-    channels = images.shape[-1]
-    patches = jax.lax.conv_general_dilated_patches(
-        lhs=images,
-        filter_shape=patch_size,
-        window_strides=patch_size,
-        padding=padding,
-        rhs_dilation=[1, 1],
-        dimension_numbers=("NHWC", "OIHW", "NHWC"),
-        precision=jax.lax.Precision.HIGH,
-    )
-    patches = einops.rearrange(patches, "b ph pw (c p) -> b (ph pw) (p c)", c=channels)
-    return patches
 
 
 class _Module(nn.Module):
@@ -243,46 +201,15 @@ class _Module(nn.Module):
     scan: bool = False
     # or "dots_with_no_batch_dims_saveable" for more speed (memory costly)
     remat_policy: str = "nothing_saveable"
-    dtype_mm: str = "float32"
-    posemb_shape: tuple[int, int] | None = None  # 👈 Add this
+    dtype_mm: str = "bfloat16"
 
     @nn.compact
     def __call__(self, image, *, train=False):
         out = {}
 
-        *batch_dims, _, _, _ = image.shape
-        image = einops.rearrange(image, "... h w c -> (...) h w c")
-
-        patches = patchify_images(
-            image,
-            patch_size=(14, 14),
-        )
-        patches = patches.reshape((*batch_dims,) + patches.shape[1:])
-
-        num_patches_one_side = 224 // 14
-
-        flattened_images = einops.rearrange(
-            patches,
-            "b n (h w) c -> (b n) h w c",
-            h=num_patches_one_side,
-            w=num_patches_one_side,
-            c=patches.shape[-1],
-        )
-        flattened_images = einops.rearrange(
-            flattened_images,
-            "b h w (p q c) -> b (h p) (w q) c",
-            h=num_patches_one_side,
-            w=num_patches_one_side,
-            p=14,
-            q=14,
-            c=3,
-        )
-
-        # Kevin edit: do patch extraction and posemb in float32,
+        # Kevin edit: do patch extraction and posemb in bfloat16,
         # because I feel like it's a bit safer.
-        image = jnp.asarray(flattened_images, jnp.float32)
-        # WE NEED TO MAKE THE IMAGE BE 896x896 FOR GEMMA3
-        # image = jax.image.resize(image, (896, 896), method='linear')
+        image = jnp.asarray(image, jnp.bfloat16)
 
         # Patch extraction
         x = out["stem"] = nn.Conv(
@@ -291,15 +218,14 @@ class _Module(nn.Module):
             strides=self.patch_size,
             padding="VALID",
             name="embedding",
-            dtype=jnp.float32,
+            dtype=jnp.bfloat16,
         )(image)
 
         n, h, w, c = x.shape
         x = jnp.reshape(x, [n, h * w, c])
 
-        seqshape = self.posemb_shape or (h, w)
         # Add posemb before adding extra token.
-        x = out["with_posemb"] = x + get_posemb(self, self.posemb, seqshape, c, "pos_embedding", jnp.float32)
+        x = out["with_posemb"] = x + get_posemb(self, self.posemb, (h, w), c, "pos_embedding", jnp.bfloat16)
 
         if self.pool_type == "tok":
             cls = self.param("cls", nn.initializers.zeros, (1, 1, c), x.dtype)
@@ -307,14 +233,6 @@ class _Module(nn.Module):
 
         n, _, c = x.shape  # n,l,d
         x = nn.Dropout(rate=self.dropout)(x, not train)
-
-        # ====================================================================
-        # CORRECT LOCATION FOR THE SOFTNORM LAYER
-        # ====================================================================
-        # The layer name "mm_soft_embedding_norm" will cause Flax to create
-        # a parameter path that matches your checkpoint.
-        x, _ = CommonRMSNorm(name="mm_soft_embedding_norm")(x, None)
-        # ====================================================================
 
         # Kevin edit: now cast back to dtype_mm (potentially half precision)
         x = x.astype(self.dtype_mm)
@@ -364,9 +282,7 @@ class _Module(nn.Module):
 
         if self.num_classes:
             kw = {"kernel_init": nn.initializers.zeros} if self.head_zeroinit else {}
-            head = nn.Dense(
-                self.num_classes, dtype=self.dtype_mm, use_bias=False, name="head", **kw
-            )  # Gemma3 doesn't use bias
+            head = nn.Dense(self.num_classes, dtype=self.dtype_mm, name="head", **kw)
             x_2d = out["logits_2d"] = head(x_2d)
             x = out["logits"] = head(x)
 
