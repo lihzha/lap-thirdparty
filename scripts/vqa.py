@@ -341,7 +341,7 @@ def main(args: Args) -> None:
     # Initialize wandb
     init_wandb(args, enabled=args.wandb_enabled)
 
-    prompt = args.default_prompt or "what is in the image?"
+    prompt = args.default_prompt
     for idx, req in enumerate(
         tqdm(
             _iter_droid_request_data(config.data.rlds_data_dir, "all", config.data.droid_dataset_name, prompt=prompt),
