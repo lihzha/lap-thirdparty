@@ -785,8 +785,6 @@ class PaliGemmaWithPi05ActionExpertWeightLoader(WeightLoader):
     pi05_params_path: str = "gs://openpi-assets/checkpoints/pi05_base/params"
 
     def load(self, params: at.Params) -> at.Params:
-        logger.info(f"Loading PaliGemma checkpoint from {self.params_path}")
-
         path = download.maybe_download(
             "gs://vertex-model-garden-paligemma-us/paligemma/pt_224.npz", gs={"token": "anon"}
         )
