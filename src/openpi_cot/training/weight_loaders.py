@@ -135,6 +135,7 @@ class PaliGemma2WeightLoader(WeightLoader):
         with path.open("rb") as f:
             flat_params = dict(np.load(f, allow_pickle=False))
         loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
+        breakpoint()
         loaded_params = jax.tree.map(recover_dtype, loaded_params)
         # Add all missing weights.
         return _merge_params(loaded_params, params, missing_regex=".*")
@@ -328,7 +329,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         zoom_factors = [1.0, new_h / orig_h, new_w / orig_w, 1.0]
 
         # order=3 gives bicubic interpolation
-        pos_emb_resized = ndimage.zoom(pos_emb_2d, zoom_factors, order=3, mode='reflect')
+        pos_emb_resized = ndimage.zoom(pos_emb_2d, zoom_factors, order=3, mode="reflect")
 
         # Reshape back to sequence: [1, H, W, D] -> [1, H*W, D]
         result = pos_emb_resized.reshape(1, new_h * new_w, dim).astype(original_dtype)
@@ -693,6 +694,7 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     # First, take all weights that are a subset of the reference weights.
     result = {}
     for k, v in flat_loaded.items():
+        breakpoint()
         if k in flat_ref:
             result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
 
