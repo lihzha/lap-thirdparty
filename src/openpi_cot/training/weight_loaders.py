@@ -764,6 +764,8 @@ class Pi05BaseWeightLoader(WeightLoader):
         # Unflatten back to nested structure
         loaded_params = flax.traverse_util.unflatten_dict(flat_loaded, sep="/")
 
+        breakpoint()
+
         # Merge with reference params (add missing LoRA weights, etc.)
         return _merge_params(loaded_params, params, missing_regex=".*lora.*")
 
