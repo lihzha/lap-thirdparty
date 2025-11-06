@@ -637,7 +637,7 @@ class Pi05ActionExpertWeightLoader(WeightLoader):
     This is useful for transferring trained action expert weights while keeping the base model weights.
     """
 
-    pi05_params_path: str
+    pi05_params_path: str = "gs://openpi-assets/checkpoints/pi05_base/params"
 
     def load(self, params: at.Params) -> at.Params:
         logger.info(f"Loading Pi0.5 action expert weights from {self.pi05_params_path}")
@@ -663,6 +663,8 @@ class Pi05ActionExpertWeightLoader(WeightLoader):
         # Flatten both parameter dictionaries for easier processing
         flat_pi05 = flax.traverse_util.flatten_dict(pi05_params, sep="/")
         flat_params = flax.traverse_util.flatten_dict(params, sep="/")
+
+        breakpoint()
 
         # Extract action expert weights (containing "_1" or projection layers)
         action_expert_weights = {}
@@ -696,7 +698,7 @@ class Pi05BaseWeightLoader(WeightLoader):
     while keeping action expert weights from a different source or leaving them initialized.
     """
 
-    pi05_params_path: str
+    pi05_params_path: str = "gs://openpi-assets/checkpoints/pi05_base/params"
 
     def load(self, params: at.Params) -> at.Params:
         logger.info(f"Loading Pi0.5 base model weights (excluding action expert) from {self.pi05_params_path}")
