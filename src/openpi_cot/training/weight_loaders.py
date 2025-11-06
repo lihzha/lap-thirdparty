@@ -773,7 +773,7 @@ class WeightLoaderChoice(WeightLoader):
     # Only used when kind == "gemma3" - target grid size for positional embeddings.
     target_pos_emb_grid_size: tuple[int, int] | None = None
     # Only used when kind == "pi05_action_expert" or "pi05_base" - path to Pi0.5 checkpoint.
-    pi05_params_path: str | None = None
+    pi05_params_path: str | None = "gs://openpi-assets/checkpoints/pi05_base/params"
 
     def _resolve(self) -> WeightLoader:
         match self.kind:
