@@ -135,7 +135,6 @@ class PaliGemma2WeightLoader(WeightLoader):
         with path.open("rb") as f:
             flat_params = dict(np.load(f, allow_pickle=False))
         loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
-        breakpoint()
         loaded_params = jax.tree.map(recover_dtype, loaded_params)
         # Add all missing weights.
         return _merge_params(loaded_params, params, missing_regex=".*")
@@ -694,8 +693,8 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     # First, take all weights that are a subset of the reference weights.
     result = {}
     for k, v in flat_loaded.items():
-        breakpoint()
         if k in flat_ref:
+            breakpoint()
             result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
 
     flat_loaded.clear()
