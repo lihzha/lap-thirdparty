@@ -22,7 +22,6 @@ from openpi_cot.models.gemma2 import get_config as get_gemma2_config
 from openpi_cot.models.gemma3 import get_config as get_gemma3_config
 import openpi_cot.models.pi_cot_config as _pi_cot_config
 import openpi_cot.models.siglip as _siglip_gemma3
-import openpi_cot.models.siglip_gemma2 as _siglip_gemma2
 
 logger = logging.getLogger("openpi")
 
@@ -143,18 +142,6 @@ class PiCoT(_pi0.Pi0):
             fake_obs = config.fake_obs()
             fake_obs_image = next(iter(fake_obs.images.values()))
             img.lazy_init(fake_obs_image[:, None], train=False, rngs=rngs)
-        elif "gemma2" in config.paligemma_variant:
-            assert config.dtype == "bfloat16"
-            img = nnx_bridge.ToNNX(
-                _siglip_gemma2.Module(
-                    num_classes=paligemma_config.width,
-                    variant="So400m/14",
-                    pool_type="none",
-                    scan=True,
-                    dtype_mm=config.dtype,
-                )
-            )
-            img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         else:
             # For other models, use the original default (learnable embeddings)
             img = nnx_bridge.ToNNX(
