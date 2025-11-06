@@ -784,30 +784,17 @@ class PaliGemmaWithPi05ActionExpertWeightLoader(WeightLoader):
     since PaliGemma originally doesn't have action expert weights.
     """
 
-    params_path: str
     pi05_params_path: str = "gs://openpi-assets/checkpoints/pi05_base/params"
 
     def load(self, params: at.Params) -> at.Params:
         logger.info(f"Loading PaliGemma checkpoint from {self.params_path}")
 
-        # Load PaliGemma checkpoint using same logic as CheckpointWeightLoader
-        params_path_str = str(self.params_path)
-        if params_path_str.startswith("gs://"):
-            if "/cache/" in params_path_str:
-                cache_candidate = params_path_str
-                upstream = params_path_str.split("/cache/", 1)[1]
-                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
-                try:
-                    download.ensure_commit_success(cache_candidate)
-                    paligemma_params_source = cache_candidate
-                except Exception:
-                    paligemma_params_source = download.mirror_checkpoint_to_remote_cache(upstream)
-            else:
-                paligemma_params_source = download.mirror_checkpoint_to_remote_cache(params_path_str)
-        else:
-            paligemma_params_source = str(download.maybe_download(params_path_str))
-
-        loaded_params = _model.restore_params(paligemma_params_source, restore_type=np.ndarray)
+        path = download.maybe_download(
+            "gs://vertex-model-garden-paligemma-us/paligemma/pt_224.npz", gs={"token": "anon"}
+        )
+        with path.open("rb") as f:
+            flat_params = dict(np.load(f, allow_pickle=False))
+        loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
 
         # Load Pi0.5 checkpoint
         logger.info(f"Loading Pi0.5 action expert weights from {self.pi05_params_path}")
@@ -916,10 +903,6 @@ class WeightLoaderChoice(WeightLoader):
                     raise ValueError("--weight-loader.pi05-params-path must be set when kind=pi05_base")
                 return Pi05BaseWeightLoader(self.pi05_params_path)
             case "paligemma_with_pi05_action_expert":
-                if not self.params_path:
-                    raise ValueError(
-                        "--weight-loader.params-path must be set when kind=paligemma_with_pi05_action_expert"
-                    )
                 if not self.pi05_params_path:
                     raise ValueError(
                         "--weight-loader.pi05-params-path must be set when kind=paligemma_with_pi05_action_expert"
