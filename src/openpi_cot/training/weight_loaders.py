@@ -905,7 +905,7 @@ class WeightLoaderChoice(WeightLoader):
                     raise ValueError(
                         "--weight-loader.pi05-params-path must be set when kind=paligemma_with_pi05_action_expert"
                     )
-                return PaliGemmaWithPi05ActionExpertWeightLoader(self.params_path, self.pi05_params_path)
+                return PaliGemmaWithPi05ActionExpertWeightLoader(self.pi05_params_path)
             case "none":
                 return NoOpWeightLoader()
             case _:
