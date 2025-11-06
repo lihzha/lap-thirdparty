@@ -921,8 +921,9 @@ def main(config: _config.TrainConfig):
                 for _ in val_pbar:
                     val_batch = next(val_iter)
                     val_info = pval_step(train_rng, train_state, val_batch)
-                    val_info_local = jax.device_get(val_info)
-                    val_infos.append(val_info_local)
+                    # val_info_local = jax.device_get(val_info)
+                    # val_infos.append(val_info_local)
+                    val_infos.append(val_info)
                     if verbose_mode:
                         log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
                 # if first_val_run:
