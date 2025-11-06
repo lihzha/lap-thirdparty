@@ -144,6 +144,7 @@ class PiCoT(_pi0.Pi0):
             fake_obs_image = next(iter(fake_obs.images.values()))
             img.lazy_init(fake_obs_image[:, None], train=False, rngs=rngs)
         elif "gemma2" in config.paligemma_variant:
+            assert config.dtype == "bfloat16"
             img = nnx_bridge.ToNNX(
                 _siglip_gemma2.Module(
                     num_classes=paligemma_config.width,
