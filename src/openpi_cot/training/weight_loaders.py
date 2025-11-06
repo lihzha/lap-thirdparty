@@ -629,6 +629,124 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class Pi05ActionExpertWeightLoader(WeightLoader):
+    """Loads action expert weights from a Pi0.5 checkpoint.
+
+    This loader extracts action expert weights (identified by "_1" suffix and projection layers)
+    from a Pi0.5 checkpoint and overrides the corresponding weights in the target model.
+    This is useful for transferring trained action expert weights while keeping the base model weights.
+    """
+
+    pi05_params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        logger.info(f"Loading Pi0.5 action expert weights from {self.pi05_params_path}")
+
+        # Load Pi0.5 checkpoint
+        if self.pi05_params_path.startswith("gs://"):
+            if "/cache/" in self.pi05_params_path:
+                cache_candidate = self.pi05_params_path
+                upstream = self.pi05_params_path.split("/cache/", 1)[1]
+                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
+                try:
+                    download.ensure_commit_success(cache_candidate)
+                    params_source = cache_candidate
+                except Exception:
+                    params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+            else:
+                params_source = download.mirror_checkpoint_to_remote_cache(self.pi05_params_path)
+        else:
+            params_source = str(download.maybe_download(self.pi05_params_path))
+
+        pi05_params = _model.restore_params(params_source, restore_type=np.ndarray)
+
+        # Flatten both parameter dictionaries for easier processing
+        flat_pi05 = flax.traverse_util.flatten_dict(pi05_params, sep="/")
+        flat_params = flax.traverse_util.flatten_dict(params, sep="/")
+
+        # Extract action expert weights (containing "_1" or projection layers)
+        action_expert_weights = {}
+        for key, value in flat_pi05.items():
+            # Check if key contains "_1" (action expert identifier) or is a projection layer
+            if "_1" in key or "projection" in key.lower():
+                if key in flat_params:
+                    # Ensure dtype matches the target model
+                    if value.dtype != flat_params[key].dtype:
+                        value = value.astype(flat_params[key].dtype)
+                    action_expert_weights[key] = value
+                    logger.debug(f"Loaded action expert weight: {key} with shape {value.shape}")
+                else:
+                    logger.warning(f"Action expert weight {key} not found in target model, skipping")
+
+        logger.info(f"Loaded {len(action_expert_weights)} action expert weights from Pi0.5 checkpoint")
+
+        # Override action expert weights in the target params
+        result = dict(flat_params)
+        result.update(action_expert_weights)
+
+        return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+@dataclasses.dataclass(frozen=True)
+class Pi05BaseWeightLoader(WeightLoader):
+    """Loads base model weights (non-action expert) from a Pi0.5 checkpoint.
+
+    This loader extracts all weights EXCEPT action expert weights (identified by "_1" suffix
+    and projection layers) from a Pi0.5 checkpoint. This is useful for loading the base model
+    while keeping action expert weights from a different source or leaving them initialized.
+    """
+
+    pi05_params_path: str
+
+    def load(self, params: at.Params) -> at.Params:
+        logger.info(f"Loading Pi0.5 base model weights (excluding action expert) from {self.pi05_params_path}")
+
+        # Load Pi0.5 checkpoint
+        if self.pi05_params_path.startswith("gs://"):
+            if "/cache/" in self.pi05_params_path:
+                cache_candidate = self.pi05_params_path
+                upstream = self.pi05_params_path.split("/cache/", 1)[1]
+                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
+                try:
+                    download.ensure_commit_success(cache_candidate)
+                    params_source = cache_candidate
+                except Exception:
+                    params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+            else:
+                params_source = download.mirror_checkpoint_to_remote_cache(self.pi05_params_path)
+        else:
+            params_source = str(download.maybe_download(self.pi05_params_path))
+
+        pi05_params = _model.restore_params(params_source, restore_type=np.ndarray)
+
+        # Flatten both parameter dictionaries for easier processing
+        flat_pi05 = flax.traverse_util.flatten_dict(pi05_params, sep="/")
+        flat_params = flax.traverse_util.flatten_dict(params, sep="/")
+
+        # Extract base model weights (NOT containing "_1" or projection layers)
+        base_weights = {}
+        for key, value in flat_pi05.items():
+            # Check if key does NOT contain "_1" or is NOT a projection layer
+            if "_1" not in key and "projection" not in key.lower():
+                if key in flat_params:
+                    # Ensure dtype matches the target model
+                    if value.dtype != flat_params[key].dtype:
+                        value = value.astype(flat_params[key].dtype)
+                    base_weights[key] = value
+                    logger.debug(f"Loaded base model weight: {key} with shape {value.shape}")
+                else:
+                    logger.warning(f"Base model weight {key} not found in target model, skipping")
+
+        logger.info(f"Loaded {len(base_weights)} base model weights from Pi0.5 checkpoint")
+
+        # Override base model weights in the target params
+        result = dict(flat_params)
+        result.update(base_weights)
+
+        return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+@dataclasses.dataclass(frozen=True)
 class WeightLoaderChoice(WeightLoader):
     """CLI-friendly wrapper to choose a weight loader without nested subcommands.
 
@@ -639,15 +757,21 @@ class WeightLoaderChoice(WeightLoader):
       --weight-loader.kind=checkpoint --weight-loader.params-path=gs://...
       --weight-loader.kind=paligemma
       --weight-loader.kind=gemma3 --weight-loader.target-pos-emb-grid-size='(16,16)'
+      --weight-loader.kind=pi05_action_expert --weight-loader.pi05-params-path=gs://...
+      --weight-loader.kind=pi05_base --weight-loader.pi05-params-path=gs://...
       --weight-loader.kind=none
     """
 
     # Which loader to use.
-    kind: Literal["none", "checkpoint", "paligemma", "paligemma2", "gemma3"] = "paligemma"
+    kind: Literal["none", "checkpoint", "paligemma", "paligemma2", "gemma3", "pi05_action_expert", "pi05_base"] = (
+        "paligemma"
+    )
     # Only used when kind == "checkpoint" or "paligemma2" or "gemma3".
     params_path: str | None = None
     # Only used when kind == "gemma3" - target grid size for positional embeddings.
     target_pos_emb_grid_size: tuple[int, int] | None = None
+    # Only used when kind == "pi05_action_expert" or "pi05_base" - path to Pi0.5 checkpoint.
+    pi05_params_path: str | None = None
 
     def _resolve(self) -> WeightLoader:
         match self.kind:
@@ -667,6 +791,14 @@ class WeightLoaderChoice(WeightLoader):
                 return Gemma3ScanCompatibleWeightLoader(
                     self.params_path, target_pos_emb_grid_size=self.target_pos_emb_grid_size
                 )
+            case "pi05_action_expert":
+                if not self.pi05_params_path:
+                    raise ValueError("--weight-loader.pi05-params-path must be set when kind=pi05_action_expert")
+                return Pi05ActionExpertWeightLoader(self.pi05_params_path)
+            case "pi05_base":
+                if not self.pi05_params_path:
+                    raise ValueError("--weight-loader.pi05-params-path must be set when kind=pi05_base")
+                return Pi05BaseWeightLoader(self.pi05_params_path)
             case "none":
                 return NoOpWeightLoader()
             case _:

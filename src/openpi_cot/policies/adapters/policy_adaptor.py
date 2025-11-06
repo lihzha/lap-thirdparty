@@ -31,7 +31,6 @@ class CoTPolicy:
 
         start_time = time.monotonic()
         self._rng, _ = jax.random.split(self._base._rng)  # noqa: SLF001
-        breakpoint()
         logits, t = self._sample_reasoning(CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],

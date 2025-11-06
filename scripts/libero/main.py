@@ -37,7 +37,7 @@ class Args:
     host: str = "0.0.0.0"
     port: int = 8000
     resize_size: int = 224
-    replan_steps: int = 1
+    replan_steps: int = 6
     policy_type: PolicyType = PolicyType.PI05
 
     #################################################################################################################
