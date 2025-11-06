@@ -100,7 +100,7 @@ def eval_libero(args: Args) -> None:
             t = 0
             replay_images = []
 
-            logging.info(f"Starting episode {task_episodes+1}...")
+            logging.info(f"Starting episode {task_episodes + 1}...")
             while t < max_steps + args.num_steps_wait:
                 try:
                     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
@@ -141,7 +141,9 @@ def eval_libero(args: Args) -> None:
                             gripper_qpos = obs.get("gripper_qpos")
                         if gripper_qpos is None:
                             raise KeyError("Observation missing gripper position for PI05 policy.")
-                        gripper_pos = np.array([float(np.mean(np.asarray(gripper_qpos, dtype=np.float32)))], dtype=np.float32)
+                        gripper_pos = np.array(
+                            [float(np.mean(np.asarray(gripper_qpos, dtype=np.float32)))], dtype=np.float32
+                        )
 
                         element = {
                             "observation/exterior_image_1_left": img,
@@ -161,9 +163,9 @@ def eval_libero(args: Args) -> None:
                             g = action_chunk[:, -1].copy()
                             action_chunk = action_chunk[:, :7]
                             action_chunk[:, -1] = g
-                        assert (
-                            len(action_chunk) >= args.replan_steps
-                        ), f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        assert len(action_chunk) >= args.replan_steps, (
+                            f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
+                        )
                         action_plan.extend(action_chunk[: args.replan_steps])
 
                     action = np.asarray(action_plan.popleft(), dtype=np.float32)

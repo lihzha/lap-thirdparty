@@ -1049,7 +1049,6 @@ _CONFIGS = [
             enable_langact_training=False,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
-
         ),
         data=LiberoFinetuneDataConfig(
             repo_id="libero",
@@ -1118,9 +1117,39 @@ _CONFIGS = [
             discrete_state_input=True,
             enable_action_training=True,
             enable_langact_training=False,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+            prompt_format="pi05",
+        ),
+        data=LiberoFinetuneDataConfig(
+            repo_id="libero",
+            asset_id="libero",
+            dataset_type="combined",
+            data_mix="libero_finetune",
+            rlds_data_dir="/n/fs/robot-data/libero/tfds",
+            language_action_format_name="default",
+            decoding_schema="default",
+        ),
+        fsdp_devices=1,
+        batch_size=8,
+        num_train_steps=50000,
+        save_interval=1000,
+        log_interval=100,
+        keep_period=5000,
+        checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
+    ),
+    TrainConfig(
+        name="paligemma2_libero_finetune_local",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
-            prompt_format="schema_compact"
+            prompt_format="schema_compact",
         ),
         data=LiberoFinetuneDataConfig(
             repo_id="libero",
