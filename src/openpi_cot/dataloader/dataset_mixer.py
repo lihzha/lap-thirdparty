@@ -157,10 +157,9 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
-            try:
-                datasets.append(ds.dataset.with_ram_budget(1))
-            except AttributeError:
-                datasets.append(ds.dataset)
+            # Don't restrict RAM budget on individual datasets
+            # Let the final mixed dataset handle memory management
+            datasets.append(ds.dataset)
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_name] = dataset_statistics
@@ -268,7 +267,7 @@ class OXECoTDatasets:
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
             wrist_image_right_key=self.spec.wrist_image_right_key,
-        )
+        ).skip(10_000_000)
 
     def _compute_or_load_global_stats(
         self,
