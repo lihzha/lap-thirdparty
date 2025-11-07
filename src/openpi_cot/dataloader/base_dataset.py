@@ -613,35 +613,6 @@ class _SingleCoTDataset:
                 return
             yield batch
 
-    def create_checkpointable_iterator(self):
-        """Create an iterator that can be checkpointed.
-
-        This creates a version of the dataset without device-specific operations
-        (like prefetch_to_device and with_ram_budget) that cannot be serialized.
-
-        Returns:
-            A TensorFlow iterator that can be saved/restored using tf.train.Checkpoint.
-
-        Note:
-            This iterator will be slightly slower than the normal iterator because
-            it doesn't use device-specific optimizations, but it can be checkpointed.
-        """
-        # If standalone mode with stored params, create checkpointable version
-        if hasattr(self, "_pre_batched_dataset") and hasattr(self, "_prepare_batched_params"):
-            checkpointable_dataset = prepare_batched_dataset(
-                dataset=self._pre_batched_dataset,
-                checkpointable=True,
-                **self._prepare_batched_params,
-            )
-            # Return iterator from underlying TensorFlow dataset, not dlimp wrapper
-            # This ensures compatibility with TensorFlow's checkpoint mechanism
-            if hasattr(checkpointable_dataset, "dataset"):
-                return iter(checkpointable_dataset.dataset)
-            return iter(checkpointable_dataset)
-        # Fallback to regular dataset (non-standalone mode)
-        if hasattr(self.dataset, "dataset"):
-            return iter(self.dataset.dataset)
-        return iter(self.dataset)
 
     def __len__(self):
         return self.dataset_statistics["state"].num_transitions
