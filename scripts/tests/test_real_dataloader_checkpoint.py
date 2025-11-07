@@ -215,16 +215,23 @@ def test_save_and_load_real_dataloader(
                 logging.warning(f"Could not initialize JAX distributed: {e}")
                 # Continue anyway - might work in single-process mode
 
-        # Create dataloader (no persistent_iterator needed with skip-based approach)
-        logging.info("Creating dataloader...")
+        # Create dataloader with explicit sharding (mimics training setup)
+        logging.info("Creating dataloader with explicit sharding...")
+        # Create a simple data-parallel mesh
+        devices = jax.local_devices()
+        mesh = jax.sharding.Mesh(devices, ('data',))
+        from jax.sharding import NamedSharding, PartitionSpec as P
+        # Shard only along batch dimension (first axis)
+        data_sharding = NamedSharding(mesh, P('data'))
+
         dataloader1 = cot_data_loader.create_data_loader(
             config,
-            sharding=None,
+            sharding=data_sharding,
             shuffle=True,
             seed=42,
             split="train",
         )
-        logging.info("✓ Created dataloader 1")
+        logging.info("✓ Created dataloader 1 with data-parallel sharding")
 
         # Get iterator
         data_iter1 = iter(dataloader1)
@@ -273,11 +280,17 @@ def test_save_and_load_real_dataloader(
         logging.info("Part 2: Create new dataloader and load checkpoint")
         logging.info("=" * 80)
 
-        # Create new dataloader with same config (no persistent_iterator needed)
+        # Create new dataloader with same config and sharding
         logging.info("Creating fresh dataloader instance...")
+        # Recreate the same sharding
+        devices = jax.local_devices()
+        mesh = jax.sharding.Mesh(devices, ('data',))
+        from jax.sharding import NamedSharding, PartitionSpec as P
+        data_sharding = NamedSharding(mesh, P('data'))
+
         dataloader2 = cot_data_loader.create_data_loader(
             config,
-            sharding=None,
+            sharding=data_sharding,
             shuffle=True,
             seed=42,
             split="train",
