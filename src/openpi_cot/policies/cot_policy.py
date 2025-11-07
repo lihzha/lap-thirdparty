@@ -98,6 +98,22 @@ DIRECTIONAL_ONLY_FORMAT = LanguageActionFormat(
     include_rotation=False,
 )
 
+EEF_FORMAT = LanguageActionFormat(
+    name="verbose",
+    style="verbose",
+    decimal_places=0,
+    include_rotation=False,
+    use_eef_frame=True
+)
+
+EEF_WITH_ROTATION_FORMAT = LanguageActionFormat(
+    name="verbose",
+    style="verbose",
+    decimal_places=0,
+    include_rotation=True,
+    use_eef_frame=True
+)
+
 # Registry for easy lookup of language action formats
 LANGUAGE_ACTION_FORMAT_REGISTRY = {
     "default": VERBOSE_FORMAT,  # "default" maps to "verbose" for backward compatibility
@@ -108,6 +124,8 @@ LANGUAGE_ACTION_FORMAT_REGISTRY = {
     "compact": COMPACT_FORMAT,
     "compact_with_rotation": COMPACT_WITH_ROTATION_FORMAT,
     "directional_only": DIRECTIONAL_ONLY_FORMAT,
+    "eef_frame":EEF_FORMAT,
+    "eef_frame_with_rotation": EEF_WITH_ROTATION_FORMAT
 }
 
 
