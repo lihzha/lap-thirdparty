@@ -267,7 +267,10 @@ class OXECoTDatasets:
             primary_image_key=self.spec.primary_image_key,
             wrist_image_key=self.spec.wrist_image_key,
             wrist_image_right_key=self.spec.wrist_image_right_key,
-        ).skip(10_000_000)
+        )
+        logging.info("Before skipping")
+        self.dataset = self.dataset.skip(10_000_000)
+        logging.info("After skipping")
 
     def _compute_or_load_global_stats(
         self,
