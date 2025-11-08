@@ -787,7 +787,7 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         dtype=tf.string,
     )
 
-    # Check if language instruction is empty and replace with random fallback
+    # Check if language instruction is empty and replace with deterministic fallback
     traj_len = tf.shape(trajectory["language_instruction"])[0]
     instruction = trajectory["language_instruction"][0]
     is_empty = tf.logical_or(
@@ -795,7 +795,12 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         tf.equal(instruction, tf.constant("", dtype=tf.string)),
     )
 
-    random_fallback = tf.random.shuffle(fallback_instructions)[0]
+    # Use deterministic index based on hash of first observation state
+    state_hash = tf.strings.to_hash_bucket_fast(
+        tf.strings.as_string(tf.reduce_sum(trajectory["observation"]["state"][0])),
+        tf.shape(fallback_instructions)[0]
+    )
+    random_fallback = fallback_instructions[state_hash]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
     trajectory["language_instruction"] = tf.fill([traj_len], selected_instruction)
 
@@ -981,7 +986,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         dtype=tf.string,
     )
 
-    # Check if language instruction is empty and replace with random fallback
+    # Check if language instruction is empty and replace with deterministic fallback
     traj_len = tf.shape(trajectory["language_instruction"])[0]
     instruction = trajectory["language_instruction"][0]
     is_empty = tf.logical_or(
@@ -989,7 +994,12 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
         tf.equal(instruction, tf.constant("", dtype=tf.string)),
     )
 
-    random_fallback = tf.random.shuffle(fallback_instructions)[0]
+    # Use deterministic index based on hash of first observation state
+    state_hash = tf.strings.to_hash_bucket_fast(
+        tf.strings.as_string(tf.reduce_sum(trajectory["observation"]["state"][0])),
+        tf.shape(fallback_instructions)[0]
+    )
+    random_fallback = fallback_instructions[state_hash]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
     trajectory["language_instruction"] = tf.fill([traj_len], selected_instruction)
 

@@ -505,8 +505,10 @@ class _SingleCoTDataset:
             # Use tf.reshape to flatten to scalar if needed (works for both [] and [1] shapes)
             traj_id_str = tf.reshape(traj_id_str, [])
             traj_id_hash = tf.strings.to_hash_bucket_fast(traj_id_str, 2147483647)
-            # Also include frame index if available for per-frame randomness
-            frame_hash = tf.cast(tf.random.uniform([], 0, 2147483647, dtype=tf.int32), tf.int64)
+            # Generate deterministic frame hash using trajectory ID and seed
+            # Use a different salt to create variation from traj_id_hash
+            frame_id_str = tf.strings.join([traj_id_str, "_frame"])
+            frame_hash = tf.cast(tf.strings.to_hash_bucket_fast(frame_id_str, 2147483647), tf.int64)
             seed_pair = [self.seed + traj_id_hash, frame_hash]
 
             # Decide if this sample should be a prediction sample
