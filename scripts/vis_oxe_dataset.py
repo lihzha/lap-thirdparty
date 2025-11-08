@@ -500,77 +500,71 @@ def main(config: _config.TrainConfig):
         # Extract ground truth actions
         gt_action_texts = _extract_gt_actions(batch)
 
-        # Visualize all camera views
-        for cam_key in obs.images.keys():
-            imgs = obs.images[cam_key]
-            logging.info(f"{cam_key} imgs: {imgs.shape}")
-            start_imgs = _safe_device_get(imgs[:, 0])
-            end_imgs = _safe_device_get(imgs[:, -1])
-            if start_imgs is None or end_imgs is None:
-                logging.warning(f"Failed to get images for {cam_key}, skipping")
+        start_imgs = _safe_device_get(obs.images["base_0_rgb"][:, 0])
+        end_imgs = _safe_device_get(obs.images["left_wrist_0_rgb"][:, -1])
+
+        B = start_imgs.shape[0]
+        vis_rows = []
+        for i in range(B):
+            start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+            end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
+            la_text = langact_texts[i] if i < len(langact_texts) else ""
+            prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
+            caption_text = caption_texts[i] if i < len(caption_texts) else ""
+            gt_action_text = gt_action_texts[i] if i < len(gt_action_texts) else ""
+
+            # Determine if this is a VQA sample (has non-empty caption)
+            is_vqa = bool(caption_text and caption_text.strip())
+            is_vqa = obs.is_vqa_sample[i]
+
+            # Combine prompt, langact/caption, and GT actions for display
+            text_parts = []
+            if prompt_text:
+                text_parts.append(f"Prompt: {prompt_text}")
+
+            # For VQA datasets, show caption instead of language actions
+            if is_vqa:
+                text_parts.append(f"Caption: {caption_text}")
+            elif la_text:
+                text_parts.append(f"LangAct: {la_text}")
+
+            # Only show GT actions for robot datasets (not VQA)
+            if gt_action_text and not is_vqa:
+                text_parts.append(f"GT Action: {gt_action_text}")
+
+            combined_text = " | ".join(text_parts)
+
+            if is_vqa:
+                logging.info(f"[{i}] [VQA] Prompt: {prompt_text} | Caption: {caption_text}")
+            else:
+                logging.info(f"[{i}] [Robot] Prompt: {prompt_text} | LangAct: {la_text}")
+                logging.info(f"[{i}] GT Action: {gt_action_text}")
+
+            col1 = np.copy(_ensure_color(start_u8))
+            col2 = np.copy(_ensure_color(end_u8))
+            panels = [col1]
+            panels.append(col2)
+            panels = [p for p in panels if p is not None]
+            if not panels:
                 continue
-            B = start_imgs.shape[0]
-            vis_rows = []
-            for i in range(B):
-                start_u8 = np.asarray(((start_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-                end_u8 = np.asarray(((end_imgs[i] + 1.0) * 0.5 * 255.0).clip(0, 255), dtype=np.uint8)
-                la_text = langact_texts[i] if i < len(langact_texts) else ""
-                prompt_text = prompt_texts[i] if i < len(prompt_texts) else ""
-                caption_text = caption_texts[i] if i < len(caption_texts) else ""
-                gt_action_text = gt_action_texts[i] if i < len(gt_action_texts) else ""
-
-                # Determine if this is a VQA sample (has non-empty caption)
-                is_vqa = bool(caption_text and caption_text.strip())
-                is_vqa = obs.is_vqa_sample[i]
-
-                # Combine prompt, langact/caption, and GT actions for display
-                text_parts = []
-                if prompt_text:
-                    text_parts.append(f"Prompt: {prompt_text}")
-
-                # For VQA datasets, show caption instead of language actions
-                if is_vqa:
-                    text_parts.append(f"Caption: {caption_text}")
-                elif la_text:
-                    text_parts.append(f"LangAct: {la_text}")
-
-                # Only show GT actions for robot datasets (not VQA)
-                if gt_action_text and not is_vqa:
-                    text_parts.append(f"GT Action: {gt_action_text}")
-
-                combined_text = " | ".join(text_parts)
-
-                if is_vqa:
-                    logging.info(f"[{i}] [VQA] Prompt: {prompt_text} | Caption: {caption_text}")
-                else:
-                    logging.info(f"[{i}] [Robot] Prompt: {prompt_text} | LangAct: {la_text}")
-                    logging.info(f"[{i}] GT Action: {gt_action_text}")
-
-                col1 = np.copy(_ensure_color(start_u8))
-                col2 = np.copy(_ensure_color(end_u8))
-                panels = [col1]
-                panels.append(col2)
-                panels = [p for p in panels if p is not None]
-                if not panels:
-                    continue
-                row = np.concatenate(panels, axis=1)
-                # Larger bottom overlay to fit action comparisons
-                band_h_row = max(90, row.shape[0] // 5)
-                row = _draw_text_block(
-                    row, combined_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2)
-                )
-                vis_rows.append(row)
-            if vis_rows:
-                pages = _compose_pages(vis_rows, target_max_height=1600)
-                assert wandb_enabled and wandb is not None
-                wandb.log(
-                    {
-                        f"vis_dataset/{cam_key}": [
-                            wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
-                        ]
-                    },
-                    step=j,
-                )
+            row = np.concatenate(panels, axis=1)
+            # Larger bottom overlay to fit action comparisons
+            band_h_row = max(90, row.shape[0] // 5)
+            row = _draw_text_block(
+                row, combined_text, (4, row.shape[0] - band_h_row - 2, row.shape[1] - 4, row.shape[0] - 2)
+            )
+            vis_rows.append(row)
+        if vis_rows:
+            pages = _compose_pages(vis_rows, target_max_height=1600)
+            assert wandb_enabled and wandb is not None
+            wandb.log(
+                {
+                    "vis_dataset/prediction_images": [
+                        wandb.Image(page, caption=f"batch_{j}_page_{pi:02d}") for pi, page in enumerate(pages)
+                    ]
+                },
+                step=j,
+            )
 
         batch = next(data_iter)
 
