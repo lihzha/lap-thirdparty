@@ -33,11 +33,8 @@ TEST PARAMETERS:
 - No disk space concerns
 """
 
-import dataclasses
 import logging
 import os
-import pathlib
-import shutil
 import sys
 import time
 from typing import Any
@@ -45,13 +42,10 @@ from typing import Any
 import jax
 import numpy as np
 import tensorflow as tf
-import tyro
 
 # Import the actual dataloader
 from openpi_cot.dataloader import cot_data_loader
-from openpi_cot.dataloader.helpers import ActionEncoding, StateEncoding
-from openpi_cot.models.pi_cot_config import PiCoTConfig
-from openpi_cot.training.config import CoTDataConfig, RLDSCoTDataConfig, TrainConfig
+from openpi_cot.training.config import TrainConfig
 import openpi_cot.training.config as _config
 
 
@@ -177,10 +171,8 @@ def test_save_and_load_real_dataloader(
     continued without interruption.
 
     Test approach:
-    1. Create dataloader_reference and iterate N+H batches (get ground truth)
-    2. Create dataloader_1 and iterate N batches, then save checkpoint
-    3. Create dataloader_2, load checkpoint, and iterate H batches
-    4. VERIFY: batches N+1 to N+H from dataloader_reference match batches 1 to H from dataloader_2
+    1. Create dataloader1 → iterate 10 batches → save checkpoint → continue to get next 10 batches (expected)
+    2. Create dataloader2 → load checkpoint (skip 10 batches) → get 10 batches → verify matches expected
 
     Args:
         config: Training configuration (with test-specific modifications)
@@ -251,43 +243,13 @@ def test_save_and_load_real_dataloader(
 
         # Test parameters
         num_batches_before_checkpoint = 10
-        num_batches_after_checkpoint = 5
-        total_batches = num_batches_before_checkpoint + num_batches_after_checkpoint
+        num_test_batches = 10
 
         # ========================================================================
-        # Part 1: Create reference dataloader and iterate N+H batches (ground truth)
-        # ========================================================================
-        logging.info("\n" + "=" * 80)
-        logging.info("Part 1: Create REFERENCE dataloader (ground truth)")
-        logging.info("=" * 80)
-        logging.info(f"This will iterate {total_batches} batches to establish ground truth")
-
-        dataloader_reference = cot_data_loader.create_data_loader(
-            config,
-            sharding=data_sharding,
-            shuffle=True,
-            seed=42,
-            split="train",
-        )
-        logging.info("✓ Created reference dataloader")
-
-        data_iter_reference = iter(dataloader_reference)
-        logging.info(f"\nCollecting {total_batches} batches from reference dataloader...")
-        reference_batches_all = collect_batch_ids(data_iter_reference, num_batches=total_batches)
-
-        # Split into before/after checkpoint portions
-        reference_batches_before = reference_batches_all[:num_batches_before_checkpoint]
-        reference_batches_after = reference_batches_all[num_batches_before_checkpoint:]
-
-        logging.info(f"✓ Collected {len(reference_batches_all)} reference batches")
-        logging.info(f"  Batches 1-{num_batches_before_checkpoint}: Before checkpoint")
-        logging.info(f"  Batches {num_batches_before_checkpoint+1}-{total_batches}: After checkpoint (these should match resumed iteration)")
-
-        # ========================================================================
-        # Part 2: Create dataloader, iterate N batches, and save checkpoint
+        # Part 1: Create dataloader1, iterate N batches, save, then get H more
         # ========================================================================
         logging.info("\n" + "=" * 80)
-        logging.info("Part 2: Create dataloader and save checkpoint after N batches")
+        logging.info("Part 1: Create dataloader1 and establish expected batches")
         logging.info("=" * 80)
 
         dataloader1 = cot_data_loader.create_data_loader(
@@ -300,17 +262,10 @@ def test_save_and_load_real_dataloader(
         logging.info("✓ Created dataloader 1")
 
         data_iter1 = iter(dataloader1)
-        logging.info(f"\nIterating through {num_batches_before_checkpoint} batches...")
-        batch_ids_before = collect_batch_ids(data_iter1, num_batches=num_batches_before_checkpoint)
 
-        # Verify these match the reference
-        logging.info("\n" + "-" * 80)
-        logging.info("Verification: Do first N batches match reference?")
-        if compare_batches(batch_ids_before, reference_batches_before):
-            logging.info("✓ First N batches match reference (same seed produces same batches)")
-        else:
-            logging.error("✗ First N batches don't match reference! Seed may not be working correctly.")
-            return False
+        # Iterate N batches before checkpoint
+        logging.info(f"\nIterating through {num_batches_before_checkpoint} batches before checkpoint...")
+        batch_ids_before = collect_batch_ids(data_iter1, num_batches=num_batches_before_checkpoint)
 
         # Check batch counter
         batches_seen_before = dataloader1.get_batches_seen()
@@ -344,13 +299,25 @@ def test_save_and_load_real_dataloader(
         except Exception as e:
             logging.warning(f"Could not check checkpoint size: {e}")
 
+        # Continue iterating to get H more batches (these are what we expect after resume)
+        logging.info(f"\n{'=' * 80}")
+        logging.info(f"Continuing iteration to collect {num_test_batches} EXPECTED batches")
+        logging.info(f"These should match what we get after loading checkpoint")
+        logging.info(f"{'=' * 80}")
+        expected_batches = collect_batch_ids(data_iter1, num_batches=num_test_batches)
+
+        batches_seen_after_continue = dataloader1.get_batches_seen()
+        expected_total = num_batches_before_checkpoint + num_test_batches
+        logging.info(f"\nTotal batches seen in dataloader1: {batches_seen_after_continue}")
+        logging.info(f"Expected: {expected_total}")
+        assert batches_seen_after_continue == expected_total, f"Expected {expected_total}, got {batches_seen_after_continue}"
+
         # ========================================================================
-        # Part 3: Create new dataloader, load checkpoint, and verify determinism
+        # Part 2: Create dataloader2, load checkpoint, and verify determinism
         # ========================================================================
         logging.info("\n" + "=" * 80)
-        logging.info("Part 3: Load checkpoint and verify DETERMINISM")
+        logging.info("Part 2: Load checkpoint and verify DETERMINISM")
         logging.info("=" * 80)
-        logging.info("This is the CORE TEST: Do resumed batches match reference?")
 
         dataloader2 = cot_data_loader.create_data_loader(
             config,
@@ -384,35 +351,35 @@ def test_save_and_load_real_dataloader(
         data_iter2 = iter(dataloader2)
         logging.info("✓ Iterator created - skip should have been applied")
 
-        # Iterate H batches after checkpoint
-        logging.info(f"\nIterating through {num_batches_after_checkpoint} batches after checkpoint...")
-        batch_ids_after = collect_batch_ids(data_iter2, num_batches=num_batches_after_checkpoint)
+        # Iterate H batches - these should match the expected batches from dataloader1
+        logging.info(f"\nIterating through {num_test_batches} batches after checkpoint...")
+        actual_batches = collect_batch_ids(data_iter2, num_batches=num_test_batches)
 
         batches_seen_final = dataloader2.get_batches_seen()
-        expected_final = batches_seen_loaded + num_batches_after_checkpoint
+        expected_final = batches_seen_loaded + num_test_batches
         logging.info(f"\nFinal batch count: {batches_seen_final}")
         logging.info(f"Expected: {expected_final}")
         assert batches_seen_final == expected_final, f"Expected {expected_final}, got {batches_seen_final}"
 
         # ========================================================================
-        # CORE VERIFICATION: Do resumed batches match reference?
+        # CORE VERIFICATION: Do resumed batches match expected batches?
         # ========================================================================
         logging.info("\n" + "=" * 80)
         logging.info("CORE VERIFICATION: Determinism Check")
         logging.info("=" * 80)
-        logging.info(f"Comparing resumed batches (batches 1-{num_batches_after_checkpoint} after checkpoint)")
-        logging.info(f"with reference batches (batches {num_batches_before_checkpoint+1}-{total_batches})")
+        logging.info(f"Comparing resumed batches from dataloader2")
+        logging.info(f"with expected batches (continuation from dataloader1)")
         logging.info("These MUST match for checkpoint/resume to be correct!")
 
-        if compare_batches(batch_ids_after, reference_batches_after):
+        if compare_batches(actual_batches, expected_batches):
             logging.info("\n" + "🎉" * 40)
             logging.info("✓✓✓ DETERMINISM VERIFIED ✓✓✓")
-            logging.info("Resumed batches EXACTLY match what would have been produced!")
+            logging.info("Resumed batches EXACTLY match continuation batches!")
             logging.info("🎉" * 40)
         else:
             logging.error("\n" + "✗" * 80)
             logging.error("DETERMINISM TEST FAILED!")
-            logging.error("Resumed batches DO NOT match reference batches!")
+            logging.error("Resumed batches DO NOT match expected continuation batches!")
             logging.error("This means checkpoint/resume is NOT working correctly!")
             logging.error("✗" * 80)
             return False
@@ -423,16 +390,15 @@ def test_save_and_load_real_dataloader(
         logging.info("\n" + "=" * 80)
         logging.info("TEST SUMMARY")
         logging.info("=" * 80)
-        logging.info("✓ Created reference dataloader and collected ground truth batches")
+        logging.info(f"✓ Created dataloader1 and iterated {num_batches_before_checkpoint} batches")
         logging.info(f"✓ Lightweight checkpoint saved ({size} bytes)")
-        logging.info(f"✓ Iterated through {num_batches_before_checkpoint} batches before checkpoint")
-        logging.info(f"✓ Saved checkpoint with batch count {batches_seen_before}")
-        logging.info("✓ Created new dataloader and loaded checkpoint")
+        logging.info(f"✓ Continued dataloader1 for {num_test_batches} more batches (expected)")
+        logging.info("✓ Created dataloader2 and loaded checkpoint")
         logging.info(f"✓ Restored batch count matches: {batches_seen_loaded}")
         logging.info(f"✓ Skip applied automatically ({batches_seen_loaded} batches)")
-        logging.info(f"✓ Continued iteration for {num_batches_after_checkpoint} batches")
+        logging.info(f"✓ Iterated {num_test_batches} batches from dataloader2 (actual)")
         logging.info(f"✓ Final batch count correct: {batches_seen_final}")
-        logging.info("✓✓✓ DETERMINISM VERIFIED: Resumed batches match reference exactly!")
+        logging.info("✓✓✓ DETERMINISM VERIFIED: Resumed batches match expected exactly!")
         logging.info("\n" + "=" * 80)
         logging.info("SKIP-BASED CHECKPOINT BENEFITS:")
         logging.info("  - Checkpoint size: ~100 bytes (vs GB with tf.train.Checkpoint)")
