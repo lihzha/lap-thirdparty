@@ -109,6 +109,8 @@ class OXECoTDatasets:
                 standalone=False,
                 skip_normalization=use_global_normalization,
                 enable_prediction_training=enable_prediction_training,
+                pred_prob=config.pred_prob,
+                primary_pred_prob=config.primary_pred_prob,
             )
             if dataset_name == "droid":
                 ds = DroidCoTDataset(

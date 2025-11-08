@@ -102,7 +102,6 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     R_base_to_eef = initial_rotation.as_matrix().T  # Transpose to get EEF <- base
 
     delta_pos_base = actions[:3]
-    delta_pos_base = delta_pos_base * np.array([-1, -1, -1])
     delta_pos_eef = R_base_to_eef @ delta_pos_base
     transformed_actions[:3] = delta_pos_eef
 
@@ -155,7 +154,6 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     for i in range(len(transformed_actions)):
         delta_pos_eef = actions[i, :3]
         delta_pos_base = R_eef_to_base @ delta_pos_eef
-        delta_pos_base = delta_pos_base * np.array([-1, -1, -1])
         transformed_actions[i, :3] = delta_pos_base
 
         # Transform rotation deltas from EEF frame to base frame
