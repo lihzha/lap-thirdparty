@@ -96,6 +96,8 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
 
     transformed_actions = actions.copy()
 
+    breakpoint()
+
     # Extract initial EEF orientation from state
     # Try to detect if state contains quaternions (length 7+) or euler angles (length 6+)
     if initial_state.shape[-1] >= 7:
@@ -105,7 +107,7 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     elif initial_state.shape[-1] >= 6:
         # Assume euler angle format: [x, y, z, roll, pitch, yaw, ...]
         euler = initial_state[3:6]
-        initial_rotation = R.from_euler('xyz', euler)
+        initial_rotation = R.from_euler("xyz", euler)
     else:
         # Not enough state information, return actions unchanged
         return actions
@@ -123,11 +125,11 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
         if actions.shape[-1] >= 6:
             delta_rot_base = actions[i, 3:6]  # [roll, pitch, yaw] in radians
             # Convert euler angles to rotation matrix
-            R_delta_base = R.from_euler('xyz', delta_rot_base).as_matrix()
+            R_delta_base = R.from_euler("xyz", delta_rot_base).as_matrix()
             # Transform to EEF frame: R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
             R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
             # Convert back to euler angles
-            delta_rot_eef = R.from_matrix(R_delta_eef).as_euler('xyz')
+            delta_rot_eef = R.from_matrix(R_delta_eef).as_euler("xyz")
             transformed_actions[i, 3:6] = delta_rot_eef
 
     return transformed_actions
@@ -164,7 +166,7 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     elif initial_state.shape[-1] >= 6:
         # Assume euler angle format: [x, y, z, roll, pitch, yaw, ...]
         euler = initial_state[3:6]
-        initial_rotation = R.from_euler('xyz', euler)
+        initial_rotation = R.from_euler("xyz", euler)
     else:
         # Not enough state information, return actions unchanged
         return actions
@@ -182,11 +184,11 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
         if actions.shape[-1] >= 6:
             delta_rot_eef = actions[i, 3:6]  # [roll, pitch, yaw] in radians
             # Convert euler angles to rotation matrix
-            R_delta_eef = R.from_euler('xyz', delta_rot_eef).as_matrix()
+            R_delta_eef = R.from_euler("xyz", delta_rot_eef).as_matrix()
             # Transform to base frame: R_delta_base = R_eef_to_base @ R_delta_eef @ R_eef_to_base.T
             R_delta_base = R_eef_to_base @ R_delta_eef @ R_eef_to_base.T
             # Convert back to euler angles
-            delta_rot_base = R.from_matrix(R_delta_base).as_euler('xyz')
+            delta_rot_base = R.from_matrix(R_delta_base).as_euler("xyz")
             transformed_actions[i, 3:6] = delta_rot_base
 
     return transformed_actions
