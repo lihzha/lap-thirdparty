@@ -157,10 +157,9 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
-            try:
-                datasets.append(ds.dataset.with_ram_budget(1))
-            except AttributeError:
-                datasets.append(ds.dataset)
+            # Don't restrict RAM budget on individual datasets
+            # Let the final mixed dataset handle memory management
+            datasets.append(ds.dataset)
             dataset_statistics = ds.dataset_statistics
             dataset_sizes.append(dataset_statistics["state"].num_transitions)
             all_dataset_statistics[dataset_name] = dataset_statistics
@@ -473,31 +472,6 @@ class OXECoTDatasets:
                 logging.info("StopIteration")
                 return
             yield batch
-
-    def create_checkpointable_iterator(self):
-        """Create an iterator that can be checkpointed.
-
-        This creates a version of the dataset without device-specific operations
-        (like prefetch_to_device and with_ram_budget) that cannot be serialized.
-
-        Returns:
-            A TensorFlow iterator that can be saved/restored using tf.train.Checkpoint.
-
-        Note:
-            This iterator will be slightly slower than the normal iterator because
-            it doesn't use device-specific optimizations, but it can be checkpointed.
-        """
-        # Create a checkpointable version of the dataset
-        checkpointable_dataset = prepare_batched_dataset(
-            dataset=self._pre_batched_dataset,
-            checkpointable=True,
-            **self._prepare_batched_params,
-        )
-        # Return iterator from underlying TensorFlow dataset, not dlimp wrapper
-        # This ensures compatibility with TensorFlow's checkpoint mechanism
-        if hasattr(checkpointable_dataset, "dataset"):
-            return iter(checkpointable_dataset.dataset)
-        return iter(checkpointable_dataset)
 
     def __len__(self):
         return self.dataset_length

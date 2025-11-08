@@ -328,7 +328,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
         zoom_factors = [1.0, new_h / orig_h, new_w / orig_w, 1.0]
 
         # order=3 gives bicubic interpolation
-        pos_emb_resized = ndimage.zoom(pos_emb_2d, zoom_factors, order=3, mode='reflect')
+        pos_emb_resized = ndimage.zoom(pos_emb_2d, zoom_factors, order=3, mode="reflect")
 
         # Reshape back to sequence: [1, H, W, D] -> [1, H*W, D]
         result = pos_emb_resized.reshape(1, new_h * new_w, dim).astype(original_dtype)
@@ -629,6 +629,213 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class Pi05ActionExpertWeightLoader(WeightLoader):
+    """Loads a checkpoint and overrides its action expert weights from Pi0.5.
+
+    This loader:
+    1. Loads a base checkpoint from params_path
+    2. Loads Pi0.5 checkpoint and extracts action expert weights (identified by "_1", "action_", or "time_mlp_")
+    3. Overrides the base checkpoint's action expert weights with Pi0.5 action expert weights
+    4. Merges the result with reference params (similar to CheckpointWeightLoader)
+
+    This is useful for transferring trained action expert weights from Pi0.5 while using a different base model.
+    """
+
+    params_path: str
+    pi05_params_path: str = "gs://openpi-assets/checkpoints/pi05_base/params"
+
+    def load(self, params: at.Params) -> at.Params:
+        logger.info(f"Loading base checkpoint from {self.params_path}")
+
+        # Load base checkpoint using same logic as CheckpointWeightLoader
+        params_path_str = str(self.params_path)
+        if params_path_str.startswith("gs://"):
+            if "/cache/" in params_path_str:
+                cache_candidate = params_path_str
+                upstream = params_path_str.split("/cache/", 1)[1]
+                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
+                try:
+                    download.ensure_commit_success(cache_candidate)
+                    base_params_source = cache_candidate
+                except Exception:
+                    base_params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+            else:
+                base_params_source = download.mirror_checkpoint_to_remote_cache(params_path_str)
+        else:
+            base_params_source = str(download.maybe_download(params_path_str))
+
+        loaded_params = _model.restore_params(base_params_source, restore_type=np.ndarray)
+
+        # Load Pi0.5 checkpoint
+        logger.info(f"Loading Pi0.5 action expert weights from {self.pi05_params_path}")
+        pi05_path_str = str(self.pi05_params_path)
+        if pi05_path_str.startswith("gs://"):
+            if "/cache/" in pi05_path_str:
+                cache_candidate = pi05_path_str
+                upstream = pi05_path_str.split("/cache/", 1)[1]
+                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
+                try:
+                    download.ensure_commit_success(cache_candidate)
+                    pi05_params_source = cache_candidate
+                except Exception:
+                    pi05_params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+            else:
+                pi05_params_source = download.mirror_checkpoint_to_remote_cache(pi05_path_str)
+        else:
+            pi05_params_source = str(download.maybe_download(pi05_path_str))
+
+        pi05_params = _model.restore_params(pi05_params_source, restore_type=np.ndarray)
+
+        # Flatten both parameter dictionaries for easier processing
+        flat_pi05 = flax.traverse_util.flatten_dict(pi05_params, sep="/")
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+
+        # Extract and override action expert weights (containing "_1", "action_", or "time_mlp_")
+        action_expert_count = 0
+        for key, pi05_value in flat_pi05.items():
+            # Check if key contains action expert identifiers
+            if "_1" in key or "action_" in key or "time_mlp_" in key:
+                if key in flat_loaded:
+                    # Override with Pi0.5 action expert weight
+                    flat_loaded[key] = pi05_value
+                    action_expert_count += 1
+                    logger.debug(f"Overrode action expert weight: {key} with shape {pi05_value.shape}")
+
+        logger.info(f"Overrode {action_expert_count} action expert weights from Pi0.5 checkpoint")
+
+        # Unflatten back to nested structure
+        loaded_params = flax.traverse_util.unflatten_dict(flat_loaded, sep="/")
+
+        # Merge with reference params (add missing LoRA weights, etc.)
+        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+
+
+@dataclasses.dataclass(frozen=True)
+class Pi05BaseWeightLoader(WeightLoader):
+    """Loads all Pi0.5 base model weights (excluding action expert).
+
+    This loader:
+    1. Loads Pi0.5 checkpoint and extracts all base model weights (excluding "_1", "action_", and "time_mlp_")
+    2. Merges the result with reference params (similar to CheckpointWeightLoader)
+
+    This is useful for loading Pi0.5 base model while keeping action expert weights uninitialized
+    or from a different source.
+    """
+
+    pi05_params_path: str = "gs://openpi-assets/checkpoints/pi05_base/params"
+
+    def load(self, params: at.Params) -> at.Params:
+        logger.info(f"Loading Pi0.5 base model weights (excluding action expert) from {self.pi05_params_path}")
+
+        # Load Pi0.5 checkpoint
+        pi05_path_str = str(self.pi05_params_path)
+        if pi05_path_str.startswith("gs://"):
+            if "/cache/" in pi05_path_str:
+                cache_candidate = pi05_path_str
+                upstream = pi05_path_str.split("/cache/", 1)[1]
+                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
+                try:
+                    download.ensure_commit_success(cache_candidate)
+                    pi05_params_source = cache_candidate
+                except Exception:
+                    pi05_params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+            else:
+                pi05_params_source = download.mirror_checkpoint_to_remote_cache(pi05_path_str)
+        else:
+            pi05_params_source = str(download.maybe_download(pi05_path_str))
+
+        pi05_params = _model.restore_params(pi05_params_source, restore_type=np.ndarray)
+
+        # Flatten Pi0.5 parameters
+        flat_pi05 = flax.traverse_util.flatten_dict(pi05_params, sep="/")
+
+        # Extract only base model weights (NOT containing "_1", "action_", or "time_mlp_")
+        flat_loaded = {}
+        base_weight_count = 0
+        for key, pi05_value in flat_pi05.items():
+            # Check if key does NOT contain action expert identifiers
+            if "_1" not in key and "action_" not in key and "time_mlp_" not in key:
+                flat_loaded[key] = pi05_value
+                base_weight_count += 1
+                logger.debug(f"Loaded base model weight: {key} with shape {pi05_value.shape}")
+
+        logger.info(f"Loaded {base_weight_count} base model weights from Pi0.5 checkpoint (excluding action expert)")
+
+        # Unflatten back to nested structure
+        loaded_params = flax.traverse_util.unflatten_dict(flat_loaded, sep="/")
+
+        # Merge with reference params (add missing LoRA weights, etc.)
+        return _merge_params(loaded_params, params, missing_regex=".*")
+
+
+@dataclasses.dataclass(frozen=True)
+class PaliGemmaWithPi05ActionExpertWeightLoader(WeightLoader):
+    """Loads PaliGemma and appends Pi0.5 action expert weights to it.
+
+    This loader:
+    1. Loads a PaliGemma checkpoint from params_path
+    2. Loads Pi0.5 checkpoint and extracts action expert weights (identified by "_1", "action_", or "time_mlp_")
+    3. Appends the Pi0.5 action expert weights to the PaliGemma checkpoint
+    4. Merges the result with reference params (similar to CheckpointWeightLoader)
+
+    This is useful for creating a model that combines PaliGemma's base model with Pi0.5's trained action expert,
+    since PaliGemma originally doesn't have action expert weights.
+    """
+
+    pi05_params_path: str = "gs://openpi-assets/checkpoints/pi05_base/params"
+
+    def load(self, params: at.Params) -> at.Params:
+        path = download.maybe_download(
+            "gs://vertex-model-garden-paligemma-us/paligemma/pt_224.npz", gs={"token": "anon"}
+        )
+        with path.open("rb") as f:
+            flat_params = dict(np.load(f, allow_pickle=False))
+        loaded_params = {"PaliGemma": flax.traverse_util.unflatten_dict(flat_params, sep="/")["params"]}
+
+        # Load Pi0.5 checkpoint
+        logger.info(f"Loading Pi0.5 action expert weights from {self.pi05_params_path}")
+        pi05_path_str = str(self.pi05_params_path)
+        if pi05_path_str.startswith("gs://"):
+            if "/cache/" in pi05_path_str:
+                cache_candidate = pi05_path_str
+                upstream = pi05_path_str.split("/cache/", 1)[1]
+                upstream = upstream if upstream.startswith("gs://") else f"gs://{upstream}"
+                try:
+                    download.ensure_commit_success(cache_candidate)
+                    pi05_params_source = cache_candidate
+                except Exception:
+                    pi05_params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+            else:
+                pi05_params_source = download.mirror_checkpoint_to_remote_cache(pi05_path_str)
+        else:
+            pi05_params_source = str(download.maybe_download(pi05_path_str))
+
+        pi05_params = _model.restore_params(pi05_params_source, restore_type=np.ndarray)
+
+        # Flatten both parameter dictionaries for easier processing
+        flat_pi05 = flax.traverse_util.flatten_dict(pi05_params, sep="/")
+        flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+
+        # Extract and append action expert weights (containing "_1", "action_", or "time_mlp_")
+        action_expert_count = 0
+        for key, pi05_value in flat_pi05.items():
+            # Check if key contains action expert identifiers
+            if "_1" in key or "action_" in key or "time_mlp_" in key:
+                # Append the action expert weight (don't check if it exists in loaded_params)
+                flat_loaded[key] = pi05_value
+                action_expert_count += 1
+                logger.debug(f"Appended action expert weight: {key} with shape {pi05_value.shape}")
+
+        logger.info(f"Appended {action_expert_count} action expert weights from Pi0.5 checkpoint to PaliGemma")
+
+        # Unflatten back to nested structure
+        loaded_params = flax.traverse_util.unflatten_dict(flat_loaded, sep="/")
+
+        # Merge with reference params (add missing LoRA weights, etc.)
+        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+
+
+@dataclasses.dataclass(frozen=True)
 class WeightLoaderChoice(WeightLoader):
     """CLI-friendly wrapper to choose a weight loader without nested subcommands.
 
@@ -639,15 +846,29 @@ class WeightLoaderChoice(WeightLoader):
       --weight-loader.kind=checkpoint --weight-loader.params-path=gs://...
       --weight-loader.kind=paligemma
       --weight-loader.kind=gemma3 --weight-loader.target-pos-emb-grid-size='(16,16)'
+      --weight-loader.kind=pi05_action_expert --weight-loader.params-path=gs://base/checkpoint --weight-loader.pi05-params-path=gs://...
+      --weight-loader.kind=pi05_base --weight-loader.pi05-params-path=gs://...
+      --weight-loader.kind=paligemma_with_pi05_action_expert --weight-loader.params-path=gs://paligemma/checkpoint --weight-loader.pi05-params-path=gs://...
       --weight-loader.kind=none
     """
 
     # Which loader to use.
-    kind: Literal["none", "checkpoint", "paligemma", "paligemma2", "gemma3"] = "paligemma"
-    # Only used when kind == "checkpoint" or "paligemma2" or "gemma3".
+    kind: Literal[
+        "none",
+        "checkpoint",
+        "paligemma",
+        "paligemma2",
+        "gemma3",
+        "pi05_action_expert",
+        "pi05_base",
+        "paligemma_with_pi05_action_expert",
+    ] = "paligemma"
+    # Used when kind == "checkpoint", "paligemma2", "gemma3", "pi05_action_expert", or "paligemma_with_pi05_action_expert".
     params_path: str | None = None
     # Only used when kind == "gemma3" - target grid size for positional embeddings.
     target_pos_emb_grid_size: tuple[int, int] | None = None
+    # Only used when kind == "pi05_action_expert", "pi05_base", or "paligemma_with_pi05_action_expert" - path to Pi0.5 checkpoint.
+    pi05_params_path: str | None = "gs://openpi-assets/checkpoints/pi05_base/params"
 
     def _resolve(self) -> WeightLoader:
         match self.kind:
@@ -667,6 +888,22 @@ class WeightLoaderChoice(WeightLoader):
                 return Gemma3ScanCompatibleWeightLoader(
                     self.params_path, target_pos_emb_grid_size=self.target_pos_emb_grid_size
                 )
+            case "pi05_action_expert":
+                if not self.params_path:
+                    raise ValueError("--weight-loader.params-path must be set when kind=pi05_action_expert")
+                if not self.pi05_params_path:
+                    raise ValueError("--weight-loader.pi05-params-path must be set when kind=pi05_action_expert")
+                return Pi05ActionExpertWeightLoader(self.params_path, self.pi05_params_path)
+            case "pi05_base":
+                if not self.pi05_params_path:
+                    raise ValueError("--weight-loader.pi05-params-path must be set when kind=pi05_base")
+                return Pi05BaseWeightLoader(self.pi05_params_path)
+            case "paligemma_with_pi05_action_expert":
+                if not self.pi05_params_path:
+                    raise ValueError(
+                        "--weight-loader.pi05-params-path must be set when kind=paligemma_with_pi05_action_expert"
+                    )
+                return PaliGemmaWithPi05ActionExpertWeightLoader(self.pi05_params_path)
             case "none":
                 return NoOpWeightLoader()
             case _:

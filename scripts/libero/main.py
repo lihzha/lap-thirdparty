@@ -37,7 +37,7 @@ class Args:
     host: str = "0.0.0.0"
     port: int = 8000
     resize_size: int = 224
-    replan_steps: int = 1
+    replan_steps: int = 6
     policy_type: PolicyType = PolicyType.PI05
 
     #################################################################################################################
@@ -130,6 +130,7 @@ def eval_libero(args: Args) -> None:
             # Setup
             t = 0
             replay_images = []
+            # wrist_replay_images = []
             episode_start_time = datetime.datetime.now()
 
             logging.info(f"Starting episode {task_episodes + 1}...")
@@ -159,6 +160,7 @@ def eval_libero(args: Args) -> None:
 
                     # Save preprocessed image for replay video
                     replay_images.append(img)
+                    # wrist_replay_images.append(wrist_img)
 
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
@@ -274,6 +276,11 @@ def eval_libero(args: Args) -> None:
                 [np.asarray(x) for x in replay_images],
                 fps=10,
             )
+            # imageio.mimwrite(
+            #     pathlib.Path(args.video_out_path) / f"rollout_wrist_{task_segment}_{suffix}.mp4",
+            #     [np.asarray(x) for x in wrist_replay_images],
+            #     fps=10,
+            # )
 
             # Log current results
             logging.info(f"Success: {done}")

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """A refactored and simplified ViT adoptation for Pi, taken from big_vision."""
+
 """ADDING RMSNORM FOR GEMMA3"""
 
 from collections.abc import Sequence
@@ -22,8 +23,8 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-
 import openpi.training.sharding as sharding
+
 from openpi_cot.models.gemma_common import RMSNorm as CommonRMSNorm
 
 
@@ -187,12 +188,13 @@ class MAPHead(nn.Module):
         x = x + MlpBlock(mlp_dim=self.mlp_dim, dtype=self.dtype_mm)(y)
         return x[:, 0]
 
+
 def patchify_images(
     images: jnp.ndarray,
     *,
     patch_size: tuple[int, int],
     padding: str = "VALID",
-    ) -> jnp.ndarray:
+) -> jnp.ndarray:
     """Extract patches from images.
 
     This function is a wrapper for jax.lax.conv_general_dilated_patches
@@ -220,11 +222,8 @@ def patchify_images(
         dimension_numbers=("NHWC", "OIHW", "NHWC"),
         precision=jax.lax.Precision.HIGH,
     )
-    patches = einops.rearrange(
-        patches, "b ph pw (c p) -> b (ph pw) (p c)", c=channels
-    )
+    patches = einops.rearrange(patches, "b ph pw (c p) -> b (ph pw) (p c)", c=channels)
     return patches
-
 
 
 class _Module(nn.Module):
@@ -247,7 +246,6 @@ class _Module(nn.Module):
     dtype_mm: str = "float32"
     posemb_shape: tuple[int, int] | None = None  # 👈 Add this
 
-
     @nn.compact
     def __call__(self, image, *, train=False):
         out = {}
@@ -255,16 +253,13 @@ class _Module(nn.Module):
         *batch_dims, _, _, _ = image.shape
         image = einops.rearrange(image, "... h w c -> (...) h w c")
 
-
         patches = patchify_images(
             image,
             patch_size=(14, 14),
         )
         patches = patches.reshape((*batch_dims,) + patches.shape[1:])
 
-        num_patches_one_side = (
-            224 // 14
-        )
+        num_patches_one_side = 224 // 14
 
         flattened_images = einops.rearrange(
             patches,
@@ -287,7 +282,7 @@ class _Module(nn.Module):
         # because I feel like it's a bit safer.
         image = jnp.asarray(flattened_images, jnp.float32)
         # WE NEED TO MAKE THE IMAGE BE 896x896 FOR GEMMA3
-        #image = jax.image.resize(image, (896, 896), method='linear')
+        # image = jax.image.resize(image, (896, 896), method='linear')
 
         # Patch extraction
         x = out["stem"] = nn.Conv(
@@ -369,7 +364,9 @@ class _Module(nn.Module):
 
         if self.num_classes:
             kw = {"kernel_init": nn.initializers.zeros} if self.head_zeroinit else {}
-            head = nn.Dense(self.num_classes, dtype=self.dtype_mm, use_bias=False, name="head", **kw) # Gemma3 doesn't use bias
+            head = nn.Dense(
+                self.num_classes, dtype=self.dtype_mm, use_bias=False, name="head", **kw
+            )  # Gemma3 doesn't use bias
             x_2d = out["logits_2d"] = head(x_2d)
             x = out["logits"] = head(x)
 

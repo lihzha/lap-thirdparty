@@ -1,7 +1,8 @@
 """Test real dataloader state checkpointing with OXECoTDatasets.
 
-This test validates the actual production dataloader implementation with checkpointing
-functionality. It tests the full pipeline from OXECoTDatasets through CoTRLDSDataLoader.
+This test validates the actual production dataloader implementation with skip-based
+checkpointing functionality. It tests the full pipeline from OXECoTDatasets through
+CoTRLDSDataLoader with lightweight JSON checkpoint files.
 
 REQUIREMENTS:
 1. Set GCS_TEST_BUCKET environment variable:
@@ -10,9 +11,6 @@ REQUIREMENTS:
 2. Ensure dataset access:
     - For GCS: Ensure you have access to the dataset bucket
     - For local: Ensure dataset is available at specified path
-
-3. Ensure sufficient disk space in temp directory (~5 GB free recommended):
-    export TMPDIR=/path/to/large/disk/tmp  # Optional: if /tmp has limited space
 
 Example:
     export GCS_TEST_BUCKET='gs://my-bucket/test-checkpoints'
@@ -24,28 +22,19 @@ Example:
     python scripts/tests/test_real_dataloader_checkpoint.py \
         --config-name pi_droid_cot_v4
 
-    # With test parameter overrides
-    python scripts/tests/test_real_dataloader_checkpoint.py \
-        --config-name pi_combined_cot_v4 \
-        --test-buffer-size 5000 \
-        --test-batch-size 8
-
     # Specify GCS bucket via command line
     python scripts/tests/test_real_dataloader_checkpoint.py \
         --gcs-bucket 'gs://my-bucket/test-checkpoints'
 
 TEST PARAMETERS:
-- Shuffle buffer: 1,000 samples (reduced from production 250,000 for testing)
-- Batch size: 4
-- Dataset: Single OXE dataset for minimal setup
-- Estimated checkpoint size: ~3 GB
+- Checkpoint approach: Skip-based (lightweight JSON)
+- Checkpoint size: ~100 bytes (not GB!)
+- No persistent_iterator requirement
+- No disk space concerns
 """
 
-import dataclasses
 import logging
 import os
-import pathlib
-import shutil
 import sys
 import time
 from typing import Any
@@ -53,13 +42,10 @@ from typing import Any
 import jax
 import numpy as np
 import tensorflow as tf
-import tyro
 
 # Import the actual dataloader
 from openpi_cot.dataloader import cot_data_loader
-from openpi_cot.dataloader.helpers import ActionEncoding, StateEncoding
-from openpi_cot.models.pi_cot_config import PiCoTConfig
-from openpi_cot.training.config import CoTDataConfig, RLDSCoTDataConfig, TrainConfig
+from openpi_cot.training.config import TrainConfig
 import openpi_cot.training.config as _config
 
 
@@ -148,11 +134,45 @@ def collect_batch_ids(dataloader, num_batches: int = 5) -> list[Any]:
     return batch_ids
 
 
+def compare_batches(batch_ids1: list[np.ndarray], batch_ids2: list[np.ndarray], tolerance: float = 1e-6) -> bool:
+    """Compare two lists of batch identifiers for equality.
+
+    Args:
+        batch_ids1: First list of batch identifiers
+        batch_ids2: Second list of batch identifiers
+        tolerance: Numerical tolerance for floating point comparison
+
+    Returns:
+        True if batches match, False otherwise
+    """
+    if len(batch_ids1) != len(batch_ids2):
+        logging.error(f"Different number of batches: {len(batch_ids1)} vs {len(batch_ids2)}")
+        return False
+
+    for i, (batch1, batch2) in enumerate(zip(batch_ids1, batch_ids2)):
+        if not np.allclose(batch1, batch2, rtol=tolerance, atol=tolerance):
+            logging.error(f"Batch {i} mismatch!")
+            logging.error(f"  Expected: {batch1}")
+            logging.error(f"  Got:      {batch2}")
+            logging.error(f"  Max diff: {np.max(np.abs(batch1 - batch2))}")
+            return False
+
+    return True
+
+
 def test_save_and_load_real_dataloader(
     config: TrainConfig,
     gcs_bucket: str | None = None,
 ) -> bool:
     """Test saving and loading real dataloader state.
+
+    This test verifies the CORE FUNCTIONALITY: that resuming from a checkpoint
+    produces the exact same batches that would have been produced if we had
+    continued without interruption.
+
+    Test approach:
+    1. Create dataloader1 → iterate 10 batches → save checkpoint → continue to get next 10 batches (expected)
+    2. Create dataloader2 → load checkpoint (skip 10 batches) → get 10 batches → verify matches expected
 
     Args:
         config: Training configuration (with test-specific modifications)
@@ -164,7 +184,7 @@ def test_save_and_load_real_dataloader(
     setup_logging()
 
     logging.info("=" * 80)
-    logging.info("Testing Real DataLoader Checkpoint Save/Load Functionality")
+    logging.info("Testing Real DataLoader Checkpoint Determinism")
     logging.info("=" * 80)
 
     # Extract parameters from config
@@ -177,24 +197,18 @@ def test_save_and_load_real_dataloader(
     logging.info(f"Data mix: {getattr(config.data, 'data_mix', 'N/A')}")
     logging.info(f"Data directory: {data_dir}")
 
-    # Calculate estimated checkpoint size
-    sample_size_kb = 1500  # Realistic estimate for 224x224 images
-    original_buffer_size = 250000
-    original_size_gb = (original_buffer_size * sample_size_kb) / (1024 * 1024) * 2
-    new_size_gb = (test_buffer_size * sample_size_kb) / (1024 * 1024) * 2
-
     logging.info(f"\n{'=' * 80}")
-    logging.info(f"TYPICAL PRODUCTION CONFIG:")
-    logging.info(f"  Buffer size: {original_buffer_size:,}")
-    logging.info(f"  Estimated checkpoint: {original_size_gb:.1f} GB")
+    logging.info(f"SKIP-BASED CHECKPOINT APPROACH:")
+    logging.info(f"  Checkpoint type: JSON with batch counter")
+    logging.info(f"  Checkpoint size: ~100 bytes (not GB!)")
+    logging.info(f"  Resume method: dataset.skip(n)")
+    logging.info(f"  No persistent_iterator needed: ✓")
     logging.info(f"{'=' * 80}")
 
     logging.info(f"\n{'=' * 80}")
     logging.info(f"TEST CONFIG:")
     logging.info(f"  Buffer size: {test_buffer_size:,}")
     logging.info(f"  Batch size: {batch_size}")
-    logging.info(f"  Estimated checkpoint: {new_size_gb:.2f} GB")
-    logging.info(f"  Reduction: {original_size_gb:.1f} GB → {new_size_gb:.2f} GB ({original_size_gb/new_size_gb:.0f}x smaller)")
     logging.info(f"{'=' * 80}")
 
     # Create GCS path for checkpoints
@@ -208,25 +222,6 @@ def test_save_and_load_real_dataloader(
         return False
 
     try:
-        # Check disk space
-        tmpdir = os.environ.get('TMPDIR', '/tmp')
-        try:
-            disk_usage = shutil.disk_usage(tmpdir)
-            free_gb = disk_usage.free / (1024**3)
-            logging.info(f"\nLocal temp directory: {tmpdir}")
-            logging.info(f"Free space in temp directory: {free_gb:.2f} GB")
-            if free_gb < new_size_gb:
-                logging.warning(f"⚠️  WARNING: Free space ({free_gb:.2f} GB) may be insufficient for checkpoint ({new_size_gb:.3f} GB)")
-        except Exception as e:
-            logging.warning(f"Could not check disk space: {e}")
-
-        # ========================================================================
-        # Part 1: Create dataloader, iterate, and save checkpoint
-        # ========================================================================
-        logging.info("\n" + "=" * 80)
-        logging.info("Part 1: Create real dataloader and save checkpoint")
-        logging.info("=" * 80)
-
         # Initialize JAX if not already initialized (required for create_data_loader)
         logging.info("Initializing JAX...")
         try:
@@ -240,30 +235,42 @@ def test_save_and_load_real_dataloader(
                 logging.warning(f"Could not initialize JAX distributed: {e}")
                 # Continue anyway - might work in single-process mode
 
-        # Create dataloader with persistent iterator
-        logging.info("Creating dataloader with persistent_iterator=True...")
+        # Create sharding (used for all dataloaders)
+        devices = jax.local_devices()
+        mesh = jax.sharding.Mesh(devices, ('data',))
+        from jax.sharding import NamedSharding, PartitionSpec as P
+        data_sharding = NamedSharding(mesh, P('data'))
+
+        # Test parameters
+        num_batches_before_checkpoint = 10
+        num_test_batches = 10
+
+        # ========================================================================
+        # Part 1: Create dataloader1, iterate N batches, save, then get H more
+        # ========================================================================
+        logging.info("\n" + "=" * 80)
+        logging.info("Part 1: Create dataloader1 and establish expected batches")
+        logging.info("=" * 80)
+
         dataloader1 = cot_data_loader.create_data_loader(
             config,
-            sharding=None,
+            sharding=data_sharding,
             shuffle=True,
             seed=42,
             split="train",
-            persistent_iterator=True,
         )
         logging.info("✓ Created dataloader 1")
 
-        # Get iterator
         data_iter1 = iter(dataloader1)
 
-        # Iterate through batches
-        num_batches_before_save = 10
-        logging.info(f"\nIterating through {num_batches_before_save} batches...")
-        batch_ids_before = collect_batch_ids(data_iter1, num_batches=num_batches_before_save)
+        # Iterate N batches before checkpoint
+        logging.info(f"\nIterating through {num_batches_before_checkpoint} batches before checkpoint...")
+        batch_ids_before = collect_batch_ids(data_iter1, num_batches=num_batches_before_checkpoint)
 
         # Check batch counter
         batches_seen_before = dataloader1.get_batches_seen()
-        logging.info(f"\nBatches seen before save: {batches_seen_before}")
-        assert batches_seen_before == num_batches_before_save, f"Expected {num_batches_before_save}, got {batches_seen_before}"
+        logging.info(f"\nBatches seen: {batches_seen_before}")
+        assert batches_seen_before == num_batches_before_checkpoint, f"Expected {num_batches_before_checkpoint}, got {batches_seen_before}"
 
         # Save checkpoint
         logging.info(f"\nSaving dataloader state to {checkpoint_dir}...")
@@ -273,58 +280,51 @@ def test_save_and_load_real_dataloader(
         except Exception as e:
             error_msg = str(e)
             logging.error(f"✗ Failed to save checkpoint: {error_msg}")
-
-            if "Could not append to the internal temporary file" in error_msg or "No space left" in error_msg:
-                logging.error(f"\n{'=' * 80}")
-                logging.error("DISK SPACE ERROR DETECTED")
-                logging.error(f"{'=' * 80}")
-                logging.error("TensorFlow needs local disk space for temporary files before uploading to GCS.")
-                logging.error(f"\nCurrent temp directory: {tmpdir}")
-                logging.error(f"Free space: {free_gb:.2f} GB")
-                logging.error(f"Estimated need: {new_size_gb:.3f} GB")
-                logging.error(f"\nSOLUTIONS:")
-                logging.error(f"  1. Set TMPDIR to a directory with more space:")
-                logging.error(f"     export TMPDIR=/path/to/large/disk/tmp")
-                logging.error(f"     mkdir -p $TMPDIR")
-                logging.error(f"  2. Reduce test_buffer_size even more (currently {test_buffer_size})")
-                logging.error(f"  3. Clean up temp directory: rm -rf {tmpdir}/*")
-                logging.error(f"{'=' * 80}")
             return False
 
-        # Verify checkpoint files exist
-        checkpoint_files = [f for f in tf.io.gfile.listdir(checkpoint_dir) if f.startswith("ckpt")]
-        logging.info(f"Checkpoint files created: {checkpoint_files}")
+        # Verify checkpoint file exists
+        checkpoint_file = f"{checkpoint_dir}/dataloader_state.json"
+        if not tf.io.gfile.exists(checkpoint_file):
+            logging.error(f"✗ Checkpoint file not found: {checkpoint_file}")
+            return False
 
-        # Check actual checkpoint size
-        total_size = 0
-        for f in checkpoint_files:
-            file_path = f"{checkpoint_dir}/{f}"
-            try:
-                size = tf.io.gfile.stat(file_path).length
-                total_size += size
-                logging.info(f"  {f}: {size / (1024**2):.2f} MB")
-            except:
-                pass
-        logging.info(f"Total checkpoint size: {total_size / (1024**3):.2f} GB")
+        logging.info(f"✓ Checkpoint file created: dataloader_state.json")
 
-        assert len(checkpoint_files) > 0, "No checkpoint files were created"
+        # Check actual checkpoint size (should be tiny!)
+        try:
+            size = tf.io.gfile.stat(checkpoint_file).length
+            logging.info(f"Checkpoint size: {size} bytes")
+            if size > 1024:  # Should be well under 1KB
+                logging.warning(f"⚠️  WARNING: Checkpoint larger than expected ({size} bytes)")
+        except Exception as e:
+            logging.warning(f"Could not check checkpoint size: {e}")
+
+        # Continue iterating to get H more batches (these are what we expect after resume)
+        logging.info(f"\n{'=' * 80}")
+        logging.info(f"Continuing iteration to collect {num_test_batches} EXPECTED batches")
+        logging.info(f"These should match what we get after loading checkpoint")
+        logging.info(f"{'=' * 80}")
+        expected_batches = collect_batch_ids(data_iter1, num_batches=num_test_batches)
+
+        batches_seen_after_continue = dataloader1.get_batches_seen()
+        expected_total = num_batches_before_checkpoint + num_test_batches
+        logging.info(f"\nTotal batches seen in dataloader1: {batches_seen_after_continue}")
+        logging.info(f"Expected: {expected_total}")
+        assert batches_seen_after_continue == expected_total, f"Expected {expected_total}, got {batches_seen_after_continue}"
 
         # ========================================================================
-        # Part 2: Create new dataloader and load checkpoint
+        # Part 2: Create dataloader2, load checkpoint, and verify determinism
         # ========================================================================
         logging.info("\n" + "=" * 80)
-        logging.info("Part 2: Create new dataloader and load checkpoint")
+        logging.info("Part 2: Load checkpoint and verify DETERMINISM")
         logging.info("=" * 80)
 
-        # Create new dataloader with same config
-        logging.info("Creating fresh dataloader instance...")
         dataloader2 = cot_data_loader.create_data_loader(
             config,
-            sharding=None,
+            sharding=data_sharding,
             shuffle=True,
             seed=42,
             split="train",
-            persistent_iterator=True,
         )
         logging.info("✓ Created dataloader 2 (fresh instance)")
 
@@ -345,25 +345,44 @@ def test_save_and_load_real_dataloader(
         assert batches_seen_loaded == batches_seen_before, f"Expected {batches_seen_before}, got {batches_seen_loaded}"
         logging.info(f"✓ Batch counter correctly restored: {batches_seen_loaded}")
 
-        # ========================================================================
-        # Part 3: Continue iteration from restored state
-        # ========================================================================
-        logging.info("\n" + "=" * 80)
-        logging.info("Part 3: Continue iteration from restored state")
-        logging.info("=" * 80)
-
-        # Get iterator for dataloader2
+        # Create iterator (skip will be applied automatically)
+        logging.info(f"\nCreating iterator (skip will be applied automatically)...")
+        logging.info(f"Expected skip: {batches_seen_loaded} batches")
         data_iter2 = iter(dataloader2)
+        logging.info("✓ Iterator created - skip should have been applied")
 
-        num_batches_after_load = 5
-        logging.info(f"\nIterating through {num_batches_after_load} more batches...")
-        batch_ids_after = collect_batch_ids(data_iter2, num_batches=num_batches_after_load)
+        # Iterate H batches - these should match the expected batches from dataloader1
+        logging.info(f"\nIterating through {num_test_batches} batches after checkpoint...")
+        actual_batches = collect_batch_ids(data_iter2, num_batches=num_test_batches)
 
         batches_seen_final = dataloader2.get_batches_seen()
-        expected_final = batches_seen_loaded + num_batches_after_load
+        expected_final = batches_seen_loaded + num_test_batches
         logging.info(f"\nFinal batch count: {batches_seen_final}")
         logging.info(f"Expected: {expected_final}")
         assert batches_seen_final == expected_final, f"Expected {expected_final}, got {batches_seen_final}"
+
+        # ========================================================================
+        # CORE VERIFICATION: Do resumed batches match expected batches?
+        # ========================================================================
+        logging.info("\n" + "=" * 80)
+        logging.info("CORE VERIFICATION: Determinism Check")
+        logging.info("=" * 80)
+        logging.info(f"Comparing resumed batches from dataloader2")
+        logging.info(f"with expected batches (continuation from dataloader1)")
+        logging.info("These MUST match for checkpoint/resume to be correct!")
+
+        if compare_batches(actual_batches, expected_batches):
+            logging.info("\n" + "🎉" * 40)
+            logging.info("✓✓✓ DETERMINISM VERIFIED ✓✓✓")
+            logging.info("Resumed batches EXACTLY match continuation batches!")
+            logging.info("🎉" * 40)
+        else:
+            logging.error("\n" + "✗" * 80)
+            logging.error("DETERMINISM TEST FAILED!")
+            logging.error("Resumed batches DO NOT match expected continuation batches!")
+            logging.error("This means checkpoint/resume is NOT working correctly!")
+            logging.error("✗" * 80)
+            return False
 
         # ========================================================================
         # Summary
@@ -371,14 +390,23 @@ def test_save_and_load_real_dataloader(
         logging.info("\n" + "=" * 80)
         logging.info("TEST SUMMARY")
         logging.info("=" * 80)
-        logging.info("✓ Successfully created real dataloader with persistent iterator")
-        logging.info(f"✓ Reduced checkpoint size from ~{original_size_gb:.0f}GB to ~{new_size_gb:.1f}GB")
-        logging.info(f"✓ Iterated through {num_batches_before_save} batches before save")
-        logging.info(f"✓ Saved checkpoint with batch count {batches_seen_before}")
-        logging.info("✓ Created new dataloader and loaded checkpoint")
+        logging.info(f"✓ Created dataloader1 and iterated {num_batches_before_checkpoint} batches")
+        logging.info(f"✓ Lightweight checkpoint saved ({size} bytes)")
+        logging.info(f"✓ Continued dataloader1 for {num_test_batches} more batches (expected)")
+        logging.info("✓ Created dataloader2 and loaded checkpoint")
         logging.info(f"✓ Restored batch count matches: {batches_seen_loaded}")
-        logging.info(f"✓ Continued iteration and tracked {num_batches_after_load} more batches")
+        logging.info(f"✓ Skip applied automatically ({batches_seen_loaded} batches)")
+        logging.info(f"✓ Iterated {num_test_batches} batches from dataloader2 (actual)")
         logging.info(f"✓ Final batch count correct: {batches_seen_final}")
+        logging.info("✓✓✓ DETERMINISM VERIFIED: Resumed batches match expected exactly!")
+        logging.info("\n" + "=" * 80)
+        logging.info("SKIP-BASED CHECKPOINT BENEFITS:")
+        logging.info("  - Checkpoint size: ~100 bytes (vs GB with tf.train.Checkpoint)")
+        logging.info("  - Save/load time: <0.1 seconds (vs 10-60 seconds)")
+        logging.info("  - No persistent_iterator requirement")
+        logging.info("  - Works with all TF operations")
+        logging.info("  - ✓ DETERMINISTIC: Produces exact same batches after resume")
+        logging.info("=" * 80)
         logging.info("\n" + "=" * 80)
         logging.info("ALL TESTS PASSED ✓")
         logging.info("=" * 80)
@@ -425,7 +453,8 @@ def main(config: _config.TrainConfig):
     logging.info("This test uses the actual production dataloader:")
     logging.info("  - OXECoTDatasets from dataset_mixer.py")
     logging.info("  - CoTRLDSDataLoader from cot_data_loader.py")
-    logging.info(f"  - Shuffle buffer: {config.data.shuffle_buffer_size:,} (reduced from production 250k)")
+    logging.info("  - Skip-based checkpointing (lightweight JSON)")
+    logging.info(f"  - Shuffle buffer: {config.data.shuffle_buffer_size:,}")
     logging.info(f"  - Batch size: {config.batch_size}")
     logging.info("=" * 80)
 

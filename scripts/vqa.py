@@ -164,7 +164,7 @@ class Args:
 
     # If provided, will be used in case the "prompt" key is not present in the data, or if the model doesn't have a default
     # prompt.
-    default_prompt: str | None = "what is in the image?"
+    default_prompt: str | None = ""
 
     # Port to serve the policy on.
     port: int = 8000
@@ -341,7 +341,7 @@ def main(args: Args) -> None:
     # Initialize wandb
     init_wandb(args, enabled=args.wandb_enabled)
 
-    prompt = args.default_prompt or "what is in the image?"
+    prompt = args.default_prompt
     for idx, req in enumerate(
         tqdm(
             _iter_droid_request_data(config.data.rlds_data_dir, "all", config.data.droid_dataset_name, prompt=prompt),

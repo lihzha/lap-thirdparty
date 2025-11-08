@@ -113,45 +113,14 @@ class IterableTransformedDataset(up.IterableTransformedDataset):
     def __init__(self, batch_size, *args, persistent_iterator=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.batch_size = batch_size
-        self.persistent_iterator = persistent_iterator
-        self._persistent_tf_iterator = None
-
-    def get_or_create_tf_iterator(self):
-        """Get or create the underlying TensorFlow iterator.
-
-        This is used for checkpointing - we need to maintain a persistent TensorFlow
-        iterator that can be saved/restored.
-        """
-        if self._persistent_tf_iterator is None:
-            # Get the underlying dataset and create a TensorFlow iterator
-            underlying_dataset = self._dataset
-            if hasattr(underlying_dataset, "create_checkpointable_iterator"):
-                self._persistent_tf_iterator = underlying_dataset.create_checkpointable_iterator()
-            else:
-                # Fallback: create iterator directly from dataset
-                self._persistent_tf_iterator = iter(underlying_dataset.dataset)
-        return self._persistent_tf_iterator
+        self.persistent_iterator = persistent_iterator  # Kept for backward compatibility
 
     def __iter__(self):
-        if self.persistent_iterator:
-            # Use persistent iterator for checkpointing support
-            dataset_iter = self.get_or_create_tf_iterator()
-
-            # TensorFlow iterator yields TF tensors, need to convert to numpy
-            def to_numpy(x):
-                if isinstance(x, tf.Tensor):
-                    return x.numpy()
-                return np.asarray(x) if hasattr(x, "__array__") else x
-        else:
-            # Regular behavior: create new iterator each time
-            # This already yields numpy arrays via as_numpy_iterator()
-            dataset_iter = iter(self._dataset)
-            to_numpy = lambda x: x
+        # Regular behavior: create new iterator each time
+        # This already yields numpy arrays via as_numpy_iterator()
+        dataset_iter = iter(self._dataset)
 
         for sample in dataset_iter:
-            # Convert sample from TF tensors to numpy if needed
-            sample = jax.tree.map(to_numpy, sample)
-
             if self._is_batched:
                 # Transforms are designed to be applied to individual samples. So we need to split the batch into
                 # individual samples and apply the transform to each sample individually.
@@ -260,6 +229,7 @@ class CoTRLDSDataLoader:
         persistent_iterator: bool = False,
     ):
         self._dataset = dataset
+        self._original_dataset = dataset  # Keep reference for skip-based resumption
         self._num_batches = num_batches
         self._data_cfg = data_cfg
         self._n_proc = jax.process_count()
@@ -268,6 +238,7 @@ class CoTRLDSDataLoader:
         self._iterator = None
         self._checkpoint = None
         self._seen_batches = 0
+        self._skip_batches = 0  # Track how many batches to skip on next iteration
 
         if sharding is None:
             sharding = jax.sharding.PositionalSharding(jax.local_devices())
@@ -326,6 +297,23 @@ class CoTRLDSDataLoader:
     # ──────────────────────────────────────────────────────────────────────────
     def __iter__(self):
         seen = 0
+
+        # Apply skip if we're resuming from a checkpoint
+        if self._skip_batches > 0:
+            logging.info(f"Skipping {self._skip_batches} batches to resume from checkpoint...")
+            # Get the underlying dataset and apply skip
+            underlying_ds = self._dataset._dataset
+            if hasattr(underlying_ds, 'dataset'):
+                # For OXECoTDatasets and similar wrappers
+                skipped_ds = underlying_ds.dataset.skip(self._skip_batches)
+                underlying_ds.dataset = skipped_ds
+            else:
+                # For direct TF datasets
+                self._dataset._dataset = underlying_ds.skip(self._skip_batches)
+
+            self._skip_batches = 0  # Reset after applying skip
+            logging.info("Skip complete, resuming training...")
+
         data_iter = iter(self._dataset)
         while True:
             if self._num_batches is not None and seen >= self._num_batches:
@@ -380,120 +368,96 @@ class CoTRLDSDataLoader:
         return None, "none"
 
     def save_dataloader_state(self, checkpoint_dir: str) -> str:
-        """Save the dataloader state including iterator position.
+        """Save the dataloader state using batch counter for skip-based resumption.
+
+        This uses a lightweight approach that saves only the batch counter,
+        allowing resumption via dataset.skip(n).
 
         Args:
-            checkpoint_dir: Directory to save the checkpoint files.
+            checkpoint_dir: Directory to save the checkpoint file.
                            Supports both local paths and GCS paths (gs://...).
 
         Returns:
-            The checkpoint prefix path used for saving.
+            The path to the saved checkpoint file.
 
         Note:
-            - This uses TensorFlow's tf.train.Checkpoint to save the iterator state
-            - The checkpoint includes the iterator position and batch count
-            - Requires persistent_iterator=True when creating the dataloader
-            - Limitations: Cannot checkpoint iterators with external state (e.g., tf.py_function)
-            - Checkpoint files may be large due to buffering from shuffle/prefetch operations
-            - For GCS paths, ensure you have sufficient local temporary storage space
+            - Saves only the batch counter (~8 bytes) for fast checkpointing
+            - On resume, uses dataset.skip(n) to fast-forward to the checkpoint position
+            - Works with all dataset types and operations
+            - No persistent_iterator requirement
 
         Example:
             >>> loader.save_dataloader_state("./checkpoints/dataloader")
-            './checkpoints/dataloader/ckpt-1'
+            './checkpoints/dataloader/dataloader_state.json'
             >>> loader.save_dataloader_state("gs://my-bucket/checkpoints/dataloader")
-            'gs://my-bucket/checkpoints/dataloader/ckpt-1'
+            'gs://my-bucket/checkpoints/dataloader/dataloader_state.json'
         """
-        if not self._persistent_iterator:
-            raise ValueError(
-                "Dataloader must be created with persistent_iterator=True to support checkpointing. "
-                "Please recreate the dataloader with this flag enabled."
-            )
+        import json
 
         # Use tf.io.gfile for GCS compatibility
         if not tf.io.gfile.exists(checkpoint_dir):
             tf.io.gfile.makedirs(checkpoint_dir)
 
-        # Get the persistent TensorFlow iterator from the dataset
-        if self._iterator is None:
-            if hasattr(self._dataset, "get_or_create_tf_iterator"):
-                self._iterator = self._dataset.get_or_create_tf_iterator()
-            else:
-                raise ValueError(
-                    "Dataset does not support persistent iterators. "
-                    "Please ensure you're using IterableTransformedDataset with persistent_iterator=True."
-                )
+        # Save batch counter to JSON
+        checkpoint_data = {
+            "batches_seen": int(self._seen_batches),
+            "version": "1.0",
+        }
 
-        logging.info("Creating checkpoint with iterator and batch counter...")
-        # Create checkpoint with iterator and batch counter
-        step = tf.Variable(self._seen_batches, dtype=tf.int64, name="batch_counter")
-        self._checkpoint = tf.train.Checkpoint(step=step, iterator=self._iterator)
+        checkpoint_path = tf.io.gfile.join(checkpoint_dir, "dataloader_state.json")
+        logging.info(f"Saving dataloader state to {checkpoint_path}...")
 
-        # Save the checkpoint
-        checkpoint_prefix = tf.io.gfile.join(checkpoint_dir, "ckpt")
-        logging.info(f"Saving checkpoint to {checkpoint_prefix}...")
-        save_path = self._checkpoint.save(checkpoint_prefix)
-        logging.info(f"Saved dataloader state to {save_path} (batch {self._seen_batches})")
+        with tf.io.gfile.GFile(checkpoint_path, "w") as f:
+            json.dump(checkpoint_data, f, indent=2)
 
-        return save_path
+        logging.info(f"Saved dataloader state (batch {self._seen_batches})")
+        return checkpoint_path
 
     def load_dataloader_state(self, checkpoint_dir: str) -> int:
-        """Load the dataloader state from a checkpoint.
+        """Load the dataloader state from a checkpoint and prepare to skip batches.
+
+        This method loads the batch counter and sets up the dataloader to skip
+        the appropriate number of batches on the next call to __iter__.
 
         Args:
-            checkpoint_dir: Directory containing the checkpoint files.
+            checkpoint_dir: Directory containing the checkpoint file.
                            Supports both local paths and GCS paths (gs://...).
 
         Returns:
             The number of batches that were seen when the checkpoint was saved.
 
         Raises:
-            ValueError: If no checkpoint is found in the specified directory or
-                       if persistent_iterator was not enabled.
+            ValueError: If no checkpoint file is found in the specified directory.
 
         Note:
-            - This restores the iterator to the exact position when saved
-            - The dataloader will resume from where it left off
-            - Must be called before starting iteration
-            - Requires persistent_iterator=True when creating the dataloader
+            - Loads only the batch counter for lightweight checkpointing
+            - The skip operation is deferred until __iter__ is called
+            - Works with all dataset types and does not require persistent_iterator
+            - After loading, the next iteration will automatically skip to the checkpoint position
 
         Example:
             >>> batches_seen = loader.load_dataloader_state("./checkpoints/dataloader")
-            >>> print(f"Resuming from batch {batches_seen}")
+            >>> print(f"Will resume from batch {batches_seen}")
             >>> batches_seen = loader.load_dataloader_state("gs://my-bucket/checkpoints/dataloader")
-            >>> print(f"Resuming from batch {batches_seen}")
+            >>> print(f"Will resume from batch {batches_seen}")
         """
-        if not self._persistent_iterator:
-            raise ValueError(
-                "Dataloader must be created with persistent_iterator=True to support checkpointing. "
-                "Please recreate the dataloader with this flag enabled."
-            )
+        import json
 
-        # Get the persistent TensorFlow iterator from the dataset
-        if self._iterator is None:
-            if hasattr(self._dataset, "get_or_create_tf_iterator"):
-                self._iterator = self._dataset.get_or_create_tf_iterator()
-            else:
-                raise ValueError(
-                    "Dataset does not support persistent iterators. "
-                    "Please ensure you're using IterableTransformedDataset with persistent_iterator=True."
-                )
+        checkpoint_path = tf.io.gfile.join(checkpoint_dir, "dataloader_state.json")
 
-        # Create checkpoint object
-        step = tf.Variable(0, dtype=tf.int64, name="batch_counter")
-        self._checkpoint = tf.train.Checkpoint(step=step, iterator=self._iterator)
+        if not tf.io.gfile.exists(checkpoint_path):
+            raise ValueError(f"No checkpoint file found at {checkpoint_path}")
 
-        # Find the latest checkpoint
-        latest_ckpt = tf.train.latest_checkpoint(checkpoint_dir)
-        if latest_ckpt is None:
-            raise ValueError(f"No checkpoint found in {checkpoint_dir}")
+        logging.info(f"Loading dataloader state from {checkpoint_path}...")
 
-        # Restore the checkpoint
-        status = self._checkpoint.restore(latest_ckpt)
-        status.expect_partial()  # Suppress warnings about unmatched objects
+        with tf.io.gfile.GFile(checkpoint_path, "r") as f:
+            checkpoint_data = json.load(f)
 
-        # Get the restored batch count
-        self._seen_batches = int(step.numpy())
-        logging.info(f"Restored dataloader state from {latest_ckpt} (batch {self._seen_batches})")
+        self._seen_batches = checkpoint_data["batches_seen"]
+        self._skip_batches = self._seen_batches  # Set skip counter for next iteration
+
+        logging.info(f"Loaded dataloader state (batch {self._seen_batches})")
+        logging.info(f"Will skip {self._skip_batches} batches on next iteration")
 
         return self._seen_batches
 

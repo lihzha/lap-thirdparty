@@ -198,7 +198,8 @@ class _SingleCoTDataset:
         opts = tf.data.Options()
         # Always use deterministic operations for reproducibility
         # File interleaving will be deterministic but still provide good mixing
-        opts.experimental_deterministic = bool(self.want_val)
+        # opts.experimental_deterministic = bool(self.want_val)
+        opts.experimental_deterministic = True
         opts.experimental_optimization.map_parallelization = True
         opts.experimental_optimization.parallel_batch = True
         opts.experimental_optimization.map_fusion = True
@@ -504,8 +505,10 @@ class _SingleCoTDataset:
             # Use tf.reshape to flatten to scalar if needed (works for both [] and [1] shapes)
             traj_id_str = tf.reshape(traj_id_str, [])
             traj_id_hash = tf.strings.to_hash_bucket_fast(traj_id_str, 2147483647)
-            # Also include frame index if available for per-frame randomness
-            frame_hash = tf.cast(tf.random.uniform([], 0, 2147483647, dtype=tf.int32), tf.int64)
+            # Generate deterministic frame hash using trajectory ID and seed
+            # Use a different salt to create variation from traj_id_hash
+            frame_id_str = tf.strings.join([traj_id_str, "_frame"])
+            frame_hash = tf.cast(tf.strings.to_hash_bucket_fast(frame_id_str, 2147483647), tf.int64)
             seed_pair = [self.seed + traj_id_hash, frame_hash]
 
             # Decide if this sample should be a prediction sample
@@ -613,35 +616,6 @@ class _SingleCoTDataset:
                 return
             yield batch
 
-    def create_checkpointable_iterator(self):
-        """Create an iterator that can be checkpointed.
-
-        This creates a version of the dataset without device-specific operations
-        (like prefetch_to_device and with_ram_budget) that cannot be serialized.
-
-        Returns:
-            A TensorFlow iterator that can be saved/restored using tf.train.Checkpoint.
-
-        Note:
-            This iterator will be slightly slower than the normal iterator because
-            it doesn't use device-specific optimizations, but it can be checkpointed.
-        """
-        # If standalone mode with stored params, create checkpointable version
-        if hasattr(self, "_pre_batched_dataset") and hasattr(self, "_prepare_batched_params"):
-            checkpointable_dataset = prepare_batched_dataset(
-                dataset=self._pre_batched_dataset,
-                checkpointable=True,
-                **self._prepare_batched_params,
-            )
-            # Return iterator from underlying TensorFlow dataset, not dlimp wrapper
-            # This ensures compatibility with TensorFlow's checkpoint mechanism
-            if hasattr(checkpointable_dataset, "dataset"):
-                return iter(checkpointable_dataset.dataset)
-            return iter(checkpointable_dataset)
-        # Fallback to regular dataset (non-standalone mode)
-        if hasattr(self.dataset, "dataset"):
-            return iter(self.dataset.dataset)
-        return iter(self.dataset)
 
     def __len__(self):
         return self.dataset_statistics["state"].num_transitions

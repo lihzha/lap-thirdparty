@@ -15,6 +15,8 @@ from openpi_cot.policies.utils import sum_language_actions
 from openpi_cot.policies.utils import summarize_bimanual_numeric_actions
 from openpi_cot.policies.utils import summarize_numeric_actions
 from openpi_cot.policies.utils import to_str_list
+from openpi_cot.policies.utils import transform_actions_from_eef_frame
+from openpi_cot.policies.utils import transform_actions_to_eef_frame
 
 
 @dataclasses.dataclass(frozen=True)
@@ -38,6 +40,8 @@ class LanguageActionFormat:
     rotation_unit: str = "deg"
     # For compact style: use schema-based format like <+03 +05 -08 1>
     use_schema_format: bool = False
+    # Whether to represent actions in end effector's frame (relative to first timestep)
+    use_eef_frame: bool = False
 
     def get_sum_decimal(self) -> str:
         """Convert to legacy sum_decimal format for backward compatibility."""
@@ -94,6 +98,22 @@ DIRECTIONAL_ONLY_FORMAT = LanguageActionFormat(
     include_rotation=False,
 )
 
+EEF_FORMAT = LanguageActionFormat(
+    name="verbose",
+    style="verbose",
+    decimal_places=0,
+    include_rotation=False,
+    use_eef_frame=True
+)
+
+EEF_WITH_ROTATION_FORMAT = LanguageActionFormat(
+    name="verbose",
+    style="verbose",
+    decimal_places=0,
+    include_rotation=True,
+    use_eef_frame=True
+)
+
 # Registry for easy lookup of language action formats
 LANGUAGE_ACTION_FORMAT_REGISTRY = {
     "default": VERBOSE_FORMAT,  # "default" maps to "verbose" for backward compatibility
@@ -104,6 +124,8 @@ LANGUAGE_ACTION_FORMAT_REGISTRY = {
     "compact": COMPACT_FORMAT,
     "compact_with_rotation": COMPACT_WITH_ROTATION_FORMAT,
     "directional_only": DIRECTIONAL_ONLY_FORMAT,
+    "eef_frame":EEF_FORMAT,
+    "eef_frame_with_rotation": EEF_WITH_ROTATION_FORMAT
 }
 
 
@@ -265,7 +287,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         return inputs
 
-    def _prepare_text(self, data: dict, lang_action_key: str, trimmed_len_key: str) -> dict:
+    def _prepare_text(self, data: dict, lang_action_key: str, trimmed_len_key: str, initial_state: np.ndarray = None) -> dict:
         la = data[lang_action_key]
         assert isinstance(la[0], bytes)
         if (
@@ -278,6 +300,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             trimmed_len: int = data.get(trimmed_len_key)
             la_used = la[:trimmed_len]
             raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
+
+            # Transform to EEF frame if requested
+            if self.language_action_format.use_eef_frame and initial_state is not None:
+                raw_array = [transform_actions_to_eef_frame(action, initial_state) for action in raw_array]
+
             if is_bimanual:
                 summed = summarize_bimanual_numeric_actions(
                     raw_array,
@@ -337,9 +364,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if self.language_action_format.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
+        # Extract initial state for EEF frame transformation
+        initial_state = None
+        if self.language_action_format.use_eef_frame and "observation" in data and "state" in data["observation"]:
+            initial_state = np.asarray(data["observation"]["state"])
+
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data:
-            inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency")
+            inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency", initial_state)
 
             # Only apply idle filtering for language actions
             if not is_vqa_sample and not inputs["is_prediction_sample"]:
@@ -386,17 +418,21 @@ class ActionDecodingSchema:
     # Coordinate frame axis permutation and sign (for camera frame)
     axis_perm: tuple[int, int, int] = (0, 2, 1)
     axis_sign: tuple[int, int, int] = (1, 1, 1)
+    # Whether actions are in EEF frame (if True, will transform to base frame)
+    use_eef_frame: bool = False
 
     def parse_language_to_deltas(
         self,
         reasoning: str | list[str],
         in_camera_frame: bool = False,
+        initial_state: np.ndarray = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Parse language action(s) into translation deltas, rotation deltas, and gripper actions.
 
         Args:
             reasoning: Single sentence or list of reasoning sentences
             in_camera_frame: Whether the output should be in camera frame coordinates
+            initial_state: Initial EEF state for EEF frame transformation (optional)
 
         Returns:
             (translation_deltas, rotation_deltas, gripper_actions)
@@ -542,18 +578,31 @@ class ActionDecodingSchema:
                 #     # Maintain previous gripper state
                 #     gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
 
+        # Transform from EEF frame to base frame if needed
+        if self.use_eef_frame and initial_state is not None:
+            # Combine translations and rotations into action array
+            actions = np.concatenate([translations, rotations, gripper_actions[:, None]], axis=1)
+            # Transform from EEF frame to base frame
+            actions = transform_actions_from_eef_frame(actions, initial_state)
+            # Split back into components
+            translations = actions[:, :3]
+            rotations = actions[:, 3:6]
+            gripper_actions = actions[:, 6]
+
         return translations, rotations, gripper_actions
 
     def parse_bimanual_language_to_deltas(
         self,
         reasoning: str | list[str],
         in_camera_frame: bool = False,
+        initial_state: np.ndarray = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Parse bimanual language action(s) into translation deltas, rotation deltas, and gripper actions.
 
         Args:
             reasoning: Single sentence or list of reasoning sentences in format <L ... R ...>
             in_camera_frame: Whether the output should be in camera frame coordinates
+            initial_state: Initial EEF state for EEF frame transformation (optional)
 
         Returns:
             (left_translations, left_rotations, left_grippers, right_translations, right_rotations, right_grippers)
@@ -642,16 +691,40 @@ class ActionDecodingSchema:
                     right_part = parts[1].strip()
 
                     # Parse left arm
-                    left_trans, left_rot, left_grip = self.parse_language_to_deltas(left_part, in_camera_frame)
+                    # For bimanual, initial_state should contain left arm state in first 7 or 6 elements
+                    left_state = initial_state[:7] if initial_state is not None and len(initial_state) >= 7 else None
+                    left_trans, left_rot, left_grip = self.parse_language_to_deltas(left_part, in_camera_frame, left_state)
                     left_translations[i] = left_trans[0]
                     left_rotations[i] = left_rot[0]
                     left_grippers[i] = left_grip[0]
 
                     # Parse right arm
-                    right_trans, right_rot, right_grip = self.parse_language_to_deltas(right_part, in_camera_frame)
+                    # For bimanual, initial_state should contain right arm state starting at index 7
+                    right_state = initial_state[7:14] if initial_state is not None and len(initial_state) >= 14 else None
+                    right_trans, right_rot, right_grip = self.parse_language_to_deltas(right_part, in_camera_frame, right_state)
                     right_translations[i] = right_trans[0]
                     right_rotations[i] = right_rot[0]
                     right_grippers[i] = right_grip[0]
+
+        # Transform from EEF frame to base frame if needed
+        if self.use_eef_frame and initial_state is not None:
+            # Combine left arm components
+            left_actions = np.concatenate([left_translations, left_rotations, left_grippers[:, None]], axis=1)
+            # For bimanual, initial_state should contain left arm state in first 7 or 6 elements
+            left_state = initial_state[:7] if len(initial_state) >= 7 else initial_state[:6]
+            left_actions = transform_actions_from_eef_frame(left_actions, left_state)
+            left_translations = left_actions[:, :3]
+            left_rotations = left_actions[:, 3:6]
+            left_grippers = left_actions[:, 6]
+
+            # Combine right arm components
+            right_actions = np.concatenate([right_translations, right_rotations, right_grippers[:, None]], axis=1)
+            # For bimanual, initial_state should contain right arm state starting at index 7
+            right_state = initial_state[7:14] if len(initial_state) >= 14 else initial_state[7:13]
+            right_actions = transform_actions_from_eef_frame(right_actions, right_state)
+            right_translations = right_actions[:, :3]
+            right_rotations = right_actions[:, 3:6]
+            right_grippers = right_actions[:, 6]
 
         return left_translations, left_rotations, left_grippers, right_translations, right_rotations, right_grippers
 
@@ -745,9 +818,15 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
         assert self.decoding_schema is not None and reasoning is not None
+
+        # Extract initial state for EEF frame transformation
+        initial_state = None
+        if self.decoding_schema.use_eef_frame and "state" in data:
+            initial_state = np.asarray(data["state"])
+
         # Parse reasoning to translation deltas, rotation deltas, and gripper actions
         translations, rotations, gripper_actions = self.decoding_schema.parse_language_to_deltas(
-            reasoning, in_camera_frame=self.in_camera_frame
+            reasoning, in_camera_frame=self.in_camera_frame, initial_state=initial_state
         )
 
         # If we don't have actions from the model, use the parsed actions

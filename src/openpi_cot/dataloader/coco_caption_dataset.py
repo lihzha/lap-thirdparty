@@ -78,15 +78,23 @@ class CocoCaption(_BaseVQADataset):
             (prompt, caption) where prompt is randomly sampled from COCO_PROMPTS
             and caption is randomly sampled from the available captions.
         """
+        # Generate deterministic seed from image ID
+        image_id = example["image/id"]
+        image_id_hash = tf.cast(image_id % 2147483647, tf.int32)
+
         # Randomly select one caption from the list
         captions = example["captions"]["text"]
         num_captions = tf.shape(captions)[0]
-        caption_idx = tf.random.uniform([], 0, num_captions, dtype=tf.int32, seed=self.seed)
+        caption_idx = tf.random.stateless_uniform(
+            [], seed=[self.seed, image_id_hash], minval=0, maxval=num_captions, dtype=tf.int32
+        )
         selected_caption = captions[caption_idx]
 
-        # Randomly select a prompt
+        # Randomly select a prompt (use different seed component for diversity)
         num_prompts = tf.shape(COCO_PROMPTS)[0]
-        prompt_idx = tf.random.uniform([], 0, num_prompts, dtype=tf.int32, seed=self.seed)
+        prompt_idx = tf.random.stateless_uniform(
+            [], seed=[self.seed + 1, image_id_hash], minval=0, maxval=num_prompts, dtype=tf.int32
+        )
         prompt = COCO_PROMPTS[prompt_idx]
 
         return prompt, selected_caption
