@@ -263,8 +263,12 @@ def save_state(
             }
             manager_to_use.save(step, items)
 
+            # Wait for async operations to complete before barrier
+            # This ensures all async I/O (including dataloader state saves) has finished
+            manager_to_use.wait_until_finished()
+
             # Multi-host barrier: Ensure all hosts wait for checkpoint save to complete
-            # This is critical when process 0 saves dataloader state - other hosts must wait
+            # This is critical because all processes save their own dataloader state
             if jax.process_count() > 1:
                 jax.experimental.multihost_utils.sync_global_devices("checkpoint_save_complete")
 
@@ -365,17 +369,19 @@ def restore_state(
                 logging.info(
                     f"[Process {process_idx}] Restored dataloader state | batches_seen={batches_seen} | step={restore_step} | location={dataloader_dir}"
                 )
-
-                # Multi-host barrier: Ensure all hosts have completed restore before continuing
-                if jax.process_count() > 1:
-                    jax.experimental.multihost_utils.sync_global_devices("dataloader_restore_complete")
-                    if jax.process_index() == 0:
-                        logging.info(f"All {jax.process_count()} hosts synchronized after dataloader restore")
             else:
                 logging.warning(
                     f"[Process {process_idx}] Dataloader checkpoint not found at {dataloader_dir}. "
                     "Dataloader will start from beginning of dataset shard."
                 )
+
+            # Multi-host barrier: Ensure all hosts have completed restore before continuing
+            # This barrier must be OUTSIDE the exists check to prevent deadlock when some processes
+            # have checkpoints while others don't
+            if jax.process_count() > 1:
+                jax.experimental.multihost_utils.sync_global_devices("dataloader_restore_complete")
+                if jax.process_index() == 0:
+                    logging.info(f"All {jax.process_count()} hosts synchronized after dataloader restore")
         except Exception as e:
             logging.warning(f"[Process {jax.process_index()}] Failed to restore dataloader state: {e}")
             logging.warning("Training will continue but dataloader will start from beginning")
