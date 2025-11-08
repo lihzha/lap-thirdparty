@@ -235,23 +235,23 @@ def save_state(
                 # - Each host MUST save its own checkpoint to restore correctly
                 # - All hosts save in parallel to their own subdirectories
 
-                # if hasattr(data_loader, "save_dataloader_state"):
-                #     try:
-                #         # directory is {checkpoint_dir}/{step}/assets/
-                #         # Each process saves to its own subdirectory
-                #         process_idx = jax.process_index()
-                #         dataloader_dir = str(directory / f"dataloader_process_{process_idx}")
-                #         save_path = data_loader.save_dataloader_state(dataloader_dir)
-                #         batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
-                #         logging.info(
-                #             f"[Process {process_idx}] Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
-                #         )
-                #     except Exception as e:
-                #         logging.warning(f"[Process {jax.process_index()}] Failed to save dataloader state: {e}")
-                #         logging.warning("Training will continue but dataloader state will not be checkpointed")
-                # else:
-                #     if jax.process_index() == 0:
-                #         logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
+                if hasattr(data_loader, "save_dataloader_state"):
+                    try:
+                        # directory is {checkpoint_dir}/{step}/assets/
+                        # Each process saves to its own subdirectory
+                        process_idx = jax.process_index()
+                        dataloader_dir = str(directory / f"dataloader_process_{process_idx}")
+                        save_path = data_loader.save_dataloader_state(dataloader_dir)
+                        batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
+                        logging.info(
+                            f"[Process {process_idx}] Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
+                        )
+                    except Exception as e:
+                        logging.warning(f"[Process {jax.process_index()}] Failed to save dataloader state: {e}")
+                        logging.warning("Training will continue but dataloader state will not be checkpointed")
+                else:
+                    if jax.process_index() == 0:
+                        logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
 
             # Split params that can be used for inference into a separate item.
             with at.disable_typechecking():
@@ -345,41 +345,42 @@ def restore_state(
     # Multi-host: Each host restores from its own checkpoint (saved per-process)
     # This ensures each host resumes its correct data shard position
 
-    # if hasattr(data_loader, "load_dataloader_state"):
-    #     try:
-    #         # Determine which step to restore from
-    #         if step is None:
-    #             step = checkpoint_manager.latest_step()
+    if data_loader is not None and hasattr(data_loader, "load_dataloader_state"):
+        try:
+            # Determine which step to restore from
+            restore_step = step
+            if restore_step is None:
+                restore_step = checkpoint_manager.latest_step()
 
-    #         # Construct dataloader checkpoint directory (same structure as save)
-    #         # Each process has its own checkpoint: {checkpoint_dir}/{step}/assets/dataloader_process_{process_index}/
-    #         checkpoint_dir = _extract_directory(checkpoint_manager)
-    #         process_idx = jax.process_index()
-    #         dataloader_dir = str(epath.Path(checkpoint_dir) / str(step) / "assets" / f"dataloader_process_{process_idx}")
+            # Construct dataloader checkpoint directory (same structure as save)
+            # Each process has its own checkpoint: {checkpoint_dir}/{step}/assets/dataloader_process_{process_index}/
+            checkpoint_dir = _extract_directory(checkpoint_manager)
+            process_idx = jax.process_index()
+            dataloader_dir = str(epath.Path(checkpoint_dir) / str(restore_step) / "assets" / f"dataloader_process_{process_idx}")
 
-    #         # Check if dataloader checkpoint exists for this process
-    #         if tf.io.gfile.exists(dataloader_dir):
-    #             # Each host restores from its own checkpoint
-    #             batches_seen = data_loader.load_dataloader_state(dataloader_dir)
-    #             logging.info(
-    #                 f"[Process {process_idx}] Restored dataloader state | batches_seen={batches_seen} | step={step} | location={dataloader_dir}"
-    #             )
+            # Check if dataloader checkpoint exists for this process
+            if tf.io.gfile.exists(dataloader_dir):
+                # Each host restores from its own checkpoint
+                batches_seen = data_loader.load_dataloader_state(dataloader_dir)
+                logging.info(
+                    f"[Process {process_idx}] Restored dataloader state | batches_seen={batches_seen} | step={restore_step} | location={dataloader_dir}"
+                )
 
-    #             # Multi-host barrier: Ensure all hosts have completed restore before continuing
-    #             if jax.process_count() > 1:
-    #                 jax.experimental.multihost_utils.sync_global_devices("dataloader_restore_complete")
-    #                 if jax.process_index() == 0:
-    #                     logging.info(f"All {jax.process_count()} hosts synchronized after dataloader restore")
-    #         else:
-    #             logging.warning(
-    #                 f"[Process {process_idx}] Dataloader checkpoint not found at {dataloader_dir}. "
-    #                 "Dataloader will start from beginning of dataset shard."
-    #             )
-    #     except Exception as e:
-    #         logging.warning(f"[Process {jax.process_index()}] Failed to restore dataloader state: {e}")
-    #         logging.warning("Training will continue but dataloader will start from beginning")
-    # elif jax.process_index() == 0:
-    #     logging.info("Data loader does not support state restoration (persistent_iterator not enabled)")
+                # Multi-host barrier: Ensure all hosts have completed restore before continuing
+                if jax.process_count() > 1:
+                    jax.experimental.multihost_utils.sync_global_devices("dataloader_restore_complete")
+                    if jax.process_index() == 0:
+                        logging.info(f"All {jax.process_count()} hosts synchronized after dataloader restore")
+            else:
+                logging.warning(
+                    f"[Process {process_idx}] Dataloader checkpoint not found at {dataloader_dir}. "
+                    "Dataloader will start from beginning of dataset shard."
+                )
+        except Exception as e:
+            logging.warning(f"[Process {jax.process_index()}] Failed to restore dataloader state: {e}")
+            logging.warning("Training will continue but dataloader will start from beginning")
+    elif data_loader is not None and jax.process_index() == 0:
+        logging.info("Data loader does not support state restoration (persistent_iterator not enabled)")
 
     return _merge_params(restored["train_state"], restored["params"])
 

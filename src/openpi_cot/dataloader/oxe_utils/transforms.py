@@ -798,7 +798,7 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # Use deterministic index based on hash of first observation state
     state_hash = tf.strings.to_hash_bucket_fast(
         tf.strings.as_string(tf.reduce_sum(trajectory["observation"]["state"][0])),
-        tf.shape(fallback_instructions)[0]
+        18  # Number of fallback instructions
     )
     random_fallback = fallback_instructions[state_hash]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
@@ -997,7 +997,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     # Use deterministic index based on hash of first observation state
     state_hash = tf.strings.to_hash_bucket_fast(
         tf.strings.as_string(tf.reduce_sum(trajectory["observation"]["state"][0])),
-        tf.shape(fallback_instructions)[0]
+        18  # Number of fallback instructions
     )
     random_fallback = fallback_instructions[state_hash]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)

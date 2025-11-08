@@ -198,8 +198,7 @@ class _SingleCoTDataset:
         opts = tf.data.Options()
         # Always use deterministic operations for reproducibility
         # File interleaving will be deterministic but still provide good mixing
-        # opts.experimental_deterministic = bool(self.want_val)
-        opts.experimental_deterministic = True
+        opts.experimental_deterministic = bool(self.want_val)
         opts.experimental_optimization.map_parallelization = True
         opts.experimental_optimization.parallel_batch = True
         opts.experimental_optimization.map_fusion = True
@@ -615,7 +614,6 @@ class _SingleCoTDataset:
                 logging.info("StopIteration")
                 return
             yield batch
-
 
     def __len__(self):
         return self.dataset_statistics["state"].num_transitions
