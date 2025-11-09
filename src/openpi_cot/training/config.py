@@ -183,6 +183,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     prediction_prompt: str = "What is the robot's movement between two frames?"
     pred_prob: float = 0.2  # Probability of converting a frame to prediction sample (after flattening)
     primary_pred_prob: float = 0.5  # Probability of using primary camera (vs wrist) for prediction training
+    prediction_state_config: Literal["default", "named_params", "verbose"] | None = None  # State format for prediction prompts
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
@@ -217,6 +218,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
     ] = "pi05"
     tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
     include_outputs: bool = True  # Toggle output transforms (e.g., detokenization)
+    prediction_state_config: Literal["default", "named_params", "verbose"] | None = None
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -229,6 +231,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             tokenizer_type=self.tokenizer_type,
+                            prediction_state_config=self.prediction_state_config,
                         )
                     )
                 ]
@@ -241,6 +244,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             tokenizer_type=self.tokenizer_type,
+                            prediction_state_config=self.prediction_state_config,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                     ),
@@ -350,6 +354,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+            prediction_state_config=base_cfg.prediction_state_config,
         )(model_config)
 
 
@@ -375,6 +380,7 @@ class VQADataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+            prediction_state_config=base_cfg.prediction_state_config,
         )(model_config)
 
 
@@ -405,6 +411,7 @@ class LiberoFinetuneDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+            prediction_state_config=base_cfg.prediction_state_config,
             include_outputs=False,  # Libero doesn't need output detokenization
         )(model_config)
 
@@ -436,6 +443,7 @@ class PlanningDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+            prediction_state_config=base_cfg.prediction_state_config,
             include_outputs=False,  # Planning doesn't need output detokenization
         )(model_config)
 

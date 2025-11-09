@@ -377,11 +377,18 @@ PREDICTION_STATE_VERBOSE = PredictionStateConfig(
     ),
 )
 
+GROUPED_STATE_VERBOSE = PredictionStateConfig(
+    discretization=StateDiscretizationConfig(
+        bins=256, min_dim=7, range_min=-1.0, range_max=1.0, template=GROUPED_STATE_TEMPLATE
+    ),
+)
+
 # Registry for prediction state configs
 PREDICTION_STATE_CONFIG_REGISTRY = {
     "default": PREDICTION_STATE_DEFAULT,
     "named_params": PREDICTION_STATE_NAMED_PARAMS,
     "verbose": PREDICTION_STATE_VERBOSE,
+    "grouped": GROUPED_STATE_VERBOSE,
 }
 
 
