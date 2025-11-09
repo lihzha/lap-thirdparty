@@ -303,7 +303,7 @@ def _convert_eef_pos_to_eef_r6(action: tf.Tensor) -> tf.Tensor:
 
 def _euler_to_quaternion(euler: tf.Tensor) -> tf.Tensor:
     """Convert euler angles (rx, ry, rz) to quaternion (qx, qy, qz, qw) using extrinsic XYZ convention."""
-    rx, ry, rz = tf.unstack(euler, axis=-1)
+    rx, ry, rz = tf.unstack(euler, num=3, axis=-1)
 
     # Half angles
     cx, sx = tf.cos(rx * 0.5), tf.sin(rx * 0.5)
@@ -323,7 +323,7 @@ def _euler_to_quaternion(euler: tf.Tensor) -> tf.Tensor:
 
 def _euler_to_rotation_matrix(euler: tf.Tensor) -> tf.Tensor:
     """Convert euler angles (rx, ry, rz) to rotation matrix using extrinsic XYZ convention."""
-    rx, ry, rz = tf.unstack(euler, axis=-1)
+    rx, ry, rz = tf.unstack(euler, num=3, axis=-1)
 
     cx, sx = tf.cos(rx), tf.sin(rx)
     cy, sy = tf.cos(ry), tf.sin(ry)
@@ -379,7 +379,7 @@ def _quaternion_to_euler(quat: tf.Tensor) -> tf.Tensor:
 def _quaternion_to_rotation_matrix(quat: tf.Tensor) -> tf.Tensor:
     """Convert quaternion (qx, qy, qz, qw) to rotation matrix."""
     eps = tf.constant(1e-8, quat.dtype)
-    qx, qy, qz, qw = tf.unstack(quat, axis=-1)
+    qx, qy, qz, qw = tf.unstack(quat, num=4, axis=-1)
     norm = tf.sqrt(tf.maximum(qw**2 + qx**2 + qy**2 + qz**2, eps))
     qw, qx, qy, qz = qw / norm, qx / norm, qy / norm, qz / norm
 
@@ -407,9 +407,9 @@ def _rotation_matrix_to_euler(rot_matrix: tf.Tensor) -> tf.Tensor:
 
     For extrinsic XYZ: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)
     """
-    r11, r12, r13 = tf.unstack(rot_matrix[..., 0, :], axis=-1)
-    r21, r22, r23 = tf.unstack(rot_matrix[..., 1, :], axis=-1)
-    r31, r32, r33 = tf.unstack(rot_matrix[..., 2, :], axis=-1)
+    r11, r12, r13 = tf.unstack(rot_matrix[..., 0, :], num=3, axis=-1)
+    r21, r22, r23 = tf.unstack(rot_matrix[..., 1, :], num=3, axis=-1)
+    r31, r32, r33 = tf.unstack(rot_matrix[..., 2, :], num=3, axis=-1)
 
     # Extrinsic XYZ extraction:
     # pitch = asin(r13), roll = atan2(-r23, r33), yaw = atan2(-r12, r11)
@@ -421,9 +421,9 @@ def _rotation_matrix_to_euler(rot_matrix: tf.Tensor) -> tf.Tensor:
 
 def _rotation_matrix_to_quaternion(rot_matrix: tf.Tensor) -> tf.Tensor:
     eps = tf.constant(1e-8, rot_matrix.dtype)
-    r11, r12, r13 = tf.unstack(rot_matrix[..., 0, :], axis=-1)
-    r21, r22, r23 = tf.unstack(rot_matrix[..., 1, :], axis=-1)
-    r31, r32, r33 = tf.unstack(rot_matrix[..., 2, :], axis=-1)
+    r11, r12, r13 = tf.unstack(rot_matrix[..., 0, :], num=3, axis=-1)
+    r21, r22, r23 = tf.unstack(rot_matrix[..., 1, :], num=3, axis=-1)
+    r31, r32, r33 = tf.unstack(rot_matrix[..., 2, :], num=3, axis=-1)
 
     trace = r11 + r22 + r33
     cond1 = trace > 0
