@@ -69,6 +69,7 @@ class _BaseVQADataset(_SingleCoTDataset):
         max_samples: int | None = None,
         skip_normalization: bool = False,
         enable_prediction_training: bool = False,
+        **kwargs,
     ):
         # VQA datasets don't have language actions in the traditional sense
         self.use_json_actions = False
