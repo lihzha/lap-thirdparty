@@ -405,9 +405,7 @@ VERBOSE_STATE_PROMPT_FORMAT = PromptFormat(
     components=[
         PromptComponent(
             "schema",
-            "Robot control schema: Actions are displacement vectors <dx, dy, dz, gripper>. "
-            "Units: centimeters. Coordinate system: +x=forward, +y=left, +z=up. "
-            "Gripper values: 0=close, 1=open.",
+            "Your Robot control coordinate system: +x=forward, +y=left, +z=up.",
         ),
         PromptComponent("task_prefix", "Task: {prompt}"),
         PromptComponent("state_prefix", "Current state ({state_label}): {state}", include_state_type=True),
