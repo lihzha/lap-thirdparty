@@ -339,7 +339,7 @@ VERBOSE_STATE_TEMPLATE = StateTemplate(
 
 GROUPED_STATE_TEMPLATE = GroupedStateTemplate(
     group_labels=["position", "rotation", "gripper"],
-    group_sizes=[3, 6, 1],
+    group_sizes=[3, 3, 1],
     value_format="{value:03d}",
     group_separator=", ",
     value_separator=" ",

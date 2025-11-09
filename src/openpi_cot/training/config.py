@@ -918,7 +918,7 @@ _CONFIGS = [
             "droid_dataset_name": "droid",
             "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
             "shuffle_buffer_size": 400_000,
-            "state_encoding": StateEncoding.EEF_R6,
+            # "state_encoding": StateEncoding.EEF_R6,
             "action_proprio_normalization_type": NormalizationType.BOUNDS,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(
