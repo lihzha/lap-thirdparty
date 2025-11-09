@@ -107,6 +107,7 @@ class OXECoTDatasets:
                 pred_prob=config.pred_prob,
                 primary_pred_prob=config.primary_pred_prob,
             )
+            has_robot_dataset = False
             if dataset_name == "droid":
                 ds = DroidCoTDataset(
                     **kwargs,
@@ -119,26 +120,31 @@ class OXECoTDatasets:
                     "instr_table": ds.instr_table,
                     "filter_table": ds.filter_table,
                 }
+                has_robot_dataset = True
             elif dataset_name == "sample_r1_lite":
                 ds = SampleR1LiteCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
+                has_robot_dataset = True
             elif dataset_name == "dobbe":
                 ds = DobbeCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
+                has_robot_dataset = True
             elif dataset_name.startswith("libero"):
                 ds = LiberoCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
+                has_robot_dataset = True
             elif dataset_name.startswith("planning"):
                 ds = PlanningDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
+                has_robot_dataset = True
             elif dataset_name == "coco_captions":
                 ds = CocoCaption(
                     dataset_name=dataset_name,
@@ -159,6 +165,7 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
+                has_robot_dataset = True
             # Don't restrict RAM budget on individual datasets
             # Let the final mixed dataset handle memory management
             datasets.append(ds.dataset)
@@ -189,7 +196,7 @@ class OXECoTDatasets:
         pprint_data_mixture(dataset_names, sample_weights)
 
         # Apply global normalization if requested
-        if use_global_normalization and not config.vis_dataset:
+        if use_global_normalization and not config.vis_dataset and has_robot_dataset:
             global_stats_dir = data_dir
             global_stats = self._compute_or_load_global_stats(
                 datasets=datasets,
