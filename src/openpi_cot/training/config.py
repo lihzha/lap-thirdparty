@@ -183,7 +183,9 @@ class CoTDataConfig(upstream_config.DataConfig):
     prediction_prompt: str = "What is the robot's movement between two frames?"
     pred_prob: float = 0.2  # Probability of converting a frame to prediction sample (after flattening)
     primary_pred_prob: float = 0.5  # Probability of using primary camera (vs wrist) for prediction training
-    prediction_state_config: Literal["default", "named_params", "verbose"] | None = None  # State format for prediction prompts
+    prediction_state_config: Literal["default", "named_params", "verbose", "grouped"] | None = (
+        None  # State format for prediction prompts
+    )
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False

@@ -606,7 +606,9 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma",
         num_images: int = 2,
         tokens_per_image: int = 256,
-        prediction_state_config: Literal["default", "named_params", "verbose"] | PredictionStateConfig | None = None,
+        prediction_state_config: Literal["default", "named_params", "verbose", "grouped"]
+        | PredictionStateConfig
+        | None = None,
     ):
         # super().__init__(max_len)
         if tokenizer_type == "paligemma":
