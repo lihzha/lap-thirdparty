@@ -17,6 +17,7 @@ from typing_extensions import override
 import tyro
 
 from openpi_cot.dataloader.helpers import ActionEncoding
+from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.dataloader.helpers import StateEncoding
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
@@ -168,6 +169,9 @@ class CoTDataConfig(upstream_config.DataConfig):
     dataset_type: Literal["droid", "oxe", "combined"] = "droid"
     state_encoding: StateEncoding = StateEncoding.POS_EULER
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
+    # Normalization type for actions and proprioceptive state.
+    # CLI: --data.action_proprio_normalization_type {normal|bounds|bounds_q99}
+    action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL
     resize_resolution: tuple[int, int] = (224, 224)
 
     # Language action format
@@ -207,6 +211,8 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
         "schema_compact_with_rotation",
         "schema_compact_bimanual",
         "schema_compact_bimanual_with_rotation",
+        "schema_compact_named_params",
+        "verbose_state",
     ] = "pi05"
     tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
     include_outputs: bool = True  # Toggle output transforms (e.g., detokenization)
@@ -874,6 +880,35 @@ _CONFIGS = [
             "droid_dataset_name": "droid",
             "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
             "shuffle_buffer_size": 400_000,
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        save_interval=500,
+        keep_period=5000,
+        resume=True,
+    ),
+    # Combined dataset with verbose_state prompt format, BOUNDS normalization, EEF_R6 state encoding
+    *create_multi_device_configs(
+        base_name="pi_combined_cot_verbose",
+        devices=["v6", "v6europe", "v4", "local"],
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=200,
+            pi05=True,
+            discrete_state_input=True,
+            prompt_format="verbose_state",
+        ),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "shuffle_buffer_size": 400_000,
+            "state_encoding": StateEncoding.EEF_R6,
+            "action_proprio_normalization_type": NormalizationType.BOUNDS,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"

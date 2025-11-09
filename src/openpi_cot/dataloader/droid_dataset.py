@@ -10,6 +10,7 @@ import tensorflow as tf
 from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
 from openpi_cot.dataloader.dataset_utils import print_memory_usage
 from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.dataloader.helpers import convert_state_encoding
 from openpi_cot.dataloader.helpers import state_encoding_to_type
 
 if TYPE_CHECKING:
@@ -243,9 +244,9 @@ class DroidCoTDataset(_SingleCoTDataset):
                 lambda: traj["observation"][self.spec.images_list[1]],
             )
 
-            # state = convert_state_encoding(
-            #     state, from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
-            # )
+            traj["state"] = convert_state_encoding(
+                traj["state"], from_encoding=self.state_encoding, to_encoding=self.config.state_encoding
+            )
 
             # Determine state type from state encoding
             state_type_str = state_encoding_to_type(self.config.state_encoding)
@@ -355,6 +356,7 @@ class DroidCoTDataset(_SingleCoTDataset):
 
     def apply_repack_transforms(self):
         super().apply_repack_transforms()
+
         def _pop_keys(traj):
             traj.pop("traj_metadata")
             # traj.pop("trajectory_id")

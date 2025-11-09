@@ -10,7 +10,7 @@ from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
 from openpi_cot.dataloader.dataset_utils import gather_with_padding
 from openpi_cot.dataloader.dataset_utils import print_memory_usage
 from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.helpers import convert_action_encoding
+from openpi_cot.dataloader.helpers import convert_state_encoding
 from openpi_cot.dataloader.helpers import state_encoding_to_type
 from openpi_cot.transforms import NormalizeActionAndProprio
 
@@ -71,12 +71,12 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
             old_obs = traj["observation"]
             new_obs = {}
 
-            traj["action"] = convert_action_encoding(
-                action=traj["action"],
-                from_encoding=self.action_encoding,
-                to_encoding=self.config.action_encoding,
-                to_delta_cartesian_pose=False,
-            )
+            # traj["action"] = convert_action_encoding(
+            #     action=traj["action"],
+            #     from_encoding=self.action_encoding,
+            #     to_encoding=self.config.action_encoding,
+            #     to_delta_cartesian_pose=False,
+            # )
 
             for new, old in self.image_obs_keys.items():
                 if new == "primary":
@@ -99,11 +99,11 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
                     [tf.cast(old_obs[key], tf.float32) for key in self.state_obs_keys if key is not None],
                     axis=1,
                 )
-                # new_obs["state"] = convert_state_encoding(
-                #     new_obs["state"],
-                #     from_encoding=self.state_encoding,
-                #     to_encoding=self.config.state_encoding,
-                # )
+                new_obs["state"] = convert_state_encoding(
+                    new_obs["state"],
+                    from_encoding=self.state_encoding,
+                    to_encoding=self.config.state_encoding,
+                )
             else:
                 new_obs["state"] = tf.zeros((traj_len, 0), dtype=tf.float32)  # Empty state
 
@@ -346,6 +346,11 @@ class LiberoCoTDataset(_SingleOXECoTDataset):
 
             # State is already in the correct format (8D: [EEF pose (6D), gripper (2D)])
             new_obs["state"] = tf.cast(old_obs["state"], tf.float32)
+            new_obs["state"] = convert_state_encoding(
+                new_obs["state"],
+                from_encoding=self.state_encoding,
+                to_encoding=self.config.state_encoding,
+            )
 
             # Actions are 7D in LIBERO dataset (delta EEF actions)
             actions = tf.cast(traj["action"], tf.float32)
@@ -542,6 +547,11 @@ class SampleR1LiteCoTDataset(_SingleOXECoTDataset):
                     new_obs[img_key] = traj["observation"][old]
 
             new_obs["state"] = traj["observation"]["state"]
+            new_obs["state"] = convert_state_encoding(
+                new_obs["state"],
+                from_encoding=self.state_encoding,
+                to_encoding=self.config.state_encoding,
+            )
 
             # Determine state type
             state_type_str = state_encoding_to_type(self.state_encoding)

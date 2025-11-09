@@ -17,6 +17,47 @@ TOKEN_PLACEHOLDER = -2
 
 
 @dataclasses.dataclass
+class StateTemplate:
+    """Template for formatting discretized state values.
+
+    Allows flexible representation of state vectors with custom labels and formatting.
+    """
+
+    # Dimension labels in order (e.g., ["x", "y", "z", "rot1x", ...])
+    # If None or shorter than values, uses generic labels
+    dim_labels: list[str] | None = None
+
+    # Format string for each dimension value
+    # Can use {label} and {value} placeholders
+    # e.g., "{label}={value:03d}" for "x=134" or just "{value}" for "134"
+    dim_format: str = "{value}"
+
+    # Separator between dimensions
+    separator: str = " "
+
+    def format_state(self, values: np.ndarray) -> str:
+        """Format discretized state values according to template.
+
+        Args:
+            values: Array of discretized state values
+
+        Returns:
+            Formatted string representation
+        """
+        parts = []
+        for i, val in enumerate(values):
+            # Use provided label or generate generic one
+            if self.dim_labels and i < len(self.dim_labels):
+                label = self.dim_labels[i]
+            else:
+                label = f"dim{i}"
+
+            parts.append(self.dim_format.format(label=label, value=int(val)))
+
+        return self.separator.join(parts)
+
+
+@dataclasses.dataclass
 class StateDiscretizationConfig:
     """Configuration for discretizing state vectors into text."""
 
@@ -24,6 +65,7 @@ class StateDiscretizationConfig:
     min_dim: int = 7  # Minimum number of dimensions to include (avoid over-trimming)
     range_min: float = -1.0
     range_max: float = 1.0
+    template: StateTemplate | None = None  # If None, uses default space-separated format
 
 
 def _is_number(piece: str) -> bool:
@@ -157,6 +199,7 @@ class PromptFormat:
         """Discretize state vector into string representation.
 
         Trims trailing zero-padded dimensions and discretizes to bins.
+        Uses the configured StateTemplate if provided, otherwise defaults to space-separated values.
         """
         assert self.state_config is not None
         state_arr = np.asarray(state)
@@ -180,8 +223,43 @@ class PromptFormat:
                 :-1
             ]
             discretized_state = np.digitize(trimmed, bins=bins) - 1
+
+            # Use template if provided, otherwise default to space-separated
+            if self.state_config.template is not None:
+                return self.state_config.template.format_state(discretized_state)
             return " ".join(map(str, discretized_state))
         return ""
+
+
+# Predefined state templates - easily extensible by adding new instances
+DEFAULT_STATE_TEMPLATE = StateTemplate(
+    dim_labels=None,
+    dim_format="{value}",
+    separator=" ",
+)
+
+NAMED_PARAMS_STATE_TEMPLATE = StateTemplate(
+    dim_labels=["x", "y", "z", "rot1x", "rot1y", "rot1z", "rot2x", "rot2y", "rot2z", "grip"],
+    dim_format="{label}={value:03d}",
+    separator=" ",
+)
+
+VERBOSE_STATE_TEMPLATE = StateTemplate(
+    dim_labels=[
+        "position_x",
+        "position_y",
+        "position_z",
+        "rotation_1_x",
+        "rotation_1_y",
+        "rotation_1_z",
+        "rotation_2_x",
+        "rotation_2_y",
+        "rotation_2_z",
+        "gripper",
+    ],
+    dim_format="{label}={value:03d}",
+    separator=", ",
+)
 
 
 # Predefined prompt formats - easily extensible by adding new instances
@@ -305,6 +383,42 @@ SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT = PromptFormat(
     direction_token_checker=_is_direction_schema,
 )
 
+SCHEMA_COMPACT_NAMED_PARAMS_PROMPT_FORMAT = PromptFormat(
+    name="schema_compact_named_params",
+    components=[
+        PromptComponent(
+            "schema",
+            "Schema: <dx dy dz g>; units cm; +x fwd, +y left, +z up; g∈{0=close,1=open}",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7, template=NAMED_PARAMS_STATE_TEMPLATE),
+    separator=". ",
+    critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
+)
+
+VERBOSE_STATE_PROMPT_FORMAT = PromptFormat(
+    name="verbose_state",
+    components=[
+        PromptComponent(
+            "schema",
+            "Robot control schema: Actions are displacement vectors <dx, dy, dz, gripper>. "
+            "Units: centimeters. Coordinate system: +x=forward, +y=left, +z=up. "
+            "Gripper values: 0=close, 1=open.",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "Current state ({state_label}): {state}", include_state_type=True),
+        PromptComponent("action_prefix", "Predicted actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7, template=VERBOSE_STATE_TEMPLATE),
+    separator="\n",
+    critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
+)
+
 # Registry for easy lookup
 PROMPT_FORMAT_REGISTRY = {
     "pi05": PI05_PROMPT_FORMAT,
@@ -315,6 +429,8 @@ PROMPT_FORMAT_REGISTRY = {
     "schema_compact_with_rotation": SCHEMA_COMPACT_WITH_ROTATION_PROMPT_FORMAT,
     "schema_compact_bimanual": SCHEMA_COMPACT_BIMANUAL_PROMPT_FORMAT,
     "schema_compact_bimanual_with_rotation": SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT,
+    "schema_compact_named_params": SCHEMA_COMPACT_NAMED_PARAMS_PROMPT_FORMAT,
+    "verbose_state": VERBOSE_STATE_PROMPT_FORMAT,
 }
 
 
@@ -336,6 +452,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             "schema_compact_with_rotation",
             "schema_compact_bimanual",
             "schema_compact_bimanual_with_rotation",
+            "schema_compact_named_params",
+            "verbose_state",
         ]
         | PromptFormat = "pi05",
         tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma",
@@ -395,10 +513,9 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         state_type: str | None = None,
         prompt_format: PromptFormat | str | None = None,
         is_vqa_sample: bool = False,
-        is_prediction_sample: bool = False
+        is_prediction_sample: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Resolve prompt format
-
 
         if prompt_format is None:
             fmt = self._prompt_format
@@ -412,7 +529,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             fmt = prompt_format
 
         if not is_vqa_sample and not is_prediction_sample:
-
             # Format the prompt using the PromptFormat
             formatted_prompt = fmt.format_prompt(prompt, state, state_type)
         else:

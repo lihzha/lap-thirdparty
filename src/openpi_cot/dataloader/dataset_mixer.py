@@ -366,6 +366,24 @@ class OXECoTDatasets:
         action_q01 = np.min(action_q01_padded, axis=0)
         action_q99 = np.max(action_q99_padded, axis=0)
 
+        # Compute actual global min/max from per-dataset statistics
+        action_min_padded = [
+            np.pad(
+                stats["actions"].min, (0, action_dim - len(stats["actions"].min)), mode="constant", constant_values=0
+            )
+            for dataset_name, stats in all_dataset_statistics.items()
+            if dataset_name not in self.VQA_DATASETS
+        ]
+        action_max_padded = [
+            np.pad(
+                stats["actions"].max, (0, action_dim - len(stats["actions"].max)), mode="constant", constant_values=0
+            )
+            for dataset_name, stats in all_dataset_statistics.items()
+            if dataset_name not in self.VQA_DATASETS
+        ]
+        action_global_min = np.min(action_min_padded, axis=0)
+        action_global_max = np.max(action_max_padded, axis=0)
+
         global_stats = {
             "actions": ExtendedNormStats(
                 mean=action_global_mean,
@@ -376,6 +394,22 @@ class OXECoTDatasets:
                 num_trajectories=sum(stats["actions"].num_trajectories for stats in all_dataset_statistics.values()),
             ),
         }
+
+        # Log global action statistics per dimension
+        logging.info("=" * 80)
+        logging.info("Global Action Statistics per Dimension:")
+        logging.info("-" * 80)
+        for dim_idx in range(action_dim):
+            logging.info(
+                f"Action dim {dim_idx:2d}: "
+                f"min={action_global_min[dim_idx]:9.4f}, "
+                f"max={action_global_max[dim_idx]:9.4f}, "
+                f"q01={action_q01[dim_idx]:9.4f}, "
+                f"q99={action_q99[dim_idx]:9.4f}, "
+                f"mean={action_global_mean[dim_idx]:9.4f}, "
+                f"std={action_global_std[dim_idx]:8.4f}"
+            )
+        logging.info("=" * 80)
 
         # Compute separate state statistics for each state type. VQA datasets already skipped above.
         for state_type, ds_names in datasets_by_state_type.items():
@@ -448,6 +482,22 @@ class OXECoTDatasets:
             state_q01 = np.min(state_q01_padded, axis=0)
             state_q99 = np.max(state_q99_padded, axis=0)
 
+            # Compute actual global min/max from per-dataset statistics
+            state_min_padded = [
+                np.pad(
+                    stats["state"].min, (0, action_dim - len(stats["state"].min)), mode="constant", constant_values=0
+                )
+                for stats in state_stats_subset.values()
+            ]
+            state_max_padded = [
+                np.pad(
+                    stats["state"].max, (0, action_dim - len(stats["state"].max)), mode="constant", constant_values=0
+                )
+                for stats in state_stats_subset.values()
+            ]
+            state_global_min = np.min(state_min_padded, axis=0)
+            state_global_max = np.max(state_max_padded, axis=0)
+
             # Store with state type-specific key
             global_stats[f"state_{state_type}"] = ExtendedNormStats(
                 mean=state_global_mean,
@@ -457,6 +507,22 @@ class OXECoTDatasets:
                 num_transitions=total_state_n,
                 num_trajectories=sum(stats["state"].num_trajectories for stats in state_stats_subset.values()),
             )
+
+            # Log global state statistics per dimension
+            logging.info("=" * 80)
+            logging.info(f"Global State Statistics per Dimension (type: {state_type}):")
+            logging.info("-" * 80)
+            for dim_idx in range(action_dim):
+                logging.info(
+                    f"State dim {dim_idx:2d}: "
+                    f"min={state_global_min[dim_idx]:9.4f}, "
+                    f"max={state_global_max[dim_idx]:9.4f}, "
+                    f"q01={state_q01[dim_idx]:9.4f}, "
+                    f"q99={state_q99[dim_idx]:9.4f}, "
+                    f"mean={state_global_mean[dim_idx]:9.4f}, "
+                    f"std={state_global_std[dim_idx]:8.4f}"
+                )
+            logging.info("=" * 80)
 
         # # Save global stats
         # if jax.process_index() == 0:

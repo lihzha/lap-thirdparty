@@ -66,7 +66,7 @@ def _create_rlds_dataset(
         action_dim=action_dim,
         hash_tables=hash_tables,
         standalone=True,
-        action_proprio_normalization_type=NormalizationType.NORMAL,
+        action_proprio_normalization_type=data_cfg.action_proprio_normalization_type,
         enable_prediction_training=enable_prediction_training,
     )
 

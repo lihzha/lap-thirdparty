@@ -46,6 +46,8 @@ class PiCoTConfig(_model.BaseModelConfig):
         "schema_compact_with_rotation",
         "schema_compact_bimanual",
         "schema_compact_bimanual_with_rotation",
+        "schema_compact_named_params",
+        "verbose_state",
     ] = "pi05"
 
     aug_wrist_image: bool = True
