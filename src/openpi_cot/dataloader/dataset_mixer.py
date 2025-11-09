@@ -18,6 +18,7 @@ from openpi_cot.dataloader.oxe_datasets import LiberoCoTDataset
 from openpi_cot.dataloader.oxe_datasets import PlanningDataset
 from openpi_cot.dataloader.oxe_datasets import SampleR1LiteCoTDataset
 from openpi_cot.dataloader.oxe_datasets import _SingleOXECoTDataset
+from openpi_cot.dataloader.pixmo_cap_dataset import PixmoCap
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
@@ -140,6 +141,11 @@ class OXECoTDatasets:
                 )
             elif dataset_name == "coco_captions":
                 ds = CocoCaption(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "pixmo_cap_local":
+                ds = PixmoCap(
                     dataset_name=dataset_name,
                     **kwargs,
                 )

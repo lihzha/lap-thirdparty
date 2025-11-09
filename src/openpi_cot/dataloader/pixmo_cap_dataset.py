@@ -1,0 +1,106 @@
+"""PixmoCap dataset implementation for VQA training."""
+
+import tensorflow as tf
+
+from openpi_cot.dataloader.vqa_base import _BaseVQADataset
+from openpi_cot.dataloader.vqa_base import ensure_dldataset
+
+
+# PixmoCap prompts to randomly sample from
+PIXMO_CAP_PROMPTS = tf.constant(
+    [
+        "Describe the image.",
+        "Describe what is in the image.",
+        "What is in the image?",
+        "Tell me what the image is about.",
+        "What do you see in this image?",
+        "Describe what you see.",
+    ],
+    dtype=tf.string,
+)
+
+
+class PixmoCap(_BaseVQADataset):
+    """PixmoCap dataset for vision-language training.
+
+    This dataset loads PixmoCap images with captions and formats them to be
+    compatible with the robot dataset structure.
+    """
+
+    def build_dataset_builder(self, ds_name: str, data_dir: str):
+        """Build TFDS builder for PixmoCap."""
+        import tensorflow_datasets as tfds
+
+        return tfds.builder("pixmo_cap_local", data_dir=data_dir)
+
+    def build_dataset(self, builder, split: str):
+        """Build TensorFlow dataset from TFDS builder."""
+        import tensorflow_datasets as tfds
+
+        opts = tf.data.Options()
+        opts.experimental_deterministic = bool(self.want_val)
+        opts.experimental_optimization.map_parallelization = True
+        opts.experimental_optimization.parallel_batch = True
+        opts.experimental_optimization.map_fusion = True
+
+        read_config = tfds.ReadConfig(
+            shuffle_seed=self.seed,
+            options=opts,
+        )
+
+        ds = builder.as_dataset(
+            split="train",  # Using train split, we'll manually split for val
+            shuffle_files=not self.want_val,
+            read_config=read_config,
+        )
+
+        ds = ensure_dldataset(ds, is_flattened=True)
+        return ds
+
+    def get_dataset_name(self) -> str:
+        """Return dataset name for metadata."""
+        return "pixmo_cap_local"
+
+    def get_num_transitions(self) -> int:
+        """Return approximate number of PixmoCap samples."""
+        return 100000  # Approximate, adjust based on actual dataset size
+
+    def create_trajectory_id(self, example: dict) -> tf.Tensor:
+        """Create trajectory ID from PixmoCap image filename."""
+        image_filename = example["image_filename"]
+        return tf.strings.join(["pixmo_cap_", image_filename])
+
+    def extract_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
+        """Extract prompt and caption from PixmoCap example.
+
+        Returns:
+            (prompt, caption) where prompt is randomly sampled from PIXMO_CAP_PROMPTS
+            and caption is the single caption from the dataset.
+        """
+        # Generate deterministic seed from image filename hash
+        image_filename = example["image_filename"]
+        filename_hash = tf.strings.to_hash_bucket_fast(image_filename, 2147483647)
+        filename_hash = tf.cast(filename_hash, tf.int32)
+
+        # Get the caption (single string, not a list)
+        caption = example["caption"]
+
+        # Randomly select a prompt
+        num_prompts = tf.shape(PIXMO_CAP_PROMPTS)[0]
+        prompt_idx = tf.random.stateless_uniform(
+            [], seed=[self.seed, filename_hash], minval=0, maxval=num_prompts, dtype=tf.int32
+        )
+        prompt = PIXMO_CAP_PROMPTS[prompt_idx]
+
+        return prompt, caption
+
+    def extract_and_encode_image(self, example: dict) -> tf.Tensor:
+        """Extract and encode PixmoCap image to JPEG bytes."""
+        image = example["image"]
+        # Check if image is already encoded (has dtype string)
+        if image.dtype == tf.string:
+            # Already encoded, return as-is
+            return image
+        else:
+            # Not encoded, encode to JPEG
+            return tf.io.encode_jpeg(image, quality=95)
