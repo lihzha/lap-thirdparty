@@ -58,6 +58,70 @@ class StateTemplate:
 
 
 @dataclasses.dataclass
+class GroupedStateTemplate:
+    """Template for formatting state values grouped by semantic meaning.
+
+    Groups dimensions into semantic categories (e.g., position, rotation, gripper).
+    Example output: "position 134 088 076, rotation 201 054 233 128 254 033, gripper 200"
+    """
+
+    # Group labels (e.g., ["position", "rotation", "gripper"])
+    group_labels: list[str]
+
+    # Number of dimensions in each group (e.g., [3, 6, 1] for 10D state)
+    group_sizes: list[int]
+
+    # Format string for each value within a group
+    # e.g., "{value:03d}" for zero-padded or "{value}" for no padding
+    value_format: str = "{value:03d}"
+
+    # Separator between groups
+    group_separator: str = ", "
+
+    # Separator between values within a group
+    value_separator: str = " "
+
+    def format_state(self, values: np.ndarray) -> str:
+        """Format discretized state values with semantic grouping.
+
+        Args:
+            values: Array of discretized state values
+
+        Returns:
+            Formatted string representation with grouped dimensions
+        """
+        if sum(self.group_sizes) > len(values):
+            # Handle case where state is shorter than expected
+            # Adjust group sizes to fit available values
+            adjusted_sizes = []
+            remaining = len(values)
+            for size in self.group_sizes:
+                adjusted_sizes.append(min(size, remaining))
+                remaining -= adjusted_sizes[-1]
+                if remaining <= 0:
+                    break
+            group_sizes = adjusted_sizes
+        else:
+            group_sizes = self.group_sizes
+
+        parts = []
+        idx = 0
+        for label, size in zip(self.group_labels, group_sizes):
+            if idx >= len(values):
+                break
+
+            # Extract values for this group
+            group_values = values[idx : idx + size]
+            formatted_values = self.value_separator.join(self.value_format.format(value=int(v)) for v in group_values)
+
+            # Format as "label value1 value2 ..."
+            parts.append(f"{label} {formatted_values}")
+            idx += size
+
+        return self.group_separator.join(parts)
+
+
+@dataclasses.dataclass
 class StateDiscretizationConfig:
     """Configuration for discretizing state vectors into text."""
 
@@ -65,7 +129,45 @@ class StateDiscretizationConfig:
     min_dim: int = 7  # Minimum number of dimensions to include (avoid over-trimming)
     range_min: float = -1.0
     range_max: float = 1.0
-    template: StateTemplate | None = None  # If None, uses default space-separated format
+    template: StateTemplate | GroupedStateTemplate | None = None  # If None, uses default space-separated format
+
+    def discretize_state(self, state: np.ndarray) -> str:
+        """Discretize state vector into string representation.
+
+        Trims trailing zero-padded dimensions and discretizes to bins.
+        Uses the configured StateTemplate if provided, otherwise defaults to space-separated values.
+
+        Args:
+            state: State vector to discretize
+
+        Returns:
+            Formatted string representation of discretized state
+        """
+        state_arr = np.asarray(state)
+        eps = 1e-8
+
+        # Trim zero-padded dimensions
+        if state_arr.ndim == 1:
+            non_zero_mask = np.abs(state_arr) > eps
+            last_idx = int(np.nonzero(non_zero_mask)[0][-1]) + 1 if np.any(non_zero_mask) else 0
+            last_idx = max(last_idx, self.min_dim)
+            trimmed = state_arr[:last_idx]
+        else:
+            flat = state_arr.reshape(-1, state_arr.shape[-1])
+            non_zero_cols = np.any(np.abs(flat) > eps, axis=0)
+            last_idx = int(np.nonzero(non_zero_cols)[0][-1]) + 1 if np.any(non_zero_cols) else 0
+            last_idx = max(last_idx, self.min_dim)
+            trimmed = state_arr[..., :last_idx].reshape(-1)
+
+        if trimmed.size > 0:
+            bins = np.linspace(self.range_min, self.range_max, self.bins + 1)[:-1]
+            discretized_state = np.digitize(trimmed, bins=bins) - 1
+
+            # Use template if provided, otherwise default to space-separated
+            if self.template is not None:
+                return self.template.format_state(discretized_state)
+            return " ".join(map(str, discretized_state))
+        return ""
 
 
 def _is_number(piece: str) -> bool:
@@ -202,33 +304,7 @@ class PromptFormat:
         Uses the configured StateTemplate if provided, otherwise defaults to space-separated values.
         """
         assert self.state_config is not None
-        state_arr = np.asarray(state)
-        eps = 1e-8
-
-        # Trim zero-padded dimensions
-        if state_arr.ndim == 1:
-            non_zero_mask = np.abs(state_arr) > eps
-            last_idx = int(np.nonzero(non_zero_mask)[0][-1]) + 1 if np.any(non_zero_mask) else 0
-            last_idx = max(last_idx, self.state_config.min_dim)
-            trimmed = state_arr[:last_idx]
-        else:
-            flat = state_arr.reshape(-1, state_arr.shape[-1])
-            non_zero_cols = np.any(np.abs(flat) > eps, axis=0)
-            last_idx = int(np.nonzero(non_zero_cols)[0][-1]) + 1 if np.any(non_zero_cols) else 0
-            last_idx = max(last_idx, self.state_config.min_dim)
-            trimmed = state_arr[..., :last_idx].reshape(-1)
-
-        if trimmed.size > 0:
-            bins = np.linspace(self.state_config.range_min, self.state_config.range_max, self.state_config.bins + 1)[
-                :-1
-            ]
-            discretized_state = np.digitize(trimmed, bins=bins) - 1
-
-            # Use template if provided, otherwise default to space-separated
-            if self.state_config.template is not None:
-                return self.state_config.template.format_state(discretized_state)
-            return " ".join(map(str, discretized_state))
-        return ""
+        return self.state_config.discretize_state(state)
 
 
 # Predefined state templates - easily extensible by adding new instances
@@ -260,6 +336,53 @@ VERBOSE_STATE_TEMPLATE = StateTemplate(
     dim_format="{label}={value:03d}",
     separator=", ",
 )
+
+GROUPED_STATE_TEMPLATE = GroupedStateTemplate(
+    group_labels=["position", "rotation", "gripper"],
+    group_sizes=[3, 6, 1],
+    value_format="{value:03d}",
+    group_separator=", ",
+    value_separator=" ",
+)
+
+
+# Predefined prediction state configurations
+# These combine StateTemplate with discretization settings for prediction prompts
+@dataclasses.dataclass
+class PredictionStateConfig:
+    """Configuration for including state in prediction prompts."""
+
+    discretization: StateDiscretizationConfig
+    prompt_prefix: str = (
+        "Robot current state: {state}. Robot state is represented in the robot base frame, not in the camera's frame."
+    )
+
+
+# Prediction state templates - using same templates but with prediction-specific prompt
+PREDICTION_STATE_DEFAULT = PredictionStateConfig(
+    discretization=StateDiscretizationConfig(
+        bins=256, min_dim=7, range_min=-1.0, range_max=1.0, template=DEFAULT_STATE_TEMPLATE
+    ),
+)
+
+PREDICTION_STATE_NAMED_PARAMS = PredictionStateConfig(
+    discretization=StateDiscretizationConfig(
+        bins=256, min_dim=7, range_min=-1.0, range_max=1.0, template=NAMED_PARAMS_STATE_TEMPLATE
+    ),
+)
+
+PREDICTION_STATE_VERBOSE = PredictionStateConfig(
+    discretization=StateDiscretizationConfig(
+        bins=256, min_dim=7, range_min=-1.0, range_max=1.0, template=VERBOSE_STATE_TEMPLATE
+    ),
+)
+
+# Registry for prediction state configs
+PREDICTION_STATE_CONFIG_REGISTRY = {
+    "default": PREDICTION_STATE_DEFAULT,
+    "named_params": PREDICTION_STATE_NAMED_PARAMS,
+    "verbose": PREDICTION_STATE_VERBOSE,
+}
 
 
 # Predefined prompt formats - easily extensible by adding new instances
@@ -408,11 +531,28 @@ VERBOSE_STATE_PROMPT_FORMAT = PromptFormat(
             "Your Robot control coordinate system: +x=forward, +y=left, +z=up.",
         ),
         PromptComponent("task_prefix", "Task: {prompt}"),
-        PromptComponent("state_prefix", "Current state ({state_label}): {state}", include_state_type=True),
+        PromptComponent("state_prefix", "Current state{state_label}: {state}", include_state_type=False),
         PromptComponent("action_prefix", "Predicted actions: "),
     ],
     state_config=StateDiscretizationConfig(bins=256, min_dim=7, template=VERBOSE_STATE_TEMPLATE),
     separator="\n",
+    critical_token_checker=_is_critical_schema,
+    direction_token_checker=_is_direction_schema,
+)
+
+GROUPED_STATE_PROMPT_FORMAT = PromptFormat(
+    name="grouped_state",
+    components=[
+        PromptComponent(
+            "schema",
+            "Your Robot control coordinate system: +x=forward, +y=left, +z=up.",
+        ),
+        PromptComponent("task_prefix", "Task: {prompt}"),
+        PromptComponent("state_prefix", "State{state_label}: {state}", include_state_type=False),
+        PromptComponent("action_prefix", "Actions: "),
+    ],
+    state_config=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
+    separator=". ",
     critical_token_checker=_is_critical_schema,
     direction_token_checker=_is_direction_schema,
 )
@@ -429,6 +569,7 @@ PROMPT_FORMAT_REGISTRY = {
     "schema_compact_bimanual_with_rotation": SCHEMA_COMPACT_BIMANUAL_WITH_ROTATION_PROMPT_FORMAT,
     "schema_compact_named_params": SCHEMA_COMPACT_NAMED_PARAMS_PROMPT_FORMAT,
     "verbose_state": VERBOSE_STATE_PROMPT_FORMAT,
+    "grouped_state": GROUPED_STATE_PROMPT_FORMAT,
 }
 
 
@@ -452,11 +593,13 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             "schema_compact_bimanual_with_rotation",
             "schema_compact_named_params",
             "verbose_state",
+            "grouped_state",
         ]
         | PromptFormat = "pi05",
         tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma",
         num_images: int = 2,
         tokens_per_image: int = 256,
+        prediction_state_config: Literal["default", "named_params", "verbose"] | PredictionStateConfig | None = None,
     ):
         # super().__init__(max_len)
         if tokenizer_type == "paligemma":
@@ -473,6 +616,17 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         self._tokenizer_type = tokenizer_type
         self._num_images = num_images
         self._tokens_per_image = tokens_per_image
+
+        # Support both string and PredictionStateConfig instance
+        if isinstance(prediction_state_config, str):
+            if prediction_state_config not in PREDICTION_STATE_CONFIG_REGISTRY:
+                raise ValueError(
+                    f"Unknown prediction state config: {prediction_state_config}. "
+                    f"Available configs: {list(PREDICTION_STATE_CONFIG_REGISTRY.keys())}"
+                )
+            self._prediction_state_config = PREDICTION_STATE_CONFIG_REGISTRY[prediction_state_config]
+        else:
+            self._prediction_state_config = prediction_state_config
 
         # Support both string and PromptFormat instance
         if isinstance(prompt_format, str):
@@ -530,7 +684,19 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             # Format the prompt using the PromptFormat
             formatted_prompt = fmt.format_prompt(prompt, state, state_type)
         else:
+            # For VQA samples and prediction samples, use simple formatting
             formatted_prompt = prompt.strip().replace("_", " ").replace("\n", " ")
+
+            # For prediction samples, optionally prepend state information
+            if is_prediction_sample and self._prediction_state_config is not None and state is not None:
+                # Discretize state using the configured StateDiscretizationConfig
+                state_str = self._prediction_state_config.discretization.discretize_state(state)
+
+                # Prepend state information to the prompt using configured prefix
+                if state_str:
+                    formatted_prompt = (
+                        f"{self._prediction_state_config.prompt_prefix.format(state=state_str)} {formatted_prompt}"
+                    )
 
         # Tokenize
         pad_id = self._tokenizer.pad_id()

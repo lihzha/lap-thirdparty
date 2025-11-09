@@ -213,6 +213,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
         "schema_compact_bimanual_with_rotation",
         "schema_compact_named_params",
         "verbose_state",
+        "grouped_state",
     ] = "pi05"
     tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
     include_outputs: bool = True  # Toggle output transforms (e.g., detokenization)

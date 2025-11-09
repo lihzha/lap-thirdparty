@@ -66,12 +66,6 @@ class OXECoTDatasets:
 
         want_val = split == "val"
 
-        # When using global normalization, assert normalization type is NORMAL
-        if use_global_normalization:
-            assert action_proprio_normalization_type == NormalizationType.NORMAL, (
-                "Global normalization only supports NORMAL normalization type"
-            )
-
         total_threads = len(os.sched_getaffinity(0))
         total_read_threads = int(total_threads * 0.4)
         total_transform_threads = int(total_threads * 0.4)
@@ -390,6 +384,8 @@ class OXECoTDatasets:
                 std=action_global_std,
                 q01=action_q01,
                 q99=action_q99,
+                min=action_global_min,
+                max=action_global_max,
                 num_transitions=total_action_n,
                 num_trajectories=sum(stats["actions"].num_trajectories for stats in all_dataset_statistics.values()),
             ),
@@ -504,6 +500,8 @@ class OXECoTDatasets:
                 std=state_global_std,
                 q01=state_q01,
                 q99=state_q99,
+                min=state_global_min,
+                max=state_global_max,
                 num_transitions=total_state_n,
                 num_trajectories=sum(stats["state"].num_trajectories for stats in state_stats_subset.values()),
             )
