@@ -19,6 +19,7 @@ from openpi_cot.dataloader.oxe_datasets import PlanningDataset
 from openpi_cot.dataloader.oxe_datasets import SampleR1LiteCoTDataset
 from openpi_cot.dataloader.oxe_datasets import _SingleOXECoTDataset
 from openpi_cot.dataloader.pixmo_cap_dataset import PixmoCap
+from openpi_cot.dataloader.pixmo_point_dataset import PixmoPoint
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
@@ -157,6 +158,11 @@ class OXECoTDatasets:
                 )
             elif dataset_name == "vqa":
                 ds = Vqav2(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "pixmo_point":
+                ds = PixmoPoint(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
