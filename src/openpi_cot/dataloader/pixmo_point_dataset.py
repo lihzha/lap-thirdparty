@@ -89,15 +89,13 @@ class PixmoPoint(_BaseVQADataset):
         points: tf.Tensor,
         # count_text: tf.Tensor,
     ) -> tf.Tensor:
-        """Convert points to formatted text representation.
+        """Convert points to formatted text representation using paligemma loc tokens.
 
         Args:
             points: Tensor of shape [N, 2] with x, y coordinates (already normalized to 0-100).
-            label_text: Label for the points.
-            alt_text: Alternative text description.
 
         Returns:
-            Formatted string with points in XML-like format.
+            Formatted string with points as paligemma loc tokens like "<loc0252><loc0233>".
         """
         # Sort points by x*10000 + y for consistent ordering
         x_coords = points[:, 0]
@@ -106,35 +104,24 @@ class PixmoPoint(_BaseVQADataset):
         sorted_indices = tf.argsort(sort_keys)
         sorted_points = tf.gather(points, sorted_indices)
 
-        # Get number of points
-        num_points = tf.shape(sorted_points)[0]
+        # Extract sorted x and y coordinates
+        x_coords = sorted_points[:, 0]
+        y_coords = sorted_points[:, 1]
 
-        # Format coordinates as strings with 1 decimal place
-        x_strs = tf.strings.as_string(sorted_points[:, 0], precision=1)
-        y_strs = tf.strings.as_string(sorted_points[:, 1], precision=1)
+        # Convert to paligemma loc token indices (0-1023)
+        N = 1024
+        x_indices = tf.cast(tf.round(x_coords / 100.0 * (N - 1)), tf.int32)
+        y_indices = tf.cast(tf.round(y_coords / 100.0 * (N - 1)), tf.int32)
 
-        # Handle single point case
-        def format_single_point():
-            return tf.strings.join(['<point x="', x_strs[0], '" y="', y_strs[0], "</point>"])
+        # Format as loc tokens: <locYYYY><locXXXX> for each point
+        y_tokens = tf.strings.join(["<loc", tf.strings.as_string(y_indices, width=4, fill="0"), ">"])
+        x_tokens = tf.strings.join(["<loc", tf.strings.as_string(x_indices, width=4, fill="0"), ">"])
 
-        # Handle multiple points case
-        def format_multiple_points():
-            # Build attribute strings like: x1="10.5" y1="20.3" x2="30.1" y2="40.2"
-            indices = tf.range(1, num_points + 1)
-            index_strs = tf.strings.as_string(indices)
+        # Interleave y and x tokens (y comes first for each point)
+        yx_pairs = tf.reshape(tf.stack([y_tokens, x_tokens], axis=1), [-1])
 
-            # Create x1="val" y1="val" pairs for each point
-            x_attrs = tf.strings.join(["x", index_strs, '="', x_strs, '"'])
-            y_attrs = tf.strings.join(["y", index_strs, '="', y_strs, '"'])
-
-            # Interleave x and y attributes
-            xy_pairs = tf.reshape(tf.stack([x_attrs, y_attrs], axis=1), [-1])
-            attrs_str = tf.strings.reduce_join(xy_pairs, separator=" ")
-
-            return tf.strings.join(["<points ", attrs_str, "</points>"])
-
-        # Choose format based on number of points
-        return tf.cond(tf.equal(num_points, 1), format_single_point, format_multiple_points)
+        # Join all tokens together without separator
+        return tf.strings.reduce_join(yx_pairs, separator="")
 
     def extract_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
         """Extract prompt and caption from PixmoPoint example.

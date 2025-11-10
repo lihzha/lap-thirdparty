@@ -104,6 +104,7 @@ def preprocess_observation(
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = _model.IMAGE_RESOLUTION,
     aug_wrist_image: bool = True,
+    vqa_mask: at.Bool[jax.Array, "*b"] | None = None,
 ) -> CoTObservation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
@@ -161,7 +162,17 @@ def preprocess_observation(
 
             # Apply augmentation
             sub_rngs = jax.random.split(rng, b * t)
-            image_flat = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image_flat)
+            image_flat_aug = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image_flat)
+
+            # Skip augmentation for VQA samples if vqa_mask is provided
+            if vqa_mask is not None:
+                # Expand vqa_mask to [b, t] and then flatten to [b*t]
+                vqa_mask_expanded = jnp.repeat(vqa_mask[:, None], t, axis=1)  # [b, t]
+                vqa_mask_flat = vqa_mask_expanded.reshape(b * t)  # [b*t]
+                # Where vqa_mask is True, keep original; otherwise use augmented
+                image_flat = jnp.where(vqa_mask_flat[:, None, None, None], image_flat, image_flat_aug)
+            else:
+                image_flat = image_flat_aug
 
             # Back to [-1, 1]
             image_flat = image_flat * 2.0 - 1.0

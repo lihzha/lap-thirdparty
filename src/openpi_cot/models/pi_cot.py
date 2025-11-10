@@ -903,13 +903,23 @@ class PiCoT(_pi0.Pi0):
     ) -> dict[str, at.Array]:
         preprocess_rng, stochastic_rng, noise_rng, time_rng = jax.random.split(rng, 4)
 
-        # Preprocess observation
-        observation = preprocess_observation(
-            preprocess_rng, observation, train=train, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
-        )
-
-        # Determine loss configuration from stage_config or model defaults
+        # Determine batch size
         batch_size = observation.tokenized_prompt.shape[0]
+
+        # Compute VQA mask first (before preprocessing) to skip augmentation for VQA samples
+        vqa_mask = None
+        if self.enable_vqa_training and hasattr(observation, "is_vqa_sample") and observation.is_vqa_sample is not None:
+            vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool)
+
+        # Preprocess observation (will skip augmentation for VQA samples if vqa_mask is provided)
+        observation = preprocess_observation(
+            preprocess_rng,
+            observation,
+            train=train,
+            image_keys=self.image_keys,
+            aug_wrist_image=self.aug_wrist_image,
+            vqa_mask=vqa_mask,
+        )
 
         # if stage_config is not None:
         #     langact_rng, action_rng = jax.random.split(stochastic_rng, 2)
@@ -973,11 +983,10 @@ class PiCoT(_pi0.Pi0):
 
             if self.enable_vqa_training or self.enable_prediction_training:
                 # Create masks for each sample type
-                vqa_mask = (
-                    jnp.asarray(observation.is_vqa_sample, dtype=bool)
-                    if self.enable_vqa_training
-                    else jnp.zeros(batch_size, dtype=bool)
-                )
+                # VQA mask was already computed at the top
+                if vqa_mask is None:
+                    vqa_mask = jnp.zeros(batch_size, dtype=bool)
+
                 pred_mask = (
                     jnp.asarray(observation.is_prediction_sample, dtype=bool)
                     if self.enable_prediction_training
@@ -1026,6 +1035,13 @@ class PiCoT(_pi0.Pi0):
                 )
             else:
                 # No VQA or prediction masks available, use original behavior
+                langact_metrics = self._compute_sample_specific_metrics(
+                    per_sample_loss=lang_loss,
+                    lang_metrics=lang_metrics,
+                    sample_mask=combined_langact_mask,
+                    prefix="langact_",
+                )
+                metrics.update(langact_metrics)
                 total_per_sample_loss += self.language_loss_weight * lang_loss
 
         # Compute action diffusion loss only if action training is enabled
