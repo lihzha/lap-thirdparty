@@ -182,7 +182,8 @@ class PixmoPoint(_BaseVQADataset):
         image = example["image"]
         # Images should already be JPEG encoded in the TFDS dataset
         # If not, encode them
-        if tf.rank(image) > 1:  # If it's a decoded image tensor
+        # Check dtype instead of rank to avoid TensorFlow graph tracing issues
+        if image.dtype != tf.string:  # If it's a decoded image tensor
             return tf.io.encode_jpeg(image, quality=95)
         # Already encoded
         return image
