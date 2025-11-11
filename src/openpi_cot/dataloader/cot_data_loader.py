@@ -14,8 +14,8 @@ import tensorflow as tf
 from openpi_cot.dataloader.dataset_mixer import OXECoTDatasets
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
-from src.openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
 
 def _create_rlds_dataset(

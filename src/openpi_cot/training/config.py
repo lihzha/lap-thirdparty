@@ -21,6 +21,7 @@ from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.dataloader.helpers import StateEncoding
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
+from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.planning_policy as planning_policy
@@ -30,7 +31,6 @@ from openpi_cot.shared.download import maybe_download
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
 from openpi_cot.transforms import TokenizePromptAndReasoning
-from src.openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.

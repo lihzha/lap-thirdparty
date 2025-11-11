@@ -22,8 +22,8 @@ from openpi.models import model as _model
 import wandb
 
 from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 from openpi_cot.training import utils as _utils
-from src.openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
 AXIS_PERM = np.array([0, 2, 1], dtype=np.int32)
 AXIS_SIGN = np.array([1.0, 1.0, 1.0], dtype=np.float32)
