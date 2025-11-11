@@ -283,5 +283,6 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "coco_captions": [("coco_captions", 1.0)],
     "vqa": [("vqa", 1.0)],
     "pixmo_cap_local": [("pixmo_cap_local", 1.0)],
+    "pixmo_point": [("pixmo_point", 1.0)],
 }
 ## to use ut_austin_mutex, we need to flip_wrist_image_channels,flip_image_channels. Other datasets are fine.
