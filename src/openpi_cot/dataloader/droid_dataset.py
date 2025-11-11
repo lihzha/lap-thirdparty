@@ -355,6 +355,34 @@ class DroidCoTDataset(_SingleCoTDataset):
         # if not self.use_json_actions:
         # self.dataset = self.dataset.filter(_id_ok)
 
+    def apply_traj_transforms(
+        self,
+        action_horizon: int,
+        summation_steps: int = 30,
+        action_key: str = "actions",
+        state_key: str = "state",
+    ):
+        """Apply trajectory transforms and ensure raw_state is padded to match final state dimension."""
+        # Call parent's implementation which handles padding and other transforms
+        super().apply_traj_transforms(
+            action_horizon=action_horizon,
+            summation_steps=summation_steps,
+            action_key=action_key,
+            state_key=state_key,
+        )
+
+        # Ensure raw_state has the same dimension as the final padded state
+        def pad_raw_state(traj):
+            state_dim = tf.shape(traj["observation"][state_key])[-1]
+            raw_state_dim = tf.shape(traj["raw_state"])[-1]
+            pad_amount = tf.maximum(0, state_dim - raw_state_dim)
+            traj["raw_state"] = tf.pad(traj["raw_state"], [[0, 0], [0, pad_amount]])
+            # Preserve static shape
+            traj["raw_state"].set_shape([None, self.action_dim])
+            return traj
+
+        self.dataset = self.dataset.traj_map(pad_raw_state, self.num_parallel_calls)
+
     def apply_repack_transforms(self):
         super().apply_repack_transforms()
 
