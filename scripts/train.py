@@ -674,7 +674,8 @@ def main(config: _config.TrainConfig):
         config,
         sharding=data_sharding,
         shuffle=True,
-        seed=config.seed + start_step,
+        # seed=config.seed + start_step,
+        seed=config.seed,
         persistent_iterator=True,
     )
 
