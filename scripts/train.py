@@ -28,7 +28,7 @@ import wandb
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
 from openpi_cot.models.adapters.model_adapter import CoTObservation
-from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
+from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
 import openpi_cot.training.log_util as log_util

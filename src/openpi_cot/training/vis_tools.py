@@ -9,6 +9,7 @@ from typing import Any
 
 try:
     import cv2
+
     HAS_CV2 = True
 except ImportError:
     HAS_CV2 = False
@@ -21,8 +22,8 @@ from openpi.models import model as _model
 import wandb
 
 from openpi_cot.models.adapters.model_adapter import CoTObservation
-from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 from openpi_cot.training import utils as _utils
+from src.openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
 AXIS_PERM = np.array([0, 2, 1], dtype=np.int32)
 AXIS_SIGN = np.array([1.0, 1.0, 1.0], dtype=np.float32)
@@ -226,8 +227,7 @@ class HardExampleTracker:
                     extraction_failures += 1
             except Exception as e:
                 logging.warning(
-                    f"[HardExampleTracker] Exception during image extraction for "
-                    f"global_idx={entry['global_idx']}: {e}"
+                    f"[HardExampleTracker] Exception during image extraction for global_idx={entry['global_idx']}: {e}"
                 )
                 extraction_failures += 1
 
@@ -413,10 +413,7 @@ class DatasetLogTracker:
     tokenizer: PaligemmaCoTTokenizer
     _dataset_log_counts: dict[str, int] = field(default_factory=dict, init=False)
 
-    def get_dataset_names_from_batch(
-        self,
-        batch: tuple[CoTObservation, _model.Actions]
-    ) -> list[str]:
+    def get_dataset_names_from_batch(self, batch: tuple[CoTObservation, _model.Actions]) -> list[str]:
         """Extract dataset names from batch."""
         obs = batch[0]
         if not hasattr(obs, "tokenized_dataset_name"):
@@ -458,10 +455,7 @@ class DatasetLogTracker:
             dataset_to_indices.setdefault(name, []).append(idx)
 
         # Sort datasets by their current log count (ascending)
-        datasets_sorted = sorted(
-            dataset_to_indices.keys(),
-            key=lambda d: self._dataset_log_counts.get(d, 0)
-        )
+        datasets_sorted = sorted(dataset_to_indices.keys(), key=lambda d: self._dataset_log_counts.get(d, 0))
 
         selected_indices = []
         round_idx = 0
@@ -523,9 +517,7 @@ def log_random_examples(
     if dataset_log_tracker is not None:
         dataset_names = dataset_log_tracker.get_dataset_names_from_batch(host_batch)
         if dataset_names:
-            rand_idx = dataset_log_tracker.select_indices_uniform(
-                dataset_names, count, rng_local
-            )
+            rand_idx = dataset_log_tracker.select_indices_uniform(dataset_names, count, rng_local)
             dataset_log_tracker.update_counts(dataset_names, rand_idx)
         else:
             # Fallback to random sampling if dataset names not available

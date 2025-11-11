@@ -11,7 +11,7 @@ from openpi.transforms import flatten_dict
 from openpi.transforms import unflatten_dict
 
 from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
+from src.openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
 # Optional TF import: used to ensure ops run inside tf.data pipelines
 try:  # pragma: no cover - optional dependency in some environments

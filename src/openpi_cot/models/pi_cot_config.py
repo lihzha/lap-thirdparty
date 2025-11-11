@@ -18,8 +18,6 @@ import openpi_cot.models.gemma3 as _gemma3
 if TYPE_CHECKING:
     from openpi_cot.models.pi_cot import PiCoT
 
-from typing import Literal
-
 
 @dataclasses.dataclass(frozen=True)
 class PiCoTConfig(_model.BaseModelConfig):
@@ -32,24 +30,13 @@ class PiCoTConfig(_model.BaseModelConfig):
     action_horizon: int = 50
     max_token_len: int = None
 
-    # if verbose_mode=True, log per sample metrics 
+    # if verbose_mode=True, log per sample metrics
     verbose_mode: bool = False
 
     pi05: bool = False
     discrete_state_input: bool = None
-    prompt_format: Literal[
-        "pi05",
-        "pi0",
-        "vqa",
-        "coordinate_system",
-        "schema_compact",
-        "schema_compact_with_rotation",
-        "schema_compact_bimanual",
-        "schema_compact_bimanual_with_rotation",
-        "schema_compact_named_params",
-        "verbose_state",
-        "grouped_state",
-    ] = "pi05"
+    prompt_format: str = "pi05"
+    prediction_format: str = "default"
 
     aug_wrist_image: bool = True
     # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup

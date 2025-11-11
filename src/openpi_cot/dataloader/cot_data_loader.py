@@ -13,10 +13,9 @@ import tensorflow as tf
 
 from openpi_cot.dataloader.dataset_mixer import OXECoTDatasets
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
-from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.models.adapters.model_adapter import CoTObservation
-from openpi_cot.models.adapters.tokenizer_adapter import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
+from src.openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
 
 def _create_rlds_dataset(
@@ -303,7 +302,7 @@ class CoTRLDSDataLoader:
             logging.info(f"Skipping {self._skip_batches} batches to resume from checkpoint...")
             # Get the underlying dataset and apply skip
             underlying_ds = self._dataset._dataset
-            if hasattr(underlying_ds, 'dataset'):
+            if hasattr(underlying_ds, "dataset"):
                 # For OXECoTDatasets and similar wrappers
                 skipped_ds = underlying_ds.dataset.skip(self._skip_batches)
                 underlying_ds.dataset = skipped_ds
