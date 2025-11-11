@@ -84,6 +84,7 @@ class OXECoTDatasets:
 
         datasets, dataset_sizes, all_dataset_statistics = [], [], {}
         dataset_state_encodings = {}  # Track state encoding for each dataset
+        has_robot_dataset = False  # Track if ANY dataset is a robot dataset
         logging.info("Constructing datasets...")
         for dataset_name, threads, reads in zip(  # noqa: B905
             dataset_names,
@@ -108,7 +109,6 @@ class OXECoTDatasets:
                 pred_prob=config.pred_prob,
                 primary_pred_prob=config.primary_pred_prob,
             )
-            has_robot_dataset = False
             if dataset_name == "droid":
                 ds = DroidCoTDataset(
                     **kwargs,
@@ -202,6 +202,11 @@ class OXECoTDatasets:
         pprint_data_mixture(dataset_names, sample_weights)
 
         # Apply global normalization if requested
+        logging.info(
+            f"Global normalization check: use_global_normalization={use_global_normalization}, "
+            f"config.vis_dataset={config.vis_dataset}, has_robot_dataset={has_robot_dataset}, "
+            f"split={split}"
+        )
         if use_global_normalization and not config.vis_dataset and has_robot_dataset:
             global_stats_dir = data_dir
             global_stats = self._compute_or_load_global_stats(
