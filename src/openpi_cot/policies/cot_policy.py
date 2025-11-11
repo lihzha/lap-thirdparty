@@ -361,7 +361,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # Extract initial state for EEF frame transformation
         initial_state = None
         if self.language_action_format.use_eef_frame and "observation" in data and "state" in data["observation"]:
-            initial_state = np.asarray(data["observation"]["raw_state"])
+            initial_state = np.asarray(data["raw_state"])
 
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data:
