@@ -99,19 +99,11 @@ DIRECTIONAL_ONLY_FORMAT = LanguageActionFormat(
 )
 
 EEF_FORMAT = LanguageActionFormat(
-    name="verbose",
-    style="verbose",
-    decimal_places=0,
-    include_rotation=False,
-    use_eef_frame=True
+    name="verbose", style="verbose", decimal_places=0, include_rotation=False, use_eef_frame=True
 )
 
 EEF_WITH_ROTATION_FORMAT = LanguageActionFormat(
-    name="verbose",
-    style="verbose",
-    decimal_places=0,
-    include_rotation=True,
-    use_eef_frame=True
+    name="verbose", style="verbose", decimal_places=0, include_rotation=True, use_eef_frame=True
 )
 
 # Registry for easy lookup of language action formats
@@ -124,8 +116,8 @@ LANGUAGE_ACTION_FORMAT_REGISTRY = {
     "compact": COMPACT_FORMAT,
     "compact_with_rotation": COMPACT_WITH_ROTATION_FORMAT,
     "directional_only": DIRECTIONAL_ONLY_FORMAT,
-    "eef_frame":EEF_FORMAT,
-    "eef_frame_with_rotation": EEF_WITH_ROTATION_FORMAT
+    "eef_frame": EEF_FORMAT,
+    "eef_frame_with_rotation": EEF_WITH_ROTATION_FORMAT,
 }
 
 
@@ -287,7 +279,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         return inputs
 
-    def _prepare_text(self, data: dict, lang_action_key: str, trimmed_len_key: str, initial_state: np.ndarray = None) -> dict:
+    def _prepare_text(
+        self, data: dict, lang_action_key: str, trimmed_len_key: str, initial_state: np.ndarray = None
+    ) -> dict:
         la = data[lang_action_key]
         assert isinstance(la[0], bytes)
         if (
@@ -367,11 +361,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # Extract initial state for EEF frame transformation
         initial_state = None
         if self.language_action_format.use_eef_frame and "observation" in data and "state" in data["observation"]:
-            initial_state = np.asarray(data["observation"]["state"])
+            initial_state = np.asarray(data["observation"]["raw_state"])
 
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data:
-            inputs["language_actions"] = self._prepare_text(data, "language_actions", "control_frequency", initial_state)
+            inputs["language_actions"] = self._prepare_text(
+                data, "language_actions", "control_frequency", initial_state
+            )
 
             # Only apply idle filtering for language actions
             if not is_vqa_sample and not inputs["is_prediction_sample"]:
@@ -693,15 +689,21 @@ class ActionDecodingSchema:
                     # Parse left arm
                     # For bimanual, initial_state should contain left arm state in first 7 or 6 elements
                     left_state = initial_state[:7] if initial_state is not None and len(initial_state) >= 7 else None
-                    left_trans, left_rot, left_grip = self.parse_language_to_deltas(left_part, in_camera_frame, left_state)
+                    left_trans, left_rot, left_grip = self.parse_language_to_deltas(
+                        left_part, in_camera_frame, left_state
+                    )
                     left_translations[i] = left_trans[0]
                     left_rotations[i] = left_rot[0]
                     left_grippers[i] = left_grip[0]
 
                     # Parse right arm
                     # For bimanual, initial_state should contain right arm state starting at index 7
-                    right_state = initial_state[7:14] if initial_state is not None and len(initial_state) >= 14 else None
-                    right_trans, right_rot, right_grip = self.parse_language_to_deltas(right_part, in_camera_frame, right_state)
+                    right_state = (
+                        initial_state[7:14] if initial_state is not None and len(initial_state) >= 14 else None
+                    )
+                    right_trans, right_rot, right_grip = self.parse_language_to_deltas(
+                        right_part, in_camera_frame, right_state
+                    )
                     right_translations[i] = right_trans[0]
                     right_rotations[i] = right_rot[0]
                     right_grippers[i] = right_grip[0]

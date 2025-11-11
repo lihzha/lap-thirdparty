@@ -268,6 +268,7 @@ class _BaseVQADataset(_SingleCoTDataset):
                 "is_vqa_sample": tf.constant(True, dtype=tf.bool),
                 "is_prediction_sample": tf.constant(False, dtype=tf.bool),
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
+                "raw_state": tf.zeros([self.action_dim], dtype=tf.float32),
             }
 
             return output
