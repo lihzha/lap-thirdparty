@@ -18,6 +18,16 @@ from openpi_cot.policies.utils import to_str_list
 from openpi_cot.policies.utils import transform_actions_from_eef_frame
 from openpi_cot.policies.utils import transform_actions_to_eef_frame
 
+# Datasets that need wrist camera rotation by 180 degrees
+DATASETS_REQUIRING_WRIST_ROTATION = {
+    # "taco_play",
+    "droid",
+    # "furniture_bench_dataset_converted_externally_to_rlds",
+    "berkeley_fanuc_manipulation",
+    "berkeley_autolab_ur5",
+    "fmb",
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class LanguageActionFormat:
@@ -151,16 +161,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if base_image is None:
             raise ValueError("Base image missing from observation")
 
-        # Datasets that need wrist camera rotation by 180 degrees
-        DATASETS_REQUIRING_WRIST_ROTATION = {
-            # "taco_play",
-            "droid",
-            # "furniture_bench_dataset_converted_externally_to_rlds",
-            "berkeley_fanuc_manipulation",
-            "berkeley_autolab_ur5",
-            "fmb",
-        }
-
         # Check if current dataset requires wrist rotation
         dataset_name = (
             data.get("dataset_name", b"").decode()
@@ -249,9 +249,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         else:
             raise ValueError(f"Prompt is not a string or bytes: {prompt}")
 
-        if "dataset_name" in data:
-            if "r1_lite" in data["dataset_name"].decode():
-                prompt_str = prompt_str.split("@")[-1]
+        if "dataset_name" in data and "r1_lite" in data["dataset_name"].decode():
+            prompt_str = prompt_str.split("@")[-1]
 
         inputs["prompt"] = prompt_str
         if "dataset_name" in data:
@@ -369,8 +368,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 data, "language_actions", "control_frequency", initial_state
             )
 
-            # Only apply idle filtering for language actions
-            if not is_vqa_sample and not inputs["is_prediction_sample"]:
+            # Only apply idle filtering for language actions and prediction
+            if not is_vqa_sample:
                 is_idle = is_idle_language_action(
                     inputs["language_actions"],
                     self.language_action_format.get_sum_decimal(),
@@ -420,6 +419,7 @@ class ActionDecodingSchema:
     def parse_language_to_deltas(
         self,
         reasoning: str | list[str],
+        *,
         in_camera_frame: bool = False,
         initial_state: np.ndarray = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -436,10 +436,7 @@ class ActionDecodingSchema:
             - rotation_deltas: array of shape (num_steps, 3) in radians [roll, pitch, yaw]
             - gripper_actions: array of shape (num_steps,)
         """
-        if isinstance(reasoning, str):
-            sentences = [reasoning]
-        else:
-            sentences = reasoning
+        sentences = [reasoning] if isinstance(reasoning, str) else reasoning
 
         num_steps = len(sentences)
         translations = np.zeros((num_steps, 3), dtype=float)
@@ -590,6 +587,7 @@ class ActionDecodingSchema:
     def parse_bimanual_language_to_deltas(
         self,
         reasoning: str | list[str],
+        *,
         in_camera_frame: bool = False,
         initial_state: np.ndarray = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -609,10 +607,7 @@ class ActionDecodingSchema:
             - right_rotations: array of shape (num_steps, 3) in radians [roll, pitch, yaw]
             - right_grippers: array of shape (num_steps,)
         """
-        if isinstance(reasoning, str):
-            sentences = [reasoning]
-        else:
-            sentences = reasoning
+        sentences = [reasoning] if isinstance(reasoning, str) else reasoning
 
         num_steps = len(sentences)
         left_translations = np.zeros((num_steps, 3), dtype=float)
@@ -819,7 +814,8 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         reasoning = data.get("reasoning")
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
-        assert self.decoding_schema is not None and reasoning is not None
+        assert self.decoding_schema is not None
+        assert reasoning is not None
 
         # Extract initial state for EEF frame transformation
         initial_state = None

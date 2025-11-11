@@ -207,6 +207,22 @@ GROUPED_STATE_PROMPT_FORMAT = PromptFormat(
 )
 
 
+GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
+    name="grouped_state",
+    prefix_module=PrefixModule("Predict what is the action that the robot should take"),
+    task_module=TaskModule(template="Task: {prompt}"),
+    state_module=StateModule(
+        discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
+        state_prefix_template="Robot control coordinate system is: +x=forward, +y=left, +z=up. Robot current state{state_label}: {state}",
+        include_state_type=False,
+    ),
+    action_module=ActionModule(prefix="Actions: "),
+    separator=". ",
+    critical_token_checker=checkers.is_critical_schema,
+    direction_token_checker=checkers.is_direction_schema,
+)
+
+
 GROUPED_PREDICTION_PROMPT_FORMAT = PromptFormat(
     name="grouped_prediction",
     state_module=StateModule(
@@ -247,6 +263,7 @@ PROMPT_FORMAT_REGISTRY = {
     "coordinate_system": COORDINATE_SYSTEM_PROMPT_FORMAT,
     "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
     "grouped_state": GROUPED_STATE_PROMPT_FORMAT,
+    "grouped_state_verbose": GROUPED_STATE_PREFIX_PROMPT_FORMAT,
 }
 
 PREDICTION_PROMPT_FORMAT_REGISTRY = {
