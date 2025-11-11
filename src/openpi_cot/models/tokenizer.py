@@ -7,7 +7,7 @@ import numpy as np
 from openpi.models import tokenizer as _tokenizer
 import sentencepiece
 
-from openpi_cot.models.prompt_utils.checkers import _is_number
+from openpi_cot.models.prompt_utils.checkers import is_number
 from openpi_cot.models.prompt_utils.prompt import DEFAULT_VQA_PROMPT_FORMAT
 from openpi_cot.models.prompt_utils.prompt import PREDICTION_PROMPT_FORMAT_REGISTRY
 from openpi_cot.models.prompt_utils.prompt import PROMPT_FORMAT_REGISTRY
@@ -216,7 +216,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
                     continue
                 piece = pieces[i]
                 if piece:
-                    if _is_number(piece):
+                    if is_number(piece):
                         number_mask[i] = True
                     if fmt.direction_token_checker(piece):
                         direction_mask[i] = True
