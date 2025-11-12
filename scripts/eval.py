@@ -49,8 +49,7 @@ def init_logging():
 
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    if logger.handlers:
-        logger.handlers[0].setFormatter(formatter)
+    logger.handlers[0].setFormatter(formatter)
 
 
 def init_wandb(
@@ -193,7 +192,7 @@ class RolloutEvaluator:
         observation, _ = batch
 
         # Sample language action tokens
-        id_buf, t_final = model.sample_language_actions(observation)
+        id_buf, t_final = model.sample_reasoning(observation)
 
         return id_buf, t_final
 

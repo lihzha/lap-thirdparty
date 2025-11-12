@@ -171,7 +171,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     # Normalization type for actions and proprioceptive state.
     # CLI: --data.action_proprio_normalization_type {normal|bounds|bounds_q99}
-    action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL
+    action_proprio_normalization_type: NormalizationType = NormalizationType.BOUNDS
     resize_resolution: tuple[int, int] = (224, 224)
 
     # Language action format
@@ -823,7 +823,7 @@ class TrainConfig(upstream_config.TrainConfig):
     # Evaluation fields
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = None
-    eval_mode: Literal["token_accuracy", "rollout", "both"] = "token_accuracy"
+    eval_mode: Literal["token_accuracy", "rollout", "both"] = "rollout"
     # Multi-stage training schedule choice
     training_schedule_choice: TrainingScheduleChoice = dataclasses.field(default_factory=TrainingScheduleChoice)
 
@@ -876,35 +876,6 @@ _CONFIGS = [
             "droid_dataset_name": "droid",
             "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
             "shuffle_buffer_size": 400_000,
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
-        ),
-        save_interval=500,
-        keep_period=5000,
-        resume=True,
-    ),
-    # Combined dataset with verbose_state prompt format, BOUNDS normalization, EEF_R6 state encoding
-    *create_multi_device_configs(
-        base_name="pi_combined_cot_verbose",
-        devices=["v6", "v6europe", "v4", "local"],
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=200,
-            pi05=True,
-            discrete_state_input=True,
-            prompt_format="verbose_state",
-        ),
-        data_config_class=RLDSCoTDataConfig,
-        data_config_kwargs={
-            "repo_id": "combined",
-            "asset_id": "combined",
-            "dataset_type": "combined",
-            "droid_dataset_name": "droid",
-            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
-            "shuffle_buffer_size": 400_000,
-            # "state_encoding": StateEncoding.EEF_R6,
-            "action_proprio_normalization_type": NormalizationType.BOUNDS,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
