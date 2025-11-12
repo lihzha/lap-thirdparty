@@ -691,11 +691,65 @@ def log_hard_examples_payload(payload: dict[str, Any]) -> None:
 def prepare_eval_batch(batch):
     # Process the batch to remove reasoning and update masks
     obs, actions = batch
-    new_tokenized_prompt = obs.tokenized_prompt * (~obs.tokenized_langact_mask)
+
+    # Find the first True index for each sample in the batch
+    # obs.tokenized_langact_mask has shape [batch_size, seq_len]
+    batch_size = obs.tokenized_langact_mask.shape[0]
+
+    # For each sample, find the first index where tokenized_langact_mask is True
+    cut_indices = []
+    for i in range(batch_size):
+        mask = obs.tokenized_langact_mask[i]
+        # Find first True index
+        true_indices = jnp.where(mask)[0]
+        if true_indices.shape[0] > 0:
+            cut_idx = int(true_indices[0])
+        else:
+            # If no True values, keep the entire sequence
+            cut_idx = int(mask.shape[0])
+        cut_indices.append(cut_idx)
+
+    # Find the maximum cut index (longest sequence after cutting)
+    max_cut_idx = max(cut_indices)
+
+    # Cut and pad each sample
+    new_tokenized_prompt_list = []
+    new_tokenized_prompt_mask_list = []
+    new_tokenized_langact_mask_list = []
+
+    for i in range(batch_size):
+        cut_idx = cut_indices[i]
+
+        # Cut to the first True index (keep everything before reasoning)
+        prompt_cut = obs.tokenized_prompt[i, :cut_idx]
+        prompt_mask_cut = obs.tokenized_prompt_mask[i, :cut_idx]
+        # Since we're removing reasoning, langact_mask should be all False
+        langact_mask_cut = jnp.zeros(cut_idx, dtype=jnp.bool_)
+
+        # Left-pad to max_cut_idx
+        pad_len = max_cut_idx - cut_idx
+        if pad_len > 0:
+            prompt_padded = jnp.concatenate([jnp.zeros(pad_len, dtype=prompt_cut.dtype), prompt_cut])
+            prompt_mask_padded = jnp.concatenate([jnp.zeros(pad_len, dtype=jnp.bool_), prompt_mask_cut])
+            langact_mask_padded = jnp.concatenate([jnp.zeros(pad_len, dtype=jnp.bool_), langact_mask_cut])
+        else:
+            prompt_padded = prompt_cut
+            prompt_mask_padded = prompt_mask_cut
+            langact_mask_padded = langact_mask_cut
+
+        new_tokenized_prompt_list.append(prompt_padded)
+        new_tokenized_prompt_mask_list.append(prompt_mask_padded)
+        new_tokenized_langact_mask_list.append(langact_mask_padded)
+
+    # Stack back into batch
+    new_tokenized_prompt = jnp.stack(new_tokenized_prompt_list)
+    new_tokenized_prompt_mask = jnp.stack(new_tokenized_prompt_mask_list)
+    new_tokenized_langact_mask = jnp.stack(new_tokenized_langact_mask_list) * False
+
     new_obs = dataclasses.asdict(obs)
     new_obs["tokenized_prompt"] = new_tokenized_prompt
-    new_obs["tokenized_prompt_mask"] = obs.tokenized_prompt_mask * (~obs.tokenized_langact_mask)
-    new_obs["tokenized_langact_mask"] = obs.tokenized_prompt_mask * False
+    new_obs["tokenized_prompt_mask"] = new_tokenized_prompt_mask
+    new_obs["tokenized_langact_mask"] = new_tokenized_langact_mask
     new_obs = CoTObservation(**new_obs)
     return (new_obs, actions)
 
