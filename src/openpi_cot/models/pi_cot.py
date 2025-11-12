@@ -463,6 +463,7 @@ class PiCoT(_pi0.Pi0):
         number_mask: at.Bool[at.Array, "b s"] | None = None,
         direction_mask: at.Bool[at.Array, "b s"] | None = None,
         verbose_mode: bool = False,
+        return_predictions: bool = False,
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Compute cross-entropy loss and associated accuracy metrics.
 
@@ -470,10 +471,11 @@ class PiCoT(_pi0.Pi0):
             logits: Model predictions [b, s, vocab_size]
             labels: Ground truth token IDs [b, s]
             token_mask: Mask indicating which tokens to include [b, s]
-            critical_mask: Optional mask for critical tokens [b, s]
-            number_mask: Optional mask for number tokens [b, s]
-            direction_mask: Optional mask for direction tokens [b, s]
-            verbose_mode: Whether to compute detailed metrics
+            critical_mask: Optional mask for critical tokens [b, s] (only used if verbose_mode=True)
+            number_mask: Optional mask for number tokens [b, s] (only used if verbose_mode=True)
+            direction_mask: Optional mask for direction tokens [b, s] (only used if verbose_mode=True)
+            verbose_mode: Whether to compute detailed accuracy metrics (requires critical/number/direction masks)
+            return_predictions: Whether to return predictions and labels in metrics (independent of verbose_mode)
 
         Returns:
             (loss, metrics_dict)
@@ -489,9 +491,21 @@ class PiCoT(_pi0.Pi0):
             per_example=True,
         )
 
-        # Compute accuracy metrics
-        if verbose_mode:
+        # Return predictions if requested (independently of verbose_mode)
+        # IMPORTANT: Predictions are ONLY returned when return_predictions=True
+        if return_predictions:
             predictions = jnp.argmax(logits, axis=-1)
+            metrics["predictions"] = predictions
+            metrics["labels"] = labels
+            metrics["token_mask"] = token_mask
+
+        # Compute detailed accuracy metrics if verbose_mode is enabled
+        # NOTE: When verbose_mode=True but return_predictions=False, predictions are
+        # computed internally for accuracy metrics but NOT added to the output metrics
+        if verbose_mode:
+            # Reuse predictions if already computed (when return_predictions=True),
+            # otherwise compute them temporarily for accuracy calculation only
+            predictions = metrics.get("predictions", jnp.argmax(logits, axis=-1))
             accuracy_metrics = self._compute_token_accuracy_metrics(
                 predictions=predictions,
                 labels=labels,
@@ -500,6 +514,7 @@ class PiCoT(_pi0.Pi0):
                 number_mask=number_mask,
                 direction_mask=direction_mask,
             )
+            # Only add accuracy metrics, not predictions (unless already added above)
             metrics.update(accuracy_metrics)
 
         return per_sample_loss, metrics
@@ -624,6 +639,7 @@ class PiCoT(_pi0.Pi0):
         loss_name: str,
         metric_prefix: str,
         verbose_mode: bool = False,
+        return_predictions: bool = False,
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Shared logic for computing sequence prediction loss (language or prediction).
 
@@ -641,6 +657,7 @@ class PiCoT(_pi0.Pi0):
             loss_name: Name to use for loss metric (e.g., "lang_loss", "pred_loss")
             metric_prefix: Prefix to add to metric names (e.g., "", "pred_")
             verbose_mode: Whether to compute detailed metrics
+            return_predictions: Whether to return predictions and labels
 
         Returns:
             (loss, metrics)
@@ -661,6 +678,8 @@ class PiCoT(_pi0.Pi0):
             sample_mask,
         )
 
+        # Only prepare detailed masks if verbose_mode is enabled (for accuracy metrics)
+        # When return_predictions=True but verbose_mode=False, we skip this expensive preparation
         if verbose_mode:
             # Prepare additional masks for accuracy computation
             ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
@@ -677,6 +696,7 @@ class PiCoT(_pi0.Pi0):
             number_mask = prepare_mask(number_token_mask)
             direction_mask = prepare_mask(direction_token_mask)
         else:
+            # Skip mask preparation when only returning predictions
             critical_mask, number_mask, direction_mask = None, None, None
 
         # Compute loss and metrics
@@ -688,12 +708,14 @@ class PiCoT(_pi0.Pi0):
             number_mask=number_mask,
             direction_mask=direction_mask,
             verbose_mode=verbose_mode,
+            return_predictions=return_predictions,
         )
 
         # Apply metric prefix if needed
         metrics = {loss_name: jnp.mean(per_sample_loss)}
 
-        if verbose_mode:
+        # Add predictions/labels or accuracy metrics to output
+        if return_predictions or verbose_mode:
             metric_rename_map = {
                 "token_accuracy": f"{metric_prefix}token_accuracy",
                 "critical_token_accuracy": f"{metric_prefix}critical_token_accuracy",
@@ -702,9 +724,13 @@ class PiCoT(_pi0.Pi0):
             }
 
             for key, value in raw_metrics.items():
-                # Rename accuracy metrics with prefix, keep other metrics as-is
-                new_key = metric_rename_map.get(key, key)
-                metrics[new_key] = value
+                # Keep predictions/labels/mask as-is without prefix
+                if key in ["predictions", "labels", "token_mask"]:
+                    metrics[key] = value
+                # Rename accuracy metrics with prefix
+                else:
+                    new_key = metric_rename_map.get(key, key)
+                    metrics[new_key] = value
 
         return per_sample_loss, metrics
 
@@ -716,6 +742,7 @@ class PiCoT(_pi0.Pi0):
         prefix_ar_mask: at.Bool[at.Array, "b s"],
         sample_mask: at.Bool[at.Array, "b"] | None = None,
         verbose_mode: bool = False,
+        return_predictions: bool = False,
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Compute language/reasoning cross-entropy loss and accuracy metrics.
 
@@ -726,6 +753,7 @@ class PiCoT(_pi0.Pi0):
             prefix_ar_mask: Prefix autoregressive mask
             sample_mask: Optional per-sample mask to override observation.sample_mask
             verbose_mode: Whether to compute detailed metrics
+            return_predictions: Whether to return predictions and labels
 
         Returns:
             (loss, metrics, token_accuracy_scalar)
@@ -747,6 +775,7 @@ class PiCoT(_pi0.Pi0):
             loss_name="lang_loss",
             metric_prefix="",
             verbose_mode=verbose_mode,
+            return_predictions=return_predictions,
         )
 
         return per_sample_loss, metrics
@@ -1082,6 +1111,92 @@ class PiCoT(_pi0.Pi0):
             metrics["per_sample_loss"] = total_per_sample_loss
 
         return jnp.mean(total_per_sample_loss), metrics
+
+    @override
+    def compute_loss_with_decoded_tokens(
+        self,
+        rng: at.KeyArrayLike,
+        observation: CoTObservation | Observation,
+        actions: _model.Actions,
+        *,
+        train: bool = False,
+        verbose_mode: bool = False,
+    ) -> tuple[float, dict[str, at.Array]]:
+        """Compute loss and return predictions and labels for visualization.
+
+        This is similar to compute_loss but optimized for visualization:
+        - Always returns predicted tokens, ground truth labels, and token masks
+        - By default, skips expensive accuracy metric computation (verbose_mode=False)
+        - Avoids preparing critical/number/direction masks when not needed
+
+        Args:
+            rng: Random key
+            observation: Observation containing images and tokenized text
+            actions: Ground truth actions (unused but kept for API compatibility)
+            train: Whether in training mode
+            verbose_mode: Whether to compute detailed accuracy metrics (default: False for efficiency)
+
+        Returns:
+            (loss, metrics) where metrics includes 'predictions', 'labels', and 'token_mask'
+        """
+        preprocess_rng, _, _, _ = jax.random.split(rng, 4)
+
+        # Use explicit verbose_mode (defaults to False for efficiency)
+        effective_verbose_mode = verbose_mode
+
+        # Preprocess observation
+        vqa_mask = None
+        if self.enable_vqa_training and hasattr(observation, "is_vqa_sample") and observation.is_vqa_sample is not None:
+            vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool)
+
+        observation = preprocess_observation(
+            preprocess_rng,
+            observation,
+            train=train,
+            image_keys=self.image_keys,
+            aug_wrist_image=self.aug_wrist_image,
+            vqa_mask=vqa_mask,
+        )
+
+        # Encode images (only first frame needed)
+        img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
+
+        # Build prefix
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(
+            observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
+        )
+
+        # Compute language loss with predictions
+        # NOTE: We always set return_predictions=True because this method's purpose
+        # is to return decoded tokens for visualization
+        combined_langact_mask = observation.sample_mask
+        lang_loss, lang_metrics = self._compute_language_loss(
+            observation,
+            prefix_tokens,
+            prefix_mask,
+            prefix_ar_mask,
+            sample_mask=combined_langact_mask,
+            verbose_mode=effective_verbose_mode,
+            return_predictions=True,  # Always True: this method is for visualization
+        )
+
+        # Extract predictions, labels, and mask from metrics
+        # These are always present because return_predictions=True above
+        metrics = {
+            "loss": jnp.mean(lang_loss),
+            "predictions": lang_metrics["predictions"],
+            "labels": lang_metrics["labels"],
+            "token_mask": lang_metrics["token_mask"],
+        }
+
+        # Include accuracy metrics if verbose mode is enabled
+        # (predictions/labels/token_mask are already included above)
+        if effective_verbose_mode:
+            for key, value in lang_metrics.items():
+                if key not in ["predictions", "labels", "token_mask"]:
+                    metrics[key] = value
+
+        return jnp.mean(lang_loss), metrics
 
     def _slide_window_cache(
         self,

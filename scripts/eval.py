@@ -197,6 +197,47 @@ class RolloutEvaluator:
         return id_buf, t_final
 
 
+class TokenVisualizationEvaluator:
+    def __init__(self, config: _config.TrainConfig):
+        self.config = config
+
+    @at.typecheck
+    def __call__(
+        self,
+        rng: at.KeyArrayLike,
+        state: training_utils.TrainState,
+        batch: tuple[CoTObservation, _model.Actions],
+    ) -> dict[str, at.Array]:
+        """Compute loss and return predictions and labels for visualization.
+
+        Returns:
+            Dictionary containing loss, predictions, labels, and token_mask
+        """
+        model = nnx.merge(state.model_def, state.params)
+        model.eval()
+
+        eval_rng = jax.random.fold_in(rng, state.step)
+        observation, actions = batch
+
+        loss, metrics = model.compute_loss_with_decoded_tokens(
+            eval_rng, observation, actions, train=False, verbose_mode=False
+        )
+
+        info = {
+            "loss": loss,
+            "predictions": metrics["predictions"],
+            "labels": metrics["labels"],
+            "token_mask": metrics["token_mask"],
+        }
+
+        # Include other metrics if available
+        for key in ["token_accuracy", "critical_token_accuracy", "number_token_accuracy", "direction_token_accuracy"]:
+            if key in metrics:
+                info[key] = metrics[key]
+
+        return info
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
@@ -369,6 +410,22 @@ def main(config: _config.TrainConfig):
             num_eval_batches,
         )
         results.update(rollout_results)
+
+    # Token visualization evaluation
+    if config.eval_mode == "token_visualization":
+        logging.info("Running token visualization evaluation...")
+        viz_results = evaluate_token_visualization(
+            config,
+            eval_rng,
+            train_state,
+            train_state_sharding,
+            data_loader,
+            mesh,
+            data_sharding,
+            replicated_sharding,
+            num_eval_batches,
+        )
+        results.update(viz_results)
 
     # Log final results
     logging.info("=" * 80)
@@ -560,6 +617,109 @@ def evaluate_rollout(
     # Log images to wandb
     if images_to_log and jax.process_index() == 0 and config.wandb_enabled:
         wandb.log({"eval/rollout/predictions": images_to_log}, step=int(train_state.step))
+
+    return results
+
+
+def evaluate_token_visualization(
+    config: _config.TrainConfig,
+    eval_rng: at.KeyArrayLike,
+    train_state: training_utils.TrainState,
+    train_state_sharding,
+    data_loader,
+    mesh,
+    data_sharding,
+    replicated_sharding,
+    num_eval_batches: int,
+) -> dict[str, float]:
+    """Evaluate and visualize token predictions vs ground truth."""
+    evaluator = TokenVisualizationEvaluator(config)
+    peval_step = jax.jit(
+        evaluator,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    )
+
+    # Get tokenizer for decoding
+    tokenizer = data_loader.tokenizer
+
+    data_iter = iter(data_loader)
+    all_accuracies = []
+    max_samples_to_log = 10  # Log only a few samples for readability
+
+    pbar = tqdm.tqdm(
+        range(num_eval_batches),
+        total=num_eval_batches,
+        dynamic_ncols=True,
+        desc="Token visualization evaluation",
+        disable=(jax.process_index() != 0),
+    )
+
+    with sharding.set_mesh(mesh):
+        for batch_idx in pbar:
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                logging.info(f"Reached end of dataset at batch {batch_idx}")
+                break
+
+            eval_info = peval_step(eval_rng, train_state, batch)
+
+            # Process results on host
+            if jax.process_index() == 0:
+                predictions = jax.device_get(eval_info["predictions"])  # [batch, seq_len]
+                labels = jax.device_get(eval_info["labels"])  # [batch, seq_len]
+                token_mask = jax.device_get(eval_info["token_mask"])  # [batch, seq_len]
+
+                # Log first few samples
+                if batch_idx < max_samples_to_log:
+                    batch_size = predictions.shape[0]
+                    for sample_idx in range(min(2, batch_size)):  # Log up to 2 samples per batch
+                        pred_tokens = predictions[sample_idx]
+                        label_tokens = labels[sample_idx]
+                        mask = token_mask[sample_idx]
+
+                        # Only decode valid tokens
+                        valid_pred = pred_tokens[mask > 0]
+                        valid_label = label_tokens[mask > 0]
+
+                        # Decode tokens
+                        pred_text = tokenizer.decode(valid_pred.tolist())
+                        label_text = tokenizer.decode(valid_label.tolist())
+
+                        # Log to console
+                        logging.info("=" * 80)
+                        logging.info(f"Batch {batch_idx}, Sample {sample_idx}")
+                        logging.info("-" * 80)
+                        logging.info(f"Ground Truth: {label_text}")
+                        logging.info(f"Prediction:   {pred_text}")
+                        logging.info("=" * 80)
+
+                        # Log to wandb
+                        if config.wandb_enabled:
+                            wandb.log(
+                                {
+                                    f"eval/token_viz/batch_{batch_idx}_sample_{sample_idx}/ground_truth": label_text,
+                                    f"eval/token_viz/batch_{batch_idx}_sample_{sample_idx}/prediction": pred_text,
+                                },
+                                step=int(train_state.step),
+                            )
+
+                # Track accuracy
+                if "token_accuracy" in eval_info:
+                    all_accuracies.append(float(jax.device_get(eval_info["token_accuracy"])))
+
+            # Update progress bar
+            if all_accuracies and (batch_idx + 1) % 10 == 0:
+                recent_acc = all_accuracies[-min(10, len(all_accuracies)) :]
+                pbar.set_postfix({"token_acc": f"{np.mean(recent_acc):.4f}"})
+
+    # Compute final statistics
+    results = {}
+    if all_accuracies:
+        results["eval/token_viz/mean_accuracy"] = float(np.mean(all_accuracies))
+        results["eval/token_viz/std_accuracy"] = float(np.std(all_accuracies))
+
+    results["eval/token_viz/num_batches"] = len(all_accuracies) if all_accuracies else 0
 
     return results
 
