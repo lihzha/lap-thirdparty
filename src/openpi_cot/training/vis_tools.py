@@ -694,6 +694,8 @@ def prepare_eval_batch(batch):
     new_tokenized_prompt = obs.tokenized_prompt * (~obs.tokenized_langact_mask)
     new_obs = dataclasses.asdict(obs)
     new_obs["tokenized_prompt"] = new_tokenized_prompt
+    new_obs["tokenized_prompt_mask"] = obs.tokenized_prompt_mask * (~obs.tokenized_langact_mask)
+    new_obs["tokenized_langact_mask"] = obs.tokenized_prompt_mask * False
     new_obs = CoTObservation(**new_obs)
     return (new_obs, actions)
 
