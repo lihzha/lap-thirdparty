@@ -507,6 +507,8 @@ def evaluate_rollout(
             # Replicate the batch to match expected sharding
             eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
 
+            breakpoint()
+
             # Run rollout evaluation
             id_buf, t_final = peval_step(eval_rng, train_state, eval_batch_replicated)
 
