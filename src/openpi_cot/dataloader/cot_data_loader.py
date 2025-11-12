@@ -299,7 +299,7 @@ class CoTRLDSDataLoader:
 
         # Apply skip if we're resuming from a checkpoint
         if self._skip_batches > 0:
-            logging.info(f"Skipping {self._skip_batches} batches to resume from checkpoint...")
+            logging.info(f"Host {self._proc_idx}: Skipping {self._skip_batches} batches in this host's shard to resume from checkpoint...")
             # Get the underlying dataset and apply skip
             underlying_ds = self._dataset._dataset
             if hasattr(underlying_ds, "dataset"):
@@ -311,7 +311,7 @@ class CoTRLDSDataLoader:
                 self._dataset._dataset = underlying_ds.skip(self._skip_batches)
 
             self._skip_batches = 0  # Reset after applying skip
-            logging.info("Skip complete, resuming training...")
+            logging.info(f"Host {self._proc_idx}: Skip complete, resuming training...")
 
         data_iter = iter(self._dataset)
         while True:
@@ -384,6 +384,7 @@ class CoTRLDSDataLoader:
             - On resume, uses dataset.skip(n) to fast-forward to the checkpoint position
             - Works with all dataset types and operations
             - No persistent_iterator requirement
+            - In multi-host setup, only host 0 saves to avoid race conditions
 
         Example:
             >>> loader.save_dataloader_state("./checkpoints/dataloader")
@@ -393,23 +394,29 @@ class CoTRLDSDataLoader:
         """
         import json
 
+        # Only host 0 should save to avoid race conditions in multi-host setups
+        if self._proc_idx != 0:
+            logging.info(f"Host {self._proc_idx}: Skipping dataloader state save (only host 0 saves)")
+            return tf.io.gfile.join(checkpoint_dir, "dataloader_state.json")
+
         # Use tf.io.gfile for GCS compatibility
         if not tf.io.gfile.exists(checkpoint_dir):
             tf.io.gfile.makedirs(checkpoint_dir)
 
         # Save batch counter to JSON
+        # Note: All hosts should have the same _seen_batches value due to synchronous training
         checkpoint_data = {
             "batches_seen": int(self._seen_batches),
             "version": "1.0",
         }
 
         checkpoint_path = tf.io.gfile.join(checkpoint_dir, "dataloader_state.json")
-        logging.info(f"Saving dataloader state to {checkpoint_path}...")
+        logging.info(f"Host {self._proc_idx}: Saving dataloader state to {checkpoint_path}...")
 
         with tf.io.gfile.GFile(checkpoint_path, "w") as f:
             json.dump(checkpoint_data, f, indent=2)
 
-        logging.info(f"Saved dataloader state (batch {self._seen_batches})")
+        logging.info(f"Host {self._proc_idx}: Saved dataloader state (batch {self._seen_batches})")
         return checkpoint_path
 
     def load_dataloader_state(self, checkpoint_dir: str) -> int:
@@ -433,6 +440,7 @@ class CoTRLDSDataLoader:
             - The skip operation is deferred until __iter__ is called
             - Works with all dataset types and does not require persistent_iterator
             - After loading, the next iteration will automatically skip to the checkpoint position
+            - All hosts load the same state and skip the same number of batches in their respective shards
 
         Example:
             >>> batches_seen = loader.load_dataloader_state("./checkpoints/dataloader")
@@ -447,7 +455,7 @@ class CoTRLDSDataLoader:
         if not tf.io.gfile.exists(checkpoint_path):
             raise ValueError(f"No checkpoint file found at {checkpoint_path}")
 
-        logging.info(f"Loading dataloader state from {checkpoint_path}...")
+        logging.info(f"Host {self._proc_idx}: Loading dataloader state from {checkpoint_path}...")
 
         with tf.io.gfile.GFile(checkpoint_path, "r") as f:
             checkpoint_data = json.load(f)
@@ -455,8 +463,8 @@ class CoTRLDSDataLoader:
         self._seen_batches = checkpoint_data["batches_seen"]
         self._skip_batches = self._seen_batches  # Set skip counter for next iteration
 
-        logging.info(f"Loaded dataloader state (batch {self._seen_batches})")
-        logging.info(f"Will skip {self._skip_batches} batches on next iteration")
+        logging.info(f"Host {self._proc_idx}: Loaded dataloader state (batch {self._seen_batches})")
+        logging.info(f"Host {self._proc_idx}: Will skip {self._skip_batches} batches in this host's shard on next iteration")
 
         return self._seen_batches
 

@@ -725,8 +725,8 @@ def main(config: _config.TrainConfig):
         if dataset:
             hash_tables = dataset.hash_tables
 
-        # Set validation batch size to 3/4 of training batch size
-        val_batch_size = int(config.batch_size * 3 / 4)
+        # Set validation batch size to 1/2 of training batch size
+        val_batch_size = int(config.batch_size * 1 / 2)
         val_config = replace(
             config,
             model=replace(config.model, verbose_mode=True),
