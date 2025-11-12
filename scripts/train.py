@@ -579,7 +579,11 @@ class ValidationStepRunner:
         # Call compute_loss to get per-sample metrics for dataset tracking
         # Note: We use the model in eval mode but request per-sample metrics by passing train=True
         # This is to enable dataset-level tracking during validation
-        val_loss, val_metrics = model.compute_loss(eval_rng, observation, actions, train=False)
+        # Pass verbose_mode=True to enable detailed metrics for validation
+        verbose_mode = self.config.model.verbose_mode
+        val_loss, val_metrics = model.compute_loss(
+            eval_rng, observation, actions, train=False, verbose_mode=verbose_mode
+        )
 
         val_metrics["val_loss"] = val_loss
 
@@ -682,7 +686,7 @@ def main(config: _config.TrainConfig):
 
     try:
         tok = data_loader.tokenizer
-    except:
+    except:  # noqa: E722
         tok = PaligemmaCoTTokenizer(max_len=200)
 
     # Initialize dataset log tracker for uniform sample logging across datasets
@@ -721,7 +725,13 @@ def main(config: _config.TrainConfig):
         if dataset:
             hash_tables = dataset.hash_tables
 
-        val_config = replace(config, model=replace(config.model, verbose_mode=True))
+        # Set validation batch size to 3/4 of training batch size
+        val_batch_size = int(config.batch_size * 3 / 4)
+        val_config = replace(
+            config,
+            model=replace(config.model, verbose_mode=True),
+            batch_size=val_batch_size,
+        )
         val_loader = _data_loader.create_data_loader(
             val_config,
             sharding=data_sharding,
@@ -745,7 +755,7 @@ def main(config: _config.TrainConfig):
 
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
-        val_runner = ValidationStepRunner(config)
+        val_runner = ValidationStepRunner(val_config)
         pval_step = jax.jit(
             val_runner,
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding),

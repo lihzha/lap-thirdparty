@@ -23,8 +23,8 @@ def _create_rlds_dataset(
     batch_size: int,
     action_horizon: int,
     action_dim: int,
-    enable_prediction_training: bool = False,
     *,
+    enable_prediction_training: bool = False,
     shuffle: bool,
     seed: int,
     max_samples: int | None,
@@ -45,7 +45,7 @@ def _create_rlds_dataset(
     if dataset_type == "droid":
         assert droid_required, "language_action_dir is required"
         dataset_cls = DroidCoTDataset
-    if dataset_type == "oxe" or dataset_type == "combined":
+    if dataset_type in {"oxe", "combined"}:
         assert oxe_required, "data_mix is required"
         dataset_cls = OXECoTDatasets
 
@@ -53,21 +53,21 @@ def _create_rlds_dataset(
         return up.create_rlds_dataset(data_cfg, action_horizon, local_bsz, shuffle=shuffle)
 
     # Build kwargs dynamically
-    kwargs = dict(
-        data_dir=rlds_data_dir,
-        batch_size=local_bsz,
-        shuffle=shuffle,
-        max_samples=max_samples,
-        seed=seed,
-        config=data_cfg,
-        split=split,
-        action_horizon=action_horizon,
-        action_dim=action_dim,
-        hash_tables=hash_tables,
-        standalone=True,
-        action_proprio_normalization_type=data_cfg.action_proprio_normalization_type,
-        enable_prediction_training=enable_prediction_training,
-    )
+    kwargs = {
+        "data_dir": rlds_data_dir,
+        "batch_size": local_bsz,
+        "shuffle": shuffle,
+        "max_samples": max_samples,
+        "seed": seed,
+        "config": data_cfg,
+        "split": split,
+        "action_horizon": action_horizon,
+        "action_dim": action_dim,
+        "hash_tables": hash_tables,
+        "standalone": True,
+        "action_proprio_normalization_type": data_cfg.action_proprio_normalization_type,
+        "enable_prediction_training": enable_prediction_training,
+    }
 
     return dataset_cls(**kwargs)
 

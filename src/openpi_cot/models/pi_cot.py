@@ -462,6 +462,7 @@ class PiCoT(_pi0.Pi0):
         critical_mask: at.Bool[at.Array, "b s"] | None = None,
         number_mask: at.Bool[at.Array, "b s"] | None = None,
         direction_mask: at.Bool[at.Array, "b s"] | None = None,
+        verbose_mode: bool = False,
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Compute cross-entropy loss and associated accuracy metrics.
 
@@ -472,6 +473,7 @@ class PiCoT(_pi0.Pi0):
             critical_mask: Optional mask for critical tokens [b, s]
             number_mask: Optional mask for number tokens [b, s]
             direction_mask: Optional mask for direction tokens [b, s]
+            verbose_mode: Whether to compute detailed metrics
 
         Returns:
             (loss, metrics_dict)
@@ -488,7 +490,7 @@ class PiCoT(_pi0.Pi0):
         )
 
         # Compute accuracy metrics
-        if self.verbose_mode:
+        if verbose_mode:
             predictions = jnp.argmax(logits, axis=-1)
             accuracy_metrics = self._compute_token_accuracy_metrics(
                 predictions=predictions,
@@ -621,6 +623,7 @@ class PiCoT(_pi0.Pi0):
         sample_mask: at.Bool[at.Array, "b"] | None,
         loss_name: str,
         metric_prefix: str,
+        verbose_mode: bool = False,
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Shared logic for computing sequence prediction loss (language or prediction).
 
@@ -637,6 +640,7 @@ class PiCoT(_pi0.Pi0):
             sample_mask: Per-sample mask for batch-level filtering
             loss_name: Name to use for loss metric (e.g., "lang_loss", "pred_loss")
             metric_prefix: Prefix to add to metric names (e.g., "", "pred_")
+            verbose_mode: Whether to compute detailed metrics
 
         Returns:
             (loss, metrics)
@@ -657,7 +661,7 @@ class PiCoT(_pi0.Pi0):
             sample_mask,
         )
 
-        if self.verbose_mode:
+        if verbose_mode:
             # Prepare additional masks for accuracy computation
             ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
 
@@ -683,12 +687,13 @@ class PiCoT(_pi0.Pi0):
             critical_mask=critical_mask,
             number_mask=number_mask,
             direction_mask=direction_mask,
+            verbose_mode=verbose_mode,
         )
 
         # Apply metric prefix if needed
         metrics = {loss_name: jnp.mean(per_sample_loss)}
 
-        if self.verbose_mode:
+        if verbose_mode:
             metric_rename_map = {
                 "token_accuracy": f"{metric_prefix}token_accuracy",
                 "critical_token_accuracy": f"{metric_prefix}critical_token_accuracy",
@@ -710,6 +715,7 @@ class PiCoT(_pi0.Pi0):
         prefix_mask: at.Bool[at.Array, "b s"],
         prefix_ar_mask: at.Bool[at.Array, "b s"],
         sample_mask: at.Bool[at.Array, "b"] | None = None,
+        verbose_mode: bool = False,
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Compute language/reasoning cross-entropy loss and accuracy metrics.
 
@@ -719,6 +725,7 @@ class PiCoT(_pi0.Pi0):
             prefix_mask: Prefix attention mask
             prefix_ar_mask: Prefix autoregressive mask
             sample_mask: Optional per-sample mask to override observation.sample_mask
+            verbose_mode: Whether to compute detailed metrics
 
         Returns:
             (loss, metrics, token_accuracy_scalar)
@@ -739,6 +746,7 @@ class PiCoT(_pi0.Pi0):
             sample_mask=effective_sample_mask,
             loss_name="lang_loss",
             metric_prefix="",
+            verbose_mode=verbose_mode,
         )
 
         return per_sample_loss, metrics
@@ -825,6 +833,7 @@ class PiCoT(_pi0.Pi0):
         lang_metrics: dict[str, at.Array],
         sample_mask: at.Bool[at.Array, "b"],
         prefix: str,
+        verbose_mode: bool = False,
     ) -> dict[str, at.Array]:
         """Compute comprehensive metrics for a specific subset of samples (pred or langact).
 
@@ -833,6 +842,7 @@ class PiCoT(_pi0.Pi0):
             lang_metrics: Metrics dict from _compute_language_loss
             sample_mask: Boolean mask indicating which samples to include [b]
             prefix: Prefix for metric names (e.g., "pred_" or "langact_")
+            verbose_mode: Whether to compute detailed metrics
 
         Returns:
             Dictionary containing all metrics for this sample subset
@@ -846,7 +856,7 @@ class PiCoT(_pi0.Pi0):
         # Average loss for this subset
         metrics[f"{prefix}loss"] = jnp.sum(masked_loss) / num_samples
 
-        if self.verbose_mode:
+        if verbose_mode:
             # Per-sample losses (for dataset-level micro-averaging)
             metrics[f"{prefix}per_sample_loss"] = masked_loss
 
@@ -900,8 +910,12 @@ class PiCoT(_pi0.Pi0):
         *,
         train: bool = False,
         stage_config: dict | None = None,
+        verbose_mode: bool | None = None,
     ) -> dict[str, at.Array]:
         preprocess_rng, stochastic_rng, noise_rng, time_rng = jax.random.split(rng, 4)
+
+        # Use passed verbose_mode if provided, otherwise use class attribute
+        effective_verbose_mode = verbose_mode if verbose_mode is not None else self.verbose_mode
 
         # Determine batch size
         batch_size = observation.tokenized_prompt.shape[0]
@@ -978,7 +992,12 @@ class PiCoT(_pi0.Pi0):
 
             # Pass combined mask to language loss computation
             lang_loss, lang_metrics = self._compute_language_loss(
-                observation, prefix_tokens, prefix_mask, prefix_ar_mask, sample_mask=combined_langact_mask
+                observation,
+                prefix_tokens,
+                prefix_mask,
+                prefix_ar_mask,
+                sample_mask=combined_langact_mask,
+                verbose_mode=effective_verbose_mode,
             )
 
             if self.enable_vqa_training or self.enable_prediction_training:
@@ -1006,6 +1025,7 @@ class PiCoT(_pi0.Pi0):
                         lang_metrics=lang_metrics,
                         sample_mask=vqa_mask,
                         prefix="vqa_",
+                        verbose_mode=effective_verbose_mode,
                     )
                     metrics.update(vqa_metrics)
 
@@ -1016,6 +1036,7 @@ class PiCoT(_pi0.Pi0):
                         lang_metrics=lang_metrics,
                         sample_mask=pred_mask,
                         prefix="pred_",
+                        verbose_mode=effective_verbose_mode,
                     )
                     metrics.update(pred_metrics)
 
@@ -1025,6 +1046,7 @@ class PiCoT(_pi0.Pi0):
                     lang_metrics=lang_metrics,
                     sample_mask=lang_mask,
                     prefix="langact_",
+                    verbose_mode=effective_verbose_mode,
                 )
                 metrics.update(langact_metrics)
 
@@ -1040,6 +1062,7 @@ class PiCoT(_pi0.Pi0):
                     lang_metrics=lang_metrics,
                     sample_mask=combined_langact_mask,
                     prefix="langact_",
+                    verbose_mode=effective_verbose_mode,
                 )
                 metrics.update(langact_metrics)
                 total_per_sample_loss += self.language_loss_weight * lang_loss
@@ -1055,7 +1078,7 @@ class PiCoT(_pi0.Pi0):
             metrics.update(action_metrics)
 
         # Add main metrics to dict
-        if self.verbose_mode:
+        if effective_verbose_mode:
             metrics["per_sample_loss"] = total_per_sample_loss
 
         return jnp.mean(total_per_sample_loss), metrics

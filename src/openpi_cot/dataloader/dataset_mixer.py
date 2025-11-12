@@ -18,11 +18,11 @@ from openpi_cot.dataloader.oxe_datasets import LiberoCoTDataset
 from openpi_cot.dataloader.oxe_datasets import PlanningDataset
 from openpi_cot.dataloader.oxe_datasets import SampleR1LiteCoTDataset
 from openpi_cot.dataloader.oxe_datasets import _SingleOXECoTDataset
-from openpi_cot.dataloader.pixmo_cap_dataset import PixmoCap
-from openpi_cot.dataloader.pixmo_point_dataset import PixmoPoint
 from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
 from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
 from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.dataloader.pixmo_cap_dataset import PixmoCap
+from openpi_cot.dataloader.pixmo_point_dataset import PixmoPoint
 from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
 from openpi_cot.dataloader.vqa_base import VQA_DATASET_NAMES
 from openpi_cot.dataloader.vqav2_dataset import Vqav2
@@ -45,13 +45,14 @@ class OXECoTDatasets:
         action_horizon: int = 16,
         seed: int = 0,
         split: str = "train",
+        *,
         shuffle: bool = False,
         batch_size: int = 1,
         max_samples: int | None = None,
         action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
-        balance_weights: bool = True,  # noqa: FBT001, FBT002
-        hash_tables: dict = None,
-        standalone=True,
+        balance_weights: bool = True,
+        hash_tables: dict | None = None,
+        standalone: bool = True,
         use_global_normalization: bool = True,
         enable_prediction_training: bool = False,
     ):
@@ -63,8 +64,8 @@ class OXECoTDatasets:
         mixture_spec = OXE_NAMED_MIXTURES[config.data_mix]
         self.config = config
 
-        dataset_names = [l[0] for l in mixture_spec]
-        sample_weights = [l[1] for l in mixture_spec]
+        dataset_names = [it[0] for it in mixture_spec]
+        sample_weights = [it[1] for it in mixture_spec]
 
         want_val = split == "val"
 
@@ -93,22 +94,22 @@ class OXECoTDatasets:
         ):
             assert threads != tf.data.AUTOTUNE, "threads should not be AUTOTUNE"
             assert reads != tf.data.AUTOTUNE, "reads should not be AUTOTUNE"
-            kwargs = dict(
-                data_dir=data_dir,
-                config=config,
-                action_horizon=action_horizon,
-                action_dim=action_dim,
-                seed=seed,
-                split=split,
-                action_proprio_normalization_type=action_proprio_normalization_type,
-                num_parallel_reads=threads,
-                num_parallel_calls=threads,
-                standalone=False,
-                skip_normalization=use_global_normalization,
-                enable_prediction_training=enable_prediction_training,
-                pred_prob=config.pred_prob,
-                primary_pred_prob=config.primary_pred_prob,
-            )
+            kwargs = {
+                "data_dir": data_dir,
+                "config": config,
+                "action_horizon": action_horizon,
+                "action_dim": action_dim,
+                "seed": seed,
+                "split": split,
+                "action_proprio_normalization_type": action_proprio_normalization_type,
+                "num_parallel_reads": threads,
+                "num_parallel_calls": threads,
+                "standalone": False,
+                "skip_normalization": use_global_normalization,
+                "enable_prediction_training": enable_prediction_training,
+                "pred_prob": config.pred_prob,
+                "primary_pred_prob": config.primary_pred_prob,
+            }
             if dataset_name == "droid":
                 ds = DroidCoTDataset(
                     **kwargs,
@@ -222,7 +223,7 @@ class OXECoTDatasets:
             # Apply state-type-specific normalization to each dataset BEFORE interleaving
             # This avoids tf.case/tf.cond issues entirely
             normalized_datasets = []
-            for ds_name, ds in zip(dataset_names, datasets):
+            for ds_name, ds in zip(dataset_names, datasets):  # noqa: B905
                 if ds_name in self.VQA_DATASETS:
                     # Skip normalization for VQA datasets
                     normalized_datasets.append(ds)
