@@ -27,6 +27,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
     tokenizer: PaligemmaCoTTokenizer
     discrete_state_input: bool = False
     dataset_name_pad_len: int = 100
+    verbose_mode: bool = False
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -75,12 +76,17 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_langact_mask": reasoning_mask,
-            # Critical tokens are both numbers AND directional indicators
-            "critical_token_mask": critical_mask,
-            "number_token_mask": numeric_mask,
-            "direction_token_mask": direction_mask,
-            "tokenized_dataset_name": tokenized_dataset_name,
         }
+
+        if self.verbose_mode:
+            result.update(
+                {  # Critical tokens are both numbers AND directional indicators
+                    "critical_token_mask": critical_mask,
+                    "number_token_mask": numeric_mask,
+                    "direction_token_mask": direction_mask,
+                    "tokenized_dataset_name": tokenized_dataset_name,
+                }
+            )
 
         return result
 

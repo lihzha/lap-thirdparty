@@ -1,4 +1,5 @@
 import dataclasses
+from dataclasses import replace
 import datetime
 import logging
 import os
@@ -657,19 +658,6 @@ def main(config: _config.TrainConfig):
     sharding.log_param_sharding_planned(train_state_sharding)
     sharding.log_param_sharding_actual(train_state.params)
 
-    # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
-    dataloader_restored = False
-    if resuming:
-        try:
-            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, None)
-            dataloader_restored = True
-            logging.info("Successfully restored checkpoint and dataloader state")
-        except Exception as e:
-            logging.error(f"Failed to restore dataloader state: {e}")
-            dataloader_restored = False
-
-    start_step = int(train_state.step)
-
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
@@ -678,6 +666,19 @@ def main(config: _config.TrainConfig):
         seed=config.seed,
         persistent_iterator=True,
     )
+
+    # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
+    dataloader_restored = False
+    if resuming:
+        try:
+            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader=data_loader)
+            dataloader_restored = True
+            logging.info("Successfully restored checkpoint and dataloader state")
+        except Exception as e:
+            logging.error(f"Failed to restore dataloader state: {e}")
+            dataloader_restored = False
+
+    start_step = int(train_state.step)
 
     try:
         tok = data_loader.tokenizer
@@ -719,12 +720,14 @@ def main(config: _config.TrainConfig):
         hash_tables = None
         if dataset:
             hash_tables = dataset.hash_tables
+
+        val_config = replace(config, model=replace(config.model, verbose_mode=True))
         val_loader = _data_loader.create_data_loader(
-            config,
+            val_config,
             sharding=data_sharding,
             shuffle=False,
             split="val",
-            max_samples=getattr(config.data, "val_max_samples", None),
+            max_samples=getattr(val_config.data, "val_max_samples", None),
             hash_tables=hash_tables,
             persistent_iterator=False,
         )
@@ -739,9 +742,6 @@ def main(config: _config.TrainConfig):
             if hasattr(val_dataset, "dataset_length"):
                 logging.info(f"Validation dataset length: {val_dataset.dataset_length}")
         logging.info("=" * 80)
-
-        # Track first validation run to determine actual batch count
-        first_val_run = True
 
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
@@ -903,8 +903,8 @@ def main(config: _config.TrainConfig):
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
             # Initialize validation dataset trackers
-            val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
-            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
+            val_dataset_stats_tracker = log_util.DatasetStatsTracker()
+            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
 
             with sharding.set_mesh(mesh):
                 val_infos = []
@@ -925,8 +925,7 @@ def main(config: _config.TrainConfig):
                     # val_info_local = jax.device_get(val_info)
                     # val_infos.append(val_info_local)
                     val_infos.append(val_info)
-                    if verbose_mode:
-                        log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                    log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
                 # if first_val_run:
                 #     # First validation run: iterate until StopIteration to determine actual batch count
                 #     logging.info("First validation run - determining actual number of batches...")
@@ -974,7 +973,7 @@ def main(config: _config.TrainConfig):
                     dataset_log_tracker=None,
                     tok=None,
                     prefix="val_",
-                    verbose_mode=verbose_mode,
+                    verbose_mode=True,
                 )
 
         # Profiling: Time batch loading
