@@ -184,15 +184,41 @@ class PixmoPoint(_BaseVQADataset):
         # If not, encode them
         # Check dtype instead of rank to avoid TensorFlow graph tracing issues
         if image.dtype != tf.string:  # If it's a decoded image tensor
-            # Handle case where image has extra batch dimension at the front
-            # e.g., [1, H, W, C] -> [H, W, C] or [1, 1, 1, 3] -> [1, 1, 3]
-            # EncodeJpeg expects 3D tensor [H, W, C]
+            # Get dynamic shape
             shape = tf.shape(image)
-            rank = len(image.shape)
+            rank = tf.rank(image)
 
-            # If rank is 4 and first dimension is 1, remove it (likely a batch dimension)
-            if rank == 4:
-                image = tf.squeeze(image, axis=0)
+            # Handle different ranks using tf.cond
+            def handle_rank_4():
+                # Remove first dimension if it's 1 (batch dimension)
+                # [1, H, W, C] -> [H, W, C] or [1, 1, 1, 3] -> [1, 1, 3]
+                return tf.cond(
+                    tf.equal(shape[0], 1),
+                    lambda: tf.squeeze(image, axis=0),
+                    lambda: image
+                )
+
+            def handle_rank_3():
+                # Already 3D, use as-is
+                return image
+
+            def handle_other_ranks():
+                # For any other rank, create a 1x1 placeholder
+                # This handles corrupted data gracefully
+                return tf.zeros([1, 1, 3], dtype=image.dtype)
+
+            # Select appropriate handler based on rank
+            image = tf.case(
+                [
+                    (tf.equal(rank, 4), handle_rank_4),
+                    (tf.equal(rank, 3), handle_rank_3),
+                ],
+                default=handle_other_ranks
+            )
+
+            # Ensure uint8 dtype for JPEG encoding
+            if image.dtype != tf.uint8:
+                image = tf.cast(tf.clip_by_value(image, 0, 255), tf.uint8)
 
             return tf.io.encode_jpeg(image, quality=95)
         # Already encoded
