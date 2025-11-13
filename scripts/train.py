@@ -912,8 +912,8 @@ def main(config: _config.TrainConfig):
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
             # Initialize validation dataset trackers
-            val_dataset_stats_tracker = log_util.DatasetStatsTracker()
-            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
+            val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
+            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
             with sharding.set_mesh(mesh):
                 val_infos = []
@@ -934,7 +934,8 @@ def main(config: _config.TrainConfig):
                     # val_info_local = jax.device_get(val_info)
                     # val_infos.append(val_info_local)
                     val_infos.append(val_info)
-                    log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                    if verbose_mode:
+                        log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
                 # if first_val_run:
                 #     # First validation run: iterate until StopIteration to determine actual batch count
                 #     logging.info("First validation run - determining actual number of batches...")
@@ -982,7 +983,7 @@ def main(config: _config.TrainConfig):
                     dataset_log_tracker=None,
                     tok=None,
                     prefix="val_",
-                    verbose_mode=True,
+                    verbose_mode=verbose_mode,
                 )
 
         # Profiling: Time batch loading
