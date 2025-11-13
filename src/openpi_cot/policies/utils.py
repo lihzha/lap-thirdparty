@@ -523,7 +523,30 @@ def is_idle_language_action(
             return translation_l2 < translation_threshold
         return True  # Failed to parse, treat as idle
     # Verbose format: "move forward X cm and move right Y cm..."
-    # Parse all movement commands
+    # Special handling for directional_only format (no_number)
+    if sum_decimal == "no_number":
+        # For directional_only, just check if any directional movement exists
+        # Pattern: "move [direction]" without numeric values
+        move_pattern_no_number = re.compile(
+            r"move\s+(right|left|forward|backward|back|up|down)(?!\s+[\d.])", re.IGNORECASE
+        )
+        has_movement = bool(move_pattern_no_number.search(language_action))
+
+        if not include_rotation:
+            # If any movement command exists, it's not idle
+            return not has_movement
+
+        # Check for rotation commands without numbers
+        rotation_pattern_no_number = re.compile(
+            r"(tilt left|tilt right|tilt up|tilt down|tilt back|tilt forward|rotate clockwise|rotate counterclockwise)(?!\s+[\d.])",
+            re.IGNORECASE,
+        )
+        has_rotation = bool(rotation_pattern_no_number.search(language_action))
+
+        # If any movement or rotation exists, it's not idle
+        return not (has_movement or has_rotation)
+
+    # Parse all movement commands with numeric values
     move_pattern = re.compile(r"move\s+(right|left|forward|backward|back|up|down)\s+([\d.]+)\s*cm", re.IGNORECASE)
 
     dx_cm = dy_cm = dz_cm = 0.0
