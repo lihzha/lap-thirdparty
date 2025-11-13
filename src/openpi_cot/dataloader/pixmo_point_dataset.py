@@ -180,46 +180,31 @@ class PixmoPoint(_BaseVQADataset):
     def extract_and_encode_image(self, example: dict) -> tf.Tensor:
         """Extract and encode PixmoPoint image to JPEG bytes."""
         image = example["image"]
-        # Images should already be JPEG encoded in the TFDS dataset
-        # If not, encode them
-        # Check dtype instead of rank to avoid TensorFlow graph tracing issues
-        if image.dtype != tf.string:  # If it's a decoded image tensor
-            # Get dynamic shape
-            shape = tf.shape(image)
-            rank = tf.rank(image)
 
-            # Handle different ranks using tf.cond
-            def handle_rank_4():
-                # Remove first dimension if it's 1 (batch dimension)
-                # [1, H, W, C] -> [H, W, C] or [1, 1, 1, 3] -> [1, 1, 3]
-                return tf.cond(
-                    tf.equal(shape[0], 1),
-                    lambda: tf.squeeze(image, axis=0),
-                    lambda: image
-                )
+        # If already encoded (string), return as-is
+        if image.dtype == tf.string:
+            return image
 
-            def handle_rank_3():
-                # Already 3D, use as-is
-                return image
+        # Handle decoded image tensor
+        # Force to 3D by squeezing first dimension if rank is 4
+        img_shape = tf.shape(image)
+        img_rank = len(image.shape)  # Static rank
 
-            def handle_other_ranks():
-                # For any other rank, create a 1x1 placeholder
-                # This handles corrupted data gracefully
-                return tf.zeros([1, 1, 3], dtype=image.dtype)
+        if img_rank == 4:
+            # Squeeze first dimension: [1,1,1,3] -> [1,1,3] or [1,H,W,C] -> [H,W,C]
+            img = tf.reshape(image, img_shape[1:])
+        elif img_rank == 3:
+            img = image
+        elif img_rank == 2:
+            # Add channel dimension
+            img = tf.expand_dims(image, axis=-1)
+        else:
+            # Fallback for unexpected ranks
+            img = tf.reshape(image, [1, 1, -1])
+            img = img[:, :, :3]  # Keep only 3 channels
 
-            # Select appropriate handler based on rank
-            image = tf.case(
-                [
-                    (tf.equal(rank, 4), handle_rank_4),
-                    (tf.equal(rank, 3), handle_rank_3),
-                ],
-                default=handle_other_ranks
-            )
+        # Ensure uint8 dtype for JPEG encoding
+        if img.dtype != tf.uint8:
+            img = tf.cast(tf.clip_by_value(img, 0, 255), tf.uint8)
 
-            # Ensure uint8 dtype for JPEG encoding
-            if image.dtype != tf.uint8:
-                image = tf.cast(tf.clip_by_value(image, 0, 255), tf.uint8)
-
-            return tf.io.encode_jpeg(image, quality=95)
-        # Already encoded
-        return image
+        return tf.io.encode_jpeg(img, quality=95)
