@@ -269,17 +269,17 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     parts: list[str] = []
 
     if sum_decimal == "no_number":
-        if dx_m > 0:
+        if dx_m > 0 and dx != 0:
             parts.append("move forward")
-        elif dx_m < 0:
+        elif dx_m < 0 and dx != 0:
             parts.append("move back")
-        if dy_m > 0:
+        if dy_m > 0 and dy != 0:
             parts.append("move left")
-        elif dy_m < 0:
+        if dy_m < 0 and dy != 0:
             parts.append("move right")
-        if dz_m > 0:
+        if dz_m > 0 and dz != 0:
             parts.append("move up")
-        elif dz_m < 0:
+        elif dz_m < 0 and dz != 0:
             parts.append("move down")
         if include_rotation:
             if droll_rad > 0:

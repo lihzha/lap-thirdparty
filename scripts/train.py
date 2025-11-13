@@ -1,5 +1,4 @@
 import dataclasses
-from dataclasses import replace
 import datetime
 import logging
 import os
@@ -725,19 +724,19 @@ def main(config: _config.TrainConfig):
         if dataset:
             hash_tables = dataset.hash_tables
 
-        # Set validation batch size to 1/2 of training batch size
-        val_batch_size = int(config.batch_size * 1 / 2)
-        val_config = replace(
-            config,
-            model=replace(config.model, verbose_mode=True),
-            batch_size=val_batch_size,
-        )
+        # # Set validation batch size to 1/2 of training batch size
+        # val_batch_size = int(config.batch_size * 1 / 2)
+        # val_config = replace(
+        #     config,
+        #     model=replace(config.model, verbose_mode=True),
+        #     batch_size=val_batch_size,
+        # )
         val_loader = _data_loader.create_data_loader(
-            val_config,
+            config,
             sharding=data_sharding,
             shuffle=False,
             split="val",
-            max_samples=getattr(val_config.data, "val_max_samples", None),
+            max_samples=getattr(config.data, "val_max_samples", None),
             hash_tables=hash_tables,
             persistent_iterator=False,
         )
@@ -755,7 +754,7 @@ def main(config: _config.TrainConfig):
 
         # Try to obtain the tokenizer from the transform pipeline for decoding
         # tok = data_loader.tokenizer
-        val_runner = ValidationStepRunner(val_config)
+        val_runner = ValidationStepRunner(config)
         pval_step = jax.jit(
             val_runner,
             in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
