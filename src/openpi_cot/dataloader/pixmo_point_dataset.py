@@ -184,6 +184,16 @@ class PixmoPoint(_BaseVQADataset):
         # If not, encode them
         # Check dtype instead of rank to avoid TensorFlow graph tracing issues
         if image.dtype != tf.string:  # If it's a decoded image tensor
+            # Handle case where image has extra batch dimension at the front
+            # e.g., [1, H, W, C] -> [H, W, C] or [1, 1, 1, 3] -> [1, 1, 3]
+            # EncodeJpeg expects 3D tensor [H, W, C]
+            shape = tf.shape(image)
+            rank = len(image.shape)
+
+            # If rank is 4 and first dimension is 1, remove it (likely a batch dimension)
+            if rank == 4:
+                image = tf.squeeze(image, axis=0)
+
             return tf.io.encode_jpeg(image, quality=95)
         # Already encoded
         return image
