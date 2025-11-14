@@ -74,7 +74,7 @@ class Config:
     final_logits_softcap: float | None = None  # new in gemma2
     attn_logits_softcap: float | None = None  # new in gemma2
     post_norms: bool = False  # new in gemma2
-    param_dtype: str = "float32"  # parameter storage dtype
+    param_dtype: str = "bfloat16"  # parameter storage dtype
 
 
 Variant = Literal["gemma2_300m", "gemma2_2b", "gemma2_9b", "gemma2_27b", "gemma2_2b_lora"]
@@ -158,7 +158,7 @@ class RMSNorm(CommonRMSNorm):
     Inherits from common implementation and sets param_dtype="bfloat16" by default.
     """
 
-    param_dtype: str = "float32"
+    param_dtype: str = "bfloat16"
 
 
 # Embedder: Wrapper around common implementation with bfloat16 default for Gemma2
@@ -169,7 +169,7 @@ class Embedder(CommonEmbedder):
     Inherits from common implementation and sets param_dtype="bfloat16" by default.
     """
 
-    param_dtype: str = "float32"
+    param_dtype: str = "bfloat16"
 
 
 # Einsum: Wrapper around common implementation with bfloat16 default for Gemma2
@@ -179,7 +179,7 @@ class Einsum(CommonEinsum):
     Inherits from common implementation and sets param_dtype="bfloat16" by default.
     """
 
-    param_dtype: str = "float32"
+    param_dtype: str = "bfloat16"
     init_fn: nn.initializers.Initializer = nn.initializers.zeros
 
 
@@ -190,7 +190,7 @@ class FeedForward(CommonFeedForward):
     Inherits from common implementation and sets param_dtype="bfloat16" by default.
     """
 
-    param_dtype: str = "float32"
+    param_dtype: str = "bfloat16"
 
 
 @at.typecheck
