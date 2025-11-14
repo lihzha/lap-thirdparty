@@ -169,8 +169,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         )
 
         needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
-        is_prediction_sample = data["is_prediction_sample"]
-        pred_use_primary = data["pred_use_primary"]
+        is_prediction_sample = data.get("is_prediction_sample", False)
+        pred_use_primary = data.get("pred_use_primary", False)
 
         images = []
         image_masks = []
@@ -274,8 +274,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
 
-        inputs["is_prediction_sample"] = data["is_prediction_sample"]
-
+        inputs["is_prediction_sample"] = is_prediction_sample
         return inputs
 
     def _prepare_text(
@@ -735,6 +734,15 @@ VERBOSE_DECODING_SCHEMA = ActionDecodingSchema(
     use_schema_format=False,
 )
 
+VERBOSE_EEF_DECODING_SCHEMA = ActionDecodingSchema(
+    name="verbose",
+    style="verbose",
+    include_rotation=False,
+    translation_unit="cm",
+    use_schema_format=False,
+    use_eef_frame=True
+)
+
 VERBOSE_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
     name="verbose",
     style="verbose",
@@ -742,6 +750,16 @@ VERBOSE_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
     translation_unit="cm",
     use_schema_format=False,
 )
+
+VERBOSE_EEF_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
+    name="verbose",
+    style="verbose",
+    include_rotation=True,
+    translation_unit="cm",
+    use_schema_format=False,
+    use_eef_frame=True
+)
+
 
 COMPACT_DECODING_SCHEMA = ActionDecodingSchema(
     name="compact",
@@ -782,6 +800,8 @@ DECODING_SCHEMA_REGISTRY = {
     "compact_with_rotation": COMPACT_WITH_ROTATION_DECODING_SCHEMA,
     "compact_bimanual": COMPACT_BIMANUAL_DECODING_SCHEMA,
     "compact_bimanual_with_rotation": COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA,
+    "verbose_eef": VERBOSE_EEF_DECODING_SCHEMA,
+    "verbose_eef_with_rotation": VERBOSE_EEF_WITH_ROTATION_DECODING_SCHEMA
 }
 
 
