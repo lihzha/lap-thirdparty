@@ -152,7 +152,7 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
-            elif dataset_name == "pixmo_cap_local":
+            elif dataset_name == "pixmo_cap":
                 ds = PixmoCap(
                     dataset_name=dataset_name,
                     **kwargs,

@@ -5,7 +5,6 @@ import tensorflow as tf
 from openpi_cot.dataloader.vqa_base import _BaseVQADataset
 from openpi_cot.dataloader.vqa_base import ensure_dldataset
 
-
 # PixmoCap prompts to randomly sample from
 PIXMO_CAP_PROMPTS = tf.constant(
     [
@@ -31,7 +30,7 @@ class PixmoCap(_BaseVQADataset):
         """Build TFDS builder for PixmoCap."""
         import tensorflow_datasets as tfds
 
-        return tfds.builder("pixmo_cap_local", data_dir=data_dir)
+        return tfds.builder("pixmo_cap", data_dir=data_dir)
 
     def build_dataset(self, builder, split: str):
         """Build TensorFlow dataset from TFDS builder."""
@@ -59,7 +58,7 @@ class PixmoCap(_BaseVQADataset):
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""
-        return "pixmo_cap_local"
+        return "pixmo_cap"
 
     def get_num_transitions(self) -> int:
         """Return approximate number of PixmoCap samples."""
@@ -101,6 +100,5 @@ class PixmoCap(_BaseVQADataset):
         if image.dtype == tf.string:
             # Already encoded, return as-is
             return image
-        else:
-            # Not encoded, encode to JPEG
-            return tf.io.encode_jpeg(image, quality=95)
+        # Not encoded, encode to JPEG
+        return tf.io.encode_jpeg(image, quality=95)
