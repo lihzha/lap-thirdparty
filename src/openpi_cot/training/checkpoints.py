@@ -394,11 +394,16 @@ def restore_state(
 def load_norm_stats(
     assets_dir: epath.Path | str, asset_id: str
 ) -> dict[str, _normalize_adapter.ExtendedNormStats] | None:
-    norm_stats_dir = epath.Path(assets_dir) / asset_id
-    norm_stats = _normalize_adapter.load(str(norm_stats_dir))
-    logging.info(f"Loaded norm stats from {norm_stats_dir}")
-    return norm_stats
+    assets_dir = epath.Path(assets_dir)
+    for asset_id in ["droid", "combined"]:
+        norm_stats_dir = assets_dir / asset_id
+        if norm_stats_dir.exists():
+            norm_stats = _normalize_adapter.load(str(norm_stats_dir))
+            logging.info(f"Loaded norm stats from {norm_stats_dir}")
+            return norm_stats
 
+    logging.warning(f"No valid norm stats folder found in {assets_dir}")
+    return None
 
 class Callback(Protocol):
     def __call__(self, directory: epath.Path) -> None: ...

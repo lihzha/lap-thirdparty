@@ -569,16 +569,16 @@ class ActionDecodingSchema:
                     ]
 
                 # Parse gripper action
-                # grip_match = grip_pattern.search(sentence)
+                grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
+                grip_match = grip_pattern.search(sentence)
                 if "open gripper" in sentence.lower():
                     gripper_actions[i] = 1.0
                 elif "close gripper" in sentence.lower():
                     gripper_actions[i] = 0.0
+                elif grip_match:
+                    gripper_actions[i] = float(grip_match.group(1))
                 else:
                     gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
-                # if grip_match:
-                #     gripper_actions[i] = float(grip_match.group(1))
-                # else:
                 #     # Maintain previous gripper state
                 #     gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
 

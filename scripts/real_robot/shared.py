@@ -368,10 +368,10 @@ class BaseEvalRunner:
                         save_to_disk=t_step == 0,
                     )
                     if self.args.external_camera is not None:
-                        video.append(curr_obs[f"{self.args.external_camera}_image"])
+                        video.append(curr_obs[f"{self.args.external_camera}_image"][0])
                     else:
-                        video.append(curr_obs["image"])
-                    wrist_video.append(curr_obs["wrist_image"].copy())
+                        video.append(curr_obs["image"][0])
+                    wrist_video.append(curr_obs["wrist_image"][0].copy())
                     # Predict a new chunk if needed
                     if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0
@@ -398,10 +398,29 @@ class BaseEvalRunner:
                     break
             video = np.stack(video)
             wrist_video = np.stack(wrist_video)
+
+            # Ensure both videos have the same width by resizing wrist view to match side view width
+            side_height, side_width = video.shape[1:3]
+            wrist_height, wrist_width = wrist_video.shape[1:3]
+
+            if wrist_width != side_width:
+                # Resize wrist video to match side view width while maintaining aspect ratio
+                import cv2
+
+                resized_wrist = []
+                aspect_ratio = wrist_width / wrist_height
+                new_height = int(side_width / aspect_ratio)
+                for frame in wrist_video:
+                    resized_frame = cv2.resize(frame, (side_width, new_height))
+                    resized_wrist.append(resized_frame)
+                wrist_video = np.stack(resized_wrist)
+
+            # Concatenate side view and wrist view vertically (wrist below side view)
+            combined_video = np.concatenate([video, wrist_video], axis=1)
+
             timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
             save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
-            ImageSequenceClip(list(video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
-            ImageSequenceClip(list(wrist_video), fps=10).write_videofile(save_filename + "_wrist.mp4", codec="libx264")
+            ImageSequenceClip(list(combined_video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
             answer = input("Do one more eval? (enter y or n) ")
             if "n" in answer.lower():
                 break
