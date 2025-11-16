@@ -250,6 +250,16 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("coco_captions", 1.0),  # 10% COCO caption samples
         ("vqa", 1.0),  # 10% vqa samples
     ],
+    "franka_no_droid": [
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        ("utaustin_mutex", 1.0),
+        ("fmb", 1.0),
+        ("austin_buds_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 50 trajs
+        ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
+        ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
+        ("viola", 1.0),  # gripper mostly out of view, 135 trajs
+        ("molmoact_dataset", 1.0),
+    ],
     # === Individual Datasets (for isolated visualization/testing) ===
     "kuka": [("kuka", 1.0)],
     "bc_z": [("bc_z", 1.0)],
