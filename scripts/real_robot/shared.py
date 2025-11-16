@@ -167,7 +167,7 @@ class BaseEvalRunner:
     def set_extrinsics(self):
         return None
 
-    def get_action_from_response(self, response, curr_obs, use_quaternions=False):
+    def get_action_from_response(self, response, curr_obs, use_quaternions=False, use_velocity=False):
         """Extract actions from server response, either directly or by parsing reasoning.
 
         Args:
@@ -182,37 +182,55 @@ class BaseEvalRunner:
             print(response["reasoning"])
             actions = np.asarray(response["actions"])
             # Extract translation delta (first 3 dims) and gripper (last dim)
-            delta_base = actions[0, :3]  # Already in meters
-            grip_actions = 1 - actions[0, -1]
-            # grip_actions = actions[:, -1]
+            
+            if not use_velocity:
+                delta_base = actions[0, :3]  # Already in meters
+                grip_actions = 1 - actions[0, -1]
+                # grip_actions = actions[:, -1]
 
-            # If in camera frame, transform to robot/base frame
-            if self.in_camera_frame:
-                R_cb = self.cam_to_base_extrinsics_matrix[:3, :3]
-                delta_base = R_cb @ delta_base
+                # If in camera frame, transform to robot/base frame
+                if self.in_camera_frame:
+                    R_cb = self.cam_to_base_extrinsics_matrix[:3, :3]
+                    delta_base = R_cb @ delta_base
 
-            # Build absolute target from current state
-            curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
-            curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
-            curr_grip = float(np.asarray(curr_obs["gripper_position"], dtype=float).reshape(-1)[0])
-            next_pos = curr_pos + delta_base
-            next_grip = float(grip_actions)
-            # Linearly interpolate to CHUNK_STEPS actions
-            positions = np.linspace(curr_pos, next_pos, self.CHUNK_STEPS, endpoint=True)
-            if self.args.predict_rotation:
-                rpy_arr = interpolate_rpy(curr=curr_rpy, delta=actions[0, 3:6], steps=self.CHUNK_STEPS)
+                # Build absolute target from current state
+                curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
+                curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
+                curr_grip = float(np.asarray(curr_obs["gripper_position"], dtype=float).reshape(-1)[0])
+                next_pos = curr_pos + delta_base
+                next_grip = float(grip_actions)
+                # Linearly interpolate to CHUNK_STEPS actions
+                positions = np.linspace(curr_pos, next_pos, self.CHUNK_STEPS, endpoint=True)
+                if self.args.predict_rotation:
+                    rpy_arr = interpolate_rpy(curr=curr_rpy, delta=actions[0, 3:6], steps=self.CHUNK_STEPS)
+                else:
+                    rpy_arr = np.tile(curr_rpy, (self.CHUNK_STEPS, 1))
+                # grip_vals = np.linspace(curr_grip, next_grip, self.CHUNK_STEPS, endpoint=True).reshape(
+                #     -1, 1
+                # ) # no interpolation for gripper
+                grip_vals = np.full((self.CHUNK_STEPS, 1), next_grip)
+                if use_quaternions:
+                    # Convert RPY to quaternions for action representation
+                    quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
+                    pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
+                else:
+                    pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
             else:
-                rpy_arr = np.tile(curr_rpy, (self.CHUNK_STEPS, 1))
-            # grip_vals = np.linspace(curr_grip, next_grip, self.CHUNK_STEPS, endpoint=True).reshape(
-            #     -1, 1
-            # ) # no interpolation for gripper
-            grip_vals = np.full((self.CHUNK_STEPS, 1), next_grip)
-            if use_quaternions:
-                # Convert RPY to quaternions for action representation
-                quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
-                pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
-            else:
-                pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
+                delta_base = actions[0, :-1]
+                grip_actions = 1 - actions[0, -1]
+                next_grip = float(grip_actions)
+
+                pos_vel = np.tile(delta_base[:3], (self.CHUNK_STEPS, 1))
+                rot_vel = np.tile(delta_base[3:6], (self.CHUNK_STEPS, 1))
+                grip_vals = np.full((self.CHUNK_STEPS, 1), next_grip)
+
+                if use_quaternions:
+                    # Convert RPY to quaternions for action representation
+                    quat_vel = R.from_euler("xyz", rot_vel, degrees=False).as_quat()  # (x,y,z,w)
+                    pred_action_chunk = np.concatenate([pos_vel, quat_vel, grip_vals], axis=1)
+                else:
+                    pred_action_chunk = np.concatenate([pos_vel, rot_vel, grip_vals], axis=1)
+                
 
         else:
             curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
@@ -259,10 +277,13 @@ class BaseEvalRunner:
                         save_to_disk=t_step == 0,
                     )
                     if self.args.external_camera is not None:
-                        video.append(curr_obs[f"{self.args.external_camera}_image"][0])
+                        if len(curr_obs[f"{self.args.external_camera}_image"].shape) == 4:
+                            video.append(curr_obs[f"{self.args.external_camera}_image"][0])
+                        else:
+                            video.append(curr_obs[f"{self.args.external_camera}_image"])
                     else:
-                        video.append(curr_obs["image"][0])
-                    wrist_video.append(curr_obs["wrist_image"][0].copy())
+                        video.append(curr_obs["image"][0] if len(curr_obs["image"].shape) == 4 else curr_obs["image"])
+                    wrist_video.append(curr_obs["wrist_image"][0].copy() if len(curr_obs["wrist_image"].shape) == 4 else curr_obs["wrist_image"].copy())
                     # Predict a new chunk if needed
                     if pred_action_chunk is None or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0

@@ -472,10 +472,20 @@ class ActionDecodingSchema:
                         gripper_actions[i] = float(grip)
         else:
             # Parse verbose format: "move right X cm and move forward Y cm..."
-            move_pattern = re.compile(
-                rf"move\s+(right|left|forward|backward|back|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
-                re.IGNORECASE,
-            )
+            
+            if self.style == "directional_only":
+                # For directional_only, accept format with optional numeric values
+                # e.g., "move right" or "move right 5 cm"
+                move_pattern = re.compile(
+                    rf"move\s+(right|left|forward|backward|back|up|down)(?:\s+([\-\d\.]+)\s*{self.translation_unit})?",
+                    re.IGNORECASE,
+                )
+            else:
+                # For verbose formats, require explicit numeric values
+                move_pattern = re.compile(
+                    rf"move\s+(right|left|forward|backward|back|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
+                    re.IGNORECASE,
+                )
             # Rotation pattern for verbose format
             rotation_pattern = re.compile(
                 r"(tilt left|tilt right|tilt up|tilt down|tilt back|tilt forward|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
@@ -487,7 +497,8 @@ class ActionDecodingSchema:
                 dx_cm = dy_cm = dz_cm = 0.0
                 for match in move_pattern.finditer(sentence):
                     direction = match.group(1).lower()
-                    value = float(match.group(2))
+                    # Default to 2cm if no numeric value provided (directional_only mode)
+                    value = float(match.group(2)) if match.group(2) is not None else 2.0
                     # if direction == "right":
                     #     dx_cm += value
                     # elif direction == "left":
@@ -512,6 +523,7 @@ class ActionDecodingSchema:
                         dz_cm += value
                     elif direction == "down":
                         dz_cm -= value
+                        # dz_cm -= 0
 
                 # Convert to meters
                 v_m = np.array([dx_cm, dy_cm, dz_cm], dtype=float) / 100.0
@@ -734,8 +746,17 @@ VERBOSE_DECODING_SCHEMA = ActionDecodingSchema(
     use_schema_format=False,
 )
 
+DIRECTIONAL_SCHEMA = ActionDecodingSchema(
+    name="directional",
+    style="directional_only",
+    include_rotation=False,
+    translation_unit="cm",
+    use_schema_format=False,
+)
+
+
 VERBOSE_EEF_DECODING_SCHEMA = ActionDecodingSchema(
-    name="verbose",
+    name="verbose_eef",
     style="verbose",
     include_rotation=False,
     translation_unit="cm",
@@ -744,7 +765,7 @@ VERBOSE_EEF_DECODING_SCHEMA = ActionDecodingSchema(
 )
 
 VERBOSE_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
-    name="verbose",
+    name="verbose_rotation",
     style="verbose",
     include_rotation=True,
     translation_unit="cm",
@@ -752,7 +773,7 @@ VERBOSE_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
 )
 
 VERBOSE_EEF_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
-    name="verbose",
+    name="verbose_eef_rotation",
     style="verbose",
     include_rotation=True,
     translation_unit="cm",
@@ -801,7 +822,8 @@ DECODING_SCHEMA_REGISTRY = {
     "compact_bimanual": COMPACT_BIMANUAL_DECODING_SCHEMA,
     "compact_bimanual_with_rotation": COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA,
     "verbose_eef": VERBOSE_EEF_DECODING_SCHEMA,
-    "verbose_eef_with_rotation": VERBOSE_EEF_WITH_ROTATION_DECODING_SCHEMA
+    "verbose_eef_with_rotation": VERBOSE_EEF_WITH_ROTATION_DECODING_SCHEMA,
+    "directional_only": DIRECTIONAL_SCHEMA
 }
 
 

@@ -72,7 +72,7 @@ class FrankaEvalRunner(BaseEvalRunner):
 
         return {
             "right_image": image_observations["0"][..., ::-1][None],  # Convert BGR to RGB
-            "wrist_image": image_observations["1"][::-1, :, ::-1][None],
+            "wrist_image": image_observations["1"][::-1, ::-1, ::-1][None],
             # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=1), # rotate 90 degrees
             # "wrist_image": np.rot90(image_observations["14846828_left"][::-1,:, :3][..., ::-1], k=0)[None], # flip
             # "wrist_image": np.rot90(image_observations["14846828_left"][..., :3][..., ::-1], k=2)[None], # rotate 180 degrees
