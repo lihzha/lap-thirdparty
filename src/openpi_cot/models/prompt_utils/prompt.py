@@ -208,7 +208,7 @@ GROUPED_STATE_PROMPT_FORMAT = PromptFormat(
 
 
 GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
-    name="grouped_state",
+    name="grouped_state_verbose",
     prefix_module=PrefixModule("Predict what is the action that the robot should take"),
     task_module=TaskModule(template="Task: {prompt}"),
     state_module=StateModule(

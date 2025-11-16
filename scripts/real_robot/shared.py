@@ -28,7 +28,7 @@ IMAGE_KEYS = (
 def interpolate_rpy(curr, delta, steps):
     """Interpolate roll-pitch-yaw angles using quaternion SLERP.
 
-    This function uses spherical linear interpolation (SLERP) on quaternions
+    This function uses spherical linear interpo lation (SLERP) on quaternions
     to provide smooth rotation interpolation, avoiding gimbal lock and
     discontinuities that occur with naive linear interpolation of Euler angles.
 

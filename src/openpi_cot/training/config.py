@@ -1061,6 +1061,19 @@ _CONFIGS = [
         data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"),
     ),
     TrainConfig(
+        name="paligemma2_eval_groupedstate",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=220,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+            prompt_format="grouped_state_verbose"
+        ),
+        data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"),
+    ),
+    TrainConfig(
         name="pi05_vqa",
         model=pi_cot_config.PiCoTConfig(pi05=True, discrete_state_input=False, max_token_len=600),
         data=VQADataConfig(
