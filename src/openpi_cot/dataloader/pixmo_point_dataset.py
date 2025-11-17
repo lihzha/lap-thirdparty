@@ -181,9 +181,9 @@ class PixmoPoint(_BaseVQADataset):
         """Extract and encode PixmoPoint image to JPEG bytes."""
         image = example["image"]
 
-        # If already encoded (string), return as-is
-        if image.dtype == tf.string:
-            return image
+        # # If already encoded (string), return as-is
+        # if image.dtype == tf.string:
+        #     return image
 
         # # Handle decoded image tensor
         # # Force to 3D by squeezing first dimension if rank is 4
