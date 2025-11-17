@@ -97,6 +97,7 @@ class Args:
     use_wrist_camera: bool = True  # whether to use the wrist camera image as input to the policy
     run_upstream: bool = False  # whether to run the upstream policy server
     predict_rotation: bool = False  # whether to use roll-pitch-yaw for orientation representation
+    use_raw: bool = True  # whether to use raw action policy
 
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is

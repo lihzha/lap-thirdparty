@@ -88,10 +88,13 @@ class DroidEvalRunner(BaseEvalRunner):
         gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         # Save the images to disk so that they can be viewed live while the robot is running
         # Create one combined image to make live viewing easy
+        if not self.args.use_raw:
+            right_image = right_image[None]
+            wrist_image = wrist_image[None]
         return {
             # "left_image": left_image,
-            "right_image": right_image[None],
-            "wrist_image": wrist_image[None],
+            "right_image": right_image,
+            "wrist_image": wrist_image,
             "cartesian_position": cartesian_position,
             "joint_position": joint_position,
             "gripper_position": gripper_position,

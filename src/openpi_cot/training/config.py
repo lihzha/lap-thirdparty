@@ -23,6 +23,7 @@ import openpi_cot.models.adapters.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
+import openpi_cot.policies.raw_policy as raw_action_policy
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.planning_policy as planning_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
@@ -333,6 +334,35 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                 )
             ],
             outputs=[cot_policy.CoTOutputs(decoding_schema=base_cfg.decoding_schema)],
+        )
+
+    @override
+    def _create_model_transforms(
+        self, base_cfg: CoTDataConfig, model_config: _model.BaseModelConfig
+    ) -> upstream_transforms.Group:
+        return ModelTransformFactory(
+            prompt_format=model_config.prompt_format,
+            prediction_format=model_config.prediction_format,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+        )(model_config)
+    
+@dataclasses.dataclass(frozen=True)
+class RawActionDataConfig(BaseCoTDataConfigFactory):
+    """
+    Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
+    """
+
+    @override
+    def _create_data_transforms(
+        self, base_cfg: CoTDataConfig, model_config: _model.BaseModelConfig
+    ) -> upstream_transforms.Group:
+        return upstream_transforms.Group(
+            inputs=[
+                raw_action_policy.RawActionInputs(
+                    model_type=model_config.model_type,
+                )
+            ],
+            outputs=[raw_action_policy.RawActionOutputs()],
         )
 
     @override
@@ -995,6 +1025,23 @@ _CONFIGS = [
             repo_id="droid",
             asset_id="droid",
             dataset_type="droid",
+        ),
+    ),
+    TrainConfig(
+        name="paligemma2_eval_raw_action",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=150,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma2_2b",
+            action_expert_variant="gemma2_300m",
+        ),
+        data=RawActionDataConfig(
+            repo_id="droid",
+            asset_id="droid",
+            dataset_type="droid",
+            action_proprio_normalization_type = NormalizationType.NORMAL
         ),
     ),
     TrainConfig(
