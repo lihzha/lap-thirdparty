@@ -222,6 +222,16 @@ GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
     direction_token_checker=checkers.is_direction_schema,
 )
 
+NO_STATE_FORMAT = PromptFormat(
+    name="no_state",
+    task_module=TaskModule(template="Task: {prompt}"),
+    state_module=None,
+    action_module=ActionModule(prefix="Action: "),
+    separator=", ",
+    critical_token_checker=checkers.is_critical_directional,
+    direction_token_checker=checkers.is_direction_natural,
+)
+
 
 GROUPED_PREDICTION_PROMPT_FORMAT = PromptFormat(
     name="grouped_prediction",
@@ -264,6 +274,7 @@ PROMPT_FORMAT_REGISTRY = {
     "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
     "grouped_state": GROUPED_STATE_PROMPT_FORMAT,
     "grouped_state_verbose": GROUPED_STATE_PREFIX_PROMPT_FORMAT,
+    "no_state": NO_STATE_FORMAT,
 }
 
 PREDICTION_PROMPT_FORMAT_REGISTRY = {
