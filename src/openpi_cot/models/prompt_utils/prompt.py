@@ -224,10 +224,12 @@ GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
 
 NO_STATE_FORMAT = PromptFormat(
     name="no_state",
-    task_module=TaskModule(template="Task: {prompt}"),
+    task_module=TaskModule(
+        template="Task: {prompt}. What actions should the robot take at current step to fulfill the task? Represent the action in the end effector frame."
+    ),
     state_module=None,
     action_module=ActionModule(prefix="Action: "),
-    separator=", ",
+    separator=" ",
     critical_token_checker=checkers.is_critical_directional,
     direction_token_checker=checkers.is_direction_natural,
 )
