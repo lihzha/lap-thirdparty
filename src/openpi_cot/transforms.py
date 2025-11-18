@@ -62,10 +62,16 @@ class TokenizePromptAndReasoning(DataTransformFn):
 
         is_vqa_sample = data["is_vqa_sample"]
         is_prediction_sample = data["is_prediction_sample"]
+        time_horizon_seconds = data.pop("time_horizon_seconds", None)
 
         # Tokenize regular reasoning
         tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(
-            prompt, language_actions, state, is_vqa_sample=is_vqa_sample, is_prediction_sample=is_prediction_sample
+            prompt,
+            language_actions,
+            state,
+            is_vqa_sample=is_vqa_sample,
+            is_prediction_sample=is_prediction_sample,
+            # time_horizon_seconds=time_horizon_seconds,
         )
 
         # Combine number_mask and direction_mask for critical tokens
@@ -131,23 +137,40 @@ class SafeRepackTransform:
 @dataclasses.dataclass(frozen=True)
 class Normalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
-    # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
-    use_quantiles: bool = False
+    # Normalization type to use (NORMAL, BOUNDS, or BOUNDS_Q99)
+    normalization_type: NormalizationType | str = NormalizationType.NORMAL
     # If true, will raise an error if any of the keys in the norm stats are not present in the data.
     strict: bool = False
 
     def __post_init__(self):
-        if self.norm_stats is not None and self.use_quantiles:
+        normalization_type = self.normalization_type
+        if isinstance(normalization_type, str):
+            normalization_type = NormalizationType(normalization_type)
+
+        if self.norm_stats is not None and normalization_type in (NormalizationType.BOUNDS_Q99,):
             _assert_quantile_stats(self.norm_stats)
 
     def __call__(self, data: DataDict) -> DataDict:
         if self.norm_stats is None:
             return data
 
+        normalization_type = self.normalization_type
+        if isinstance(normalization_type, str):
+            normalization_type = NormalizationType(normalization_type)
+
+        if normalization_type == NormalizationType.NORMAL:
+            normalize_fn = self._normalize
+        elif normalization_type == NormalizationType.BOUNDS:
+            normalize_fn = self._normalize_bounds
+        elif normalization_type == NormalizationType.BOUNDS_Q99:
+            normalize_fn = self._normalize_quantile
+        else:
+            raise ValueError(f"Unknown normalization type: {normalization_type}")
+
         return apply_tree(
             data,
             self.norm_stats,
-            self._normalize_quantile if self.use_quantiles else self._normalize,
+            normalize_fn,
             strict=self.strict,
         )
 
@@ -155,11 +178,91 @@ class Normalize(DataTransformFn):
         mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
         return (x - mean) / (std + 1e-6)
 
+    def _normalize_bounds(self, x, stats: NormStats):
+        assert stats.min is not None
+        assert stats.max is not None
+        min_val, max_val = stats.min[..., : x.shape[-1]], stats.max[..., : x.shape[-1]]
+        # Scale to [-1, 1] and clip
+        scaled = 2.0 * (x - min_val) / (max_val - min_val + 1e-8) - 1.0
+        scaled = np.clip(scaled, -1.0, 1.0)
+        # Zero-out dimensions with zero range
+        zeros_mask = np.equal(min_val, max_val)
+        while zeros_mask.ndim < x.ndim:
+            zeros_mask = zeros_mask[None, ...]
+        return np.where(zeros_mask, 0.0, scaled)
+
     def _normalize_quantile(self, x, stats: NormStats):
         assert stats.q01 is not None
         assert stats.q99 is not None
         q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
-        return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+        # Scale to [-1, 1] and clip
+        scaled = (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+        scaled = np.clip(scaled, -1.0, 1.0)
+        # Zero-out dimensions with zero range
+        zeros_mask = np.equal(q01, q99)
+        while zeros_mask.ndim < x.ndim:
+            zeros_mask = zeros_mask[None, ...]
+        return np.where(zeros_mask, 0.0, scaled)
+
+
+@dataclasses.dataclass(frozen=True)
+class Unnormalize(DataTransformFn):
+    norm_stats: at.PyTree[NormStats] | None
+    # Normalization type to use (NORMAL, BOUNDS, or BOUNDS_Q99)
+    normalization_type: NormalizationType | str = NormalizationType.NORMAL
+
+    def __post_init__(self):
+        normalization_type = self.normalization_type
+        if isinstance(normalization_type, str):
+            normalization_type = NormalizationType(normalization_type)
+
+        if self.norm_stats is not None and normalization_type in (NormalizationType.BOUNDS_Q99,):
+            _assert_quantile_stats(self.norm_stats)
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self.norm_stats is None:
+            return data
+
+        normalization_type = self.normalization_type
+        if isinstance(normalization_type, str):
+            normalization_type = NormalizationType(normalization_type)
+
+        if normalization_type == NormalizationType.NORMAL:
+            unnormalize_fn = self._unnormalize
+        elif normalization_type == NormalizationType.BOUNDS:
+            unnormalize_fn = self._unnormalize_bounds
+        elif normalization_type == NormalizationType.BOUNDS_Q99:
+            unnormalize_fn = self._unnormalize_quantile
+        else:
+            raise ValueError(f"Unknown normalization type: {normalization_type}")
+
+        # Make sure that all the keys in the norm stats are present in the data.
+        return apply_tree(
+            data,
+            self.norm_stats,
+            unnormalize_fn,
+            strict=True,
+        )
+
+    def _unnormalize(self, x, stats: NormStats):
+        mean = pad_to_dim(stats.mean, x.shape[-1], axis=-1, value=0.0)
+        std = pad_to_dim(stats.std, x.shape[-1], axis=-1, value=1.0)
+        return x * (std + 1e-6) + mean
+
+    def _unnormalize_bounds(self, x, stats: NormStats):
+        assert stats.min is not None
+        assert stats.max is not None
+        min_val = pad_to_dim(stats.min, x.shape[-1], axis=-1, value=-1.0)
+        max_val = pad_to_dim(stats.max, x.shape[-1], axis=-1, value=1.0)
+        return (x + 1.0) / 2.0 * (max_val - min_val + 1e-8) + min_val
+
+    def _unnormalize_quantile(self, x, stats: NormStats):
+        assert stats.q01 is not None
+        assert stats.q99 is not None
+        q01, q99 = stats.q01, stats.q99
+        if (dim := q01.shape[-1]) < x.shape[-1]:
+            return np.concatenate([(x[..., :dim] + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01, x[..., dim:]], axis=-1)
+        return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
 
 
 @dataclasses.dataclass(frozen=True)
@@ -315,3 +418,13 @@ class NormalizeActionAndProprio(DataTransformFn):
                 traj["observation"][self.state_key] = _where(zeros_mask, 0.0, state_normed)
 
         return traj
+
+
+def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.0) -> np.ndarray:
+    """Pad an array to the target dimension with zeros along the specified axis."""
+    current_dim = x.shape[axis]
+    if current_dim < target_dim:
+        pad_width = [(0, 0)] * len(x.shape)
+        pad_width[axis] = (0, target_dim - current_dim)
+        return np.pad(x, pad_width, constant_values=value)
+    return x

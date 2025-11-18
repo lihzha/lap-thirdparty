@@ -267,7 +267,6 @@ class BaseCoTDataConfigFactory(CoTDataConfig, upstream_config.DataConfigFactory,
             repo_id=repo_id,
             asset_id=asset_id,
             norm_stats=None,  # Note: Normalization is handled on dataset level
-            use_quantile_norm=model_config.model_type != ModelType.PI0,
         )
         return CoTDataConfig(**data)
 
@@ -309,7 +308,6 @@ class BaseCoTDataConfigFactory(CoTDataConfig, upstream_config.DataConfigFactory,
             base_cfg,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
-            use_quantile_norm=model_config.model_type == ModelType.PI0_FAST,
         )
 
 

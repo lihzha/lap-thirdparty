@@ -6,9 +6,11 @@ import jax.numpy as jnp
 from openpi.models import model as _model
 import openpi.policies.policy as _policy
 from openpi.training import config as _config
-import openpi.transforms as transforms
+import openpi.transforms as up_transforms
 
 from openpi_cot.policies.adapters.policy_adaptor import CoTPolicy
+import openpi_cot.transforms as transforms
+
 # Lazy imports to avoid loading TensorFlow (and allocating GPU memory) at import time
 # These will be imported when create_trained_policy() is actually called
 # from openpi_cot.shared.download import maybe_download
@@ -19,10 +21,10 @@ def create_trained_policy(
     train_config: _config.TrainConfig,
     checkpoint_dir: str,
     *,
-    repack_transforms: transforms.Group | None = None,
+    repack_transforms: up_transforms.Group | None = None,
     sample_kwargs: dict[str, Any] | None = None,
     default_prompt: str | None = None,
-    norm_stats: dict[str, transforms.NormStats] | None = None,
+    norm_stats: dict[str, up_transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
@@ -47,7 +49,7 @@ def create_trained_policy(
     # Lazy import to avoid loading TensorFlow at module import time
     from openpi_cot.shared.download import maybe_download
 
-    repack_transforms = repack_transforms or transforms.Group()
+    repack_transforms = repack_transforms or up_transforms.Group()
     checkpoint_dir = maybe_download(str(checkpoint_dir))
     model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
@@ -58,20 +60,21 @@ def create_trained_policy(
             raise ValueError("Asset id is required to load norm stats.")
         # Lazy import to avoid loading TensorFlow and other heavy dependencies at module import time
         from openpi_cot.training import checkpoints as _checkpoints
+
         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
 
     return _policy.Policy(
         model,
         transforms=[
             *repack_transforms.inputs,
-            transforms.InjectDefaultPrompt(default_prompt),
+            up_transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
-            transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            transforms.Normalize(norm_stats, normalization_type=data_config.action_proprio_normalization_type),
             *data_config.model_transforms.inputs,
         ],
         output_transforms=[
             *data_config.model_transforms.outputs,
-            transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            transforms.Unnormalize(norm_stats, normalization_type=data_config.action_proprio_normalization_type),
             *data_config.data_transforms.outputs,
             *repack_transforms.outputs,
         ],
