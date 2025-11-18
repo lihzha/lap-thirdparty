@@ -499,6 +499,7 @@ class ActionDecodingSchema:
                     direction = match.group(1).lower()
                     # Default to 2cm if no numeric value provided (directional_only mode)
                     value = float(match.group(2)) if match.group(2) is not None else 2.0
+                    value *= 1
                     # if direction == "right":
                     #     dx_cm += value
                     # elif direction == "left":

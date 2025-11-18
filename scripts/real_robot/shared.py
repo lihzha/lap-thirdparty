@@ -97,7 +97,7 @@ class Args:
     use_wrist_camera: bool = True  # whether to use the wrist camera image as input to the policy
     run_upstream: bool = False  # whether to run the upstream policy server
     predict_rotation: bool = False  # whether to use roll-pitch-yaw for orientation representation
-    use_raw: bool = True  # whether to use raw action policy
+    use_raw: bool = False  # whether to use raw action policy
 
 
 # We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
@@ -123,7 +123,7 @@ def prevent_keyboard_interrupt():
 
 
 class BaseEvalRunner:
-    CHUNK_STEPS = 15
+    CHUNK_STEPS = 2
 
     def __init__(self, args):
         self.env = self.init_env()
@@ -155,7 +155,7 @@ class BaseEvalRunner:
                 IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
                 "cartesian_position": curr_obs["cartesian_position"],
                 "gripper_position": curr_obs["gripper_position"],
-                "joint_position": curr_obs["joint_position"],
+                # "joint_position": curr_obs["joint_position"],
                 "state": curr_obs["state"],
             },
             "prompt": instruction,
@@ -186,8 +186,8 @@ class BaseEvalRunner:
             
             if not use_velocity:
                 delta_base = actions[0, :3]  # Already in meters
+                # grip_actions = 1 - actions[0, -1]
                 grip_actions = 1 - actions[0, -1]
-                # grip_actions = actions[:, -1]
 
                 # If in camera frame, transform to robot/base frame
                 if self.in_camera_frame:

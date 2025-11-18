@@ -63,16 +63,27 @@ class FrankaEvalRunner(BaseEvalRunner):
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
         gripper_position = np.array([robot_state["gripper_position"]])
-        gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
+        # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
+        gripper_position = binarize_gripper_actions_np(gripper_position)
+
+        print(gripper_position)
 
         # if gripper_position > 0.2:
         #     gripper_position = 1.0
         # else:
         #     gripper_position = 0.0
 
+        right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
+        wrist_image = image_observations["1"][::-1, ::-1, ::-1] # rotate 180
+
+        if not self.args.use_raw:
+            right_image = right_image[None]
+            wrist_image = wrist_image[None]
+
         return {
-            "right_image": image_observations["0"][..., ::-1][None],  # Convert BGR to RGB
-            "wrist_image": image_observations["1"][::-1, ::-1, ::-1][None],
+            # "right_image": image_observations["0"][..., ::-1][None],  # Convert BGR to RGB
+            "right_image": right_image,
+            "wrist_image": wrist_image,
             # "wrist_image": np.rot90(image_observations["1"][..., ::-1], k=1), # rotate 90 degrees
             # "wrist_image": np.rot90(image_observations["14846828_left"][::-1,:, :3][..., ::-1], k=0)[None], # flip
             # "wrist_image": np.rot90(image_observations["14846828_left"][..., :3][..., ::-1], k=2)[None], # rotate 180 degrees
@@ -82,7 +93,7 @@ class FrankaEvalRunner(BaseEvalRunner):
             "cartesian_position": cartesian_position,
             "gripper_position": np.array(gripper_position),
             "state": np.concatenate([cartesian_position, gripper_position]),
-            "joint_position": np.array(robot_state["joint_positions"]),
+            # "joint_position": np.array(robot_state["joint_positions"]),
         }
 
     def get_action_from_response(self, response, curr_obs, use_quaternions=True):
