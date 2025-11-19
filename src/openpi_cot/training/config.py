@@ -253,11 +253,10 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     # upstream_transforms.ResizeImages(224, 224),
                     TokenizeFASTCoTInputs(
                         FASTTokenizer(
-                            model_config.max_token_len,
+                            max_len=model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
                             tokenizer_type=self.tokenizer_type,
-                            fast_tokenizer_path=self.fast_tokenizer_path,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         verbose_mode=model_config.verbose_mode,
@@ -266,7 +265,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                 outputs=[
                     ExtractFASTActions(
                         FASTTokenizer(
-                            model_config.max_token_len,
+                            max_len=model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
                             tokenizer_type=self.tokenizer_type,
