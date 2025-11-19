@@ -434,7 +434,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
     """
 
     tokenizer: FASTTokenizer
-    discrete_state_input: bool = False
+    discrete_state_input: bool = True
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:

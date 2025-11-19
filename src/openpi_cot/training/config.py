@@ -260,7 +260,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             tokenizer_type=self.tokenizer_type,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
-                        verbose_mode=model_config.verbose_mode,
                     ),
                 ],
                 outputs=[
