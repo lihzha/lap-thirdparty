@@ -5,3 +5,6 @@
 	path = third_party/rlds_dataset_builder
 	url = https://github.com/lihzha/rlds_dataset_builder
 	branch = multithreaded
+[submodule "third_party/openpi"]
+	path = third_party/openpi
+	url = https://github.com/Physical-Intelligence/openpi
