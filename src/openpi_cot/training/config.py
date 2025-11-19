@@ -21,16 +21,20 @@ from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.dataloader.helpers import StateEncoding
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
+import openpi_cot.models.pi_fast as pi_fast
+from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
-import openpi_cot.policies.raw_policy as raw_action_policy
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.planning_policy as planning_policy
+import openpi_cot.policies.raw_policy as raw_action_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
+from openpi_cot.transforms import ExtractFASTActions
+from openpi_cot.transforms import TokenizeFASTCoTInputs
 from openpi_cot.transforms import TokenizePromptAndReasoning
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
@@ -126,7 +130,7 @@ def _to_path(base: str | pathlib.Path, *extra: str) -> pathlib.Path | epath.Path
 
 def build_picot_model(
     *,
-    action_horizon: int = 10,
+    action_horizon: int = 32,
     max_token_len: int = 110,
     pi05: bool = True,
     discrete_state_input: bool = True,
@@ -207,6 +211,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
     prediction_format: str = "default"
     tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
     include_outputs: bool = True  # Toggle output transforms (e.g., detokenization)
+    fast_tokenizer_path: str = "physical-intelligence/fast"  # KarlP/fast_droid_specialist
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
@@ -241,6 +246,38 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                 ],
                 outputs=outputs,
             )
+        if model_config.model_type == ModelType.PI_FAST:
+            return upstream_transforms.Group(
+                inputs=[
+                    upstream_transforms.InjectDefaultPrompt(self.default_prompt),
+                    # upstream_transforms.ResizeImages(224, 224),
+                    TokenizeFASTCoTInputs(
+                        FASTTokenizer(
+                            model_config.max_token_len,
+                            prompt_format=self.prompt_format,
+                            prediction_format=self.prediction_format,
+                            tokenizer_type=self.tokenizer_type,
+                            fast_tokenizer_path=self.fast_tokenizer_path,
+                        ),
+                        discrete_state_input=model_config.discrete_state_input,
+                        verbose_mode=model_config.verbose_mode,
+                    ),
+                ],
+                outputs=[
+                    ExtractFASTActions(
+                        FASTTokenizer(
+                            model_config.max_token_len,
+                            prompt_format=self.prompt_format,
+                            prediction_format=self.prediction_format,
+                            tokenizer_type=self.tokenizer_type,
+                            fast_tokenizer_path=self.fast_tokenizer_path,
+                        ),
+                        action_horizon=model_config.action_horizon,
+                        action_dim=model_config.action_dim,
+                    )
+                ],
+            )
+
         return super().__call__(model_config)
 
 
@@ -343,7 +380,8 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
             prediction_format=model_config.prediction_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
-    
+
+
 @dataclasses.dataclass(frozen=True)
 class RawActionDataConfig(BaseCoTDataConfigFactory):
     """
@@ -966,6 +1004,29 @@ _CONFIGS = [
         keep_period=5000,
         resume=True,
     ),
+    *create_multi_device_configs(
+        base_name="pi_combined_fast",
+        devices=["v6", "v6europe", "v4", "local"],
+        model=pi_fast.PiFastConfig(
+            action_horizon=32,
+            max_token_len=220,
+            pi05=True,
+            discrete_state_input=True,
+        ),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "shuffle_buffer_size": 400_000,
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        save_interval=500,
+        keep_period=10000,
+        resume=True,
+    ),
     # Evaluation and special single-instance configs
     TrainConfig(
         name="pi0_eval",
@@ -1039,7 +1100,7 @@ _CONFIGS = [
             repo_id="droid",
             asset_id="droid",
             dataset_type="droid",
-            action_proprio_normalization_type = NormalizationType.NORMAL
+            action_proprio_normalization_type=NormalizationType.NORMAL,
         ),
     ),
     TrainConfig(
@@ -1079,7 +1140,12 @@ _CONFIGS = [
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
         ),
-        data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef_with_rotation"),
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            decoding_schema="verbose_eef_with_rotation",
+        ),
     ),
     TrainConfig(
         name="paligemma2_eval_eeframe",
@@ -1091,7 +1157,9 @@ _CONFIGS = [
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
         ),
-        data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef"),
+        data=RLDSCoTDataConfig(
+            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef"
+        ),
     ),
     TrainConfig(
         name="paligemma2_eval_directional",
@@ -1103,7 +1171,9 @@ _CONFIGS = [
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
         ),
-        data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"),
+        data=RLDSCoTDataConfig(
+            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"
+        ),
     ),
     TrainConfig(
         name="paligemma2_eval_groupedstate",
@@ -1114,9 +1184,11 @@ _CONFIGS = [
             discrete_state_input=True,
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
-            prompt_format="grouped_state_verbose"
+            prompt_format="grouped_state_verbose",
         ),
-        data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"),
+        data=RLDSCoTDataConfig(
+            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"
+        ),
     ),
     TrainConfig(
         name="pi05_vqa",

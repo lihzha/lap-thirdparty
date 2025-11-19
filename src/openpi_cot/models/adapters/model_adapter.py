@@ -32,6 +32,7 @@ class ExtendedModelType(str, Enum):
     PI0_FAST = _model.ModelType.PI0_FAST.value
     PI05 = _model.ModelType.PI05.value
     PI_COT = "pi_cot"
+    PI_FAST = "pi_fast"
 
 
 @at.typecheck

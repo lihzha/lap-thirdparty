@@ -56,13 +56,37 @@ class ActionModule:
     - "Action: "
     - "Actions: "
     - "Predicted actions: "
+
+    Can optionally include time horizon information.
     """
 
     prefix: str = "Action: "
+    # Whether to include time horizon instruction when provided
+    include_time_horizon: bool = True
+    # Template for time horizon instruction
+    time_horizon_template: str = "Predict the robot's actions in the future {time_seconds} seconds. "
 
-    def format_action_prefix(self) -> str:
-        """Return the action prefix."""
-        return self.prefix
+    def format_action_prefix(self, time_horizon_seconds: float | None = None) -> str:
+        """Return the action prefix, optionally including time horizon.
+
+        Args:
+            time_horizon_seconds: Optional time horizon in seconds
+
+        Returns:
+            Formatted action prefix string
+        """
+        parts = []
+
+        # Add time horizon instruction if provided and enabled
+        if self.include_time_horizon and time_horizon_seconds is not None:
+            # Format time horizon nicely (e.g., 0.5 -> "0.5", 1.0 -> "1", 2.5 -> "2.5")
+            time_str = f"{time_horizon_seconds:.1f}".rstrip("0").rstrip(".")
+            parts.append(self.time_horizon_template.format(time_seconds=time_str))
+
+        # Add the action prefix
+        parts.append(self.prefix)
+
+        return "".join(parts)
 
 
 @dataclasses.dataclass
@@ -96,15 +120,15 @@ class PromptFormat:
         prompt: str,
         state: np.ndarray | None = None,
         state_type: str | None = None,
+        time_horizon_seconds: float | None = None,
     ) -> str:
-        """Format the prompt with optional state and state type.
+        """Format the prompt with optional state, state type, and time horizon.
 
         Args:
             prompt: The task prompt/instruction
             state: Optional state vector to discretize and include
             state_type: Optional state type ("joint_pos", "eef_pose", "none")
-            is_prediction_sample: Whether this is a prediction sample (affects state formatting)
-            is_vqa_sample: Whether this is a VQA sample
+            time_horizon_seconds: Optional time horizon in seconds for action prediction
 
         Returns:
             Formatted prompt string ready for tokenization
@@ -125,9 +149,9 @@ class PromptFormat:
             if state_str:  # Only add if non-empty
                 parts.append(state_str)
 
-        # Add action prefix
+        # Add action prefix (with optional time horizon)
         if self.action_module is not None:
-            parts.append(self.action_module.format_action_prefix())
+            parts.append(self.action_module.format_action_prefix(time_horizon_seconds=time_horizon_seconds))
 
         return self.separator.join(parts)
 

@@ -92,9 +92,8 @@ def _make_iterable_transforms(
     tx = [
         *data_cfg.repack_transforms.inputs,
         *data_cfg.data_transforms.inputs,
-        up_tf.Normalize(norm_stats, use_quantiles=data_cfg.use_quantile_norm),
         *data_cfg.model_transforms.inputs,
-    ]
+    ]  # normalize is handled on dataset level
 
     if split is not None and split != "train":
         new_tx = []
@@ -299,7 +298,9 @@ class CoTRLDSDataLoader:
 
         # Apply skip if we're resuming from a checkpoint
         if self._skip_batches > 0:
-            logging.info(f"Host {self._proc_idx}: Skipping {self._skip_batches} batches in this host's shard to resume from checkpoint...")
+            logging.info(
+                f"Host {self._proc_idx}: Skipping {self._skip_batches} batches in this host's shard to resume from checkpoint..."
+            )
             # Get the underlying dataset and apply skip
             underlying_ds = self._dataset._dataset
             if hasattr(underlying_ds, "dataset"):
@@ -464,7 +465,9 @@ class CoTRLDSDataLoader:
         self._skip_batches = self._seen_batches  # Set skip counter for next iteration
 
         logging.info(f"Host {self._proc_idx}: Loaded dataloader state (batch {self._seen_batches})")
-        logging.info(f"Host {self._proc_idx}: Will skip {self._skip_batches} batches in this host's shard on next iteration")
+        logging.info(
+            f"Host {self._proc_idx}: Will skip {self._skip_batches} batches in this host's shard on next iteration"
+        )
 
         return self._seen_batches
 

@@ -311,28 +311,13 @@ class _SingleCoTDataset:
             """
             traj_len = tf.shape(traj[action_key])[0]
 
-            # Trim to dataset control frequency and pad to fixed window length (summation_steps)
-            # Note: self.control_frequency is a Python int constant per dataset instance
-            trimmed_len = tf.minimum(tf.cast(self.control_frequency, tf.int32), tf.cast(summation_steps, tf.int32))
-
-            # Use unified gather function with proper zero-padding
-            actions_window_trim = gather_with_padding(
+            # Always gather summation_steps actions (without trimming to control_frequency)
+            # The gather function will handle padding if we reach the end of trajectory
+            actions_window = gather_with_padding(
                 data=traj["raw_action"],
                 sequence_length=traj_len,
-                window_size=trimmed_len,
-            )  # [T, trimmed_len, A]
-
-            # Pad to full summation_steps if needed
-            pad_len = int(summation_steps) - trimmed_len
-
-            def _pad_numeric():
-                zeros_pad = tf.zeros(
-                    [tf.shape(actions_window_trim)[0], pad_len, tf.shape(actions_window_trim)[-1]],
-                    dtype=actions_window_trim.dtype,
-                )
-                return tf.concat([actions_window_trim, zeros_pad], axis=1)
-
-            actions_window = tf.cond(pad_len > 0, _pad_numeric, lambda: actions_window_trim)
+                window_size=summation_steps,
+            )  # [T, summation_steps, A]
 
             # Unify spec with DROID by converting per-step numeric rows to tf.string via serialization.
             # Result shape: [T, summation_steps] tf.string (each element is a serialized [A] float32 tensor)
@@ -348,6 +333,23 @@ class _SingleCoTDataset:
             )
             # Set static shape for TensorFlow's shape inference
             traj["language_actions"].set_shape([None, summation_steps])
+
+            # Store control_frequency as metadata (per timestep)
+            traj["control_frequency"] = tf.repeat(
+                tf.constant(self.control_frequency, dtype=tf.int32),
+                tf.shape(traj[action_key])[0]
+            )
+
+            # Store valid_length: how many steps have actual data (not padding from gather_with_padding)
+            # For each timestep t, valid length is min(summation_steps, trajectory_length - t)
+            timestep_indices = tf.range(traj_len, dtype=tf.int32)
+            remaining_steps = traj_len - timestep_indices  # How many steps remain from current timestep
+            valid_lengths = tf.minimum(
+                remaining_steps,
+                tf.constant(summation_steps, dtype=tf.int32)
+            )
+            traj["valid_language_length"] = valid_lengths
+
             return traj
 
         self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)

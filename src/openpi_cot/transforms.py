@@ -11,6 +11,7 @@ from openpi.transforms import flatten_dict
 from openpi.transforms import unflatten_dict
 
 from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
 # Optional TF import: used to ensure ops run inside tf.data pipelines
@@ -71,7 +72,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             state,
             is_vqa_sample=is_vqa_sample,
             is_prediction_sample=is_prediction_sample,
-            # time_horizon_seconds=time_horizon_seconds,
+            time_horizon_seconds=time_horizon_seconds,
         )
 
         # Combine number_mask and direction_mask for critical tokens
@@ -418,6 +419,127 @@ class NormalizeActionAndProprio(DataTransformFn):
                 traj["observation"][self.state_key] = _where(zeros_mask, 0.0, state_normed)
 
         return traj
+
+
+@dataclasses.dataclass(frozen=True)
+class TokenizeFASTCoTInputs(DataTransformFn):
+    """Tokenize inputs for FAST CoT model.
+
+    This combines CoT-style reasoning with FAST-style action token prediction:
+    - Tokenizes prompt + language actions (if available)
+    - Appends state and action representations as tokens
+    - Creates appropriate masks for training
+
+    Similar to upstream TokenizeFASTInputs but with support for language actions.
+    """
+
+    tokenizer: FASTTokenizer
+    discrete_state_input: bool = False
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if (prompt := data.pop("prompt", None)) is None:
+            raise ValueError("Prompt is required")
+
+        if not isinstance(prompt, str):
+            prompt = prompt.item()
+
+        if self.discrete_state_input:
+            if (state := data.get("state", None)) is None:
+                raise ValueError("State is required.")
+        else:
+            state = data.get("state")
+            if state is None:
+                raise ValueError("State is required for FAST tokenization.")
+
+        # Get language actions if available (for CoT)
+        language_actions = data.pop("language_actions", None)
+        if language_actions is not None and not isinstance(language_actions, str):
+            language_actions = language_actions.item()
+
+        time_horizon_seconds = data.pop("time_horizon_seconds", None)
+
+        # Get state type if available
+        state_type = data.pop("state_type", None)
+        if state_type is not None and not isinstance(state_type, str):
+            state_type = state_type.item() if hasattr(state_type, "item") else str(state_type)
+
+        # Get VQA and prediction flags
+        is_vqa_sample = data.get("is_vqa_sample", False)
+        is_prediction_sample = data.get("is_prediction_sample", False)
+
+        # Get actions (None during inference)
+        actions = data.get("actions")
+
+        # Tokenize using the FAST CoT tokenizer
+        tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize_fast_cot(
+            prompt=prompt,
+            state=state,
+            actions=actions,
+            language_actions=language_actions,
+            state_type=state_type,
+            is_vqa_sample=is_vqa_sample,
+            is_prediction_sample=is_prediction_sample,
+            time_horizon_seconds=time_horizon_seconds,
+        )
+
+        return {
+            **data,
+            "tokenized_prompt": tokens,
+            "tokenized_prompt_mask": token_mask,
+            "token_ar_mask": ar_mask,
+            "tokenized_langact_mask": loss_mask,  # For compatibility with CoT models
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class ExtractFASTActions(DataTransformFn):
+    """Extract action values from FAST model token outputs.
+
+    This parses the tokenized action output back into numeric action arrays.
+    """
+
+    tokenizer: PaligemmaCoTTokenizer
+    action_horizon: int
+    action_dim: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "actions" not in data:
+            return data
+
+        # Model outputs are saved in "actions", but for FAST models they represent tokens.
+        tokens = data.pop("actions")
+
+        # Decode tokens to text
+        if not isinstance(tokens, np.ndarray):
+            tokens = np.asarray(tokens, dtype=np.int32)
+
+        decoded_text = self.tokenizer.decode(tokens)
+
+        # Extract action values from text
+        # Expected format: "... action: [v0 v1 v2 ...]"
+        import re
+
+        action_match = re.search(r"action:\s*\[([\d\.\-\s]+)\]", decoded_text)
+        if action_match:
+            action_str = action_match.group(1)
+            action_values = [float(x) for x in action_str.split()]
+
+            # Reshape to [horizon, dim]
+            expected_size = self.action_horizon * self.action_dim
+            if len(action_values) >= expected_size:
+                actions = np.array(action_values[:expected_size]).reshape(self.action_horizon, self.action_dim)
+            else:
+                # Pad with zeros if needed
+                actions = np.zeros((self.action_horizon, self.action_dim), dtype=np.float32)
+                actions.flat[: len(action_values)] = action_values
+        else:
+            # No action found in decoded text, return zeros
+            actions = np.zeros((self.action_horizon, self.action_dim), dtype=np.float32)
+
+        return {
+            **data,
+            "actions": actions,
+        }
 
 
 def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.0) -> np.ndarray:

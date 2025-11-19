@@ -6,6 +6,7 @@ from etils import epath  # optional, but handy
 import numpy as np
 from openpi.models import tokenizer as _tokenizer
 import sentencepiece
+from transformers import AutoProcessor
 
 from openpi_cot.models.prompt_utils.checkers import is_number
 from openpi_cot.models.prompt_utils.prompt import DEFAULT_VQA_PROMPT_FORMAT
@@ -113,6 +114,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         state_type: str | None = None,
         is_vqa_sample: bool = False,
         is_prediction_sample: bool = False,
+        time_horizon_seconds: float | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         # Resolve prompt format
 
@@ -123,7 +125,10 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         else:
             fmt = self._prompt_format
 
-        formatted_prompt = fmt.format_prompt(prompt, state, state_type)
+        # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
+        formatted_prompt = fmt.format_prompt(
+            prompt, state, state_type, time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None
+        )
 
         # Tokenize
         pad_id = self._tokenizer.pad_id()
@@ -254,3 +259,130 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
         return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
+
+
+class FASTTokenizer(PaligemmaCoTTokenizer):
+    def __init__(self, fast_tokenizer_path: str, **kwargs):
+        super().__init__(**kwargs)
+        self._fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
+
+    def tokenize_fast_cot(
+        self,
+        prompt: str,
+        state: np.ndarray,
+        actions: np.ndarray | None = None,
+        reasoning: str | None = None,
+        state_type: str | None = None,
+        *,
+        is_vqa_sample: bool = False,
+        is_prediction_sample: bool = False,
+        time_horizon_seconds: float | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize prompt, language actions (if any), state, and actions for FAST model.
+
+        This method combines CoT-style reasoning with FAST-style action token prediction:
+        - First tokenizes prompt + language actions (optional)
+        - Then appends state and action representations as tokens
+        - Creates appropriate masks for training
+
+        Args:
+            prompt: Task description
+            state: Current state vector
+            actions: Action sequence (optional, None during inference)
+            language_actions: Language description of actions (optional)
+            state_type: Type of state representation
+            is_vqa_sample: Whether this is a VQA sample
+            is_prediction_sample: Whether this is a prediction sample
+
+        Returns:
+            (tokens, token_mask, ar_mask, loss_mask)
+            - tokens: Token IDs including prompt, language actions, state, and actions
+            - token_mask: Mask for valid (non-padding) tokens
+            - ar_mask: Autoregressive mask (0=prefix attention, 1=causal)
+            - loss_mask: Mask for tokens that contribute to loss
+        """
+        # Resolve prompt format
+        if is_prediction_sample:
+            fmt = self._prediction_format
+        elif is_vqa_sample:
+            fmt = self._vqa_format
+        else:
+            fmt = self._prompt_format
+
+        # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
+        formatted_prompt = fmt.format_prompt(
+            prompt, state, state_type, time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None
+        )
+
+        # Tokenize prompt
+        pad_id = self._tokenizer.pad_id()
+
+        if self._tokenizer_type == "gemma3":
+            image_placeholders = self._create_image_placeholders()
+            text_tokens = (
+                self._tokenizer.encode("<start_of_turn>user\n<start_of_image>", add_bos=True, add_eos=False)
+                + image_placeholders
+                + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
+                + image_placeholders
+                + self._tokenizer.encode(
+                    "<end_of_image>\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model",
+                    add_bos=False,
+                    add_eos=False,
+                )
+            )
+            prefix_tokens = text_tokens
+        else:
+            prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+
+        # # TODO: ignore language actions for now
+        # reasoning_start = len(tokens)
+
+        # # Add language actions if provided
+        # if reasoning is not None:
+        #     clean_reason = reasoning.strip().replace("_", " ").replace("\n", " ")
+        #     reasoning_tokens = self._tokenizer.encode(clean_reason, add_bos=False, add_eos=False)
+        #     tokens += reasoning_tokens
+
+        # reasoning_end = len(tokens)
+
+        if actions is not None:
+            action_tokens = self._fast_tokenizer(actions[None])[0]
+            action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
+            postfix_tokens = action_tokens_in_pg.tolist() + self._tokenizer.encode("|", add_eos=True)
+        else:
+            raise NotImplementedError
+
+        tokens = prefix_tokens + postfix_tokens
+        token_mask = [True] * len(tokens)
+        ar_mask = [0] * len(prefix_tokens) + [1] * len(postfix_tokens)
+        loss_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
+
+        if len(tokens) > self._max_len:
+            logging.warning(
+                f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+                "Consider increasing the `max_token_len` in your model config."
+            )
+            tokens = tokens[: self._max_len]
+            token_mask = token_mask[: self._max_len]
+            ar_mask = ar_mask[: self._max_len]
+            loss_mask = loss_mask[: self._max_len]
+
+        # Left pad to max length
+        pad_count = self._max_len - len(tokens)
+        if pad_count > 0:
+            tokens = [pad_id] * pad_count + tokens
+            token_mask = [False] * pad_count + token_mask
+            ar_mask = [False] * pad_count + ar_mask
+            loss_mask = [False] * pad_count + loss_mask
+
+        return (
+            np.asarray(tokens, dtype=np.int32),
+            token_mask,
+            ar_mask,
+            loss_mask,
+        )
+
+    def _act_tokens_to_paligemma_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
+        if isinstance(tokens, list):
+            tokens = np.array(tokens)
+        return self._tokenizer.vocab_size() - 1 - 128 - tokens

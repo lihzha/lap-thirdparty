@@ -152,6 +152,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # Determines which model will be used.
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
+    # Whether to randomly sample time horizons for language actions (training only)
+    random_time_horizon: bool = True
+    # Available time horizons to sample from (in seconds)
+    time_horizon_options: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type == ExtendedModelType.PI_COT
@@ -278,19 +282,49 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         return inputs
 
     def _prepare_text(
-        self, data: dict, lang_action_key: str, trimmed_len_key: str, initial_state: np.ndarray = None
-    ) -> dict:
+        self, data: dict, lang_action_key: str, initial_state: np.ndarray = None
+    ) -> tuple[dict, float | None]:
         la = data[lang_action_key]
         assert isinstance(la[0], bytes)
+
+        # Get control frequency and valid language length from data
+        control_frequency = int(data.get("control_frequency", 10))  # Default to 10Hz if not present
+        valid_language_length = int(data.get("valid_language_length", len(la)))
+
+        # Determine how many language actions to use
+        sampled_time_horizon = None
+        if self.random_time_horizon:
+            # Randomly sample a time horizon that has enough valid data
+            # Compute max time horizon based on valid length
+            max_time_horizon = valid_language_length / control_frequency
+
+            # Filter time horizon options to only those with enough data
+            valid_horizons = [h for h in self.time_horizon_options if h <= max_time_horizon]
+
+            if valid_horizons:
+                # Randomly sample from valid horizons
+                sampled_time_horizon = float(np.random.choice(valid_horizons))
+                num_steps = int(sampled_time_horizon * control_frequency)
+            else:
+                # If no valid horizons (e.g., very short trajectory), use all valid data
+                num_steps = valid_language_length
+                sampled_time_horizon = valid_language_length / control_frequency
+        else:
+            # Use all valid language actions (validation/inference mode)
+            num_steps = valid_language_length
+            sampled_time_horizon = None
+
+        # Ensure we don't exceed available data
+        num_steps = min(num_steps, len(la))
+
         if (
             maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None
         ):  # not use json actions case. language_actions is raw action
             # Check if dataset is bimanual
             is_bimanual: bool = data.get("is_bimanual", False)
 
-            # Only use the non-padded portion according to trimmed_len, if present
-            trimmed_len: int = data.get(trimmed_len_key)
-            la_used = la[:trimmed_len]
+            # Use the computed number of steps
+            la_used = la[:num_steps]
             raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
 
             # Transform to EEF frame if requested
@@ -309,7 +343,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     self.language_action_format.get_sum_decimal(),
                     self.language_action_format.include_rotation,
                 )
-            return summed
+            return summed, sampled_time_horizon
         seq = to_str_list(la)
         assert seq is not None
         summed = sum_language_actions(
@@ -317,7 +351,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         )
         assert summed is not None
         assert len(summed) > 0
-        return summed
+        return summed, sampled_time_horizon
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
@@ -363,9 +397,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data:
-            inputs["language_actions"] = self._prepare_text(
-                data, "language_actions", "control_frequency", initial_state
+            inputs["language_actions"], time_horizon_seconds = self._prepare_text(
+                data, "language_actions", initial_state
             )
+
+            # Save the time horizon in seconds if it was sampled
+            if time_horizon_seconds is not None:
+                inputs["time_horizon_seconds"] = time_horizon_seconds
 
             # Only apply idle filtering for language actions and prediction
             if not is_vqa_sample:
