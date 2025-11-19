@@ -93,6 +93,7 @@ class PiFastConfig(_model.BaseModelConfig):
     # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
     pi05: bool = False
     discrete_state_input: bool = None
+    prompt_format: str = "pi05"
     use_bimanual: bool = False
     # Whether to augment wrist images
     aug_wrist_image: bool = True
