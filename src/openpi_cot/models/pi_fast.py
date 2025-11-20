@@ -14,12 +14,9 @@ from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
-from openpi_cot.models.adapters.gemma_adapter import Gemma2ModuleWithDecode
-from openpi_cot.models.adapters.gemma_adapter import ModuleWithDecode
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 from openpi_cot.models.adapters.model_adapter import preprocess_observation
-from openpi_cot.models.gemma2 import get_config as get_gemma2_config
 
 logger = logging.getLogger("openpi")
 
@@ -166,18 +163,14 @@ class PiFast(_model.BaseModel):
         self.image_keys = config.image_keys
         self.aug_wrist_image = config.aug_wrist_image
 
-        if "gemma2" in config.paligemma_variant:
-            assert "gemma2" in config.action_expert_variant, "gemma2 must be used for both LLM and action expert"
-            paligemma_config = get_gemma2_config(config.paligemma_variant)
-            module = Gemma2ModuleWithDecode
-        elif "gemma3" in config.paligemma_variant:
-            raise NotImplementedError
-        else:
-            paligemma_config = get_gemma_config(config.paligemma_variant)
-            module = ModuleWithDecode
+        paligemma_config = get_gemma_config(config.paligemma_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
         llm = nnx_bridge.ToNNX(
-            module(**paligemma_config, embed_dtype=config.dtype, cache_dtype=config.dtype, adarms=False)
+            _gemma.Module(
+                **paligemma_config,
+                embed_dtype=config.dtype,
+                cache_dtype=config.dtype,
+            )
         )
         llm.lazy_init(rngs=rngs, method="init")
         img = nnx_bridge.ToNNX(
