@@ -372,7 +372,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         if pad_count > 0:
             tokens = [pad_id] * pad_count + tokens
             token_mask = [False] * pad_count + token_mask
-            ar_mask = [False] * pad_count + ar_mask
+            ar_mask = [0] * pad_count + ar_mask
             loss_mask = [False] * pad_count + loss_mask
 
         return (
