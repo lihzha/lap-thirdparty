@@ -238,6 +238,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 images.append(wrist_image)
                 image_masks.append(wrist_image_mask)
 
+        if self.model_type == ExtendedModelType.PI_FAST:
+            image_masks = [np.True_ for _ in image_masks]
+
         inputs = {
             "state": data["observation"]["state"],
             "image": dict(zip(IMAGE_KEYS, images, strict=True)),
