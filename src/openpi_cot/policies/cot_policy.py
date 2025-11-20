@@ -594,9 +594,9 @@ class ActionDecodingSchema:
                             droll_deg += value
                         elif rotation_type == "tilt right":
                             droll_deg -= value
-                        elif rotation_type in {"tilt up", "tilt forward"}:
-                            dpitch_deg += value
                         elif rotation_type in {"tilt down", "tilt back"}:
+                            dpitch_deg += value
+                        elif rotation_type in {"tilt up", "tilt forward"}:
                             dpitch_deg -= value
                         elif rotation_type == "rotate counterclockwise":
                             dyaw_deg += value
