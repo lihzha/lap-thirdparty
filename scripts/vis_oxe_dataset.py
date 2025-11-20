@@ -9,6 +9,7 @@ import numpy as np
 from rail_tpu_utils import prevent_cross_region
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
+from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
@@ -479,7 +480,7 @@ def main(config: _config.TrainConfig):
         shuffle=True,
         seed=config.seed,
     )
-    tok = data_loader.tokenizer
+    tok = PaligemmaCoTTokenizer(max_len=300)
 
     data_iter = iter(data_loader)
     logging.info("Before getting batch")
