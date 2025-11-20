@@ -475,7 +475,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             prompt=prompt,
             state=state,
             actions=actions,
-            language_actions=language_actions,
+            reasoning=language_actions,
             state_type=state_type,
             is_vqa_sample=is_vqa_sample,
             is_prediction_sample=is_prediction_sample,
