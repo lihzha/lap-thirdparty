@@ -501,8 +501,6 @@ def main(config: _config.TrainConfig):
         # Extract ground truth actions
         gt_action_texts = _extract_gt_actions(batch)
 
-        breakpoint()
-
         start_imgs = _safe_device_get(obs.images["base_0_rgb"][:, 0])
         end_imgs = _safe_device_get(obs.images["left_wrist_0_rgb"][:, -1])
 
