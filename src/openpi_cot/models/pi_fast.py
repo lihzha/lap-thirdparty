@@ -7,7 +7,6 @@ import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
 from openpi.models import model as _model
-from openpi.models.gemma import get_config as get_gemma_config
 import openpi.models.gemma_fast as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
@@ -163,7 +162,7 @@ class PiFast(_model.BaseModel):
         self.image_keys = config.image_keys
         self.aug_wrist_image = config.aug_wrist_image
 
-        paligemma_config = get_gemma_config(config.paligemma_variant)
+        paligemma_config = _gemma.get_config(config.paligemma_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
         llm = nnx_bridge.ToNNX(
             _gemma.Module(
