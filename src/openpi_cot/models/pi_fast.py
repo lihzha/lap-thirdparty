@@ -232,7 +232,14 @@ class PiFast(_model.BaseModel):
 
     @override
     def compute_loss(
-        self, rng: at.KeyArrayLike, observation: CoTObservation, actions: _model.Actions, *, train: bool = False
+        self,
+        rng: at.KeyArrayLike,
+        observation: CoTObservation,
+        actions: _model.Actions,
+        *,
+        train: bool = False,
+        stage_config: dict | None = None,
+        verbose_mode: bool | None = None,
     ) -> at.Float[at.Array, "*b ah"]:
         """Compute loss following pi0_fast logic."""
         # Preprocess observation using our own API
