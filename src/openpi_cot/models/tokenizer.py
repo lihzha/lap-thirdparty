@@ -42,6 +42,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             "grouped_state",
             "grouped_state_verbose",
             "no_state",
+            "pi05_notime",
         ]
         | PromptFormat = "pi05",
         prediction_format: Literal["default", "grouped"] | PromptFormat = "default",

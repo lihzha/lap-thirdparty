@@ -282,22 +282,18 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
     Returns one decoded string per example. If reasoning fields are absent, returns [].
     """
     tokens = _utils.to_local_array(obs.tokenized_prompt)
-    rmask = _utils.to_local_array(obs.tokenized_langact_mask)
-    reasonings: list[str] = []
-    prompts: list[str] = []
+    rmask = _utils.to_local_array(obs.tokenized_prompt_mask)
+    texts: list[str] = []
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
         text = tokenizer.decode(sel.astype(np.int32))
-        sel2 = tokens[i][~rmask[i].astype(bool)]
-        prompt = tokenizer.decode(sel2.astype(np.int32))
-        reasonings.append(text)
-        prompts.append(prompt)
-    return reasonings, prompts
+        texts.append(text)
+    return texts
 
 
 def get_language_actions(batch, tok):
-    texts, prompts = _decode_reasoning_strings(batch[0], tok)
-    return texts, prompts
+    texts = _decode_reasoning_strings(batch[0], tok)
+    return texts
 
 
 def visualize_language_actions(
@@ -335,7 +331,7 @@ def visualize_language_actions(
         raise ValueError("No images found")
     batch_size = min(batch_sizes)
 
-    texts, prompts = get_language_actions(batch, tok)
+    texts = get_language_actions(batch, tok)
 
     if indices is None:
         indices_list = list(range(batch_size))
@@ -400,8 +396,7 @@ def visualize_language_actions(
                     combined = per_cam[0]
 
         text = texts[idx] if idx < len(texts) else ""
-        prompt = prompts[idx] if idx < len(prompts) else ""
-        visuals.append({"image": combined, "language_action": text, "index": idx, "prompt": prompt})
+        visuals.append({"image": combined, "language_action": text, "index": idx})
 
     return visuals
 
