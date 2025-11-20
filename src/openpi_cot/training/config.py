@@ -1026,6 +1026,27 @@ _CONFIGS = [
         keep_period=10000,
         resume=True,
     ),
+    *create_multi_device_configs(
+        base_name="pi_droid_fast",
+        devices=["v6", "v6europe", "v4", "local"],
+        model=pi_fast.PiFastConfig(
+            action_horizon=32,
+            max_token_len=220,
+            pi05=True,
+            discrete_state_input=True,
+        ),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "droid",
+            "asset_id": "droid",
+            "dataset_type": "droid",
+            "droid_dataset_name": "droid",
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        save_interval=500,
+        keep_period=10000,
+        resume=True,
+    ),
     # Evaluation and special single-instance configs
     TrainConfig(
         name="pi0_eval",
