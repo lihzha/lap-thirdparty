@@ -683,10 +683,7 @@ def main(config: _config.TrainConfig):
 
     start_step = int(train_state.step)
 
-    try:
-        tok = data_loader.tokenizer
-    except:  # noqa: E722
-        tok = PaligemmaCoTTokenizer(max_len=200)
+    tok = PaligemmaCoTTokenizer(max_len=300)
 
     # Initialize dataset log tracker for uniform sample logging across datasets
     dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
