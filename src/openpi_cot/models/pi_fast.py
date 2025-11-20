@@ -82,21 +82,41 @@ def put_along_last_axis(arr, indices, values):
 @dataclasses.dataclass(frozen=True)
 class PiFastConfig(_model.BaseModelConfig):
     dtype: str = "bfloat16"
-    paligemma_variant: _gemma.Variant = "gemma_2b"
+    paligemma_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_2b"
+    action_expert_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_300m"
 
     # Set the model specific defaults.
     action_dim: int = 32
-    action_horizon: int = 32
-    max_token_len: int = 250
-    prediction_format: str = "default"
+    action_horizon: int = 50
+    max_token_len: int = None
 
-    # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
+    # if verbose_mode=True, log per sample metrics
+    verbose_mode: bool = False
+
     pi05: bool = False
     discrete_state_input: bool = None
     prompt_format: str = "pi05"
-    use_bimanual: bool = False
-    # Whether to augment wrist images
+    prediction_format: str = "default"
+
     aug_wrist_image: bool = True
+    # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
+    # When False, only uses base_0_rgb and left_wrist_0_rgb to save memory
+    use_bimanual: bool = False
+
+    # Enable/disable individual loss components
+    # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
+    enable_action_training: bool = False
+    # When True, enables training on language (reasoning) tokens with cross-entropy.
+    enable_langact_training: bool = True
+    # When True, enables prediction loss (predicting movement between current and future frame).
+    enable_prediction_training: bool = False
+    # When True, enables VQA weighted loss.
+    enable_vqa_training: bool = False
+    # Scalar weights to combine losses when multiple are enabled
+    language_loss_weight: float = 1.0
+    action_loss_weight: float = 1.0
+    prediction_loss_weight: float = 0.2
+    vqa_loss_weight: float = 0.1
 
     @property
     def image_keys(self) -> tuple[str, ...]:
