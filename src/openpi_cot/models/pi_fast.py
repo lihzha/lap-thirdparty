@@ -82,8 +82,8 @@ def put_along_last_axis(arr, indices, values):
 @dataclasses.dataclass(frozen=True)
 class PiFastConfig(_model.BaseModelConfig):
     dtype: str = "bfloat16"
-    paligemma_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_2b"
-    action_expert_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_300m"
+    paligemma_variant: _gemma.Variant = "gemma_2b"
+    action_expert_variant: _gemma.Variant = "gemma_300m"
 
     # Set the model specific defaults.
     action_dim: int = 32
