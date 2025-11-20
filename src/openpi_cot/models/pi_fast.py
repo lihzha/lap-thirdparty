@@ -280,7 +280,10 @@ class PiFast(_model.BaseModel):
         loss_mask = observation.token_loss_mask[:, 1:]
 
         token_pplx = jnp.sum(targets * logp, axis=-1)
-        return -jnp.sum(token_pplx * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, -1), 1)
+        loss = -jnp.sum(token_pplx * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, -1), 1)
+        metrics = {}
+        metrics["action_loss"] = loss
+        return loss, metrics
 
     @override
     def sample_actions(
