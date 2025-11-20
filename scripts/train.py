@@ -100,9 +100,6 @@ def vis_batch(batch, tok=None, step=None):
     logging.info("\n--- TOKENIZED PROMPTS ---")
     tokenized_prompt = obs.tokenized_prompt
     tokenized_prompt_mask = obs.tokenized_prompt_mask
-    token_ar_mask = obs.token_ar_mask
-    token_loss_mask = obs.token_loss_mask
-    print(token_ar_mask, token_loss_mask)
 
     logging.info(f"tokenized_prompt: shape={tokenized_prompt.shape}, dtype={tokenized_prompt.dtype}")
     logging.info(f"tokenized_prompt_mask: shape={tokenized_prompt_mask.shape}, dtype={tokenized_prompt_mask.dtype}")
