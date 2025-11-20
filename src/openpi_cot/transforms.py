@@ -488,7 +488,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             "tokenized_prompt_mask": token_mask,
             "token_ar_mask": ar_mask,
             "token_loss_mask": loss_mask,  # For compatibility with CoT models
-            "token_langact_mask": 1 - ar_mask,  # only for vis_oxe_dataset
+            "tokenized_langact_mask": token_mask,  # only for vis_oxe_dataset
         }
 
 
