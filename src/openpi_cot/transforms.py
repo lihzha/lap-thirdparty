@@ -482,8 +482,6 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             time_horizon_seconds=time_horizon_seconds,
         )
 
-        breakpoint()
-
         return {
             **data,
             "tokenized_prompt": tokens,
