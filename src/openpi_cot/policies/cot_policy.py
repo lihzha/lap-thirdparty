@@ -158,7 +158,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     time_horizon_options: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
-        assert self.model_type == ExtendedModelType.PI_COT
+        assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
         assert "observation" in data
         assert IMAGE_KEYS[0] in data["observation"]
         base_image = parse_image(data["observation"][IMAGE_KEYS[0]])
@@ -510,7 +510,7 @@ class ActionDecodingSchema:
                         gripper_actions[i] = float(grip)
         else:
             # Parse verbose format: "move right X cm and move forward Y cm..."
-            
+
             if self.style == "directional_only":
                 # For directional_only, accept format with optional numeric values
                 # e.g., "move right" or "move right 5 cm"
@@ -800,7 +800,7 @@ VERBOSE_EEF_DECODING_SCHEMA = ActionDecodingSchema(
     include_rotation=False,
     translation_unit="cm",
     use_schema_format=False,
-    use_eef_frame=True
+    use_eef_frame=True,
 )
 
 VERBOSE_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
@@ -817,7 +817,7 @@ VERBOSE_EEF_WITH_ROTATION_DECODING_SCHEMA = ActionDecodingSchema(
     include_rotation=True,
     translation_unit="cm",
     use_schema_format=False,
-    use_eef_frame=True
+    use_eef_frame=True,
 )
 
 
@@ -862,7 +862,7 @@ DECODING_SCHEMA_REGISTRY = {
     "compact_bimanual_with_rotation": COMPACT_BIMANUAL_WITH_ROTATION_DECODING_SCHEMA,
     "verbose_eef": VERBOSE_EEF_DECODING_SCHEMA,
     "verbose_eef_with_rotation": VERBOSE_EEF_WITH_ROTATION_DECODING_SCHEMA,
-    "directional_only": DIRECTIONAL_SCHEMA
+    "directional_only": DIRECTIONAL_SCHEMA,
 }
 
 
