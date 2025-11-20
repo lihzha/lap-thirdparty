@@ -487,7 +487,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             "tokenized_prompt": tokens,
             "tokenized_prompt_mask": token_mask,
             "token_ar_mask": ar_mask,
-            "tokenized_langact_mask": loss_mask,  # For compatibility with CoT models
+            "token_loss_mask": loss_mask,  # For compatibility with CoT models
         }
 
 
