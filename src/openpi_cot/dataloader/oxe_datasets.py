@@ -124,6 +124,7 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
+                "raw_state": new_obs["state"],
             }
 
             return traj
@@ -276,6 +277,15 @@ class PlanningDataset(_SingleOXECoTDataset):
             )
             # Ensure static shape is preserved
             traj["observation"][state_key].set_shape([None, self.action_dim])
+            # Pad raw_state to action_dim to match the final state dimension
+            raw_state_last_dim = tf.shape(traj["raw_state"])[-1]
+            pad_amount_raw_state = tf.maximum(0, self.action_dim - raw_state_last_dim)
+            traj["raw_state"] = tf.pad(
+                traj["raw_state"],
+                [[0, 0], [0, pad_amount_raw_state]],
+            )
+            # Ensure static shape is preserved
+            traj["raw_state"].set_shape([None, self.action_dim])
             return traj
 
         self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
