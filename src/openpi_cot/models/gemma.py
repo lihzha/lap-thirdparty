@@ -184,7 +184,7 @@ class Attention(nn.Module):
                     name=_name("qkv_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0, 1)),
                     lora_config=config.lora_configs.get("attn"),
-                    param_dtype=config.param_dtype,
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 qkvs.append(qkv_einsum("BSD,3KDH->3BSKH", x))
             else:
@@ -193,7 +193,7 @@ class Attention(nn.Module):
                     name=_name("q_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
                     lora_config=config.lora_configs.get("attn"),
-                    param_dtype=config.param_dtype,
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 q = q_einsum("BTD,NDH->BTNH", x)
                 kv_einsum = Einsum(
@@ -201,7 +201,7 @@ class Attention(nn.Module):
                     name=_name("kv_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0, 1)),
                     lora_config=config.lora_configs.get("attn"),
-                    param_dtype=config.param_dtype,
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 k, v = kv_einsum("BSD,2KDH->2BSKH", x)
                 qkvs.append((q, k, v))
@@ -248,7 +248,7 @@ class Attention(nn.Module):
                     name=_name("attn_vec_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=(-3, -2), out_axis=-1),
                     lora_config=config.lora_configs.get("attn"),
-                    param_dtype=config.param_dtype,
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 out.append(out_einsum("BTNH,NHD->BTD", encoded[:, start:end]))
                 start = end
@@ -278,9 +278,9 @@ class Block(nn.Module):
         gates = []
         for i, x in enumerate(xs):
             if x is not None:
-                x, gate = RMSNorm(name=_name("pre_attention_norm", i), param_dtype=self.configs[i].param_dtype)(  # noqa: PLW2901
-                    x, adarms_cond[i]
-                )
+                x, gate = RMSNorm(  # noqa: PLW2901
+                    name=_name("pre_attention_norm", i), param_dtype=getattr(self.configs[i], "param_dtype", "bfloat16")
+                )(x, adarms_cond[i])
             pre_attn.append(x)
             gates.append(gate if x is not None else None)
 
@@ -295,13 +295,15 @@ class Block(nn.Module):
         gates = []
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is not None:
-                x, gate = RMSNorm(name=_name("pre_ffw_norm", i), param_dtype=config.param_dtype)(x, adarms_cond[i])  # noqa: PLW2901
+                x, gate = RMSNorm(  # noqa: PLW2901
+                    name=_name("pre_ffw_norm", i), param_dtype=getattr(config, "param_dtype", "bfloat16")
+                )(x, adarms_cond[i])
                 x = FeedForward(  # noqa: PLW2901
                     features=config.width,
                     hidden_dim=config.mlp_dim,
                     name=_name("mlp", i),
                     lora_config=config.lora_configs.get("ffn"),
-                    param_dtype=config.param_dtype,
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )(x)
             out.append(x)
             gates.append(gate if x is not None else None)
@@ -335,7 +337,7 @@ class Module(nn.Module):
         self.embedder = Embedder(
             vocab_size=PALIGEMMA_VOCAB_SIZE,
             embed_dim=self.configs[0].width,  # embedder for first expert only
-            param_dtype=self.configs[0].param_dtype,
+            param_dtype=getattr(self.configs[0], "param_dtype", "bfloat16"),
             name="embedder",
         )
         block_cls = nn.remat(
@@ -362,7 +364,7 @@ class Module(nn.Module):
             dropout_bdims=self.dropout_bdims,
         )
         self.final_norms = [
-            RMSNorm(name=_name("final_norm", i), param_dtype=self.configs[i].param_dtype)
+            RMSNorm(name=_name("final_norm", i), param_dtype=getattr(self.configs[i], "param_dtype", "bfloat16"))
             for i in range(len(self.configs))
         ]
 
