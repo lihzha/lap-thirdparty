@@ -5,7 +5,7 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
-from openpi.models.gemma import get_config as get_gemma_config
+from openpi_cot.models.gemma import get_config as get_gemma_config
 import openpi.models.model as _model
 from openpi.models.model import Observation
 import openpi.models.pi0 as _pi0

@@ -5,7 +5,7 @@ import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 from openpi.models import model as _model
-import openpi.models.gemma as _gemma
+import openpi_cot.models.gemma as _gemma
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
