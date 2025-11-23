@@ -243,25 +243,24 @@ def process_and_log_metrics(
                 log_util.log_dataset_plots(plots, step, prefix=prefix)
 
         # Training-specific logging: random examples and dataset log counts
-        if not prefix and config.model.enable_langact_training:
-            if host_batch_cache is not None and tok is not None and dataset_log_tracker is not None:
-                host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-                vis_tools.log_random_examples(
-                    step,
-                    host_batch_local,
-                    tok,
-                    local_batch_size=local_size,
-                    dataset_log_tracker=dataset_log_tracker,
-                )
+        if not prefix and host_batch_cache is not None and tok is not None and dataset_log_tracker is not None:
+            host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+            vis_tools.log_random_examples(
+                step,
+                host_batch_local,
+                tok,
+                local_batch_size=local_size,
+                dataset_log_tracker=dataset_log_tracker,
+            )
 
-                # Log dataset logging statistics periodically
-                if step % (config.log_interval * 10) == 0:
-                    log_stats = dataset_log_tracker.get_stats()
-                    if log_stats:
-                        logging.info(f"Dataset logging counts: {log_stats}")
-                        # Log to wandb as well
-                        wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
-                        wandb.log(wandb_log_stats, step=step)
+            # Log dataset logging statistics periodically
+            if step % (config.log_interval * 10) == 0:
+                log_stats = dataset_log_tracker.get_stats()
+                if log_stats:
+                    logging.info(f"Dataset logging counts: {log_stats}")
+                    # Log to wandb as well
+                    wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
+                    wandb.log(wandb_log_stats, step=step)
 
     return reduced_info
 

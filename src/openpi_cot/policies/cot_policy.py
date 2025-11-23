@@ -155,7 +155,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # Whether to randomly sample time horizons for language actions (training only)
     random_time_horizon: bool = True
     # Available time horizons to sample from (in seconds)
-    time_horizon_options: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
+    time_horizon_options: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 4.0)
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
@@ -314,7 +314,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 sampled_time_horizon = valid_language_length / control_frequency
         else:
             # Use all valid language actions (validation/inference mode)
-            num_steps = valid_language_length
+            num_steps = control_frequency
             sampled_time_horizon = None
 
         # Ensure we don't exceed available data
