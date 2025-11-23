@@ -677,6 +677,7 @@ def main(config: _config.TrainConfig):
             logging.error(f"Failed to restore dataloader state: {e}")
             dataloader_restored = False
 
+    # Get start step after restoring checkpoint (if resuming)
     start_step = int(train_state.step)
 
     tok = PaligemmaCoTTokenizer(max_len=300)

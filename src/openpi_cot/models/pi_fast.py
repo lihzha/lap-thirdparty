@@ -22,6 +22,56 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_EOS_TOKEN = 1
 
 
+def cross_entropy_loss(
+    logits: jnp.ndarray,
+    labels: jnp.ndarray,
+    mask: jnp.ndarray | None = None,
+    axis: int = -1,
+    *,
+    per_example: bool = False,
+) -> jnp.ndarray:
+    """
+    Args
+    ----
+      logits : (..., V)   – raw scores.
+      labels : (...)      – int32 / int64 class‑ids, same leading shape as logits without the class dim.
+      mask   : (...) or None – 0/1 or bool; broadcastable to `labels`.
+      axis   : int        – class dimension in `logits`.
+
+    Returns
+    -------
+      If per_example=False (default): scalar mean.
+      If per_example=True: per-example mean over non-batch dims (shape [B]).
+    """
+    # log‑probs
+    log_probs = nnx.log_softmax(logits, axis=axis)  # (..., V)
+
+    # gather log‑prob of the gold class
+    gather_idx = jnp.expand_dims(labels.astype(jnp.int32), axis=axis)  # (..., 1)
+    gold_logp = jnp.take_along_axis(log_probs, gather_idx, axis=axis)  # (..., 1)
+    loss = -gold_logp.squeeze(axis)  # (...)
+
+    # optional masking
+    if per_example:
+        # Reduce over all non-batch dims (assume batch is leading dimension)
+        reduce_axes = tuple(range(1, loss.ndim))
+        if mask is not None:
+            loss = loss * mask
+            denom = jnp.maximum(mask.sum(axis=reduce_axes), 1)  # [B]
+        else:
+            # Mean over all trailing dims
+            denom = jnp.prod(jnp.array(loss.shape[1:]))
+        total = loss.sum(axis=reduce_axes)
+        return total / denom
+    if mask is not None:
+        loss = loss * mask
+        denom = jnp.maximum(mask.sum(), 1)  # avoid ÷0 for empty mask
+    else:
+        denom = loss.size
+    total = loss.sum()
+    return total / denom
+
+
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
 
@@ -255,11 +305,8 @@ class PiFast(_model.BaseModel):
         input_token_embeddings, input_mask, ar_mask = self.embed_inputs(observation)
         attn_mask = make_attn_mask(input_mask, ar_mask)
 
-        # Compute one-hot targets: we predict *next* token, so shift the input tokens by one.
-        targets = jax.nn.one_hot(
-            observation.tokenized_prompt[:, 1:],
-            self.PaliGemma.llm.module.vocab_size,
-        )
+        # Compute labels: we predict *next* token, so shift the input tokens by one.
+        labels = observation.tokenized_prompt[:, 1:]
 
         # Each input predicts *next* token, so we don't input the last token.
         pre_logits, _, _ = self.PaliGemma.llm(
@@ -271,16 +318,20 @@ class PiFast(_model.BaseModel):
         # Only decode logits for the target tokens to save memory
         # (decoding matmul is large because it is a seq_len x vocab_size dense layer).
         logits, _ = self.PaliGemma.llm(
-            pre_logits=pre_logits[:, -targets.shape[1] :],
+            pre_logits=pre_logits[:, -labels.shape[1] :],
         )
-        logp = jax.nn.log_softmax(logits, axis=-1)
 
         # Compute CE loss on token targets
         assert observation.token_loss_mask is not None, "Token loss mask is required"
         loss_mask = observation.token_loss_mask[:, 1:]
 
-        token_pplx = jnp.sum(targets * logp, axis=-1)
-        loss = jnp.mean(-jnp.sum(token_pplx * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, -1), 1))
+        loss = cross_entropy_loss(
+            logits=logits,
+            labels=labels,
+            mask=loss_mask,
+            axis=-1,
+            per_example=False,
+        )
         metrics = {}
         metrics["action_loss"] = loss
         return loss, metrics
