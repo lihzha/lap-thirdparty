@@ -305,8 +305,11 @@ class PiFast(_model.BaseModel):
         input_token_embeddings, input_mask, ar_mask = self.embed_inputs(observation)
         attn_mask = make_attn_mask(input_mask, ar_mask)
 
-        # Compute labels: we predict *next* token, so shift the input tokens by one.
-        labels = observation.tokenized_prompt[:, 1:]
+        # Compute one-hot targets: we predict *next* token, so shift the input tokens by one.
+        targets = jax.nn.one_hot(
+            observation.tokenized_prompt[:, 1:],
+            self.PaliGemma.llm.module.vocab_size,
+        )
 
         # Each input predicts *next* token, so we don't input the last token.
         pre_logits, _, _ = self.PaliGemma.llm(
@@ -318,20 +321,16 @@ class PiFast(_model.BaseModel):
         # Only decode logits for the target tokens to save memory
         # (decoding matmul is large because it is a seq_len x vocab_size dense layer).
         logits, _ = self.PaliGemma.llm(
-            pre_logits=pre_logits[:, -labels.shape[1] :],
+            pre_logits=pre_logits[:, -targets.shape[1] :],
         )
+        logp = jax.nn.log_softmax(logits, axis=-1)
 
         # Compute CE loss on token targets
         assert observation.token_loss_mask is not None, "Token loss mask is required"
         loss_mask = observation.token_loss_mask[:, 1:]
 
-        loss = cross_entropy_loss(
-            logits=logits,
-            labels=labels,
-            mask=loss_mask,
-            axis=-1,
-            per_example=False,
-        )
+        token_pplx = jnp.sum(targets * logp, axis=-1)
+        loss = jnp.mean(-jnp.sum(token_pplx * loss_mask, axis=-1) / jnp.clip(jnp.sum(loss_mask, -1), 1))
         metrics = {}
         metrics["action_loss"] = loss
         return loss, metrics
