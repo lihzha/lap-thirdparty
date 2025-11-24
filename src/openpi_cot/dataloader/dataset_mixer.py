@@ -13,6 +13,7 @@ from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
 from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
 from openpi_cot.dataloader.helpers import NormalizationType
 from openpi_cot.dataloader.helpers import state_encoding_to_type
+from openpi_cot.dataloader.lvis_dataset import Lvis
 from openpi_cot.dataloader.oxe_datasets import DobbeCoTDataset
 from openpi_cot.dataloader.oxe_datasets import LiberoCoTDataset
 from openpi_cot.dataloader.oxe_datasets import PlanningDataset
@@ -164,6 +165,11 @@ class OXECoTDatasets:
                 )
             elif dataset_name == "pixmo_point":
                 ds = PixmoPoint(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "lvis":
+                ds = Lvis(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
