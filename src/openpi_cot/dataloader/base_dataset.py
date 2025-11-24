@@ -192,6 +192,8 @@ class _SingleCoTDataset:
             ds_name = "fmb:1.0.0"
         if ds_name == "dobbe":
             ds_name = "dobbe:0.0.1"
+        if ds_name == "lvis":
+            ds_name = "lvis:1.0.0"
         return tfds.builder(ds_name, data_dir=data_dir)
 
     def build_dataset(self, builder):
@@ -336,18 +338,14 @@ class _SingleCoTDataset:
 
             # Store control_frequency as metadata (per timestep)
             traj["control_frequency"] = tf.repeat(
-                tf.constant(self.control_frequency, dtype=tf.int32),
-                tf.shape(traj[action_key])[0]
+                tf.constant(self.control_frequency, dtype=tf.int32), tf.shape(traj[action_key])[0]
             )
 
             # Store valid_length: how many steps have actual data (not padding from gather_with_padding)
             # For each timestep t, valid length is min(summation_steps, trajectory_length - t)
             timestep_indices = tf.range(traj_len, dtype=tf.int32)
             remaining_steps = traj_len - timestep_indices  # How many steps remain from current timestep
-            valid_lengths = tf.minimum(
-                remaining_steps,
-                tf.constant(summation_steps, dtype=tf.int32)
-            )
+            valid_lengths = tf.minimum(remaining_steps, tf.constant(summation_steps, dtype=tf.int32))
             traj["valid_language_length"] = valid_lengths
 
             return traj
