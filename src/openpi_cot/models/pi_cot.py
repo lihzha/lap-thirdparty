@@ -5,7 +5,6 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
-from openpi_cot.models.gemma import get_config as get_gemma_config
 import openpi.models.model as _model
 from openpi.models.model import Observation
 import openpi.models.pi0 as _pi0
@@ -18,6 +17,7 @@ from openpi_cot.models.adapters.gemma_adapter import Gemma3ModuleWithDecode
 from openpi_cot.models.adapters.gemma_adapter import ModuleWithDecode
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import preprocess_observation
+from openpi_cot.models.gemma import get_config as get_gemma_config
 from openpi_cot.models.gemma2 import get_config as get_gemma2_config
 from openpi_cot.models.gemma3 import get_config as get_gemma3_config
 import openpi_cot.models.pi_cot_config as _pi_cot_config
@@ -805,28 +805,28 @@ class PiCoT(_pi0.Pi0):
         # For action training, text tokens should not use autoregressive masking
         prefix_ar_mask_action = jnp.zeros_like(prefix_mask, dtype=bool)
 
-        # Mask out langact tokens so actions cannot see them
-        if observation.tokenized_langact_mask is not None:
-            if self.use_gemma3:
-                # For Gemma3, prefix corresponds directly to tokenized_prompt
-                # Mask out positions where langact tokens are present
-                prefix_mask_action = jnp.logical_and(prefix_mask, jnp.logical_not(observation.tokenized_langact_mask))
-            else:
-                # For legacy, prefix = [img_tokens, text_tokens]
-                # Compute image sequence length
-                img_seq_len = prefix_mask.shape[1] - observation.tokenized_langact_mask.shape[1]
-                # Pad langact mask with False for image positions
-                langact_mask_full = jnp.concatenate(
-                    [
-                        jnp.zeros((observation.tokenized_langact_mask.shape[0], img_seq_len), dtype=bool),
-                        observation.tokenized_langact_mask,
-                    ],
-                    axis=1,
-                )
-                # Mask out langact positions
-                prefix_mask_action = jnp.logical_and(prefix_mask, jnp.logical_not(langact_mask_full))
-        else:
-            prefix_mask_action = prefix_mask
+        # # Mask out langact tokens so actions cannot see them
+        # if observation.tokenized_langact_mask is not None:
+        #     if self.use_gemma3:
+        #         # For Gemma3, prefix corresponds directly to tokenized_prompt
+        #         # Mask out positions where langact tokens are present
+        #         prefix_mask_action = jnp.logical_and(prefix_mask, jnp.logical_not(observation.tokenized_langact_mask))
+        #     else:
+        #         # For legacy, prefix = [img_tokens, text_tokens]
+        #         # Compute image sequence length
+        #         img_seq_len = prefix_mask.shape[1] - observation.tokenized_langact_mask.shape[1]
+        #         # Pad langact mask with False for image positions
+        #         langact_mask_full = jnp.concatenate(
+        #             [
+        #                 jnp.zeros((observation.tokenized_langact_mask.shape[0], img_seq_len), dtype=bool),
+        #                 observation.tokenized_langact_mask,
+        #             ],
+        #             axis=1,
+        #         )
+        #         # Mask out langact positions
+        #         prefix_mask_action = jnp.logical_and(prefix_mask, jnp.logical_not(langact_mask_full))
+        # else:
+        prefix_mask_action = prefix_mask
 
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
