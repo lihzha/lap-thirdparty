@@ -45,9 +45,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
 
         # Always tokenize regular reasoning (prompt + language_actions)
         language_actions = data.pop("language_actions", None)  # if None, inference
-        if language_actions is not None and not isinstance(language_actions, str):
-            language_actions = language_actions.item()
-
         dataset_name = data.pop("dataset_name", None)  # if None, inference
         if dataset_name is not None:
             tokenized_dataset_name = self.tokenizer._tokenizer.encode(dataset_name)
