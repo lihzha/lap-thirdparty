@@ -5,7 +5,6 @@ import tensorflow as tf
 from openpi_cot.dataloader.vqa_base import _BaseVQADataset
 from openpi_cot.dataloader.vqa_base import ensure_dldataset
 
-
 # LVIS prompts to randomly sample from
 LVIS_PROMPTS = tf.constant(
     [
@@ -32,7 +31,7 @@ class Lvis(_BaseVQADataset):
         """Build TFDS builder for LVIS."""
         import tensorflow_datasets as tfds
 
-        return tfds.builder("lvis", data_dir=data_dir)
+        return tfds.builder("lvis:1.0.0", data_dir=data_dir)
 
     def build_dataset(self, builder, split: str):
         """Build TensorFlow dataset from TFDS builder."""
