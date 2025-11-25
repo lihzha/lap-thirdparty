@@ -933,7 +933,7 @@ def main(config: _config.TrainConfig):
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
-                
+
                 val_batch = None
 
                 # Subsequent validation runs: use progress bar with known batch count
@@ -988,7 +988,7 @@ def main(config: _config.TrainConfig):
                 #         val_info_local = jax.device_get(val_info)
                 #         val_infos.append(val_info_local)
                 # Use unified logging function for validation metrics
-                if val_batch
+                if val_batch:
                     process_and_log_metrics(
                         step=step,
                         infos=val_infos,
