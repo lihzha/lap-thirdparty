@@ -739,7 +739,7 @@ def main(config: _config.TrainConfig):
 
         val_config = replace(
             config,
-            model=replace(config.model, verbose_mode=True),
+            # model=replace(config.model, verbose_mode=True),
             batch_size=128,
             data=replace(config.data, data_mix="franka_dataset", val_fraction=1.0),
         )
@@ -1033,7 +1033,7 @@ def main(config: _config.TrainConfig):
                     dataset_log_tracker=dataset_log_tracker,
                     tok=tok,
                     prefix="franka_val_",
-                    verbose_mode=True,
+                    verbose_mode=False,
                 )
 
         # Profiling: Time batch loading
