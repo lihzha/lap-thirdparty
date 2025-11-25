@@ -71,34 +71,35 @@ class Lvis(_BaseVQADataset):
         """Convert bbox to formatted text representation using paligemma loc tokens.
 
         Args:
-            bbox: Tensor of shape [2, 2] with normalized coordinates [[x1, y1], [x2, y2]]
+            bbox: Tensor of shape [2, 2] with normalized coordinates [[x_min, y_min], [x_max, y_max]]
                   where coordinates are in range [0, 1].
 
         Returns:
-            Formatted string with bbox corners as paligemma loc tokens like "<locY1><locX1><locY2><locX2>".
+            Formatted string in PaLiGemma2 bbox format: "<loc_ymin><loc_xmin><loc_ymax><loc_xmax>".
         """
         # Extract corner coordinates (already normalized to 0-1)
-        top_left = bbox[0]  # [x1, y1]
-        bottom_right = bbox[1]  # [x2, y2]
+        # bbox[0] = [x_min, y_min], bbox[1] = [x_max, y_max]
+        top_left = bbox[0]
+        bottom_right = bbox[1]
 
-        x1, y1 = top_left[0], top_left[1]
-        x2, y2 = bottom_right[0], bottom_right[1]
+        x_min, y_min = top_left[0], top_left[1]
+        x_max, y_max = bottom_right[0], bottom_right[1]
 
         # Convert to paligemma loc token indices (0-1023)
         N = 1024
-        x1_idx = tf.cast(tf.round(x1 * (N - 1)), tf.int32)
-        y1_idx = tf.cast(tf.round(y1 * (N - 1)), tf.int32)
-        x2_idx = tf.cast(tf.round(x2 * (N - 1)), tf.int32)
-        y2_idx = tf.cast(tf.round(y2 * (N - 1)), tf.int32)
+        y_min_idx = tf.cast(tf.round(y_min * (N - 1)), tf.int32)
+        x_min_idx = tf.cast(tf.round(x_min * (N - 1)), tf.int32)
+        y_max_idx = tf.cast(tf.round(y_max * (N - 1)), tf.int32)
+        x_max_idx = tf.cast(tf.round(x_max * (N - 1)), tf.int32)
 
-        # Format as loc tokens: <locY1><locX1><locY2><locX2>
-        y1_token = tf.strings.join(["<loc", tf.strings.as_string(y1_idx, width=4, fill="0"), ">"])
-        x1_token = tf.strings.join(["<loc", tf.strings.as_string(x1_idx, width=4, fill="0"), ">"])
-        y2_token = tf.strings.join(["<loc", tf.strings.as_string(y2_idx, width=4, fill="0"), ">"])
-        x2_token = tf.strings.join(["<loc", tf.strings.as_string(x2_idx, width=4, fill="0"), ">"])
+        # Format as loc tokens in PaLiGemma2 order: y_min, x_min, y_max, x_max
+        y_min_token = tf.strings.join(["<loc", tf.strings.as_string(y_min_idx, width=4, fill="0"), ">"])
+        x_min_token = tf.strings.join(["<loc", tf.strings.as_string(x_min_idx, width=4, fill="0"), ">"])
+        y_max_token = tf.strings.join(["<loc", tf.strings.as_string(y_max_idx, width=4, fill="0"), ">"])
+        x_max_token = tf.strings.join(["<loc", tf.strings.as_string(x_max_idx, width=4, fill="0"), ">"])
 
-        # Join all tokens: top-left then bottom-right
-        return tf.strings.join([y1_token, x1_token, y2_token, x2_token])
+        # Join in PaLiGemma2 order: y_min, x_min, y_max, x_max
+        return tf.strings.join([y_min_token, x_min_token, y_max_token, x_max_token])
 
     def extract_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
         """Extract prompt and caption from LVIS example.
@@ -115,7 +116,7 @@ class Lvis(_BaseVQADataset):
         # Extract the single category name (each example has one annotation)
         category_name = example["annotations"]["category_name"][0]
 
-        # Extract the bbox (shape: [2, 2] with [[x1, y1], [x2, y2]])
+        # Extract the bbox (shape: [2, 2] with [[x_min, y_min], [x_max, y_max]])
         bbox = example["annotations"]["bbox"][0]
 
         # Randomly select a prompt template using tf.switch_case
