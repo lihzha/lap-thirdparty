@@ -329,6 +329,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "sample_r1_lite": [("sample_r1_lite", 1.0)],
     "molmoact_dataset": [("molmoact_dataset", 1.0)],
     "planning_dataset": [("planning_dataset", 1.0)],
+    "franka_dataset": [("franka_dataset", 1.0)],
     "libero_10_no_noops": [("libero_10_no_noops", 1.0)],
     # === VQA Datasets ===
     "coco_captions": [("coco_captions", 1.0)],

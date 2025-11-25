@@ -798,7 +798,7 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # Use deterministic index based on hash of first observation state
     state_hash = tf.strings.to_hash_bucket_fast(
         tf.strings.as_string(tf.reduce_sum(trajectory["observation"]["state"][0])),
-        18  # Number of fallback instructions
+        18,  # Number of fallback instructions
     )
     random_fallback = fallback_instructions[state_hash]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
@@ -997,7 +997,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     # Use deterministic index based on hash of first observation state
     state_hash = tf.strings.to_hash_bucket_fast(
         tf.strings.as_string(tf.reduce_sum(trajectory["observation"]["state"][0])),
-        18  # Number of fallback instructions
+        18,  # Number of fallback instructions
     )
     random_fallback = fallback_instructions[state_hash]
     selected_instruction = tf.cond(is_empty, lambda: random_fallback, lambda: instruction)
@@ -1666,6 +1666,25 @@ def planning_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     return trajectory
 
 
+def franka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    # Compute movement actions with zero-padding (no truncation) for both arms
+
+    trajectory["observation"]["state"] = tf.concat(
+        (
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(tf.clip_by_value(trajectory["observation"]["state"][:, 6:], 0, 1)),
+        ),
+        axis=-1,
+    )
+
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat(
+        [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
+    )
+
+    return trajectory
+
+
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
     "bridge_v2_oxe": bridge_v2_oxe_dataset_transform,
@@ -1761,4 +1780,5 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "agibot_large_dataset": agibot_large_dataset_transform,
     "molmoact_dataset": molmoact_dataset_transform,
     "planning_dataset": planning_dataset_transform,
+    "franka_dataset": franka_dataset_transform,
 }
