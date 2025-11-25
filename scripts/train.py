@@ -933,6 +933,8 @@ def main(config: _config.TrainConfig):
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
                 val_iter = iter(val_loader)
+                
+                val_batch = None
 
                 # Subsequent validation runs: use progress bar with known batch count
                 val_pbar = tqdm.tqdm(
@@ -986,19 +988,20 @@ def main(config: _config.TrainConfig):
                 #         val_info_local = jax.device_get(val_info)
                 #         val_infos.append(val_info_local)
                 # Use unified logging function for validation metrics
-                process_and_log_metrics(
-                    step=step,
-                    infos=val_infos,
-                    batch=val_batch,  # Use last val_batch for dataset info
-                    dataset_stats_tracker=val_dataset_stats_tracker,
-                    dataset_info_buffer=val_dataset_info_buffer,
-                    config=config,
-                    host_batch_cache=val_host_batch_cache,
-                    dataset_log_tracker=dataset_log_tracker,
-                    tok=tok,
-                    prefix="val_",
-                    verbose_mode=verbose_mode,
-                )
+                if val_batch
+                    process_and_log_metrics(
+                        step=step,
+                        infos=val_infos,
+                        batch=val_batch,  # Use last val_batch for dataset info
+                        dataset_stats_tracker=val_dataset_stats_tracker,
+                        dataset_info_buffer=val_dataset_info_buffer,
+                        config=config,
+                        host_batch_cache=val_host_batch_cache,
+                        dataset_log_tracker=dataset_log_tracker,
+                        tok=tok,
+                        prefix="val_",
+                        verbose_mode=verbose_mode,
+                    )
 
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
