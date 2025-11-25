@@ -498,6 +498,7 @@ def log_random_examples(
     local_batch_size: int,
     num_random: int = 5,
     dataset_log_tracker: DatasetLogTracker | None = None,
+    prefix: str = "train",
 ) -> None:
     if host_batch is None or local_batch_size <= 0:
         return
@@ -537,7 +538,7 @@ def log_random_examples(
         caption = f"{caption_text}"
         images_to_log.append(wandb.Image(vis["image"], caption=caption))
     if images_to_log:
-        wandb.log({"train/random_examples": images_to_log}, step=step)
+        wandb.log({f"{prefix}/random_examples": images_to_log}, step=step)
 
 
 def _log_entries(entries: list[dict[str, Any]], *, step: int, quantile_threshold: float, total_samples: int) -> None:

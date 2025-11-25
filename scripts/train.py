@@ -252,6 +252,7 @@ def process_and_log_metrics(
                 tok,
                 local_batch_size=local_size,
                 dataset_log_tracker=dataset_log_tracker,
+                prefix=prefix[:-1] if prefix else "train",
             )
 
             # Log dataset logging statistics periodically
@@ -798,6 +799,7 @@ def main(config: _config.TrainConfig):
 
     infos = []
     host_batch_cache = HostBatchCache()
+    val_host_batch_cache = HostBatchCache()
 
     verbose_mode = config.model.verbose_mode
 
@@ -924,81 +926,79 @@ def main(config: _config.TrainConfig):
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
             # Initialize validation dataset trackers
-            # val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
-            # val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
+            val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
+            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
-            val_dataset_stats_tracker = log_util.DatasetStatsTracker()
-            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
             with sharding.set_mesh(mesh):
-                # val_infos = []
-                # # Recreate a fresh iterator to ensure the same fixed validation subset each time.
-                # val_iter = iter(val_loader)
+                val_infos = []
+                # Recreate a fresh iterator to ensure the same fixed validation subset each time.
+                val_iter = iter(val_loader)
 
-                # # Subsequent validation runs: use progress bar with known batch count
-                # val_pbar = tqdm.tqdm(
-                #     range(num_val_batches),
-                #     initial=0,
-                #     total=num_val_batches,
-                #     dynamic_ncols=True,
-                #     disable=(jax.process_index() != 0),
-                # )
-                # for _ in val_pbar:
-                #     val_batch = next(val_iter)
-                #     val_info = pval_step(train_rng, train_state, val_batch)
-                #     # val_info_local = jax.device_get(val_info)
-                #     # val_infos.append(val_info_local)
-                #     val_infos.append(val_info)
-                #     if verbose_mode:
-                #         log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                # # if first_val_run:
-                # #     # First validation run: iterate until StopIteration to determine actual batch count
-                # #     logging.info("First validation run - determining actual number of batches...")
-                # #     batch_count = 0
-                # #     try:
-                # #         while True:
-                # #             val_batch = next(val_iter)
-                # #             val_info = pval_step(train_rng, train_state, val_batch)
-                # #             val_info_local = jax.device_get(val_info)
-                # #             val_infos.append(val_info_local)
-                # #             log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                # #             batch_count += 1
-                # #     except StopIteration:
-                # #         # Update num_val_batches with actual count minus 1
-                # #         num_val_batches = max(1, batch_count - 1)
-                # #         logging.info(f"Captured actual validation batches: {batch_count}")
-                # #         logging.info(f"Updated num_val_batches to: {num_val_batches}")
-                # #         # Remove the last batch info since we went one too far
-                # #         if val_infos:
-                # #             val_infos = val_infos[:-1]
-                # #         first_val_run = False
-                # # else:
-                # #     # Subsequent validation runs: use progress bar with known batch count
-                # #     val_pbar = tqdm.tqdm(
-                # #         range(num_val_batches),
-                # #         initial=0,
-                # #         total=num_val_batches,
-                # #         dynamic_ncols=True,
-                # #         disable=(jax.process_index() != 0),
-                # #     )
-                # #     for _ in val_pbar:
-                # #         val_batch = next(val_iter)
-                # #         val_info = pval_step(train_rng, train_state, val_batch)
-                # #         val_info_local = jax.device_get(val_info)
-                # #         val_infos.append(val_info_local)
-                # # Use unified logging function for validation metrics
-                # process_and_log_metrics(
-                #     step=step,
-                #     infos=val_infos,
-                #     batch=val_batch,  # Use last val_batch for dataset info
-                #     dataset_stats_tracker=val_dataset_stats_tracker,
-                #     dataset_info_buffer=val_dataset_info_buffer,
-                #     config=config,
-                #     host_batch_cache=None,
-                #     dataset_log_tracker=None,
-                #     tok=None,
-                #     prefix="val_",
-                #     verbose_mode=verbose_mode,
-                # )
+                # Subsequent validation runs: use progress bar with known batch count
+                val_pbar = tqdm.tqdm(
+                    range(num_val_batches),
+                    initial=0,
+                    total=num_val_batches,
+                    dynamic_ncols=True,
+                    disable=(jax.process_index() != 0),
+                )
+                for _ in val_pbar:
+                    val_batch = next(val_iter)
+                    val_info = pval_step(train_rng, train_state, val_batch)
+                    # val_info_local = jax.device_get(val_info)
+                    # val_infos.append(val_info_local)
+                    val_infos.append(val_info)
+                    if verbose_mode:
+                        log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                # if first_val_run:
+                #     # First validation run: iterate until StopIteration to determine actual batch count
+                #     logging.info("First validation run - determining actual number of batches...")
+                #     batch_count = 0
+                #     try:
+                #         while True:
+                #             val_batch = next(val_iter)
+                #             val_info = pval_step(train_rng, train_state, val_batch)
+                #             val_info_local = jax.device_get(val_info)
+                #             val_infos.append(val_info_local)
+                #             log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+                #             batch_count += 1
+                #     except StopIteration:
+                #         # Update num_val_batches with actual count minus 1
+                #         num_val_batches = max(1, batch_count - 1)
+                #         logging.info(f"Captured actual validation batches: {batch_count}")
+                #         logging.info(f"Updated num_val_batches to: {num_val_batches}")
+                #         # Remove the last batch info since we went one too far
+                #         if val_infos:
+                #             val_infos = val_infos[:-1]
+                #         first_val_run = False
+                # else:
+                #     # Subsequent validation runs: use progress bar with known batch count
+                #     val_pbar = tqdm.tqdm(
+                #         range(num_val_batches),
+                #         initial=0,
+                #         total=num_val_batches,
+                #         dynamic_ncols=True,
+                #         disable=(jax.process_index() != 0),
+                #     )
+                #     for _ in val_pbar:
+                #         val_batch = next(val_iter)
+                #         val_info = pval_step(train_rng, train_state, val_batch)
+                #         val_info_local = jax.device_get(val_info)
+                #         val_infos.append(val_info_local)
+                # Use unified logging function for validation metrics
+                process_and_log_metrics(
+                    step=step,
+                    infos=val_infos,
+                    batch=val_batch,  # Use last val_batch for dataset info
+                    dataset_stats_tracker=val_dataset_stats_tracker,
+                    dataset_info_buffer=val_dataset_info_buffer,
+                    config=config,
+                    host_batch_cache=val_host_batch_cache,
+                    dataset_log_tracker=dataset_log_tracker,
+                    tok=tok,
+                    prefix="val_",
+                    verbose_mode=verbose_mode,
+                )
 
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
@@ -1026,9 +1026,9 @@ def main(config: _config.TrainConfig):
                     dataset_stats_tracker=val_dataset_stats_tracker,
                     dataset_info_buffer=val_dataset_info_buffer,
                     config=config,
-                    host_batch_cache=None,
-                    dataset_log_tracker=None,
-                    tok=None,
+                    host_batch_cache=val_host_batch_cache,
+                    dataset_log_tracker=dataset_log_tracker,
+                    tok=tok,
                     prefix="franka_val_",
                     verbose_mode=True,
                 )
