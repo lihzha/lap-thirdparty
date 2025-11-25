@@ -1431,18 +1431,14 @@ def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
             trajectory["observation"]["position"],
             tf.zeros_like(trajectory["observation"]["state"][:, :3]),
             trajectory["observation"]["yaw"],
+            tf.zeros_like(trajectory["observation"]["state"][:, :1]),
         ),
         axis=-1,
     )
-    trajectory["action"] = tf.concat(
-        (
-            trajectory["action"],
-            tf.zeros_like(trajectory["action"]),
-            tf.zeros_like(trajectory["action"]),
-            tf.zeros_like(trajectory["action"][:, :1]),
-        ),
-        axis=-1,
-    )
+
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, tf.zeros_like(trajectory["action"][:, :1])], axis=1)
+
     return trajectory
 
 
