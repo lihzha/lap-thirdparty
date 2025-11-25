@@ -924,9 +924,11 @@ def main(config: _config.TrainConfig):
         # Periodic validation
         if config.do_val and step % getattr(config, "val_interval", 500) == 0:
             # Initialize validation dataset trackers
-            val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
-            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
+            # val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
+            # val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
+            val_dataset_stats_tracker = log_util.DatasetStatsTracker()
+            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok)
             with sharding.set_mesh(mesh):
                 # val_infos = []
                 # # Recreate a fresh iterator to ensure the same fixed validation subset each time.

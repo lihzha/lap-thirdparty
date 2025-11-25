@@ -5,18 +5,15 @@ import tensorflow as tf
 from openpi_cot.dataloader.vqa_base import _BaseVQADataset
 from openpi_cot.dataloader.vqa_base import ensure_dldataset
 
-# LVIS prompts to randomly sample from
-LVIS_PROMPTS = tf.constant(
-    [
-        "What objects are in this image?",
-        "Describe the objects you see.",
-        "List the objects in the image.",
-        "What can you see in this image?",
-        "Identify the objects present.",
-        "Describe what is visible in the image.",
-    ],
-    dtype=tf.string,
-)
+# LVIS prompts to randomly sample from - split into prefix and suffix for category insertion
+LVIS_PROMPT_PARTS = [
+    ("Point out the ", " in the image."),
+    ("Where is the ", " in the image?"),
+    ("Locate the ", " in this image."),
+    ("Identify the ", " in the image."),
+    ("Find the ", " in the image."),
+    ("Show me where the ", " is."),
+]
 
 
 class Lvis(_BaseVQADataset):
@@ -70,37 +67,77 @@ class Lvis(_BaseVQADataset):
         image_id = example["image_id"]
         return tf.strings.join(["lvis_", image_id])
 
+    def bbox_to_text(self, bbox: tf.Tensor) -> tf.Tensor:
+        """Convert bbox to formatted text representation using paligemma loc tokens.
+
+        Args:
+            bbox: Tensor of shape [2, 2] with normalized coordinates [[x1, y1], [x2, y2]]
+                  where coordinates are in range [0, 1].
+
+        Returns:
+            Formatted string with bbox corners as paligemma loc tokens like "<locY1><locX1><locY2><locX2>".
+        """
+        # Extract corner coordinates (already normalized to 0-1)
+        top_left = bbox[0]  # [x1, y1]
+        bottom_right = bbox[1]  # [x2, y2]
+
+        x1, y1 = top_left[0], top_left[1]
+        x2, y2 = bottom_right[0], bottom_right[1]
+
+        # Convert to paligemma loc token indices (0-1023)
+        N = 1024
+        x1_idx = tf.cast(tf.round(x1 * (N - 1)), tf.int32)
+        y1_idx = tf.cast(tf.round(y1 * (N - 1)), tf.int32)
+        x2_idx = tf.cast(tf.round(x2 * (N - 1)), tf.int32)
+        y2_idx = tf.cast(tf.round(y2 * (N - 1)), tf.int32)
+
+        # Format as loc tokens: <locY1><locX1><locY2><locX2>
+        y1_token = tf.strings.join(["<loc", tf.strings.as_string(y1_idx, width=4, fill="0"), ">"])
+        x1_token = tf.strings.join(["<loc", tf.strings.as_string(x1_idx, width=4, fill="0"), ">"])
+        y2_token = tf.strings.join(["<loc", tf.strings.as_string(y2_idx, width=4, fill="0"), ">"])
+        x2_token = tf.strings.join(["<loc", tf.strings.as_string(x2_idx, width=4, fill="0"), ">"])
+
+        # Join all tokens: top-left then bottom-right
+        return tf.strings.join([y1_token, x1_token, y2_token, x2_token])
+
     def extract_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
         """Extract prompt and caption from LVIS example.
 
         Returns:
-            (prompt, caption) where prompt is randomly sampled from LVIS_PROMPTS
-            and caption is a description of all objects in the image.
+            (prompt, caption) where prompt asks about the specific category
+            and caption contains the formatted bbox.
         """
         # Generate deterministic seed from image ID hash
         image_id = example["image_id"]
         image_id_hash = tf.strings.to_hash_bucket_fast(image_id, 2147483647)
         image_id_hash = tf.cast(image_id_hash, tf.int32)
 
-        # Extract all category names from annotations
-        category_names = example["annotations"]["category_name"]
+        # Extract the single category name (each example has one annotation)
+        category_name = example["annotations"]["category_name"][0]
 
-        # Create caption by joining all unique object names
-        # Use unique to avoid repetition
-        unique_categories = tf.unique(category_names)[0]
+        # Extract the bbox (shape: [2, 2] with [[x1, y1], [x2, y2]])
+        bbox = example["annotations"]["bbox"][0]
 
-        # Sort for consistent ordering
-        unique_categories = tf.sort(unique_categories)
-
-        # Join with commas
-        caption = tf.strings.reduce_join(unique_categories, separator=", ")
-
-        # Randomly select a prompt
-        num_prompts = tf.shape(LVIS_PROMPTS)[0]
+        # Randomly select a prompt template using tf.switch_case
+        num_prompts = len(LVIS_PROMPT_PARTS)
         prompt_idx = tf.random.stateless_uniform(
             [], seed=[self.seed, image_id_hash], minval=0, maxval=num_prompts, dtype=tf.int32
         )
-        prompt = LVIS_PROMPTS[prompt_idx]
+
+        # Create branches for each prompt template
+        def make_prompt_fn(idx):
+            prefix, suffix = LVIS_PROMPT_PARTS[idx]
+
+            def fn():
+                return tf.strings.join([prefix, category_name, suffix])
+
+            return fn
+
+        prompt_branches = {i: make_prompt_fn(i) for i in range(num_prompts)}
+        prompt = tf.switch_case(prompt_idx, branch_fns=prompt_branches)
+
+        # Format bbox as caption using loc tokens
+        caption = self.bbox_to_text(bbox)
 
         return prompt, caption
 
