@@ -282,19 +282,15 @@ def main(config: _config.TrainConfig):
         prompt_texts = decode_prompt_strings(obs, tok)
         dataset_names = decode_dataset_names(obs, tok)
 
-        # Skip VQA samples (only analyze robot samples)
-        is_vqa = _safe_device_get(obs.is_vqa_sample)
-        if is_vqa is None:
-            is_vqa = np.zeros(len(prompt_texts), dtype=bool)
+        breakpoint()
 
         for i, prompt_text in enumerate(prompt_texts):
-            if is_vqa[i]:
-                continue  # Skip VQA samples
-
             dataset_name = dataset_names[i] if i < len(dataset_names) else "unknown"
 
             # Parse tokens
             parsed = parse_prompt_tokens(prompt_text)
+
+            breakpoint()
 
             num_count = len(parsed["action_numbers"])
             dir_count = len(parsed["direction_tokens"])
