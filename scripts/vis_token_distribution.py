@@ -11,6 +11,7 @@ from collections import Counter
 from collections import defaultdict
 import logging
 import os
+import pickle
 import platform
 import re
 
@@ -27,6 +28,16 @@ import openpi_cot.dataloader.cot_data_loader as _data_loader
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
+
+
+def keep_tpu_busy():
+    """Run a lightweight operation to prevent TPU preemption."""
+    # Simple matmul operation on TPU to keep it active
+    x = jax.numpy.ones((128, 128))
+    y = jax.numpy.dot(x, x)
+    # Force execution with block_until_ready
+    y.block_until_ready()
+    return y
 
 
 def init_logging():
@@ -730,7 +741,7 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
 
     # Periodic logging setup
-    CHECKPOINT_INTERVAL = 100000  # Log every 100k samples
+    CHECKPOINT_INTERVAL = 1000000  # Log every 1M samples
     total_samples_processed = 0
     next_checkpoint = CHECKPOINT_INTERVAL
 
@@ -743,6 +754,10 @@ def main(config: _config.TrainConfig):
     )
     for batch_idx, _ in enumerate(pbar):
         batch = next(data_iter)
+
+        # Keep TPU busy to prevent preemption - run every 5 batches
+        if batch_idx % 5 == 0:
+            keep_tpu_busy()
 
         obs = batch[0]
 
@@ -818,6 +833,9 @@ def main(config: _config.TrainConfig):
                 f"Reached checkpoint: {total_samples_processed} samples processed. Creating and logging plots..."
             )
 
+            # Keep TPU busy during plot creation
+            keep_tpu_busy()
+
             # Create plots with current data
             plots = create_all_plots(
                 num_token_hist_bins,
@@ -839,6 +857,9 @@ def main(config: _config.TrainConfig):
             # Log or save plots with step number
             log_or_save_plots(plots, wandb_enabled, step=total_samples_processed)
 
+            # Keep TPU busy after logging
+            keep_tpu_busy()
+
             # Update next checkpoint
             next_checkpoint += CHECKPOINT_INTERVAL
 
@@ -847,6 +868,9 @@ def main(config: _config.TrainConfig):
 
     logging.info(f"Analysis complete. Processed {num_token_stats.count} robot samples")
     logging.info(f"Found {len(dataset_num_token_stats)} unique datasets")
+
+    # Keep TPU busy during final plot creation
+    keep_tpu_busy()
 
     # Create final visualizations
     logging.info("Creating final plots...")
@@ -869,6 +893,9 @@ def main(config: _config.TrainConfig):
 
     # Log or save final plots
     log_or_save_plots(plots, wandb_enabled, step=None)
+
+    # Keep TPU busy after final logging
+    keep_tpu_busy()
 
     # Finish wandb run
     if wandb_enabled and wandb is not None:
