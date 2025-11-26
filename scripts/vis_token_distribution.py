@@ -44,7 +44,7 @@ def keep_tpu_busy():
 def save_checkpoint(
     checkpoint_dir: str,
     step: int,
-    data_loader: _data_loader.DataLoader,
+    data_loader: _data_loader.CoTRLDSDataLoader,
     stats: dict,
 ) -> None:
     """Save statistics and dataloader state to GCS.
@@ -105,7 +105,7 @@ def save_checkpoint(
 
 def load_checkpoint(
     checkpoint_dir: str,
-    data_loader: _data_loader.DataLoader,
+    data_loader: _data_loader.CoTRLDSDataLoader,
 ) -> tuple[dict | None, int]:
     """Load the latest checkpoint if it exists.
 
