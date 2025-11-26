@@ -126,13 +126,19 @@ def load_checkpoint(
 
         # List all checkpoint subdirectories
         all_files = tf.io.gfile.listdir(str(checkpoint_base))
+        logging.info(f"Found files in checkpoint directory: {all_files}")
+
         checkpoint_steps = []
         for name in all_files:
-            if name.startswith("checkpoint_"):
+            # Handle both directory names and full paths
+            basename = name.split("/")[-1] if "/" in name else name
+            if basename.startswith("checkpoint_"):
                 try:
-                    step = int(name.split("_")[1])
+                    step = int(basename.split("_")[1])
                     checkpoint_steps.append(step)
-                except (ValueError, IndexError):
+                    logging.info(f"Found checkpoint at step {step}")
+                except (ValueError, IndexError) as e:
+                    logging.warning(f"Failed to parse checkpoint name '{basename}': {e}")
                     continue
 
         if not checkpoint_steps:
@@ -892,7 +898,7 @@ def main(config: _config.TrainConfig):
     dataset_total_count = defaultdict(int)
 
     # Periodic logging setup
-    CHECKPOINT_INTERVAL = 100000  # Log every 1M samples
+    CHECKPOINT_INTERVAL = 1000000  # Log every 1M samples
     total_samples_processed = 0
     next_checkpoint = CHECKPOINT_INTERVAL
 
