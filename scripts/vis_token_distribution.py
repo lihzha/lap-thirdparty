@@ -238,7 +238,6 @@ def main(config: _config.TrainConfig):
     - Only unbounded storage is Counter for discrete number token values
     - Memory usage is O(num_bins + num_datasets + num_unique_values), not O(num_samples)
     """
-    num_batches = 50  # Number of batches to analyze
 
     wandb_enabled = bool(getattr(config, "wandb_enabled", False)) and wandb is not None
     if wandb_enabled:
@@ -301,6 +300,7 @@ def main(config: _config.TrainConfig):
         config,
         sharding=data_sharding,
         shuffle=True,
+        split="val",
         seed=config.seed,
     )
     tok = PaligemmaCoTTokenizer(max_len=300)
@@ -310,28 +310,42 @@ def main(config: _config.TrainConfig):
     num_token_hist_bins = np.arange(0, 4, 1)
     num_token_hist_counts = np.zeros(len(num_token_hist_bins) - 1, dtype=np.int64)
 
-    # Histogram for state values (bins from -500 to 500)
+    # Histogram for state values (bins from -1 to 257) - 7 dimensions
     state_value_hist_bins = np.arange(-1, 257, 1)
-    state_value_hist_counts = np.zeros(len(state_value_hist_bins) - 1, dtype=np.int64)
+    NUM_STATE_DIMS = 7
+    state_value_hist_counts = [np.zeros(len(state_value_hist_bins) - 1, dtype=np.int64) for _ in range(NUM_STATE_DIMS)]
 
     # Running stats for summary statistics
     num_token_stats = RunningStats()
-    state_value_stats = RunningStats()
+    state_value_stats = [RunningStats() for _ in range(NUM_STATE_DIMS)]
 
     # Counter for individual number token values (memory efficient for discrete values)
     number_token_value_counter = Counter()
 
     # Per-dataset tracking using running stats
     dataset_num_token_stats = defaultdict(RunningStats)
-    dataset_state_value_stats = defaultdict(RunningStats)
+    dataset_state_value_stats = defaultdict(lambda: [RunningStats() for _ in range(NUM_STATE_DIMS)])
     dataset_number_token_value_counter = defaultdict(Counter)
 
-    data_iter = iter(data_loader)
-    logging.info("Starting token distribution analysis...")
+    # Per-dataset state value histograms (7 dimensions each)
+    dataset_state_value_hist_counts = defaultdict(
+        lambda: [np.zeros(len(state_value_hist_bins) - 1, dtype=np.int64) for _ in range(NUM_STATE_DIMS)]
+    )
 
-    for batch_idx in range(num_batches):
+    # Direction-number token joint tracking
+    direction_number_token_counter = defaultdict(Counter)
+
+    # [1,1,1] pattern tracking per dataset (checking first 3 dimensions)
+    dataset_111_pattern_count = defaultdict(int)
+    dataset_total_count = defaultdict(int)
+
+    data_iter = iter(data_loader)
+
+    batch_idx = 0
+    while True:
         try:
             batch = next(data_iter)
+            batch_idx += 1
         except StopIteration:
             logging.info(f"Reached end of data after {batch_idx} batches")
             break
@@ -358,30 +372,49 @@ def main(config: _config.TrainConfig):
             # Update running stats
             num_token_stats.update(num_count)
 
-            # Update state value histogram and stats
-            for state_val in state_values:
+            # Update state value histogram and stats for each dimension
+            for dim_idx in range(min(len(state_values), NUM_STATE_DIMS)):
+                state_val = state_values[dim_idx]
                 # Find bin index for state value
                 bin_idx = np.searchsorted(state_value_hist_bins, state_val) - 1
-                if 0 <= bin_idx < len(state_value_hist_counts):
-                    state_value_hist_counts[bin_idx] += 1
-                state_value_stats.update(state_val)
+                if 0 <= bin_idx < len(state_value_hist_counts[dim_idx]):
+                    state_value_hist_counts[dim_idx][bin_idx] += 1
+                state_value_stats[dim_idx].update(state_val)
 
             # Count individual number token values
             for num_value in parsed["action_numbers"]:
                 # Round to nearest integer for cleaner distribution
                 number_token_value_counter[int(round(num_value))] += 1
 
-            # Per-dataset running stats
+            # Direction-number token joint tracking
+            for direction in parsed["direction_tokens"]:
+                for num_value in parsed["action_numbers"]:
+                    direction_number_token_counter[direction][int(round(num_value))] += 1
+
+            # Per-dataset tracking
             dataset_num_token_stats[dataset_name].update(num_count)
-            for state_val in state_values:
-                dataset_state_value_stats[dataset_name].update(state_val)
+            dataset_total_count[dataset_name] += 1
+
+            # Per-dataset state value stats and histograms (7 dimensions)
+            for dim_idx in range(min(len(state_values), NUM_STATE_DIMS)):
+                state_val = state_values[dim_idx]
+                dataset_state_value_stats[dataset_name][dim_idx].update(state_val)
+                # Update per-dataset histogram
+                bin_idx = np.searchsorted(state_value_hist_bins, state_val) - 1
+                if 0 <= bin_idx < len(dataset_state_value_hist_counts[dataset_name][dim_idx]):
+                    dataset_state_value_hist_counts[dataset_name][dim_idx][bin_idx] += 1
 
             # Per-dataset number token value counter
             for num_value in parsed["action_numbers"]:
                 dataset_number_token_value_counter[dataset_name][int(round(num_value))] += 1
 
+            # Check for [1,1,1] pattern (first 3 dimensions close to 1)
+            if len(state_values) >= 3:
+                if all(abs(state_values[j] - 1.0) < 0.01 for j in range(3)):
+                    dataset_111_pattern_count[dataset_name] += 1
+
         if (batch_idx + 1) % 10 == 0:
-            logging.info(f"Processed {batch_idx + 1}/{num_batches} batches")
+            logging.info(f"Processed {batch_idx + 1} batches")
 
     logging.info(f"Analysis complete. Processed {num_token_stats.count} robot samples")
     logging.info(f"Found {len(dataset_num_token_stats)} unique datasets")
@@ -402,18 +435,20 @@ def main(config: _config.TrainConfig):
             f"Number tokens - Mean: {num_token_stats.get_mean():.2f}, Std: {num_token_stats.get_std():.2f}, Count: {num_token_stats.count}"
         )
 
-    # 3. Global state values distribution
-    if state_value_stats.count > 0:
-        plots["state_values_hist"] = create_histogram_from_bins(
-            state_value_hist_bins,
-            state_value_hist_counts,
-            "State Values Distribution (Global)",
-            "State Value",
-            "mediumseagreen",
-        )
-        logging.info(
-            f"State values - Mean: {state_value_stats.get_mean():.2f}, Std: {state_value_stats.get_std():.2f}, Count: {state_value_stats.count}"
-        )
+    # 3. Global state values distribution - separate histogram per dimension
+    for dim_idx in range(NUM_STATE_DIMS):
+        if state_value_stats[dim_idx].count > 0:
+            plots[f"state_values_hist/dim_{dim_idx}"] = create_histogram_from_bins(
+                state_value_hist_bins,
+                state_value_hist_counts[dim_idx],
+                f"State Values Distribution - Dimension {dim_idx} (Global)",
+                f"State Value (Dim {dim_idx})",
+                "mediumseagreen",
+            )
+            logging.info(
+                f"State values (Dim {dim_idx}) - Mean: {state_value_stats[dim_idx].get_mean():.2f}, "
+                f"Std: {state_value_stats[dim_idx].get_std():.2f}, Count: {state_value_stats[dim_idx].count}"
+            )
 
     # 4. Number token value frequency distribution
     if number_token_value_counter:
@@ -442,7 +477,7 @@ def main(config: _config.TrainConfig):
         logging.info(f"Found {len(number_token_value_counter)} unique number token values")
         logging.info(f"Top 10 most common number values: {number_token_value_counter.most_common(10)}")
 
-    # 5. Per-dataset number token value frequency distribution
+    # 5. Per-dataset number token value frequency distribution - individual plots
     if dataset_number_token_value_counter:
         datasets_sorted = sorted(
             dataset_number_token_value_counter.keys(),
@@ -450,18 +485,7 @@ def main(config: _config.TrainConfig):
             reverse=True,
         )
 
-        # Create subplots - one per dataset (top 20 values per dataset)
-        num_datasets = len(datasets_sorted)
-        cols = min(3, num_datasets)  # Max 3 columns
-        rows = (num_datasets + cols - 1) // cols  # Ceiling division
-
-        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 4 * rows))
-        if num_datasets == 1:
-            axes = np.array([axes])
-        axes = axes.flatten() if num_datasets > 1 else axes
-
-        for idx, dataset_name in enumerate(datasets_sorted):
-            ax = axes[idx]
+        for dataset_name in datasets_sorted:
             counter = dataset_number_token_value_counter[dataset_name]
 
             # Get top 20 most common number values for this dataset
@@ -470,35 +494,31 @@ def main(config: _config.TrainConfig):
                 num_values = [val for val, count in most_common]
                 num_counts = [count for val, count in most_common]
 
-                bars = ax.bar(range(len(num_values)), num_counts, color="coral")
-                ax.set_xlabel("Number Token Value", fontsize=10)
-                ax.set_ylabel("Frequency", fontsize=10)
-                ax.set_title(f"{dataset_name} (Top 20)", fontsize=11, fontweight="bold")
+                fig, ax = plt.subplots(figsize=(12, 6))
+                bars = ax.bar(range(len(num_values)), num_counts, color="coral", alpha=0.7, edgecolor="black")
+                ax.set_xlabel("Number Token Value", fontsize=12)
+                ax.set_ylabel("Frequency", fontsize=12)
+                ax.set_title(f"{dataset_name} - Number Token Value Frequency (Top 20)", fontsize=14, fontweight="bold")
                 ax.set_xticks(range(len(num_values)))
-                ax.set_xticklabels([str(v) for v in num_values], rotation=45, ha="right", fontsize=8)
+                ax.set_xticklabels([str(v) for v in num_values], rotation=45, ha="right")
                 ax.grid(axis="y", alpha=0.3)
 
-                # Add count labels on bars for datasets with few values
-                if len(num_values) <= 10:
-                    for bar, count in zip(bars, num_counts):
-                        height = bar.get_height()
-                        ax.text(
-                            bar.get_x() + bar.get_width() / 2.0,
-                            height,
-                            str(count),
-                            ha="center",
-                            va="bottom",
-                            fontsize=7,
-                        )
+                # Add count labels on bars
+                for bar, count in zip(bars, num_counts):
+                    height = bar.get_height()
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2.0,
+                        height,
+                        str(count),
+                        ha="center",
+                        va="bottom",
+                        fontsize=9,
+                    )
 
-        # Hide extra subplots
-        for idx in range(num_datasets, len(axes)):
-            axes[idx].set_visible(False)
+                plt.tight_layout()
+                plots[f"dataset_number_value_freq/{dataset_name}"] = fig
 
-        plt.tight_layout()
-        plots["dataset_number_value_freq"] = fig
-
-        logging.info(f"Created per-dataset number token value frequency plots for {num_datasets} datasets")
+        logging.info(f"Created individual plots for {len(datasets_sorted)} datasets")
 
     # 6. Per-dataset average number tokens
     if dataset_num_token_stats:
@@ -514,19 +534,97 @@ def main(config: _config.TrainConfig):
             "steelblue",
         )
 
-    # 7. Per-dataset state value statistics
-    if dataset_state_value_stats:
-        dataset_names_sorted = sorted(
-            dataset_state_value_stats.keys(), key=lambda x: dataset_state_value_stats[x].count, reverse=True
+    # 7. Per-dataset state value histograms (7 dimensions each)
+    if dataset_state_value_hist_counts:
+        for dataset_name in dataset_state_value_hist_counts.keys():
+            for dim_idx in range(NUM_STATE_DIMS):
+                hist_counts = dataset_state_value_hist_counts[dataset_name][dim_idx]
+                if hist_counts.sum() > 0:
+                    plots[f"dataset_state_values_hist/{dataset_name}/dim_{dim_idx}"] = create_histogram_from_bins(
+                        state_value_hist_bins,
+                        hist_counts,
+                        f"{dataset_name} - State Values (Dim {dim_idx})",
+                        f"State Value (Dim {dim_idx})",
+                        "mediumseagreen",
+                    )
+        logging.info(f"Created per-dataset state value histograms for {len(dataset_state_value_hist_counts)} datasets")
+
+    # 8. Direction-number token value frequency joint distribution
+    if direction_number_token_counter:
+        directions_sorted = sorted(
+            direction_number_token_counter.keys(),
+            key=lambda x: sum(direction_number_token_counter[x].values()),
+            reverse=True,
         )
-        avg_state_values = [dataset_state_value_stats[name].get_mean() for name in dataset_names_sorted]
-        plots["dataset_state_means"] = create_bar_plot(
-            dataset_names_sorted,
-            avg_state_values,
-            "Average State Value per Dataset",
-            "Average State Value",
-            "mediumseagreen",
+
+        for direction in directions_sorted:
+            counter = direction_number_token_counter[direction]
+            # Get top 20 most common number values for this direction
+            most_common = counter.most_common(20)
+            if most_common:
+                num_values = [val for val, count in most_common]
+                num_counts = [count for val, count in most_common]
+
+                fig, ax = plt.subplots(figsize=(12, 6))
+                bars = ax.bar(range(len(num_values)), num_counts, color="orchid", alpha=0.7, edgecolor="black")
+                ax.set_xlabel("Number Token Value", fontsize=12)
+                ax.set_ylabel("Frequency", fontsize=12)
+                ax.set_title(
+                    f'Direction "{direction}" - Number Token Value Frequency (Top 20)',
+                    fontsize=14,
+                    fontweight="bold",
+                )
+                ax.set_xticks(range(len(num_values)))
+                ax.set_xticklabels([str(v) for v in num_values], rotation=45, ha="right")
+                ax.grid(axis="y", alpha=0.3)
+
+                # Add count labels on bars
+                for bar, count in zip(bars, num_counts):
+                    height = bar.get_height()
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2.0,
+                        height,
+                        str(count),
+                        ha="center",
+                        va="bottom",
+                        fontsize=9,
+                    )
+
+                plt.tight_layout()
+                plots[f"direction_number_value_freq/{direction}"] = fig
+
+        logging.info(f"Created direction-number frequency plots for {len(directions_sorted)} directions")
+
+    # 9. [1,1,1] pattern percentage per dataset
+    if dataset_111_pattern_count:
+        datasets_sorted = sorted(
+            dataset_111_pattern_count.keys(), key=lambda x: dataset_111_pattern_count[x], reverse=True
         )
+        percentages = [
+            (dataset_111_pattern_count[name] / dataset_total_count[name] * 100) if dataset_total_count[name] > 0 else 0
+            for name in datasets_sorted
+        ]
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+        bars = ax.bar(range(len(datasets_sorted)), percentages, color="tomato", alpha=0.7, edgecolor="black")
+        ax.set_xlabel("Dataset", fontsize=12)
+        ax.set_ylabel("Percentage (%)", fontsize=12)
+        ax.set_title("Percentage of [1,1,1] State Pattern per Dataset", fontsize=14, fontweight="bold")
+        ax.set_xticks(range(len(datasets_sorted)))
+        ax.set_xticklabels(datasets_sorted, rotation=45, ha="right")
+        ax.grid(axis="y", alpha=0.3)
+
+        # Add percentage labels on bars
+        for bar, percentage in zip(bars, percentages):
+            height = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0, height, f"{percentage:.2f}%", ha="center", va="bottom", fontsize=9
+            )
+
+        plt.tight_layout()
+        plots["state_111_pattern_percentage"] = fig
+
+        logging.info(f"Created [1,1,1] pattern percentage plot for {len(datasets_sorted)} datasets")
 
     # Log or save plots
     if wandb_enabled and wandb is not None:
