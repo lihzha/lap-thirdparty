@@ -7,7 +7,8 @@ This script analyzes and visualizes:
 4. State value distributions
 """
 
-from collections import Counter, defaultdict
+from collections import Counter
+from collections import defaultdict
 import logging
 import os
 import platform
@@ -387,6 +388,8 @@ def main(config: _config.TrainConfig):
             dataset_num_dir_token_stats[dataset_name].update(num_dir_count)
             for state_val in state_values:
                 dataset_state_value_stats[dataset_name].update(state_val)
+
+            breakpoint()
 
         if (batch_idx + 1) % 10 == 0:
             logging.info(f"Processed {batch_idx + 1}/{num_batches} batches")
