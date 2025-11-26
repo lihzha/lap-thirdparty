@@ -7,7 +7,7 @@ This script analyzes and visualizes:
 4. State value distributions
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 import logging
 import os
 import platform
@@ -80,7 +80,7 @@ def extract_numbers_from_text(text: str) -> list[float]:
 
 def extract_direction_tokens(text: str) -> list[str]:
     """Extract direction keywords from text."""
-    directions = ["forward", "backward", "left", "right", "up", "down", "open", "close"]
+    directions = ["forward", "backward", "back", "left", "right", "up", "down", "open", "close"]
     found = []
     text_lower = text.lower()
     for direction in directions:
@@ -168,6 +168,46 @@ def create_histogram(values: list, title: str, xlabel: str, color: str, bins: in
     return fig
 
 
+def create_histogram_from_bins(bin_edges, bin_counts, title: str, xlabel: str, color: str):
+    """Create a histogram plot from precomputed bins."""
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    width = bin_edges[1] - bin_edges[0]
+    ax.bar(bin_centers, bin_counts, width=width * 0.9, color=color, alpha=0.7, edgecolor="black")
+    ax.set_xlabel(xlabel, fontsize=12)
+    ax.set_ylabel("Frequency", fontsize=12)
+    ax.set_title(title, fontsize=14, fontweight="bold")
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
+class RunningStats:
+    """Track running statistics (mean, std, count) without storing all values."""
+
+    def __init__(self):
+        self.count = 0
+        self.mean = 0.0
+        self.M2 = 0.0  # Sum of squared differences from mean
+
+    def update(self, value):
+        """Update statistics with a new value using Welford's online algorithm."""
+        self.count += 1
+        delta = value - self.mean
+        self.mean += delta / self.count
+        delta2 = value - self.mean
+        self.M2 += delta * delta2
+
+    def get_mean(self):
+        return self.mean if self.count > 0 else 0.0
+
+    def get_std(self):
+        return np.sqrt(self.M2 / self.count) if self.count > 1 else 0.0
+
+    def get_variance(self):
+        return self.M2 / self.count if self.count > 1 else 0.0
+
+
 def create_bar_plot(labels: list[str], values: list[float], title: str, ylabel: str, color: str):
     """Create a bar plot."""
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -189,6 +229,14 @@ def create_bar_plot(labels: list[str], values: list[float], title: str, ylabel: 
 
 
 def main(config: _config.TrainConfig):
+    """Analyze and visualize token distributions from the dataloader.
+
+    Memory-efficient implementation:
+    - Uses fixed-size histograms instead of storing all raw values
+    - Uses Welford's online algorithm for running statistics (mean, std)
+    - Only unbounded storage is Counter for discrete number token values
+    - Memory usage is O(num_bins + num_datasets + num_unique_values), not O(num_samples)
+    """
     num_batches = 50  # Number of batches to analyze
 
     wandb_enabled = bool(getattr(config, "wandb_enabled", False)) and wandb is not None
@@ -256,15 +304,29 @@ def main(config: _config.TrainConfig):
     )
     tok = PaligemmaCoTTokenizer(max_len=300)
 
-    # Initialize tracking structures
-    all_num_token_counts = []  # Count of number tokens per sample
-    all_num_dir_token_counts = []  # Count of number + direction tokens per sample
-    all_state_values = []  # All state values
+    # Initialize tracking structures - using histograms and running stats for memory efficiency
+    # Histograms for count distributions (bins from 0 to 50)
+    num_token_hist_bins = np.arange(0, 51, 1)
+    num_token_hist_counts = np.zeros(len(num_token_hist_bins) - 1, dtype=np.int64)
+    num_dir_token_hist_bins = np.arange(0, 51, 1)
+    num_dir_token_hist_counts = np.zeros(len(num_dir_token_hist_bins) - 1, dtype=np.int64)
 
-    # Per-dataset tracking
-    dataset_num_counts = defaultdict(list)
-    dataset_num_dir_counts = defaultdict(list)
-    dataset_state_values = defaultdict(list)
+    # Histogram for state values (bins from -500 to 500)
+    state_value_hist_bins = np.linspace(-500, 500, 101)
+    state_value_hist_counts = np.zeros(len(state_value_hist_bins) - 1, dtype=np.int64)
+
+    # Running stats for summary statistics
+    num_token_stats = RunningStats()
+    num_dir_token_stats = RunningStats()
+    state_value_stats = RunningStats()
+
+    # Counter for individual number token values (memory efficient for discrete values)
+    number_token_value_counter = Counter()
+
+    # Per-dataset tracking using running stats
+    dataset_num_token_stats = defaultdict(RunningStats)
+    dataset_num_dir_token_stats = defaultdict(RunningStats)
+    dataset_state_value_stats = defaultdict(RunningStats)
 
     data_iter = iter(data_loader)
     logging.info("Starting token distribution analysis...")
@@ -297,64 +359,116 @@ def main(config: _config.TrainConfig):
             num_dir_count = num_count + dir_count
             state_values = parsed["state_values"]
 
-            # Global tracking
-            all_num_token_counts.append(num_count)
-            all_num_dir_token_counts.append(num_dir_count)
-            all_state_values.extend(state_values)
+            # Update global histograms
+            if num_count < len(num_token_hist_bins):
+                num_token_hist_counts[min(num_count, len(num_token_hist_counts) - 1)] += 1
+            if num_dir_count < len(num_dir_token_hist_bins):
+                num_dir_token_hist_counts[min(num_dir_count, len(num_dir_token_hist_counts) - 1)] += 1
 
-            # Per-dataset tracking
-            dataset_num_counts[dataset_name].append(num_count)
-            dataset_num_dir_counts[dataset_name].append(num_dir_count)
-            dataset_state_values[dataset_name].extend(state_values)
+            # Update running stats
+            num_token_stats.update(num_count)
+            num_dir_token_stats.update(num_dir_count)
+
+            # Update state value histogram and stats
+            for state_val in state_values:
+                # Find bin index for state value
+                bin_idx = np.searchsorted(state_value_hist_bins, state_val) - 1
+                if 0 <= bin_idx < len(state_value_hist_counts):
+                    state_value_hist_counts[bin_idx] += 1
+                state_value_stats.update(state_val)
+
+            # Count individual number token values
+            for num_value in parsed["action_numbers"]:
+                # Round to nearest integer for cleaner distribution
+                number_token_value_counter[int(round(num_value))] += 1
+
+            # Per-dataset running stats
+            dataset_num_token_stats[dataset_name].update(num_count)
+            dataset_num_dir_token_stats[dataset_name].update(num_dir_count)
+            for state_val in state_values:
+                dataset_state_value_stats[dataset_name].update(state_val)
 
         if (batch_idx + 1) % 10 == 0:
             logging.info(f"Processed {batch_idx + 1}/{num_batches} batches")
 
-    logging.info(f"Analysis complete. Processed {len(all_num_token_counts)} robot samples")
-    logging.info(f"Found {len(dataset_num_counts)} unique datasets")
+    logging.info(f"Analysis complete. Processed {num_token_stats.count} robot samples")
+    logging.info(f"Found {len(dataset_num_token_stats)} unique datasets")
 
     # Create visualizations
     plots = {}
 
     # 1. Global number tokens distribution
-    if all_num_token_counts:
-        plots["num_tokens_hist"] = create_histogram(
-            all_num_token_counts,
+    if num_token_stats.count > 0:
+        plots["num_tokens_hist"] = create_histogram_from_bins(
+            num_token_hist_bins,
+            num_token_hist_counts,
             "Number Tokens Distribution (Global)",
             "Number of Number Tokens per Sample",
             "steelblue",
-            bins=20,
         )
         logging.info(
-            f"Number tokens - Mean: {np.mean(all_num_token_counts):.2f}, Std: {np.std(all_num_token_counts):.2f}"
+            f"Number tokens - Mean: {num_token_stats.get_mean():.2f}, Std: {num_token_stats.get_std():.2f}, Count: {num_token_stats.count}"
         )
 
     # 2. Global number + direction tokens distribution
-    if all_num_dir_token_counts:
-        plots["num_dir_tokens_hist"] = create_histogram(
-            all_num_dir_token_counts,
+    if num_dir_token_stats.count > 0:
+        plots["num_dir_tokens_hist"] = create_histogram_from_bins(
+            num_dir_token_hist_bins,
+            num_dir_token_hist_counts,
             "Number + Direction Tokens Distribution (Global)",
             "Number of (Number + Direction) Tokens per Sample",
             "coral",
-            bins=20,
         )
         logging.info(
-            f"Number + Direction tokens - Mean: {np.mean(all_num_dir_token_counts):.2f}, Std: {np.std(all_num_dir_token_counts):.2f}"
+            f"Number + Direction tokens - Mean: {num_dir_token_stats.get_mean():.2f}, Std: {num_dir_token_stats.get_std():.2f}, Count: {num_dir_token_stats.count}"
         )
 
     # 3. Global state values distribution
-    if all_state_values:
-        plots["state_values_hist"] = create_histogram(
-            all_state_values, "State Values Distribution (Global)", "State Value", "mediumseagreen", bins=50
+    if state_value_stats.count > 0:
+        plots["state_values_hist"] = create_histogram_from_bins(
+            state_value_hist_bins,
+            state_value_hist_counts,
+            "State Values Distribution (Global)",
+            "State Value",
+            "mediumseagreen",
         )
-        logging.info(f"State values - Mean: {np.mean(all_state_values):.2f}, Std: {np.std(all_state_values):.2f}")
+        logging.info(
+            f"State values - Mean: {state_value_stats.get_mean():.2f}, Std: {state_value_stats.get_std():.2f}, Count: {state_value_stats.count}"
+        )
 
-    # 4. Per-dataset average number tokens
-    if dataset_num_counts:
+    # 4. Number token value frequency distribution
+    if number_token_value_counter:
+        # Get top 50 most common number values for better visualization
+        most_common = number_token_value_counter.most_common(50)
+        num_values = [val for val, count in most_common]
+        num_counts = [count for val, count in most_common]
+
+        fig, ax = plt.subplots(figsize=(14, 6))
+        bars = ax.bar(range(len(num_values)), num_counts, color="mediumpurple")
+        ax.set_xlabel("Number Token Value", fontsize=12)
+        ax.set_ylabel("Frequency", fontsize=12)
+        ax.set_title("Number Token Value Frequency Distribution (Top 50)", fontsize=14, fontweight="bold")
+        ax.set_xticks(range(len(num_values)))
+        ax.set_xticklabels([str(v) for v in num_values], rotation=45, ha="right")
+        ax.grid(axis="y", alpha=0.3)
+
+        # Add count labels on bars
+        for bar, count in zip(bars, num_counts):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2.0, height, str(count), ha="center", va="bottom", fontsize=8)
+
+        plt.tight_layout()
+        plots["number_value_freq"] = fig
+
+        logging.info(f"Found {len(number_token_value_counter)} unique number token values")
+        logging.info(f"Top 10 most common number values: {number_token_value_counter.most_common(10)}")
+
+    # 5. Per-dataset average number tokens
+    if dataset_num_token_stats:
         dataset_names_sorted = sorted(
-            dataset_num_counts.keys(), key=lambda x: np.mean(dataset_num_counts[x]), reverse=True
+            dataset_num_token_stats.keys(), key=lambda x: dataset_num_token_stats[x].get_mean(), reverse=True
         )
-        avg_num_counts = [np.mean(dataset_num_counts[name]) for name in dataset_names_sorted]
+        avg_num_counts = [dataset_num_token_stats[name].get_mean() for name in dataset_names_sorted]
         plots["dataset_num_tokens"] = create_bar_plot(
             dataset_names_sorted,
             avg_num_counts,
@@ -363,12 +477,12 @@ def main(config: _config.TrainConfig):
             "steelblue",
         )
 
-    # 5. Per-dataset average number + direction tokens
-    if dataset_num_dir_counts:
+    # 6. Per-dataset average number + direction tokens
+    if dataset_num_dir_token_stats:
         dataset_names_sorted = sorted(
-            dataset_num_dir_counts.keys(), key=lambda x: np.mean(dataset_num_dir_counts[x]), reverse=True
+            dataset_num_dir_token_stats.keys(), key=lambda x: dataset_num_dir_token_stats[x].get_mean(), reverse=True
         )
-        avg_num_dir_counts = [np.mean(dataset_num_dir_counts[name]) for name in dataset_names_sorted]
+        avg_num_dir_counts = [dataset_num_dir_token_stats[name].get_mean() for name in dataset_names_sorted]
         plots["dataset_num_dir_tokens"] = create_bar_plot(
             dataset_names_sorted,
             avg_num_dir_counts,
@@ -377,14 +491,12 @@ def main(config: _config.TrainConfig):
             "coral",
         )
 
-    # 6. Per-dataset state value statistics
-    if dataset_state_values:
+    # 7. Per-dataset state value statistics
+    if dataset_state_value_stats:
         dataset_names_sorted = sorted(
-            dataset_state_values.keys(), key=lambda x: len(dataset_state_values[x]), reverse=True
+            dataset_state_value_stats.keys(), key=lambda x: dataset_state_value_stats[x].count, reverse=True
         )
-        avg_state_values = [
-            np.mean(dataset_state_values[name]) if dataset_state_values[name] else 0 for name in dataset_names_sorted
-        ]
+        avg_state_values = [dataset_state_value_stats[name].get_mean() for name in dataset_names_sorted]
         plots["dataset_state_means"] = create_bar_plot(
             dataset_names_sorted,
             avg_state_values,
