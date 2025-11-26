@@ -84,6 +84,7 @@ def save_checkpoint(
     if hasattr(data_loader, "save_dataloader_state"):
         try:
             dataloader_dir = str(checkpoint_path / f"dataloader_process_{process_idx}")
+            logging.info(f"[Process {process_idx}] Attempting to save dataloader state to {dataloader_dir}")
             save_path = data_loader.save_dataloader_state(dataloader_dir)
             batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
             logging.info(
@@ -91,8 +92,10 @@ def save_checkpoint(
             )
         except Exception as e:
             logging.warning(f"[Process {process_idx}] Failed to save dataloader state: {e}")
-    elif process_idx == 0:
-        logging.warning("DataLoader does not support state checkpointing (persistent_iterator not enabled)")
+            import traceback
+            logging.warning(f"[Process {process_idx}] Traceback: {traceback.format_exc()}")
+    else:
+        logging.warning(f"[Process {process_idx}] DataLoader does not support state checkpointing (persistent_iterator not enabled)")
 
     # Multi-host barrier to ensure all processes have saved before continuing
     if jax.process_count() > 1:
@@ -152,15 +155,17 @@ def load_checkpoint(
 
         # Load statistics (only process 0, then broadcast if needed)
         stats = None
+        stats_loaded_successfully = False
         if process_idx == 0:
             stats_path = checkpoint_path / "stats.pkl"
             try:
                 with tf.io.gfile.GFile(str(stats_path), "rb") as f:
                     stats = pickle.load(f)
+                stats_loaded_successfully = True
                 logging.info(f"Loaded statistics from {stats_path}")
             except Exception as e:
                 logging.error(f"Failed to load statistics: {e}")
-                return None, 0
+                stats_loaded_successfully = False
 
         # Load dataloader state (all processes restore their own state)
         if hasattr(data_loader, "load_dataloader_state"):
@@ -181,9 +186,21 @@ def load_checkpoint(
         elif process_idx == 0:
             logging.warning("DataLoader does not support state restoration (persistent_iterator not enabled)")
 
-        # Multi-host barrier
+        # Multi-host barrier and broadcast success status
         if jax.process_count() > 1:
             jax.experimental.multihost_utils.sync_global_devices("checkpoint_load_complete")
+            # Broadcast whether stats were loaded successfully from process 0
+            # If process 0 failed to load stats, all processes should abort the restore
+            import jax.numpy as jnp
+            success_flag = jnp.array([1 if stats_loaded_successfully else 0], dtype=jnp.int32)
+            success_flag = multihost_utils.broadcast_one_to_all(success_flag)
+            stats_loaded_successfully = bool(success_flag[0])
+
+        # If stats failed to load on process 0, all processes should return None, 0
+        if not stats_loaded_successfully:
+            if process_idx == 0:
+                logging.warning(f"Stats loading failed, skipping checkpoint restore")
+            return None, 0
 
         return stats, latest_step
 

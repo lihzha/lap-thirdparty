@@ -395,10 +395,10 @@ class CoTRLDSDataLoader:
         """
         import json
 
-        # Only host 0 should save to avoid race conditions in multi-host setups
-        if self._proc_idx != 0:
-            logging.info(f"Host {self._proc_idx}: Skipping dataloader state save (only host 0 saves)")
-            return tf.io.gfile.join(checkpoint_dir, "dataloader_state.json")
+        # # Only host 0 should save to avoid race conditions in multi-host setups
+        # if self._proc_idx != 0:
+        #     logging.info(f"Host {self._proc_idx}: Skipping dataloader state save (only host 0 saves)")
+        #     return tf.io.gfile.join(checkpoint_dir, "dataloader_state.json")
 
         # Use tf.io.gfile for GCS compatibility
         if not tf.io.gfile.exists(checkpoint_dir):
