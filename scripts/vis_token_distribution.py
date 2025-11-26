@@ -551,13 +551,20 @@ def create_all_plots(
 
 
 def log_or_save_plots(plots, wandb_enabled, step=None):
-    """Log plots to wandb or save them locally.
+    """Log plots to wandb or save them locally (only on process 0).
 
     Args:
         plots: Dictionary mapping plot names to matplotlib figures
-        wandb_enabled: Whether wandb logging is enabled
+        wandb_enabled: Whether wandb logging is enabled (already includes process 0 check)
         step: Optional step number for wandb logging (e.g., sample count)
     """
+    # Only log/save on process 0
+    if jax.process_index() != 0:
+        # Still close figures on non-primary processes to free memory
+        for plot_fig in plots.values():
+            plt.close(plot_fig)
+        return
+
     if wandb_enabled and wandb is not None:
         log_dict = {}
         for plot_name, plot_fig in plots.items():
@@ -580,7 +587,7 @@ def log_or_save_plots(plots, wandb_enabled, step=None):
             wandb.log(log_dict)
             logging.info("Logged plots to wandb")
     else:
-        # Save plots locally
+        # Save plots locally (only on process 0)
         output_dir = epath.Path("./token_distribution_plots")
         if step is not None:
             output_dir = output_dir / f"step_{step}"
@@ -606,7 +613,15 @@ def main(config: _config.TrainConfig):
     - Memory usage is O(num_bins + num_datasets + num_unique_values), not O(num_samples)
     """
 
-    wandb_enabled = bool(getattr(config, "wandb_enabled", False)) and wandb is not None
+    # # Initialize JAX distributed if needed
+    # if ("v6" in config.name and config.fsdp_devices > 8) or ("v4" in config.name and config.fsdp_devices > 4):
+    #     jax.distributed.initialize()
+
+    init_tpu(config)
+
+    # Initialize wandb only on process 0
+    is_primary_process = jax.process_index() == 0
+    wandb_enabled = bool(getattr(config, "wandb_enabled", False)) and wandb is not None and is_primary_process
     if wandb_enabled:
         wandb_mode = "online" if os.environ.get("WANDB_DISABLED", "false").lower() not in {"1", "true"} else "offline"
         run_name = f"vis-token-dist-{config.name}"
@@ -620,12 +635,12 @@ def main(config: _config.TrainConfig):
             reinit=True,
             mode=wandb_mode,
         )
+        logging.info(f"Wandb initialized on process 0 (run: {run_name})")
+    elif is_primary_process and getattr(config, "wandb_enabled", False):
+        logging.info("Wandb logging disabled (wandb module not available)")
 
-    # # Initialize JAX distributed if needed
-    # if ("v6" in config.name and config.fsdp_devices > 8) or ("v4" in config.name and config.fsdp_devices > 4):
-    #     jax.distributed.initialize()
-
-    init_tpu(config)
+    if not is_primary_process:
+        logging.info(f"Running on process {jax.process_index()} - wandb logging disabled")
 
     data_dir = save_dir = config.data.rlds_data_dir
     cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
