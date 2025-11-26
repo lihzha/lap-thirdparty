@@ -21,6 +21,7 @@ import jax.experimental.multihost_utils as multihost_utils
 import matplotlib.pyplot as plt
 import numpy as np
 from rail_tpu_utils import prevent_cross_region
+import tensorflow as tf
 import tqdm_loggable.auto as tqdm
 import wandb
 
@@ -38,6 +39,153 @@ def keep_tpu_busy():
     # Force execution with block_until_ready
     y.block_until_ready()
     return y
+
+
+def save_checkpoint(
+    checkpoint_dir: str,
+    step: int,
+    data_loader: _data_loader.DataLoader,
+    stats: dict,
+) -> None:
+    """Save statistics and dataloader state to GCS.
+
+    Args:
+        checkpoint_dir: Base checkpoint directory (e.g., gs://v6_east1d/vis_token_dist/)
+        step: Current step (total samples processed)
+        data_loader: DataLoader instance to save state from
+        stats: Dictionary containing all tracking statistics
+    """
+    # Only save on process 0 for stats, but all processes save dataloader state
+    process_idx = jax.process_index()
+    checkpoint_path = epath.Path(checkpoint_dir) / f"checkpoint_{step}"
+
+    # Create checkpoint directory
+    if process_idx == 0:
+        tf.io.gfile.makedirs(str(checkpoint_path))
+        logging.info(f"Creating checkpoint at {checkpoint_path}")
+
+    # Multi-host barrier to ensure directory is created before all processes try to write
+    if jax.process_count() > 1:
+        jax.experimental.multihost_utils.sync_global_devices(f"checkpoint_dir_created_{step}")
+
+    # Save statistics (only process 0)
+    if process_idx == 0:
+        stats_path = checkpoint_path / "stats.pkl"
+        try:
+            with tf.io.gfile.GFile(str(stats_path), "wb") as f:
+                pickle.dump(stats, f)
+            logging.info(f"Saved statistics to {stats_path}")
+        except Exception as e:
+            logging.error(f"Failed to save statistics: {e}")
+            raise
+
+    # Save dataloader state (all processes)
+    # Each process has its own shard of the data and must save its own state
+    if hasattr(data_loader, "save_dataloader_state"):
+        try:
+            dataloader_dir = str(checkpoint_path / f"dataloader_process_{process_idx}")
+            save_path = data_loader.save_dataloader_state(dataloader_dir)
+            batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
+            logging.info(
+                f"[Process {process_idx}] Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
+            )
+        except Exception as e:
+            logging.warning(f"[Process {process_idx}] Failed to save dataloader state: {e}")
+    else:
+        if process_idx == 0:
+            logging.warning("DataLoader does not support state checkpointing (persistent_iterator not enabled)")
+
+    # Multi-host barrier to ensure all processes have saved before continuing
+    if jax.process_count() > 1:
+        jax.experimental.multihost_utils.sync_global_devices(f"checkpoint_save_complete_{step}")
+
+    if process_idx == 0:
+        logging.info(f"Checkpoint {step} saved successfully")
+
+
+def load_checkpoint(
+    checkpoint_dir: str,
+    data_loader: _data_loader.DataLoader,
+) -> tuple[dict | None, int]:
+    """Load the latest checkpoint if it exists.
+
+    Args:
+        checkpoint_dir: Base checkpoint directory (e.g., gs://v6_east1d/vis_token_dist/)
+        data_loader: DataLoader instance to restore state to
+
+    Returns:
+        Tuple of (stats_dict or None, total_samples_processed)
+    """
+    process_idx = jax.process_index()
+    checkpoint_base = epath.Path(checkpoint_dir)
+
+    # Find all checkpoints
+    try:
+        if not tf.io.gfile.exists(str(checkpoint_base)):
+            logging.info(f"No checkpoint directory found at {checkpoint_base}")
+            return None, 0
+
+        # List all checkpoint subdirectories
+        all_files = tf.io.gfile.listdir(str(checkpoint_base))
+        checkpoint_steps = []
+        for name in all_files:
+            if name.startswith("checkpoint_"):
+                try:
+                    step = int(name.split("_")[1])
+                    checkpoint_steps.append(step)
+                except (ValueError, IndexError):
+                    continue
+
+        if not checkpoint_steps:
+            logging.info("No valid checkpoints found")
+            return None, 0
+
+        # Get the latest checkpoint
+        latest_step = max(checkpoint_steps)
+        checkpoint_path = checkpoint_base / f"checkpoint_{latest_step}"
+        logging.info(f"Found latest checkpoint at step {latest_step}: {checkpoint_path}")
+
+        # Load statistics (only process 0, then broadcast if needed)
+        stats = None
+        if process_idx == 0:
+            stats_path = checkpoint_path / "stats.pkl"
+            try:
+                with tf.io.gfile.GFile(str(stats_path), "rb") as f:
+                    stats = pickle.load(f)
+                logging.info(f"Loaded statistics from {stats_path}")
+            except Exception as e:
+                logging.error(f"Failed to load statistics: {e}")
+                return None, 0
+
+        # Load dataloader state (all processes restore their own state)
+        if hasattr(data_loader, "load_dataloader_state"):
+            try:
+                dataloader_dir = str(checkpoint_path / f"dataloader_process_{process_idx}")
+                if tf.io.gfile.exists(dataloader_dir):
+                    batches_seen = data_loader.load_dataloader_state(dataloader_dir)
+                    logging.info(
+                        f"[Process {process_idx}] Restored dataloader state | batches_seen={batches_seen} | location={dataloader_dir}"
+                    )
+                else:
+                    logging.warning(
+                        f"[Process {process_idx}] Dataloader checkpoint not found at {dataloader_dir}. "
+                        "Will start from beginning."
+                    )
+            except Exception as e:
+                logging.warning(f"[Process {process_idx}] Failed to restore dataloader state: {e}")
+        else:
+            if process_idx == 0:
+                logging.warning("DataLoader does not support state restoration (persistent_iterator not enabled)")
+
+        # Multi-host barrier
+        if jax.process_count() > 1:
+            jax.experimental.multihost_utils.sync_global_devices("checkpoint_load_complete")
+
+        return stats, latest_step
+
+    except Exception as e:
+        logging.error(f"Error loading checkpoint: {e}")
+        return None, 0
 
 
 def init_logging():
@@ -704,6 +852,13 @@ def main(config: _config.TrainConfig):
 
     tok = PaligemmaCoTTokenizer(max_len=300)
 
+    # Setup checkpoint directory
+    checkpoint_base_dir = "gs://v6_east1d/vis_token_dist_checkpoints"
+    checkpoint_dir = f"{checkpoint_base_dir}/{config.name}"
+    if hasattr(config, "exp_name") and config.exp_name:
+        checkpoint_dir = f"{checkpoint_dir}_{config.exp_name}"
+    logging.info(f"Checkpoint directory: {checkpoint_dir}")
+
     # Initialize tracking structures - using histograms and running stats for memory efficiency
     # Histograms for count distributions (bins from 0 to 50)
     num_token_hist_bins = np.arange(0, 4, 1)
@@ -738,16 +893,46 @@ def main(config: _config.TrainConfig):
     dataset_111_pattern_count = defaultdict(int)
     dataset_total_count = defaultdict(int)
 
-    data_iter = iter(data_loader)
-
     # Periodic logging setup
     CHECKPOINT_INTERVAL = 1000000  # Log every 1M samples
     total_samples_processed = 0
     next_checkpoint = CHECKPOINT_INTERVAL
 
+    # Try to load checkpoint if it exists
+    loaded_stats, loaded_step = load_checkpoint(checkpoint_dir, data_loader)
+    if loaded_stats is not None:
+        logging.info(f"Resuming from checkpoint at step {loaded_step}")
+        # Restore all tracking structures
+        num_token_hist_counts = loaded_stats["num_token_hist_counts"]
+        state_value_hist_counts = loaded_stats["state_value_hist_counts"]
+        num_token_stats = loaded_stats["num_token_stats"]
+        state_value_stats = loaded_stats["state_value_stats"]
+        number_token_value_counter = loaded_stats["number_token_value_counter"]
+        dataset_num_token_stats = loaded_stats["dataset_num_token_stats"]
+        dataset_state_value_stats = loaded_stats["dataset_state_value_stats"]
+        dataset_number_token_value_counter = loaded_stats["dataset_number_token_value_counter"]
+        dataset_state_value_hist_counts = loaded_stats["dataset_state_value_hist_counts"]
+        direction_number_token_counter = loaded_stats["direction_number_token_counter"]
+        dataset_111_pattern_count = loaded_stats["dataset_111_pattern_count"]
+        dataset_total_count = loaded_stats["dataset_total_count"]
+        total_samples_processed = loaded_step
+        next_checkpoint = ((loaded_step // CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL
+        logging.info(f"Restored stats. Next checkpoint at {next_checkpoint} samples")
+    else:
+        logging.info("Starting from scratch (no checkpoint found)")
+
+    data_iter = iter(data_loader)
+
+    # Calculate initial batch index based on loaded samples
+    # This is approximate since batch sizes may vary, but gives a reasonable progress indicator
+    initial_batch_idx = 0
+    if loaded_stats is not None and hasattr(data_loader, "get_batches_seen"):
+        initial_batch_idx = data_loader.get_batches_seen()
+        logging.info(f"Resuming from batch {initial_batch_idx}")
+
     pbar = tqdm.tqdm(
         range(num_batches),
-        initial=0,
+        initial=initial_batch_idx,
         total=num_batches,
         dynamic_ncols=True,
         disable=(jax.process_index() != 0),
@@ -830,8 +1015,28 @@ def main(config: _config.TrainConfig):
         # Periodic checkpoint logging
         if total_samples_processed >= next_checkpoint:
             logging.info(
-                f"Reached checkpoint: {total_samples_processed} samples processed. Creating and logging plots..."
+                f"Reached checkpoint: {total_samples_processed} samples processed. Saving checkpoint and creating plots..."
             )
+
+            # Keep TPU busy during checkpoint save
+            keep_tpu_busy()
+
+            # Save checkpoint with all stats and dataloader state
+            stats_to_save = {
+                "num_token_hist_counts": num_token_hist_counts,
+                "state_value_hist_counts": state_value_hist_counts,
+                "num_token_stats": num_token_stats,
+                "state_value_stats": state_value_stats,
+                "number_token_value_counter": number_token_value_counter,
+                "dataset_num_token_stats": dataset_num_token_stats,
+                "dataset_state_value_stats": dataset_state_value_stats,
+                "dataset_number_token_value_counter": dataset_number_token_value_counter,
+                "dataset_state_value_hist_counts": dataset_state_value_hist_counts,
+                "direction_number_token_counter": direction_number_token_counter,
+                "dataset_111_pattern_count": dataset_111_pattern_count,
+                "dataset_total_count": dataset_total_count,
+            }
+            save_checkpoint(checkpoint_dir, total_samples_processed, data_loader, stats_to_save)
 
             # Keep TPU busy during plot creation
             keep_tpu_busy()
@@ -868,6 +1073,24 @@ def main(config: _config.TrainConfig):
 
     logging.info(f"Analysis complete. Processed {num_token_stats.count} robot samples")
     logging.info(f"Found {len(dataset_num_token_stats)} unique datasets")
+
+    # Save final checkpoint
+    logging.info("Saving final checkpoint...")
+    stats_to_save = {
+        "num_token_hist_counts": num_token_hist_counts,
+        "state_value_hist_counts": state_value_hist_counts,
+        "num_token_stats": num_token_stats,
+        "state_value_stats": state_value_stats,
+        "number_token_value_counter": number_token_value_counter,
+        "dataset_num_token_stats": dataset_num_token_stats,
+        "dataset_state_value_stats": dataset_state_value_stats,
+        "dataset_number_token_value_counter": dataset_number_token_value_counter,
+        "dataset_state_value_hist_counts": dataset_state_value_hist_counts,
+        "direction_number_token_counter": direction_number_token_counter,
+        "dataset_111_pattern_count": dataset_111_pattern_count,
+        "dataset_total_count": dataset_total_count,
+    }
+    save_checkpoint(checkpoint_dir, total_samples_processed, data_loader, stats_to_save)
 
     # Keep TPU busy during final plot creation
     keep_tpu_busy()
