@@ -20,6 +20,7 @@ import jax.experimental.multihost_utils as multihost_utils
 import matplotlib.pyplot as plt
 import numpy as np
 from rail_tpu_utils import prevent_cross_region
+import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi_cot.dataloader.cot_data_loader as _data_loader
@@ -303,6 +304,10 @@ def main(config: _config.TrainConfig):
         split="val",
         seed=config.seed,
     )
+
+    num_batches = int(data_loader.num_val_batches() / 0.8 * 0.9)
+    logging.info(f"Initial number of validation batches (from loader): {num_batches}")
+
     tok = PaligemmaCoTTokenizer(max_len=300)
 
     # Initialize tracking structures - using histograms and running stats for memory efficiency
@@ -341,14 +346,15 @@ def main(config: _config.TrainConfig):
 
     data_iter = iter(data_loader)
 
-    batch_idx = 0
-    while True:
-        try:
-            batch = next(data_iter)
-            batch_idx += 1
-        except StopIteration:
-            logging.info(f"Reached end of data after {batch_idx} batches")
-            break
+    pbar = tqdm.tqdm(
+        range(num_batches),
+        initial=0,
+        total=num_batches,
+        dynamic_ncols=True,
+        disable=(jax.process_index() != 0),
+    )
+    for batch_idx, _ in enumerate(pbar):
+        batch = next(data_iter)
 
         obs = batch[0]
 
