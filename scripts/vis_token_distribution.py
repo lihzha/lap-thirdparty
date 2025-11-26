@@ -307,18 +307,15 @@ def main(config: _config.TrainConfig):
 
     # Initialize tracking structures - using histograms and running stats for memory efficiency
     # Histograms for count distributions (bins from 0 to 50)
-    num_token_hist_bins = np.arange(0, 51, 1)
+    num_token_hist_bins = np.arange(0, 4, 1)
     num_token_hist_counts = np.zeros(len(num_token_hist_bins) - 1, dtype=np.int64)
-    num_dir_token_hist_bins = np.arange(0, 51, 1)
-    num_dir_token_hist_counts = np.zeros(len(num_dir_token_hist_bins) - 1, dtype=np.int64)
 
     # Histogram for state values (bins from -500 to 500)
-    state_value_hist_bins = np.linspace(-500, 500, 101)
+    state_value_hist_bins = np.arange(-1, 257, 1)
     state_value_hist_counts = np.zeros(len(state_value_hist_bins) - 1, dtype=np.int64)
 
     # Running stats for summary statistics
     num_token_stats = RunningStats()
-    num_dir_token_stats = RunningStats()
     state_value_stats = RunningStats()
 
     # Counter for individual number token values (memory efficient for discrete values)
@@ -326,8 +323,8 @@ def main(config: _config.TrainConfig):
 
     # Per-dataset tracking using running stats
     dataset_num_token_stats = defaultdict(RunningStats)
-    dataset_num_dir_token_stats = defaultdict(RunningStats)
     dataset_state_value_stats = defaultdict(RunningStats)
+    dataset_number_token_value_counter = defaultdict(Counter)
 
     data_iter = iter(data_loader)
     logging.info("Starting token distribution analysis...")
@@ -345,30 +342,21 @@ def main(config: _config.TrainConfig):
         prompt_texts = decode_prompt_strings(obs, tok)
         dataset_names = decode_dataset_names(obs, tok)
 
-        breakpoint()
-
         for i, prompt_text in enumerate(prompt_texts):
             dataset_name = dataset_names[i] if i < len(dataset_names) else "unknown"
 
             # Parse tokens
             parsed = parse_prompt_tokens(prompt_text)
 
-            breakpoint()
-
             num_count = len(parsed["action_numbers"])
-            dir_count = len(parsed["direction_tokens"])
-            num_dir_count = num_count + dir_count
             state_values = parsed["state_values"]
 
             # Update global histograms
             if num_count < len(num_token_hist_bins):
                 num_token_hist_counts[min(num_count, len(num_token_hist_counts) - 1)] += 1
-            if num_dir_count < len(num_dir_token_hist_bins):
-                num_dir_token_hist_counts[min(num_dir_count, len(num_dir_token_hist_counts) - 1)] += 1
 
             # Update running stats
             num_token_stats.update(num_count)
-            num_dir_token_stats.update(num_dir_count)
 
             # Update state value histogram and stats
             for state_val in state_values:
@@ -385,11 +373,12 @@ def main(config: _config.TrainConfig):
 
             # Per-dataset running stats
             dataset_num_token_stats[dataset_name].update(num_count)
-            dataset_num_dir_token_stats[dataset_name].update(num_dir_count)
             for state_val in state_values:
                 dataset_state_value_stats[dataset_name].update(state_val)
 
-            breakpoint()
+            # Per-dataset number token value counter
+            for num_value in parsed["action_numbers"]:
+                dataset_number_token_value_counter[dataset_name][int(round(num_value))] += 1
 
         if (batch_idx + 1) % 10 == 0:
             logging.info(f"Processed {batch_idx + 1}/{num_batches} batches")
@@ -411,19 +400,6 @@ def main(config: _config.TrainConfig):
         )
         logging.info(
             f"Number tokens - Mean: {num_token_stats.get_mean():.2f}, Std: {num_token_stats.get_std():.2f}, Count: {num_token_stats.count}"
-        )
-
-    # 2. Global number + direction tokens distribution
-    if num_dir_token_stats.count > 0:
-        plots["num_dir_tokens_hist"] = create_histogram_from_bins(
-            num_dir_token_hist_bins,
-            num_dir_token_hist_counts,
-            "Number + Direction Tokens Distribution (Global)",
-            "Number of (Number + Direction) Tokens per Sample",
-            "coral",
-        )
-        logging.info(
-            f"Number + Direction tokens - Mean: {num_dir_token_stats.get_mean():.2f}, Std: {num_dir_token_stats.get_std():.2f}, Count: {num_dir_token_stats.count}"
         )
 
     # 3. Global state values distribution
@@ -466,7 +442,65 @@ def main(config: _config.TrainConfig):
         logging.info(f"Found {len(number_token_value_counter)} unique number token values")
         logging.info(f"Top 10 most common number values: {number_token_value_counter.most_common(10)}")
 
-    # 5. Per-dataset average number tokens
+    # 5. Per-dataset number token value frequency distribution
+    if dataset_number_token_value_counter:
+        datasets_sorted = sorted(
+            dataset_number_token_value_counter.keys(),
+            key=lambda x: sum(dataset_number_token_value_counter[x].values()),
+            reverse=True,
+        )
+
+        # Create subplots - one per dataset (top 20 values per dataset)
+        num_datasets = len(datasets_sorted)
+        cols = min(3, num_datasets)  # Max 3 columns
+        rows = (num_datasets + cols - 1) // cols  # Ceiling division
+
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 4 * rows))
+        if num_datasets == 1:
+            axes = np.array([axes])
+        axes = axes.flatten() if num_datasets > 1 else axes
+
+        for idx, dataset_name in enumerate(datasets_sorted):
+            ax = axes[idx]
+            counter = dataset_number_token_value_counter[dataset_name]
+
+            # Get top 20 most common number values for this dataset
+            most_common = counter.most_common(20)
+            if most_common:
+                num_values = [val for val, count in most_common]
+                num_counts = [count for val, count in most_common]
+
+                bars = ax.bar(range(len(num_values)), num_counts, color="coral")
+                ax.set_xlabel("Number Token Value", fontsize=10)
+                ax.set_ylabel("Frequency", fontsize=10)
+                ax.set_title(f"{dataset_name} (Top 20)", fontsize=11, fontweight="bold")
+                ax.set_xticks(range(len(num_values)))
+                ax.set_xticklabels([str(v) for v in num_values], rotation=45, ha="right", fontsize=8)
+                ax.grid(axis="y", alpha=0.3)
+
+                # Add count labels on bars for datasets with few values
+                if len(num_values) <= 10:
+                    for bar, count in zip(bars, num_counts):
+                        height = bar.get_height()
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2.0,
+                            height,
+                            str(count),
+                            ha="center",
+                            va="bottom",
+                            fontsize=7,
+                        )
+
+        # Hide extra subplots
+        for idx in range(num_datasets, len(axes)):
+            axes[idx].set_visible(False)
+
+        plt.tight_layout()
+        plots["dataset_number_value_freq"] = fig
+
+        logging.info(f"Created per-dataset number token value frequency plots for {num_datasets} datasets")
+
+    # 6. Per-dataset average number tokens
     if dataset_num_token_stats:
         dataset_names_sorted = sorted(
             dataset_num_token_stats.keys(), key=lambda x: dataset_num_token_stats[x].get_mean(), reverse=True
@@ -478,20 +512,6 @@ def main(config: _config.TrainConfig):
             "Average Number Tokens per Dataset",
             "Average Number Tokens",
             "steelblue",
-        )
-
-    # 6. Per-dataset average number + direction tokens
-    if dataset_num_dir_token_stats:
-        dataset_names_sorted = sorted(
-            dataset_num_dir_token_stats.keys(), key=lambda x: dataset_num_dir_token_stats[x].get_mean(), reverse=True
-        )
-        avg_num_dir_counts = [dataset_num_dir_token_stats[name].get_mean() for name in dataset_names_sorted]
-        plots["dataset_num_dir_tokens"] = create_bar_plot(
-            dataset_names_sorted,
-            avg_num_dir_counts,
-            "Average (Number + Direction) Tokens per Dataset",
-            "Average (Number + Direction) Tokens",
-            "coral",
         )
 
     # 7. Per-dataset state value statistics
