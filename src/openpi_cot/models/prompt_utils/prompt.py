@@ -54,8 +54,6 @@ class ActionModule:
 
     Examples:
     - "Action: "
-    - "Actions: "
-    - "Predicted actions: "
 
     Can optionally include time horizon information.
     """
@@ -208,7 +206,7 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
         state_prefix_template="State{state_label}: {state}",
         include_state_type=True,
     ),
-    action_module=ActionModule(prefix="Actions: "),
+    action_module=ActionModule(prefix="Action: "),
     separator=", ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
@@ -223,7 +221,7 @@ SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(prefix="Actions: "),
+    action_module=ActionModule(prefix="Action: "),
     separator=". ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
@@ -238,7 +236,7 @@ GROUPED_STATE_PROMPT_FORMAT = PromptFormat(
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(prefix="Actions: "),
+    action_module=ActionModule(prefix="Action: "),
     separator=". ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
@@ -254,7 +252,7 @@ GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
         state_prefix_template="Robot control coordinate system is: +x=forward, +y=left, +z=up. Robot current state{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(prefix="Actions: "),
+    action_module=ActionModule(prefix="Action: "),
     separator=". ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
