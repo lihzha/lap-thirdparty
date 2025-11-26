@@ -91,9 +91,8 @@ def save_checkpoint(
             )
         except Exception as e:
             logging.warning(f"[Process {process_idx}] Failed to save dataloader state: {e}")
-    else:
-        if process_idx == 0:
-            logging.warning("DataLoader does not support state checkpointing (persistent_iterator not enabled)")
+    elif process_idx == 0:
+        logging.warning("DataLoader does not support state checkpointing (persistent_iterator not enabled)")
 
     # Multi-host barrier to ensure all processes have saved before continuing
     if jax.process_count() > 1:
@@ -173,9 +172,8 @@ def load_checkpoint(
                     )
             except Exception as e:
                 logging.warning(f"[Process {process_idx}] Failed to restore dataloader state: {e}")
-        else:
-            if process_idx == 0:
-                logging.warning("DataLoader does not support state restoration (persistent_iterator not enabled)")
+        elif process_idx == 0:
+            logging.warning("DataLoader does not support state restoration (persistent_iterator not enabled)")
 
         # Multi-host barrier
         if jax.process_count() > 1:
@@ -894,7 +892,7 @@ def main(config: _config.TrainConfig):
     dataset_total_count = defaultdict(int)
 
     # Periodic logging setup
-    CHECKPOINT_INTERVAL = 1000000  # Log every 1M samples
+    CHECKPOINT_INTERVAL = 100000  # Log every 1M samples
     total_samples_processed = 0
     next_checkpoint = CHECKPOINT_INTERVAL
 
@@ -908,13 +906,21 @@ def main(config: _config.TrainConfig):
         num_token_stats = loaded_stats["num_token_stats"]
         state_value_stats = loaded_stats["state_value_stats"]
         number_token_value_counter = loaded_stats["number_token_value_counter"]
-        dataset_num_token_stats = loaded_stats["dataset_num_token_stats"]
-        dataset_state_value_stats = loaded_stats["dataset_state_value_stats"]
-        dataset_number_token_value_counter = loaded_stats["dataset_number_token_value_counter"]
-        dataset_state_value_hist_counts = loaded_stats["dataset_state_value_hist_counts"]
-        direction_number_token_counter = loaded_stats["direction_number_token_counter"]
-        dataset_111_pattern_count = loaded_stats["dataset_111_pattern_count"]
-        dataset_total_count = loaded_stats["dataset_total_count"]
+
+        # Convert regular dicts back to defaultdicts with appropriate factories
+        dataset_num_token_stats = defaultdict(RunningStats, loaded_stats["dataset_num_token_stats"])
+        dataset_state_value_stats = defaultdict(
+            lambda: [RunningStats() for _ in range(NUM_STATE_DIMS)], loaded_stats["dataset_state_value_stats"]
+        )
+        dataset_number_token_value_counter = defaultdict(Counter, loaded_stats["dataset_number_token_value_counter"])
+        dataset_state_value_hist_counts = defaultdict(
+            lambda: [np.zeros(len(state_value_hist_bins) - 1, dtype=np.int64) for _ in range(NUM_STATE_DIMS)],
+            loaded_stats["dataset_state_value_hist_counts"],
+        )
+        direction_number_token_counter = defaultdict(Counter, loaded_stats["direction_number_token_counter"])
+        dataset_111_pattern_count = defaultdict(int, loaded_stats["dataset_111_pattern_count"])
+        dataset_total_count = defaultdict(int, loaded_stats["dataset_total_count"])
+
         total_samples_processed = loaded_step
         next_checkpoint = ((loaded_step // CHECKPOINT_INTERVAL) + 1) * CHECKPOINT_INTERVAL
         logging.info(f"Restored stats. Next checkpoint at {next_checkpoint} samples")
@@ -1022,19 +1028,20 @@ def main(config: _config.TrainConfig):
             keep_tpu_busy()
 
             # Save checkpoint with all stats and dataloader state
+            # Convert defaultdicts to regular dicts for pickling
             stats_to_save = {
                 "num_token_hist_counts": num_token_hist_counts,
                 "state_value_hist_counts": state_value_hist_counts,
                 "num_token_stats": num_token_stats,
                 "state_value_stats": state_value_stats,
                 "number_token_value_counter": number_token_value_counter,
-                "dataset_num_token_stats": dataset_num_token_stats,
-                "dataset_state_value_stats": dataset_state_value_stats,
-                "dataset_number_token_value_counter": dataset_number_token_value_counter,
-                "dataset_state_value_hist_counts": dataset_state_value_hist_counts,
-                "direction_number_token_counter": direction_number_token_counter,
-                "dataset_111_pattern_count": dataset_111_pattern_count,
-                "dataset_total_count": dataset_total_count,
+                "dataset_num_token_stats": dict(dataset_num_token_stats),
+                "dataset_state_value_stats": dict(dataset_state_value_stats),
+                "dataset_number_token_value_counter": dict(dataset_number_token_value_counter),
+                "dataset_state_value_hist_counts": dict(dataset_state_value_hist_counts),
+                "direction_number_token_counter": dict(direction_number_token_counter),
+                "dataset_111_pattern_count": dict(dataset_111_pattern_count),
+                "dataset_total_count": dict(dataset_total_count),
             }
             save_checkpoint(checkpoint_dir, total_samples_processed, data_loader, stats_to_save)
 
@@ -1076,19 +1083,20 @@ def main(config: _config.TrainConfig):
 
     # Save final checkpoint
     logging.info("Saving final checkpoint...")
+    # Convert defaultdicts to regular dicts for pickling
     stats_to_save = {
         "num_token_hist_counts": num_token_hist_counts,
         "state_value_hist_counts": state_value_hist_counts,
         "num_token_stats": num_token_stats,
         "state_value_stats": state_value_stats,
         "number_token_value_counter": number_token_value_counter,
-        "dataset_num_token_stats": dataset_num_token_stats,
-        "dataset_state_value_stats": dataset_state_value_stats,
-        "dataset_number_token_value_counter": dataset_number_token_value_counter,
-        "dataset_state_value_hist_counts": dataset_state_value_hist_counts,
-        "direction_number_token_counter": direction_number_token_counter,
-        "dataset_111_pattern_count": dataset_111_pattern_count,
-        "dataset_total_count": dataset_total_count,
+        "dataset_num_token_stats": dict(dataset_num_token_stats),
+        "dataset_state_value_stats": dict(dataset_state_value_stats),
+        "dataset_number_token_value_counter": dict(dataset_number_token_value_counter),
+        "dataset_state_value_hist_counts": dict(dataset_state_value_hist_counts),
+        "direction_number_token_counter": dict(direction_number_token_counter),
+        "dataset_111_pattern_count": dict(dataset_111_pattern_count),
+        "dataset_total_count": dict(dataset_total_count),
     }
     save_checkpoint(checkpoint_dir, total_samples_processed, data_loader, stats_to_save)
 
