@@ -92,12 +92,49 @@ def extract_direction_tokens(text: str) -> list[str]:
     return found
 
 
+def extract_direction_number_pairs(text: str) -> list[tuple[str, float]]:
+    """Extract direction-number pairs from text.
+
+    For example, 'move left 3 cm and move forward 2 cm' should return:
+    [('left', 3.0), ('forward', 2.0)]
+
+    This function looks for direction keywords and associates them with the
+    immediately following number.
+    """
+    directions = ["forward", "backward", "back", "left", "right", "up", "down", "open", "close"]
+    pairs = []
+    text_lower = text.lower()
+
+    # For each direction keyword, find where it appears and get the next number
+    for direction in directions:
+        # Find all occurrences of this direction
+        start_idx = 0
+        while True:
+            idx = text_lower.find(direction, start_idx)
+            if idx == -1:
+                break
+
+            # Look for the next number after this direction keyword
+            # Search in the substring after the direction keyword
+            remaining_text = text[idx + len(direction):]
+            number_match = re.search(r"-?\d+\.?\d*", remaining_text)
+
+            if number_match:
+                # Extract the number
+                num_value = float(number_match.group())
+                pairs.append((direction, num_value))
+
+            start_idx = idx + len(direction)
+
+    return pairs
+
+
 def parse_prompt_tokens(prompt_text: str) -> dict:
     """Parse a prompt to extract state values, action numbers, and direction tokens.
 
     Expected format: "Task: ..., State: 1 3 51 122 -1 235 89, Action: move forward 1 cm, ..."
     """
-    result = {"state_values": [], "action_numbers": [], "direction_tokens": []}
+    result = {"state_values": [], "action_numbers": [], "direction_tokens": [], "direction_number_pairs": []}
 
     # Extract state section
     state_match = re.search(r"State:\s*([^,]+?)(?:,|$)", prompt_text, re.IGNORECASE)
@@ -111,6 +148,7 @@ def parse_prompt_tokens(prompt_text: str) -> dict:
         action_text = action_match.group(1)
         result["action_numbers"] = extract_numbers_from_text(action_text)
         result["direction_tokens"] = extract_direction_tokens(action_text)
+        result["direction_number_pairs"] = extract_direction_number_pairs(action_text)
 
     return result
 
@@ -340,7 +378,7 @@ def main(config: _config.TrainConfig):
     # Direction-number token joint tracking
     direction_number_token_counter = defaultdict(Counter)
 
-    # [1,1,1] pattern tracking per dataset (checking first 3 dimensions)
+    # All-1s action pattern tracking per dataset (checking if all action numbers are 1)
     dataset_111_pattern_count = defaultdict(int)
     dataset_total_count = defaultdict(int)
 
@@ -392,10 +430,9 @@ def main(config: _config.TrainConfig):
                 # Round to nearest integer for cleaner distribution
                 number_token_value_counter[int(round(num_value))] += 1
 
-            # Direction-number token joint tracking
-            for direction in parsed["direction_tokens"]:
-                for num_value in parsed["action_numbers"]:
-                    direction_number_token_counter[direction][int(round(num_value))] += 1
+            # Direction-number token joint tracking (only count number immediately following direction)
+            for direction, num_value in parsed["direction_number_pairs"]:
+                direction_number_token_counter[direction][int(round(num_value))] += 1
 
             # Per-dataset tracking
             dataset_num_token_stats[dataset_name].update(num_count)
@@ -414,9 +451,10 @@ def main(config: _config.TrainConfig):
             for num_value in parsed["action_numbers"]:
                 dataset_number_token_value_counter[dataset_name][int(round(num_value))] += 1
 
-            # Check for [1,1,1] pattern (first 3 dimensions close to 1)
-            if len(state_values) >= 3:
-                if all(abs(state_values[j] - 1.0) < 0.01 for j in range(3)):
+            # Check if all action numbers are 1 (pattern check)
+            action_numbers = parsed["action_numbers"]
+            if len(action_numbers) > 0:
+                if all(abs(num - 1.0) < 0.01 for num in action_numbers):
                     dataset_111_pattern_count[dataset_name] += 1
 
         if (batch_idx + 1) % 10 == 0:
@@ -601,7 +639,7 @@ def main(config: _config.TrainConfig):
 
         logging.info(f"Created direction-number frequency plots for {len(directions_sorted)} directions")
 
-    # 9. [1,1,1] pattern percentage per dataset
+    # 9. All-1s action pattern percentage per dataset
     if dataset_111_pattern_count:
         datasets_sorted = sorted(
             dataset_111_pattern_count.keys(), key=lambda x: dataset_111_pattern_count[x], reverse=True
@@ -615,7 +653,7 @@ def main(config: _config.TrainConfig):
         bars = ax.bar(range(len(datasets_sorted)), percentages, color="tomato", alpha=0.7, edgecolor="black")
         ax.set_xlabel("Dataset", fontsize=12)
         ax.set_ylabel("Percentage (%)", fontsize=12)
-        ax.set_title("Percentage of [1,1,1] State Pattern per Dataset", fontsize=14, fontweight="bold")
+        ax.set_title("Percentage of All-1s Action Pattern per Dataset", fontsize=14, fontweight="bold")
         ax.set_xticks(range(len(datasets_sorted)))
         ax.set_xticklabels(datasets_sorted, rotation=45, ha="right")
         ax.grid(axis="y", alpha=0.3)
@@ -628,15 +666,24 @@ def main(config: _config.TrainConfig):
             )
 
         plt.tight_layout()
-        plots["state_111_pattern_percentage"] = fig
+        plots["action_all1s_pattern_percentage"] = fig
 
-        logging.info(f"Created [1,1,1] pattern percentage plot for {len(datasets_sorted)} datasets")
+        logging.info(f"Created all-1s action pattern percentage plot for {len(datasets_sorted)} datasets")
 
     # Log or save plots
     if wandb_enabled and wandb is not None:
         log_dict = {}
         for plot_name, plot_fig in plots.items():
-            log_dict[f"token_dist/{plot_name}"] = wandb.Image(plot_fig)
+            # Separate dataset-specific plots into their own fields
+            if plot_name.startswith("dataset_state_values_hist/"):
+                # Log state value histograms directly without token_dist prefix
+                log_dict[plot_name] = wandb.Image(plot_fig)
+            elif plot_name.startswith("dataset_number_value_freq/"):
+                # Log number value frequency plots directly without token_dist prefix
+                log_dict[plot_name] = wandb.Image(plot_fig)
+            else:
+                # All other plots go under token_dist/
+                log_dict[f"token_dist/{plot_name}"] = wandb.Image(plot_fig)
         wandb.log(log_dict)
         logging.info("Logged plots to wandb")
         wandb.finish()
