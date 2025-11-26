@@ -130,8 +130,8 @@ def load_checkpoint(
 
         checkpoint_steps = []
         for name in all_files:
-            # Handle both directory names and full paths
-            basename = name.split("/")[-1] if "/" in name else name
+            # Handle both directory names and full paths, strip trailing slashes
+            basename = name.rstrip("/").split("/")[-1]
             if basename.startswith("checkpoint_"):
                 try:
                     step = int(basename.split("_")[1])
