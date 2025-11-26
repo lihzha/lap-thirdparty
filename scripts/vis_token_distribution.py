@@ -72,6 +72,58 @@ def _is_tpu_runtime() -> bool:
         return False
 
 
+def init_tpu(config: _config.TrainConfig):
+    def _is_tpu_runtime() -> bool:
+        try:
+            return any(d.platform == "tpu" for d in jax.devices())
+        except Exception:
+            return False
+
+    if (
+        ("v6" in config.name and config.fsdp_devices > 8)
+        or ("v4" in config.name and config.fsdp_devices > 4)
+        or ("v5" in config.name and config.fsdp_devices > 8)
+    ):
+        jax.distributed.initialize()
+    if "local" in config.name:
+        os.environ["CURL_CA_BUNDLE"] = (
+            "/etc/pki/tls/certs/ca-bundle.crt"  # Ensure the CA bundle is set for SSL verification
+        )
+
+    data_dir = save_dir = config.data.rlds_data_dir
+    cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
+    if _is_tpu_runtime() and (str(data_dir).startswith("gs://") or str(save_dir).startswith("gs://")):
+        prevent_cross_region(data_dir, save_dir)
+        if cache_dir is not None:
+            prevent_cross_region(cache_dir, save_dir)
+    # Determine effective FSDP devices for single-process GPU/CPU runs.
+    process_count = getattr(jax, "process_count", lambda: 1)()
+    local_devices = getattr(jax, "local_device_count", lambda: 1)()
+    global_devices = getattr(jax, "device_count", lambda: local_devices)()
+    logging.info(f"Local devices: {local_devices}, Global devices: {global_devices}, Process count: {process_count}")
+    if process_count == 1:
+        # Choose the largest divisor of available devices not exceeding configured fsdp_devices
+        target = min(config.fsdp_devices, local_devices)
+        effective_fsdp_devices = 1
+        for d in range(target, 0, -1):
+            if global_devices % d == 0:
+                effective_fsdp_devices = d
+                break
+        if effective_fsdp_devices != config.fsdp_devices:
+            logging.info(
+                "Using fsdp_devices=%d for single-process run (available devices=%d)",
+                effective_fsdp_devices,
+                global_devices,
+            )
+    else:
+        effective_fsdp_devices = config.fsdp_devices
+
+    logging.info(f"Running on: {platform.node()}")
+
+    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    return effective_fsdp_devices
+
+
 def extract_numbers_from_text(text: str) -> list[float]:
     """Extract all numbers (including negative) from text."""
     # Match integers and floats, including negative numbers
@@ -116,7 +168,7 @@ def extract_direction_number_pairs(text: str) -> list[tuple[str, float]]:
 
             # Look for the next number after this direction keyword
             # Search in the substring after the direction keyword
-            remaining_text = text[idx + len(direction):]
+            remaining_text = text[idx + len(direction) :]
             number_match = re.search(r"-?\d+\.?\d*", remaining_text)
 
             if number_match:
@@ -293,9 +345,11 @@ def main(config: _config.TrainConfig):
             mode=wandb_mode,
         )
 
-    # Initialize JAX distributed if needed
-    if ("v6" in config.name and config.fsdp_devices > 8) or ("v4" in config.name and config.fsdp_devices > 4):
-        jax.distributed.initialize()
+    # # Initialize JAX distributed if needed
+    # if ("v6" in config.name and config.fsdp_devices > 8) or ("v4" in config.name and config.fsdp_devices > 4):
+    #     jax.distributed.initialize()
+
+    init_tpu(config)
 
     data_dir = save_dir = config.data.rlds_data_dir
     cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
