@@ -314,7 +314,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 sampled_time_horizon = valid_language_length / control_frequency
         else:
             # Use all valid language actions (validation/inference mode)
-            num_steps = control_frequency
+            num_steps = min(control_frequency, valid_language_length)
             sampled_time_horizon = None
 
         # Ensure we don't exceed available data
