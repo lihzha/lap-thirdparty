@@ -442,6 +442,7 @@ class CoTRLDSDataLoader:
             - Works with all dataset types and does not require persistent_iterator
             - After loading, the next iteration will automatically skip to the checkpoint position
             - All hosts load the same state and skip the same number of batches in their respective shards
+            - Backward compatible: Falls back to process 0's checkpoint if current process checkpoint doesn't exist
 
         Example:
             >>> batches_seen = loader.load_dataloader_state("./checkpoints/dataloader")
@@ -453,8 +454,24 @@ class CoTRLDSDataLoader:
 
         checkpoint_path = tf.io.gfile.join(checkpoint_dir, "dataloader_state.json")
 
+        # Backward compatibility: If current process checkpoint doesn't exist, try process 0's checkpoint
         if not tf.io.gfile.exists(checkpoint_path):
-            raise ValueError(f"No checkpoint file found at {checkpoint_path}")
+            # Extract parent directory and construct process 0 path
+            # checkpoint_dir format: .../dataloader_process_{process_idx}
+            parent_dir = tf.io.gfile.dirname(checkpoint_dir)
+            process_0_dir = tf.io.gfile.join(parent_dir, "dataloader_process_0")
+            process_0_checkpoint_path = tf.io.gfile.join(process_0_dir, "dataloader_state.json")
+
+            if tf.io.gfile.exists(process_0_checkpoint_path):
+                logging.warning(
+                    f"Host {self._proc_idx}: Checkpoint not found at {checkpoint_path}, "
+                    f"falling back to process 0 checkpoint for backward compatibility"
+                )
+                checkpoint_path = process_0_checkpoint_path
+            else:
+                raise ValueError(
+                    f"No checkpoint file found at {checkpoint_path} or {process_0_checkpoint_path}"
+                )
 
         logging.info(f"Host {self._proc_idx}: Loading dataloader state from {checkpoint_path}...")
 
