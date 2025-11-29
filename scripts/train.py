@@ -3,6 +3,8 @@ from dataclasses import replace
 import datetime
 import logging
 import os
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import platform
 from typing import Any
 
