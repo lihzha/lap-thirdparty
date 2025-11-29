@@ -542,6 +542,7 @@ class LiberoCoTDataset(_SingleOXECoTDataset):
                 "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # LIBERO is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
+                "raw_state": new_obs["state"],
             }
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
