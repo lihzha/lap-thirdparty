@@ -80,9 +80,20 @@ class PixmoPoint(_BaseVQADataset):
         return 100000  # Placeholder
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
-        """Create trajectory ID from PixmoPoint image URL and SHA256."""
+        """Create trajectory ID from PixmoPoint image SHA256, label, and count.
+
+        Since the same image can have multiple different annotations (different labels
+        or different sets of points), we need to include annotation-specific information
+        to ensure uniqueness.
+        """
         image_sha = example["image_sha256"]
-        return tf.strings.join(["pixmo_point_", image_sha])
+        label = example["label"]
+        count = example["count"]
+        # Create a hash of the combination to ensure uniqueness
+        combined = tf.strings.join([image_sha, "_", label, "_", tf.strings.as_string(count)])
+        combined_hash = tf.strings.to_hash_bucket_fast(combined, 2147483647)
+        combined_hash_str = tf.strings.as_string(combined_hash)
+        return tf.strings.join(["pixmo_point_", image_sha, "_", combined_hash_str])
 
     def points_to_text(
         self,

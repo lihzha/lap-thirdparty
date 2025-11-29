@@ -63,9 +63,23 @@ class Lvis(_BaseVQADataset):
         return 100170  # Approximate number of LVIS train images
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
-        """Create trajectory ID from LVIS image ID."""
+        """Create trajectory ID from LVIS image ID and annotation.
+
+        Since the same image can have multiple object annotations (different categories
+        or multiple instances of the same category), we need to include annotation-specific
+        information to ensure uniqueness.
+        """
         image_id = example["image_id"]
-        return tf.strings.join(["lvis_", image_id])
+        category_name = example["annotations"]["category_name"][0]
+        bbox = example["annotations"]["bbox"][0]
+
+        # Create a hash from bbox coordinates to handle multiple instances of same category
+        bbox_flat = tf.reshape(bbox, [-1])
+        bbox_str = tf.strings.reduce_join(tf.strings.as_string(bbox_flat), separator="_")
+        combined = tf.strings.join([image_id, "_", category_name, "_", bbox_str])
+        combined_hash = tf.strings.to_hash_bucket_fast(combined, 2147483647)
+        combined_hash_str = tf.strings.as_string(combined_hash)
+        return tf.strings.join(["lvis_", image_id, "_", combined_hash_str])
 
     def bbox_to_text(self, bbox: tf.Tensor) -> tf.Tensor:
         """Convert bbox to formatted text representation using paligemma loc tokens.

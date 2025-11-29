@@ -65,9 +65,18 @@ class PixmoCap(_BaseVQADataset):
         return 100000  # Approximate, adjust based on actual dataset size
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
-        """Create trajectory ID from PixmoCap image filename."""
+        """Create trajectory ID from PixmoCap image filename and caption.
+
+        Since the same image can have multiple captions, we need to include
+        both the image filename and caption to ensure uniqueness.
+        """
         image_filename = example["image_filename"]
-        return tf.strings.join(["pixmo_cap_", image_filename])
+        caption = example["caption"]
+        # Create a hash of the combination to ensure uniqueness
+        combined = tf.strings.join([image_filename, "_", caption])
+        combined_hash = tf.strings.to_hash_bucket_fast(combined, 2147483647)
+        combined_hash_str = tf.strings.as_string(combined_hash)
+        return tf.strings.join(["pixmo_cap_", image_filename, "_", combined_hash_str])
 
     def extract_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
         """Extract prompt and caption from PixmoCap example.
