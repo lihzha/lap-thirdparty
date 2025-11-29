@@ -1229,8 +1229,9 @@ _CONFIGS = [
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma2", params_path="tbd"),
     ),
-    TrainConfig(
-        name="pi05_libero_finetune_v4",
+    *create_multi_device_configs(
+        base_name="pi05_libero_finetune",
+        devices=["v6", "v6europe", "v4", "local", "v5"],
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
             max_token_len=180,
@@ -1238,29 +1239,26 @@ _CONFIGS = [
             discrete_state_input=True,
             enable_action_training=True,
             enable_langact_training=False,
-            paligemma_variant="gemma2_2b",
-            action_expert_variant="gemma2_300m",
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
         ),
-        data=LiberoFinetuneDataConfig(
-            repo_id="libero",
-            asset_id="libero",
-            dataset_type="combined",
-            data_mix="libero_finetune",
-            rlds_data_dir="gs://pi0-cot/OXE",  # Update this path
-            language_action_format_name="default",
-            decoding_schema="default",
-        ),
+        data_config_class=LiberoFinetuneDataConfig,
+        data_config_kwargs={
+            "repo_id": "libero",
+            "asset_id": "libero",
+            "dataset_type": "combined",
+            "data_mix": "libero_finetune",
+            "shuffle_buffer_size": 400_000,
+            "language_action_format_name": "default",
+            "decoding_schema": "default",
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         fsdp_devices=1,
         batch_size=32,
         num_train_steps=50000,
         save_interval=500,
         log_interval=100,
         keep_period=500,
-        checkpoint_base_dir="gs://pi0-cot/checkpoints",  # Update this path
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint",
-            params_path="gs://pi0-cot/checkpoints/pi_combined_cot_v4/oxe_no_galaxea_v4_fixed/30000/params",
-        ),
     ),
     TrainConfig(
         name="pi05_libero_finetune_v4_freezevlm",
