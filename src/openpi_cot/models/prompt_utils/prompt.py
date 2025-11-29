@@ -272,6 +272,22 @@ NO_STATE_FORMAT = PromptFormat(
     direction_token_checker=checkers.is_direction_natural,
 )
 
+UNIFIED_PROMPT_FORMAT = PromptFormat(
+    name="cotrain",
+    task_module=TaskModule(
+        template="Task: {prompt}. What actions should the robot take at current step to fulfill the task? Represent the action in robot's end effector frame"
+    ),
+    state_module=StateModule(
+        discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
+        state_prefix_template="Robot current state{state_label}: {state}",
+        include_state_type=False,
+    ),
+    action_module=ActionModule(prefix="Answer: ", include_time_horizon=False),
+    separator=". ",
+    critical_token_checker=checkers.is_critical_schema,
+    direction_token_checker=checkers.is_direction_schema,
+)
+
 
 GROUPED_PREDICTION_PROMPT_FORMAT = PromptFormat(
     name="grouped_prediction",
@@ -299,8 +315,9 @@ DEFAULT_PREDICTION_PROMPT_FORMAT = PromptFormat(
 DEFAULT_VQA_PROMPT_FORMAT = PromptFormat(
     name="default_vqa",
     state_module=None,
-    task_module=TaskModule(template="{prompt}"),
-    separator=" ",
+    task_module=TaskModule(template="Task: {prompt}"),
+    action_module=ActionModule(prefix="Answer: ", include_time_horizon=False),
+    separator=". ",
     critical_token_checker=None,
     direction_token_checker=None,
 )
