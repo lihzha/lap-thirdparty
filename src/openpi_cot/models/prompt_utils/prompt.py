@@ -252,7 +252,9 @@ GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
         state_prefix_template=". Robot current state{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(prefix="Represent the action in robot's end effector frame. Action: "),
+    action_module=ActionModule(
+        prefix="Represent the action in robot's end effector frame. Action: ", include_time_horizon=False
+    ),
     separator=". ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
