@@ -2,6 +2,9 @@ import logging
 import os
 import platform
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
 import etils.epath as epath
 import jax
 import jax.experimental.multihost_utils as multihost_utils
