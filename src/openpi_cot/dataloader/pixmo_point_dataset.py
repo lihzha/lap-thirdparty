@@ -191,31 +191,9 @@ class PixmoPoint(_BaseVQADataset):
     def extract_and_encode_image(self, example: dict) -> tf.Tensor:
         """Extract and encode PixmoPoint image to JPEG bytes."""
         image = example["image"]
-
-        # # If already encoded (string), return as-is
-        # if image.dtype == tf.string:
-        #     return image
-
-        # # Handle decoded image tensor
-        # # Force to 3D by squeezing first dimension if rank is 4
-        # img_shape = tf.shape(image)
-        # img_rank = len(image.shape)  # Static rank
-
-        # if img_rank == 4:
-        #     # Squeeze first dimension: [1,1,1,3] -> [1,1,3] or [1,H,W,C] -> [H,W,C]
-        #     img = tf.reshape(image, img_shape[1:])
-        # elif img_rank == 3:
-        #     img = image
-        # elif img_rank == 2:
-        #     # Add channel dimension
-        #     img = tf.expand_dims(image, axis=-1)
-        # else:
-        #     # Fallback for unexpected ranks
-        #     img = tf.reshape(image, [1, 1, -1])
-        #     img = img[:, :, :3]  # Keep only 3 channels
-
-        # # Ensure uint8 dtype for JPEG encoding
-        # if img.dtype != tf.uint8:
-        #     img = tf.cast(tf.clip_by_value(img, 0, 255), tf.uint8)
-
+        # Check if image is already encoded (has dtype string)
+        if image.dtype == tf.string:
+            # Already encoded, return as-is
+            return image
+        # Not encoded, encode to JPEG
         return tf.io.encode_jpeg(image, quality=95)
