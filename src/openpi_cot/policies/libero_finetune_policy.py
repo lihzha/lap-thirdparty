@@ -108,6 +108,7 @@ class LiberoFinetuneOutputs(transforms.DataTransformFn):
         # For your own dataset, replace `7` with the action dimension of your dataset.
         # Only return the first 7 dims.
         actions = np.asarray(data["actions"][:, :7])
+        actions = np.array(actions, copy=True)
         # LIBERO gripper action: -1 is open, 1 is close. Our policy: 0 is close, 1 is open
         print(actions[:, -1])
         actions[:, -1:] = 1 - 2 * actions[:, -1:]

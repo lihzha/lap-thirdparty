@@ -14,6 +14,7 @@ from openpi_cot.dataloader.helpers import StateEncoding
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
 
+from openpi_cot.dataloader.dataset_utils import dataset_size
 
 # Registry of VQA dataset names
 VQA_DATASET_NAMES: set[str] = {"coco_captions", "vqa", "pixmo_cap", "pixmo_point", "lvis"}
@@ -115,9 +116,15 @@ class _BaseVQADataset(_SingleCoTDataset):
         # Build dataset (subclass-specific)
         self.dataset = self.build_dataset(self.builder, split)
 
+        ds = dataset_size(self.dataset)
+        breakpoint()
+
         # Split train/val (only if using train/val split)
         if split in ["train", "val"]:
             self.split_val(split_seed=seed)
+
+        ds = dataset_size(self.dataset)
+        breakpoint()
 
         # Restructure to match robot dataset format
         self.apply_vqa_restructure()
@@ -125,8 +132,14 @@ class _BaseVQADataset(_SingleCoTDataset):
         # Apply minimal transforms
         self.apply_vqa_transforms()
 
+        ds = dataset_size(self.dataset)
+        breakpoint()
+
         # Apply frame filters
         self.apply_vqa_frame_filters()
+
+        ds = dataset_size(self.dataset)
+        breakpoint()
 
         # Create dummy statistics for compatibility
         from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
