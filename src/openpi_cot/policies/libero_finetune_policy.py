@@ -35,20 +35,14 @@ class LiberoFinetuneInputs(transforms.DataTransformFn):
             base_image = parse_image(data["observation/image"])
         if base_image is None:
             raise ValueError("Base image missing from observation")
-        base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
         images = [base_image]
-        image_masks = [base_image_mask]
-        needs_wrist_rotation = False
+        image_masks = [np.True_]
 
         if "observation" in data:
             for k in IMAGE_KEYS[1:]:
                 if k in data["observation"]:
                     wrist_image = parse_image(data["observation"][k])
                     wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
-
-                    # Rotate wrist image by 180 degrees for specific datasets
-                    if needs_wrist_rotation and wrist_image_mask:
-                        wrist_image = np.rot90(wrist_image, k=2)
                 else:
                     wrist_image = np.zeros_like(base_image)
                     wrist_image_mask = np.False_

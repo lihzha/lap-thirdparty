@@ -181,10 +181,12 @@ def eval_libero(args: Args) -> None:
                             eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
                             eef_axisangle = _quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
                             gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
+                            breakpoint()
                             gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
                             state = np.concatenate((eef_pos, eef_axisangle, gripper_state)).astype(
                                 np.float32, copy=False
                             )
+                            breakpoint()
                             element = {
                                 "observation/image": img,
                                 "observation/wrist_image": wrist_img,

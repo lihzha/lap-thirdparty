@@ -1546,18 +1546,22 @@ def libero_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     gripper_action = trajectory["action"][:, -1:]
     gripper_action = invert_gripper_actions(tf.clip_by_value(gripper_action, 0, 1))
 
-    trajectory["action"] = tf.concat(
-        [
-            trajectory["action"][:, :6],
-            gripper_action,
-        ],
-        axis=1,
-    )
+    # trajectory["action"] = tf.concat(
+    #     [
+    #         trajectory["action"][:, :6],
+    #         gripper_action,
+    #     ],
+    #     axis=1,
+    # )
 
     trajectory["observation"]["state"] = tf.concat(
         [trajectory["observation"]["state"][:, :6], trajectory["observation"]["state"][:, -1:]],
         axis=1,
     )
+
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
+
     return trajectory
 
 

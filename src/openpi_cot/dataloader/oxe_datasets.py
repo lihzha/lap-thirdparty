@@ -514,11 +514,11 @@ class LiberoCoTDataset(_SingleOXECoTDataset):
 
             # State is already in the correct format (8D: [EEF pose (6D), gripper (2D)])
             new_obs["state"] = tf.cast(old_obs["state"], tf.float32)
-            new_obs["state"] = convert_state_encoding(
-                new_obs["state"],
-                from_encoding=self.state_encoding,
-                to_encoding=self.config.state_encoding,
-            )
+            # new_obs["state"] = convert_state_encoding(
+            #     new_obs["state"],
+            #     from_encoding=self.state_encoding,
+            #     to_encoding=self.config.state_encoding,
+            # )
 
             # Actions are 7D in LIBERO dataset (delta EEF actions)
             actions = tf.cast(traj["action"], tf.float32)
