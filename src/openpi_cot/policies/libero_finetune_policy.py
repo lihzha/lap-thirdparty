@@ -57,7 +57,6 @@ class LiberoFinetuneInputs(transforms.DataTransformFn):
         else:
             wrist_image = np.zeros_like(base_image)
             wrist_image_mask = np.False_
-        breakpoint()
         images.append(wrist_image)
         image_masks.append(wrist_image_mask)
         inputs = {
