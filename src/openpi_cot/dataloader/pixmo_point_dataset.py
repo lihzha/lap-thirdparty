@@ -61,10 +61,13 @@ class PixmoPoint(_BaseVQADataset):
             options=opts,
         )
 
+        # Skip automatic image decoding to avoid JPEG warnings/errors
+        # We'll handle encoding in extract_and_encode_image
         ds = builder.as_dataset(
             split="train",  # PixmoPoint only has train split, we'll manually split for val
             shuffle_files=not self.want_val,
             read_config=read_config,
+            decoders={"image": tfds.decode.SkipDecoding()},
         )
 
         ds = ensure_dldataset(ds, is_flattened=True)
