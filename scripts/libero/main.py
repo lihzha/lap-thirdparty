@@ -14,11 +14,65 @@ from libero.libero.envs import OffScreenRenderEnv
 import numpy as np
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
+from PIL import Image, ImageDraw, ImageFont
 import tqdm
 import tyro
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
+
+
+def _draw_text_on_image(img: np.ndarray, text: str, font_size: int = 12) -> np.ndarray:
+    """Draw text on image with word wrapping."""
+    if text is None:
+        return img
+
+    # Convert numpy array to PIL Image
+    pil_img = Image.fromarray(img)
+    draw = ImageDraw.Draw(pil_img)
+
+    # Try to load a font, fall back to default if not available
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    # Word wrap text to fit image width
+    max_width = img.shape[1] - 10  # 5px margin on each side
+    words = text.split()
+    lines = []
+    current_line = []
+
+    for word in words:
+        test_line = " ".join(current_line + [word])
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current_line.append(word)
+        else:
+            if current_line:
+                lines.append(" ".join(current_line))
+                current_line = [word]
+            else:
+                # Single word is too long, add it anyway
+                lines.append(word)
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    # Draw black rectangle background for text
+    if lines:
+        # Calculate text height
+        line_height = font_size + 4
+        text_height = len(lines) * line_height + 10
+        draw.rectangle([(0, 0), (img.shape[1], text_height)], fill=(0, 0, 0, 180))
+
+        # Draw text
+        y_offset = 5
+        for line in lines:
+            draw.text((5, y_offset), line, fill=(255, 255, 255), font=font)
+            y_offset += line_height
+
+    # Convert back to numpy array
+    return np.array(pil_img)
 
 
 class PolicyType(str, enum.Enum):
@@ -130,7 +184,8 @@ def eval_libero(args: Args) -> None:
             # Setup
             t = 0
             replay_images = []
-            # wrist_replay_images = []
+            wrist_replay_images = []
+            current_reasoning = None
             episode_start_time = datetime.datetime.now()
 
             logging.info(f"Starting episode {task_episodes + 1}...")
@@ -158,10 +213,6 @@ def eval_libero(args: Args) -> None:
                         image_tools.resize_with_pad(wrist_img, args.resize_size, args.resize_size)
                     )
 
-                    # Save preprocessed image for replay video
-                    replay_images.append(img)
-                    # wrist_replay_images.append(wrist_img)
-
                     if not action_plan:
                         # Finished executing previous action chunk -- compute new chunk
                         # Prepare observations dict
@@ -169,7 +220,8 @@ def eval_libero(args: Args) -> None:
                             eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
                             eef_euler = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
                             gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-                            gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
+                            # gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
+                            gripper_state = gripper_qpos[-1:]
                             state = np.concatenate((eef_pos, eef_euler, gripper_state)).astype(np.float32, copy=False)
                             element = {
                                 "observation/image": img,
@@ -219,6 +271,11 @@ def eval_libero(args: Args) -> None:
                         response = client.infer(element)
                         if "actions" not in response:
                             raise KeyError("Policy response missing 'actions' field")
+                        if "reasoning" in response:
+                            current_reasoning = response["reasoning"]
+                            print("Policy reasoning:", current_reasoning)
+                        else:
+                            current_reasoning = None
                         action_chunk = np.asarray(response["actions"], dtype=np.float32)
                         if action_chunk.ndim == 1:
                             action_chunk = action_chunk[None, ...]
@@ -234,6 +291,15 @@ def eval_libero(args: Args) -> None:
                             f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
                         )
                         action_plan.extend(action_chunk[: args.replan_steps])
+
+                    # Save preprocessed image for replay video
+                    # Draw reasoning on image if available
+                    if current_reasoning is not None:
+                        img_with_text = _draw_text_on_image(img, current_reasoning)
+                        replay_images.append(img_with_text)
+                    else:
+                        replay_images.append(img)
+                    wrist_replay_images.append(wrist_img)
 
                     action = action_plan.popleft()
 

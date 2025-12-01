@@ -26,6 +26,7 @@ from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
+import openpi_cot.policies.libero_policy as libero_policy
 import openpi_cot.policies.planning_policy as planning_policy
 import openpi_cot.policies.raw_policy as raw_action_policy
 import openpi_cot.policies.vqa_policy as vqa_policy
@@ -472,6 +473,38 @@ class LiberoFinetuneDataConfig(BaseCoTDataConfigFactory):
             prediction_format=model_config.prediction_format,
             tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
             include_outputs=False,  # Libero doesn't need output detokenization
+        )(model_config)
+
+
+@dataclasses.dataclass(frozen=True)
+class LiberoCoTDataConfig(BaseCoTDataConfigFactory):
+    """
+    Config for fine-tuning on Libero dataset.
+    """
+
+    @override
+    def _create_data_transforms(
+        self, base_cfg: CoTDataConfig, model_config: _model.BaseModelConfig
+    ) -> upstream_transforms.Group:
+        return upstream_transforms.Group(
+            inputs=[
+                libero_policy.LiberoInputs(
+                    model_type=model_config.model_type,
+                    action_dim=model_config.action_dim,
+                )
+            ],
+            outputs=[libero_policy.LiberoOutputs(decoding_schema=base_cfg.decoding_schema)],
+        )
+
+    @override
+    def _create_model_transforms(
+        self, base_cfg: CoTDataConfig, model_config: _model.BaseModelConfig
+    ) -> upstream_transforms.Group:
+        return ModelTransformFactory(
+            prompt_format=model_config.prompt_format,
+            prediction_format=model_config.prediction_format,
+            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
+            include_outputs=True,  # Libero doesn't need output detokenization
         )(model_config)
 
 
@@ -1382,6 +1415,37 @@ _CONFIGS = [
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m",
         ).get_freeze_filter(),
+    ),
+    *create_multi_device_configs(
+        base_name="pi05_libero_cot",
+        devices=["v6", "v6europe", "v4", "local", "v5"],
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            enable_langact_training=False,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+        ),
+        data_config_class=LiberoCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "libero",
+            "asset_id": "libero",
+            "dataset_type": "combined",
+            "data_mix": "libero_finetune",
+            "shuffle_buffer_size": 400_000,
+            "language_action_format_name": "default",
+            "decoding_schema": "verbose_eef_with_rotation",
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        fsdp_devices=1,
+        batch_size=32,
+        num_train_steps=50000,
+        save_interval=500,
+        log_interval=100,
+        keep_period=500,
     ),
     TrainConfig(
         name="paligemma2_libero_finetune_local",

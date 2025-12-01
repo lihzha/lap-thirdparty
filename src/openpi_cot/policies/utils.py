@@ -142,7 +142,8 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     if len(initial_state.shape) == 2:
         assert initial_state.shape[0] == 1
         initial_state = initial_state[0]
-    # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"  # noqa: PT018
+    # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
+    # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
 
     if actions.ndim == 1:
         actions = actions[None, :]
