@@ -231,14 +231,15 @@ class PiCoT(_pi0.Pi0):
             # Create smoothing kernel
             sigma = getattr(config, "label_smoothing_sigma", 1.0)
             support = getattr(config, "label_smoothing_support", 3)
-            breakpoint()
 
-            self.smoothing_kernel = create_digit_smoothing_kernel(
+            kernel = create_digit_smoothing_kernel(
                 vocab_size=vocab_size,
                 digit_to_token_id=digit_to_token,
                 sigma=sigma,
                 support=support,
             )
+            # Wrap in nnx.Variable as a frozen (non-trainable) parameter
+            self.smoothing_kernel = nnx.Variable(kernel)
             logger.info(f"Label smoothing enabled for units digits: sigma={sigma}, support={support}")
         else:
             self.smoothing_kernel = None
@@ -826,6 +827,8 @@ class PiCoT(_pi0.Pi0):
 
         # Get smoothing kernel if available
         smoothing_kernel = getattr(self, "smoothing_kernel", None)
+        if smoothing_kernel is not None and hasattr(smoothing_kernel, "value"):
+            smoothing_kernel = smoothing_kernel.value
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
