@@ -36,6 +36,7 @@ from openpi_cot.transforms import DetokenizeReasoning
 from openpi_cot.transforms import ExtractFASTActions
 from openpi_cot.transforms import TokenizeFASTCoTInputs
 from openpi_cot.transforms import TokenizePromptAndReasoning
+from openpi_cot.transforms import PadStates
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -263,6 +264,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                     ),
+                    PadStates(model_config.action_dim),
                 ],
                 outputs=[
                     ExtractFASTActions(
@@ -1078,6 +1080,7 @@ _CONFIGS = [
             repo_id="droid",
             asset_id="droid",
             dataset_type="droid",
+            action_proprio_normalization_type=NormalizationType.NORMAL,
         ),
     ),
     TrainConfig(
@@ -1172,6 +1175,23 @@ _CONFIGS = [
         ),
     ),
     TrainConfig(
+        name="paligemma_eval_eeframe_rotation_time",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            decoding_schema="verbose_eef_with_rotation",
+        ),
+    ),
+    TrainConfig(
         name="paligemma2_eval_eeframe",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=10,
@@ -1183,6 +1203,37 @@ _CONFIGS = [
         ),
         data=RLDSCoTDataConfig(
             repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef"
+        ),
+    ),
+    TrainConfig(
+        name="paligemma_no_state",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+            prompt_format="no_state",
+        ),
+        data=RLDSCoTDataConfig(
+            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef_with_rotation"
+        ),
+    ),
+    TrainConfig(
+        name="paligemma_bounds",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+            prompt_format="pi05_notime",
+        ),
+        data=RLDSCoTDataConfig(
+            action_proprio_normalization_type=NormalizationType.BOUNDS,
+            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef_with_rotation", 
         ),
     ),
     TrainConfig(
@@ -1211,7 +1262,7 @@ _CONFIGS = [
             prompt_format="grouped_state_verbose",
         ),
         data=RLDSCoTDataConfig(
-            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"
+            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_with_rotation"
         ),
     ),
     TrainConfig(

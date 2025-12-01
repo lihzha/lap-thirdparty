@@ -85,7 +85,7 @@ class Args:
     max_timesteps: int = 1200
     # How many actions to execute from a predicted action chunk before querying policy server again
     # 8 is usually a good default (equals 0.5 seconds of action execution).
-    open_loop_horizon: int = 8
+    open_loop_horizon: int = 5
     # Remote server parameters
     remote_host: str = "0.0.0.0"  # point this to the IP address of the policy server, e.g., "192.168.1.100"
     remote_port: int = (
@@ -123,7 +123,7 @@ def prevent_keyboard_interrupt():
 
 
 class BaseEvalRunner:
-    CHUNK_STEPS = 2
+    CHUNK_STEPS = 5
 
     def __init__(self, args):
         self.env = self.init_env()
@@ -155,7 +155,7 @@ class BaseEvalRunner:
                 IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
                 "cartesian_position": curr_obs["cartesian_position"],
                 "gripper_position": curr_obs["gripper_position"],
-                # "joint_position": curr_obs["joint_position"],
+                "joint_position": curr_obs["joint_position"],
                 "state": curr_obs["state"],
             },
             "prompt": instruction,
@@ -186,8 +186,8 @@ class BaseEvalRunner:
             
             if not use_velocity:
                 delta_base = actions[0, :3]  # Already in meters
-                # grip_actions = 1 - actions[0, -1]
                 grip_actions = 1 - actions[0, -1]
+                # grip_actions = actions[0, -1]
 
                 # If in camera frame, transform to robot/base frame
                 if self.in_camera_frame:
@@ -244,6 +244,7 @@ class BaseEvalRunner:
                     curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0]
                 )
                 pred_action_chunk[:, 3:6] = rpy_arr
+                print("using predicted rpy")
             else:
                 pred_action_chunk[:, 3:6] = curr_rpy
             pred_action_chunk[:, 6] = 1 - pred_action_chunk[:, 6]  # invert gripper action
@@ -369,10 +370,10 @@ class BaseEvalRunner:
                         save_to_disk=t_step == 0,
                     )
                     if self.args.external_camera is not None:
-                        video.append(curr_obs[f"{self.args.external_camera}_image"][0])
+                        video.append(curr_obs[f"{self.args.external_camera}_image"])
                     else:
-                        video.append(curr_obs["image"][0])
-                    wrist_video.append(curr_obs["wrist_image"][0].copy())
+                        video.append(curr_obs["image"])
+                    wrist_video.append(curr_obs["wrist_image"].copy())
                     # Predict a new chunk if needed
                     if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0
@@ -390,6 +391,7 @@ class BaseEvalRunner:
                     action = pred_action_chunk[actions_from_chunk_completed]
                     action = self.binarize_gripper(action)
                     actions_from_chunk_completed += 1
+                    print(action)
                     self.env.step(action)
                     # Sleep to match DROID data collection frequency
                     elapsed_time = time.time() - start_time

@@ -264,6 +264,16 @@ class Unnormalize(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class PadStates(DataTransformFn):
+    """Zero-pads states and actions to the model action dimension."""
+
+    model_action_dim: int
+
+    def __call__(self, data: DataDict) -> DataDict:
+        data["state"] = pad_to_dim(data["state"], self.model_action_dim, axis=-1)
+        return data
+
+@dataclasses.dataclass(frozen=True)
 class NormalizeActionAndProprio(DataTransformFn):
     """Normalize `action` and `proprio`-like fields using dataset statistics.
 
@@ -491,53 +501,21 @@ class TokenizeFASTCoTInputs(DataTransformFn):
 
 @dataclasses.dataclass(frozen=True)
 class ExtractFASTActions(DataTransformFn):
-    """Extract action values from FAST model token outputs.
-
-    This parses the tokenized action output back into numeric action arrays.
-    """
-
-    tokenizer: PaligemmaCoTTokenizer
+    tokenizer: FASTTokenizer
     action_horizon: int
     action_dim: int
 
     def __call__(self, data: DataDict) -> DataDict:
         if "actions" not in data:
             return data
-
         # Model outputs are saved in "actions", but for FAST models they represent tokens.
         tokens = data.pop("actions")
-
-        # Decode tokens to text
-        if not isinstance(tokens, np.ndarray):
-            tokens = np.asarray(tokens, dtype=np.int32)
-
-        decoded_text = self.tokenizer.decode(tokens)
-
-        # Extract action values from text
-        # Expected format: "... action: [v0 v1 v2 ...]"
-        import re
-
-        action_match = re.search(r"action:\s*\[([\d\.\-\s]+)\]", decoded_text)
-        if action_match:
-            action_str = action_match.group(1)
-            action_values = [float(x) for x in action_str.split()]
-
-            # Reshape to [horizon, dim]
-            expected_size = self.action_horizon * self.action_dim
-            if len(action_values) >= expected_size:
-                actions = np.array(action_values[:expected_size]).reshape(self.action_horizon, self.action_dim)
-            else:
-                # Pad with zeros if needed
-                actions = np.zeros((self.action_horizon, self.action_dim), dtype=np.float32)
-                actions.flat[: len(action_values)] = action_values
-        else:
-            # No action found in decoded text, return zeros
-            actions = np.zeros((self.action_horizon, self.action_dim), dtype=np.float32)
-
+        actions = self.tokenizer.extract_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
         return {
             **data,
             "actions": actions,
         }
+
 
 
 def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.0) -> np.ndarray:

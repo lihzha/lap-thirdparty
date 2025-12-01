@@ -131,6 +131,9 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             prompt, state, state_type, time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None
         )
 
+        print("Formatted Prompt:")
+        print(formatted_prompt)
+
         # Tokenize
         pad_id = self._tokenizer.pad_id()
 
@@ -254,7 +257,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             ):
                 continue  # Skip Gemma3 special tokens
             filtered_tokens.append(t)
-
+        
         return self._tokenizer.decode(filtered_tokens).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
@@ -351,7 +354,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
             postfix_tokens = action_tokens_in_pg.tolist() + self._tokenizer.encode("|", add_eos=True)
         else:
-            raise NotImplementedError
+            postfix_tokens = []
 
         tokens = prefix_tokens + postfix_tokens
         token_mask = [True] * len(tokens)
@@ -387,3 +390,23 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         if isinstance(tokens, list):
             tokens = np.array(tokens)
         return self._tokenizer.vocab_size() - 1 - 128 - tokens
+
+    def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
+        # Decode predicted output tokens
+        decoded_tokens = self._tokenizer.decode(tokens.tolist())
+
+        # Extract actions from FAST model outputs
+        # if "Action: " not in decoded_tokens:
+        #     return np.zeros((action_horizon, action_dim), dtype=np.float32)
+
+        # Extract actions from decoded tokens
+        # raw_action_tokens = np.array(
+        #     self._tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
+        # )
+        raw_action_tokens = np.array(
+            self._tokenizer.encode(decoded_tokens.split("|")[0].strip())
+        )
+        action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
+        return self._fast_tokenizer.decode(
+            [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
+        )[0]

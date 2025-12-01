@@ -66,7 +66,7 @@ class FrankaEvalRunner(BaseEvalRunner):
         # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         gripper_position = binarize_gripper_actions_np(gripper_position)
 
-        print(gripper_position)
+        print("Gripper position:", gripper_position)
 
         # if gripper_position > 0.2:
         #     gripper_position = 1.0
@@ -75,6 +75,7 @@ class FrankaEvalRunner(BaseEvalRunner):
 
         right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
         wrist_image = image_observations["1"][::-1, ::-1, ::-1] # rotate 180
+        # wrist_image = image_observations["1"][:, :, ::-1]
 
         if not self.args.use_raw:
             right_image = right_image[None]
@@ -93,7 +94,7 @@ class FrankaEvalRunner(BaseEvalRunner):
             "cartesian_position": cartesian_position,
             "gripper_position": np.array(gripper_position),
             "state": np.concatenate([cartesian_position, gripper_position]),
-            # "joint_position": np.array(robot_state["joint_positions"]),
+            "joint_position": np.array(robot_state["joint_positions"]),
         }
 
     def get_action_from_response(self, response, curr_obs, use_quaternions=True):
@@ -161,12 +162,39 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
             action_space="joint_velocity",
             gripper_action_space="position",
         )
+    
+    def _extract_observation(self, obs_dict, *, save_to_disk=False):
+        image_observations = obs_dict["image"]
+        # In addition to image observations, also capture the proprioceptive state
+        robot_state = obs_dict["robot_state"]
+        cartesian_position = np.array(robot_state["cartesian_position"])
+        gripper_position = np.array([robot_state["gripper_position"]])
+        gripper_position = binarize_gripper_actions_np(gripper_position)
+
+        print("Gripper position:", gripper_position)
+
+        right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
+        wrist_image = image_observations["1"][..., ::-1]
+
+        return {
+            "right_image": right_image,
+            "wrist_image": wrist_image,
+            "cartesian_position": cartesian_position,
+            "gripper_position": np.array(gripper_position),
+            "state": np.concatenate([cartesian_position, gripper_position]),
+            "joint_position": np.array(robot_state["joint_positions"]),
+        }
+
+
 
     def obs_to_request(self, curr_obs, instruction):
+
+        gripper_position = 1 - curr_obs["gripper_position"]
+
         request = {
             "observation/exterior_image_1_left": image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
             "observation/cartesian_position": curr_obs["cartesian_position"],
-            "observation/gripper_position": curr_obs["gripper_position"],
+            "observation/gripper_position": gripper_position,
             "observation/joint_position": curr_obs["joint_position"],
             "prompt": instruction,
         }

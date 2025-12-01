@@ -434,6 +434,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 inputs["sample_mask"] = True
         else:
             inputs["sample_mask"] = True
+            # inputs["time_horizon_seconds"] = 2.0 # test time
 
         # Optional calibration/context passthroughs for visualization
         for k in ("camera_intrinsics", "camera_extrinsics"):
