@@ -26,6 +26,7 @@ import openpi_cot.models.pi_cot_config as _pi_cot_config
 import openpi_cot.models.siglip as _siglip_gemma3
 
 logger = logging.getLogger("openpi")
+PALIGEMMA_VOCAB_SIZE = 257_152
 
 
 def cross_entropy_loss(
@@ -225,7 +226,7 @@ class PiCoT(_pi0.Pi0):
             digit_to_token = get_digit_to_token_mapping()
 
             # Get vocab size from config (use paligemma config vocab size)
-            vocab_size = paligemma_config.vocab_size
+            vocab_size = PALIGEMMA_VOCAB_SIZE
 
             # Create smoothing kernel
             sigma = getattr(config, "label_smoothing_sigma", 1.0)
