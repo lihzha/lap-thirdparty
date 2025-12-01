@@ -29,6 +29,17 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
+class AuxiliaryConstant(nnx.Variable):
+    """Non-trainable auxiliary constant that's excluded from parameter checkpoints.
+
+    Used for values that:
+    - Are not trainable (derived from config)
+    - Don't need to be saved/loaded from checkpoints
+    - Need to be part of the NNX graph for JIT compatibility
+    """
+    pass
+
+
 def cross_entropy_loss(
     logits: jnp.ndarray,
     labels: jnp.ndarray,
@@ -238,8 +249,8 @@ class PiCoT(_pi0.Pi0):
                 sigma=sigma,
                 support=support,
             )
-            # Wrap in nnx.Variable as a frozen (non-trainable) parameter
-            self.smoothing_kernel = nnx.Variable(kernel)
+            # Wrap in AuxiliaryConstant - excluded from parameter checkpoints
+            self.smoothing_kernel = AuxiliaryConstant(kernel)
             logger.info(f"Label smoothing enabled for units digits: sigma={sigma}, support={support}")
         else:
             self.smoothing_kernel = None
