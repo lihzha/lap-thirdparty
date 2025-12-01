@@ -125,11 +125,11 @@ class _BaseVQADataset(_SingleCoTDataset):
         # Apply minimal transforms
         self.apply_vqa_transforms()
 
-        # Apply frame filters
-        self.apply_vqa_frame_filters()
-
         ds = dataset_size(self.dataset)
         breakpoint()
+
+        # Apply frame filters
+        self.apply_vqa_frame_filters()
 
         # Create dummy statistics for compatibility
         from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
