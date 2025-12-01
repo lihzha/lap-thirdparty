@@ -116,24 +116,14 @@ class _BaseVQADataset(_SingleCoTDataset):
         # Build dataset (subclass-specific)
         self.dataset = self.build_dataset(self.builder, split)
 
-        ds = dataset_size(self.dataset)
-        breakpoint()
-
         # Split train/val (only if using train/val split)
         if split in ["train", "val"]:
             self.split_val(split_seed=seed)
 
-        ds = dataset_size(self.dataset)
-        breakpoint()
-
-        # Restructure to match robot dataset format
         self.apply_vqa_restructure()
 
         # Apply minimal transforms
         self.apply_vqa_transforms()
-
-        ds = dataset_size(self.dataset)
-        brewakpoint()
 
         # Apply frame filters
         self.apply_vqa_frame_filters()
