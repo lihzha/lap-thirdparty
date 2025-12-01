@@ -131,9 +131,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             prompt, state, state_type, time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None
         )
 
-        print("Formatted Prompt:")
-        print(formatted_prompt)
-
         # Tokenize
         pad_id = self._tokenizer.pad_id()
 
