@@ -63,7 +63,15 @@ class TokenizePromptAndReasoning(DataTransformFn):
         time_horizon_seconds = data.pop("time_horizon_seconds", None)
 
         # Tokenize regular reasoning
-        tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(
+        (
+            tokens,
+            pad_mask,
+            reasoning_mask,
+            numeric_mask,
+            direction_mask,
+            units_number_mask,
+            digit_values,
+        ) = self.tokenizer.tokenize_cot(
             prompt,
             language_actions,
             state,
@@ -88,6 +96,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
                     "critical_token_mask": critical_mask,
                     "number_token_mask": numeric_mask,
                     "direction_token_mask": direction_mask,
+                    "units_number_token_mask": units_number_mask,
+                    "digit_values": digit_values,
                     "tokenized_dataset_name": tokenized_dataset_name,
                 }
             )

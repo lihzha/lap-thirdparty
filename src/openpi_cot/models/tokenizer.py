@@ -116,7 +116,29 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         is_vqa_sample: bool = False,
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize prompt and reasoning for chain-of-thought model.
+
+        Args:
+            prompt: Task description
+            reasoning: Optional language actions/reasoning
+            state: Optional state vector
+            state_type: Optional state type descriptor
+            is_vqa_sample: Whether this is a VQA sample
+            is_prediction_sample: Whether this is a prediction sample
+            time_horizon_seconds: Optional time horizon for predictions
+
+        Returns:
+            Tuple of (tokens, attn_mask, reasoning_mask, number_mask, direction_mask,
+                     units_number_mask, digit_values):
+            - tokens: Tokenized sequence [max_len]
+            - attn_mask: Attention mask (True for non-pad positions) [max_len]
+            - reasoning_mask: Mask for reasoning/language action tokens [max_len]
+            - number_mask: Mask for all number tokens [max_len]
+            - direction_mask: Mask for direction tokens [max_len]
+            - units_number_mask: Mask for units digit tokens only [max_len]
+            - digit_values: Digit values 0-9 for number tokens, -1 for non-digits [max_len]
+        """
         # Resolve prompt format
 
         if is_prediction_sample:
@@ -229,12 +251,71 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
                     if fmt.direction_token_checker(piece):
                         direction_mask[i] = True
 
+        # Create units_number_mask and digit_values for label smoothing
+        units_number_mask = np.zeros(self._max_len, dtype=bool)
+        digit_values = np.full(self._max_len, -1, dtype=np.int8)  # -1 for non-digits
+
+        if not is_vqa_sample:
+            # Unit words that follow numbers in language actions
+            unit_words = {"cm", "▁cm", "degrees", "▁degrees", "mm", "▁mm", "m", "▁m", "radians", "▁radians"}
+
+            # Find digit sequences followed by unit words
+            i = start_idx
+            while i < end_idx:
+                if i >= len(pieces):
+                    break
+
+                # Check if current position starts a digit sequence
+                if number_mask[i]:
+                    # Find the end of the digit sequence
+                    seq_start = i
+                    seq_end = i
+                    while seq_end < end_idx and seq_end < len(pieces) and number_mask[seq_end]:
+                        seq_end += 1
+
+                    # Check if the next token is a unit word
+                    next_idx = seq_end
+                    is_followed_by_unit = False
+                    if next_idx < len(pieces):
+                        next_piece = pieces[next_idx]
+                        if next_piece in unit_words:
+                            is_followed_by_unit = True
+
+                    # If followed by unit, mark the last digit in sequence as units digit
+                    if is_followed_by_unit:
+                        units_digit_idx = seq_end - 1
+                        units_number_mask[units_digit_idx] = True
+
+                        # Extract the digit value from the piece
+                        units_piece = pieces[units_digit_idx]
+                        # Find the rightmost digit in the piece
+                        for char in reversed(units_piece):
+                            if char.isdigit():
+                                digit_values[units_digit_idx] = int(char)
+                                break
+
+                    # Also extract digit values for all number tokens (for potential future use)
+                    for j in range(seq_start, seq_end):
+                        if j < len(pieces):
+                            piece = pieces[j]
+                            for char in reversed(piece):
+                                if char.isdigit():
+                                    digit_values[j] = int(char)
+                                    break
+
+                    # Move to the end of the sequence
+                    i = seq_end
+                else:
+                    i += 1
+
         return (
             np.asarray(tokens, dtype=np.int32),
             attn_mask,
             reasoning_mask,
             number_mask,
             direction_mask,
+            units_number_mask,
+            digit_values,
         )
 
     def decode(self, tokens: np.ndarray) -> str:

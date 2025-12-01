@@ -44,6 +44,8 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     critical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     direction_token_mask: at.Bool[ArrayT, "*b l"] | None = None
+    units_number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
+    digit_values: at.Int[ArrayT, "*b l"] | None = None
     sample_mask: at.Bool[ArrayT, "*b"] | None = None
     camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
     camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
@@ -87,6 +89,8 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             critical_token_mask=getk("critical_token_mask"),
             number_token_mask=getk("number_token_mask"),
             direction_token_mask=getk("direction_token_mask"),
+            units_number_token_mask=getk("units_number_token_mask"),
+            digit_values=getk("digit_values"),
             sample_mask=getk("sample_mask"),
             camera_intrinsics=getk("camera_intrinsics"),
             camera_extrinsics=getk("camera_extrinsics"),
@@ -204,6 +208,8 @@ def preprocess_observation(
         critical_token_mask=getattr(observation, "critical_token_mask", None),
         number_token_mask=getattr(observation, "number_token_mask", None),
         direction_token_mask=getattr(observation, "direction_token_mask", None),
+        units_number_token_mask=getattr(observation, "units_number_token_mask", None),
+        digit_values=getattr(observation, "digit_values", None),
         sample_mask=getattr(observation, "sample_mask", None),
         camera_intrinsics=getattr(observation, "camera_intrinsics", None),
         camera_extrinsics=getattr(observation, "camera_extrinsics", None),

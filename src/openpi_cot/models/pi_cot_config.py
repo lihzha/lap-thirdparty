@@ -58,6 +58,16 @@ class PiCoTConfig(_model.BaseModelConfig):
     prediction_loss_weight: float = 0.2
     vqa_loss_weight: float = 0.1
 
+    # Label smoothing for number tokens (units digits)
+    # When True, applies truncated Gaussian label smoothing to units digit predictions
+    enable_number_label_smoothing: bool = False
+    # Gaussian standard deviation for label smoothing (smaller = more concentrated)
+    # Typical values: 0.5 (very concentrated) to 2.0 (very spread)
+    label_smoothing_sigma: float = 1.0
+    # Maximum distance from center digit to include (±support)
+    # For support=3, digit 5 gets non-zero prob for [2,3,4,5,6,7,8]
+    label_smoothing_support: int = 3
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
