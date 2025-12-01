@@ -694,6 +694,7 @@ def main(config: _config.TrainConfig):
         data_iter = iter(data_loader)
         log_mem("Before getting batch")
         batch = next(data_iter)
+        breakpoint()
         vis_batch(batch, tok=tok)
         dataloader_initialized = True
         logging.info("Successfully initialized dataloader and retrieved first batch")
@@ -707,14 +708,14 @@ def main(config: _config.TrainConfig):
     sharding.log_batch_sharding(batch)
 
     train_runner = TrainingStepRunner(config)
-    ptrain_step = jax.jit(
-        train_runner,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-        out_shardings=(train_state_sharding, replicated_sharding),
-        donate_argnums=(1,),
-    )
+    # ptrain_step = jax.jit(
+    #     train_runner,
+    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    #     out_shardings=(train_state_sharding, replicated_sharding),
+    #     donate_argnums=(1,),
+    # )
 
-    # ptrain_step = train_runner
+    ptrain_step = train_runner
 
     if config.do_val:
         dataset = getattr(data_loader, "dataset", None)

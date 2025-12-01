@@ -219,7 +219,7 @@ class PiCoT(_pi0.Pi0):
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
         # Label smoothing for number tokens
-        self.enable_number_label_smoothing = getattr(config, 'enable_number_label_smoothing', False)
+        self.enable_number_label_smoothing = getattr(config, "enable_number_label_smoothing", False)
         if self.enable_number_label_smoothing:
             # Get digit-to-token mapping
             digit_to_token = get_digit_to_token_mapping()
@@ -228,8 +228,9 @@ class PiCoT(_pi0.Pi0):
             vocab_size = paligemma_config.vocab_size
 
             # Create smoothing kernel
-            sigma = getattr(config, 'label_smoothing_sigma', 1.0)
-            support = getattr(config, 'label_smoothing_support', 3)
+            sigma = getattr(config, "label_smoothing_sigma", 1.0)
+            support = getattr(config, "label_smoothing_support", 3)
+            breakpoint()
 
             self.smoothing_kernel = create_digit_smoothing_kernel(
                 vocab_size=vocab_size,
@@ -237,9 +238,7 @@ class PiCoT(_pi0.Pi0):
                 sigma=sigma,
                 support=support,
             )
-            logger.info(
-                f"Label smoothing enabled for units digits: sigma={sigma}, support={support}"
-            )
+            logger.info(f"Label smoothing enabled for units digits: sigma={sigma}, support={support}")
         else:
             self.smoothing_kernel = None
 
@@ -825,7 +824,7 @@ class PiCoT(_pi0.Pi0):
             critical_mask, number_mask, direction_mask = None, None, None
 
         # Get smoothing kernel if available
-        smoothing_kernel = getattr(self, 'smoothing_kernel', None)
+        smoothing_kernel = getattr(self, "smoothing_kernel", None)
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
@@ -902,8 +901,8 @@ class PiCoT(_pi0.Pi0):
             critical_token_mask=observation.critical_token_mask,
             number_token_mask=observation.number_token_mask,
             direction_token_mask=observation.direction_token_mask,
-            units_number_token_mask=getattr(observation, 'units_number_token_mask', None),
-            digit_values=getattr(observation, 'digit_values', None),
+            units_number_token_mask=getattr(observation, "units_number_token_mask", None),
+            digit_values=getattr(observation, "digit_values", None),
             sample_mask=effective_sample_mask,
             loss_name="lang_loss",
             metric_prefix="",

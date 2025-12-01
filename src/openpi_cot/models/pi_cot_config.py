@@ -5,13 +5,13 @@ import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
 from openpi.models import model as _model
-import openpi_cot.models.gemma as _gemma
 from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
+import openpi_cot.models.gemma as _gemma
 import openpi_cot.models.gemma2 as _gemma2
 import openpi_cot.models.gemma3 as _gemma3
 
@@ -60,7 +60,7 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     # Label smoothing for number tokens (units digits)
     # When True, applies truncated Gaussian label smoothing to units digit predictions
-    enable_number_label_smoothing: bool = False
+    enable_number_label_smoothing: bool = True
     # Gaussian standard deviation for label smoothing (smaller = more concentrated)
     # Typical values: 0.5 (very concentrated) to 2.0 (very spread)
     label_smoothing_sigma: float = 1.0
