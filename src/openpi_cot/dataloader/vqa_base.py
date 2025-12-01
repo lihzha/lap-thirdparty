@@ -119,14 +119,12 @@ class _BaseVQADataset(_SingleCoTDataset):
         # Split train/val (only if using train/val split)
         if split in ["train", "val"]:
             self.split_val(split_seed=seed)
-
+        ds = dataset_size(self.dataset)
+        breakpoint()
         self.apply_vqa_restructure()
 
         # Apply minimal transforms
         self.apply_vqa_transforms()
-
-        ds = dataset_size(self.dataset)
-        breakpoint()
 
         # Apply frame filters
         self.apply_vqa_frame_filters()
