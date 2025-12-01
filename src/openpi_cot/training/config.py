@@ -911,7 +911,7 @@ class TrainConfig(upstream_config.TrainConfig):
     model: _model.BaseModelConfig = dataclasses.field(default_factory=build_picot_model)
     lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=build_cosine_lr)
     num_train_steps: int = 100_000
-    save_interval: int = 500
+    save_interval: int = 2500
     log_interval: int = 50
     keep_period: int | None = 10000
     resume: bool = True
