@@ -257,7 +257,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             ):
                 continue  # Skip Gemma3 special tokens
             filtered_tokens.append(t)
-        
+
         return self._tokenizer.decode(filtered_tokens).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
@@ -379,6 +379,8 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             ar_mask = [0] * pad_count + ar_mask
             loss_mask = [False] * pad_count + loss_mask
 
+        breakpoint()
+
         return (
             np.asarray(tokens, dtype=np.int32),
             np.asarray(token_mask),
@@ -403,9 +405,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         # raw_action_tokens = np.array(
         #     self._tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
         # )
-        raw_action_tokens = np.array(
-            self._tokenizer.encode(decoded_tokens.split("|")[0].strip())
-        )
+        raw_action_tokens = np.array(self._tokenizer.encode(decoded_tokens.split("|")[0].strip()))
         action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
         return self._fast_tokenizer.decode(
             [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
