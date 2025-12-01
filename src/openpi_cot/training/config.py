@@ -183,6 +183,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     language_action_format_name: str = "compact"
     decoding_schema: str = "verbose"
     random_time_horizon: bool = False
+    filter_all_1s_actions: bool = False
 
     # Prediction training parameters
     max_prediction_horizon: int = 30
@@ -367,6 +368,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     action_encoding=base_cfg.action_encoding,
                     language_action_format=cot_policy.get_language_action_format(base_cfg.language_action_format_name),
                     random_time_horizon=base_cfg.random_time_horizon,
+                    filter_all_1s_actions=base_cfg.filter_all_1s_actions,
                 )
             ],
             outputs=[cot_policy.CoTOutputs(decoding_schema=base_cfg.decoding_schema)],

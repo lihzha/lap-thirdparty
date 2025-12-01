@@ -600,3 +600,74 @@ def is_idle_language_action(
 
     rotation_l2 = np.sqrt(droll_deg**2 + dpitch_deg**2 + dyaw_deg**2)
     return translation_l2 < translation_threshold and rotation_l2 < rotation_threshold_deg
+
+
+def is_all_1s_language_action(
+    language_action: str,
+    sum_decimal: str,
+    include_rotation: bool = False,
+) -> bool:
+    """Check if all directional movements are exactly 1 cm (suggesting noisy/unreliable data).
+
+    Args:
+        language_action: Language action string in compact or verbose format
+        sum_decimal: Format specifier ("compact", "no_number", or "Xf")
+        include_rotation: Whether to consider rotation in the check
+
+    Returns:
+        True if all non-zero movements are exactly 1 cm, False otherwise
+    """
+    if not language_action or not isinstance(language_action, str):
+        return False  # Empty or invalid action is not all 1s
+
+    # Parse based on format
+    if sum_decimal == "compact":
+        # Compact format: <+dx +dy +dz [+droll +dpitch +dyaw] grip>
+        if include_rotation:
+            # Format: <+09 +09 -08 +10 -05 +15 1>
+            match = re.search(
+                r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+\d>", language_action
+            )
+            if match:
+                dx_cm, dy_cm, dz_cm = int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+                # Get absolute values of non-zero movements
+                translation_values = [abs(v) for v in [dx_cm, dy_cm, dz_cm] if v != 0]
+
+                # Check if all non-zero translations are exactly 1 cm
+                all_translations_are_1 = all(v == 1 for v in translation_values) if translation_values else False
+
+                # For rotation, we don't check "all 1s" since rotation is in degrees
+                # Just return whether translations are all 1s
+                return all_translations_are_1 and len(translation_values) > 0
+            return False
+        # Format: <+09 +09 -08 1>
+        match = re.search(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+\d>", language_action)
+        if match:
+            dx_cm, dy_cm, dz_cm = int(match.group(1)), int(match.group(2)), int(match.group(3))
+            # Get absolute values of non-zero movements
+            translation_values = [abs(v) for v in [dx_cm, dy_cm, dz_cm] if v != 0]
+            # Check if all non-zero movements are exactly 1 cm
+            return all(v == 1 for v in translation_values) and len(translation_values) > 0
+        return False
+
+    # Verbose format: "move forward X cm and move right Y cm..."
+    # Special handling for directional_only format (no_number)
+    if sum_decimal == "no_number":
+        # For directional_only, we can't check if movements are 1 cm since no numbers
+        return False
+
+    # Parse all movement commands with numeric values
+    move_pattern = re.compile(r"move\s+(right|left|forward|backward|back|up|down)\s+([\d.]+)\s*cm", re.IGNORECASE)
+
+    movement_values = []
+    for match in move_pattern.finditer(language_action):
+        value = float(match.group(2))
+        if value != 0:
+            movement_values.append(value)
+
+    # Check if all non-zero movements are exactly 1 cm
+    if not movement_values:
+        return False
+
+    return all(abs(v - 1.0) < 0.01 for v in movement_values)  # Use small epsilon for float comparison

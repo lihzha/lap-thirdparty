@@ -8,6 +8,7 @@ from openpi import transforms as upstream_transforms
 from openpi_cot.dataloader.helpers import ActionEncoding
 from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
 from openpi_cot.models.adapters.model_adapter import ExtendedModelType
+from openpi_cot.policies.utils import is_all_1s_language_action
 from openpi_cot.policies.utils import is_idle_language_action
 from openpi_cot.policies.utils import maybe_parse_serialized_tensor_to_ndarray
 from openpi_cot.policies.utils import parse_image
@@ -156,6 +157,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     random_time_horizon: bool = True
     # Available time horizons to sample from (in seconds)
     time_horizon_options: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 4.0)
+    # Whether to filter out samples where all movements are exactly 1 cm (likely noisy data)
+    filter_all_1s_actions: bool = False
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
@@ -415,7 +418,18 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     self.language_action_format.get_sum_decimal(),
                     self.language_action_format.include_rotation,
                 )
-                inputs["sample_mask"] = not is_idle
+
+                # Check if all movements are exactly 1 cm (if filter is enabled)
+                is_all_1s = False
+                if self.filter_all_1s_actions:
+                    is_all_1s = is_all_1s_language_action(
+                        inputs["language_actions"],
+                        self.language_action_format.get_sum_decimal(),
+                        self.language_action_format.include_rotation,
+                    )
+
+                # Filter out samples that are idle OR all 1s (if enabled)
+                inputs["sample_mask"] = not (is_idle or is_all_1s)
             else:
                 inputs["sample_mask"] = True
         else:
