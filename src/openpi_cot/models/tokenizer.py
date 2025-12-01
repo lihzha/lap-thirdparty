@@ -379,8 +379,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             ar_mask = [0] * pad_count + ar_mask
             loss_mask = [False] * pad_count + loss_mask
 
-        breakpoint()
-
         return (
             np.asarray(tokens, dtype=np.int32),
             np.asarray(token_mask),
