@@ -29,17 +29,6 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
-class AuxiliaryConstant(nnx.Variable):
-    """Non-trainable auxiliary constant that's excluded from parameter checkpoints.
-
-    Used for values that:
-    - Are not trainable (derived from config)
-    - Don't need to be saved/loaded from checkpoints
-    - Need to be part of the NNX graph for JIT compatibility
-    """
-    pass
-
-
 def cross_entropy_loss(
     logits: jnp.ndarray,
     labels: jnp.ndarray,
@@ -230,30 +219,17 @@ class PiCoT(_pi0.Pi0):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
-        # Label smoothing for number tokens
+        # Label smoothing for number tokens - store only config, not the kernel itself
         self.enable_number_label_smoothing = getattr(config, "enable_number_label_smoothing", False)
         if self.enable_number_label_smoothing:
-            # Get digit-to-token mapping
-            digit_to_token = get_digit_to_token_mapping()
-
-            # Get vocab size from config (use paligemma config vocab size)
-            vocab_size = PALIGEMMA_VOCAB_SIZE
-
-            # Create smoothing kernel
-            sigma = getattr(config, "label_smoothing_sigma", 1.0)
-            support = getattr(config, "label_smoothing_support", 3)
-
-            kernel = create_digit_smoothing_kernel(
-                vocab_size=vocab_size,
-                digit_to_token_id=digit_to_token,
-                sigma=sigma,
-                support=support,
+            self.label_smoothing_sigma = getattr(config, "label_smoothing_sigma", 1.0)
+            self.label_smoothing_support = getattr(config, "label_smoothing_support", 3)
+            logger.info(
+                f"Label smoothing enabled for units digits: sigma={self.label_smoothing_sigma}, support={self.label_smoothing_support}"
             )
-            # Wrap in AuxiliaryConstant - excluded from parameter checkpoints
-            self.smoothing_kernel = AuxiliaryConstant(kernel)
-            logger.info(f"Label smoothing enabled for units digits: sigma={sigma}, support={support}")
         else:
-            self.smoothing_kernel = None
+            self.label_smoothing_sigma = None
+            self.label_smoothing_support = None
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
@@ -604,6 +580,8 @@ class PiCoT(_pi0.Pi0):
             blend_mask = jnp.logical_and(units_number_mask, valid_digit_mask)[..., None]  # [b, s, 1]
             target_distribution = jnp.where(blend_mask, smoothed_dists, hard_targets)
 
+            breakpoint()
+
             # Compute loss with soft targets
             per_sample_loss = cross_entropy_loss_with_soft_targets(
                 logits,
@@ -836,10 +814,18 @@ class PiCoT(_pi0.Pi0):
         else:
             critical_mask, number_mask, direction_mask = None, None, None
 
-        # Get smoothing kernel if available
-        smoothing_kernel = getattr(self, "smoothing_kernel", None)
-        if smoothing_kernel is not None and hasattr(smoothing_kernel, "value"):
-            smoothing_kernel = smoothing_kernel.value
+        # Create smoothing kernel on-the-fly if label smoothing is enabled
+        smoothing_kernel = None
+        if self.enable_number_label_smoothing:
+            digit_to_token = get_digit_to_token_mapping()
+            smoothing_kernel = create_digit_smoothing_kernel(
+                vocab_size=PALIGEMMA_VOCAB_SIZE,
+                digit_to_token_id=digit_to_token,
+                sigma=self.label_smoothing_sigma,
+                support=self.label_smoothing_support,
+            )
+
+        breakpoint()
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
