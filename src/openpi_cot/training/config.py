@@ -35,9 +35,9 @@ from openpi_cot.shared.download import maybe_download
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
 from openpi_cot.transforms import ExtractFASTActions
+from openpi_cot.transforms import PadStates
 from openpi_cot.transforms import TokenizeFASTCoTInputs
 from openpi_cot.transforms import TokenizePromptAndReasoning
-from openpi_cot.transforms import PadStates
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
@@ -985,8 +985,8 @@ _CONFIGS = [
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
         ),
-        save_interval=500,
-        keep_period=5000,
+        save_interval=2500,
+        keep_period=10000,
         resume=True,
     ),
     # Gemma3 configs
@@ -1011,7 +1011,7 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=1,
         weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
-        save_interval=500,
+        save_interval=2500,
         keep_period=10000,
         resume=True,
         checkpoint_base_dir="gs://pi0-cot/checkpoints",
@@ -1046,8 +1046,8 @@ _CONFIGS = [
         base_name="pi_combined_fast",
         devices=["v6", "v6europe", "v4", "local"],
         model=pi_fast.PiFastConfig(
-            action_horizon=32,
-            max_token_len=220,
+            action_horizon=16,
+            max_token_len=150,
             pi05=True,
             discrete_state_input=True,
         ),
@@ -1061,7 +1061,7 @@ _CONFIGS = [
             "shuffle_buffer_size": 400_000,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        save_interval=500,
+        save_interval=2500,
         keep_period=10000,
         resume=True,
     ),
@@ -1069,8 +1069,8 @@ _CONFIGS = [
         base_name="pi_droid_fast",
         devices=["v6", "v6europe", "v4", "local"],
         model=pi_fast.PiFastConfig(
-            action_horizon=32,
-            max_token_len=220,
+            action_horizon=16,
+            max_token_len=150,
             pi05=True,
             discrete_state_input=True,
         ),
@@ -1082,7 +1082,7 @@ _CONFIGS = [
             "droid_dataset_name": "droid",
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        save_interval=500,
+        save_interval=2500,
         keep_period=10000,
         resume=True,
     ),
@@ -1250,7 +1250,10 @@ _CONFIGS = [
             prompt_format="no_state",
         ),
         data=RLDSCoTDataConfig(
-            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef_with_rotation"
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            decoding_schema="verbose_eef_with_rotation",
         ),
     ),
     TrainConfig(
@@ -1266,7 +1269,10 @@ _CONFIGS = [
         ),
         data=RLDSCoTDataConfig(
             action_proprio_normalization_type=NormalizationType.BOUNDS,
-            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef_with_rotation", 
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            decoding_schema="verbose_eef_with_rotation",
         ),
     ),
     TrainConfig(
@@ -1342,9 +1348,9 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=32,
         num_train_steps=50000,
-        save_interval=500,
+        save_interval=2000,
         log_interval=100,
-        keep_period=500,
+        keep_period=2000,
     ),
     *create_multi_device_configs(
         base_name="pi05_libero_finetune_freezevlm",
@@ -1373,9 +1379,9 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=32,
         num_train_steps=50000,
-        save_interval=500,
+        save_interval=2000,
         log_interval=100,
-        keep_period=500,
+        keep_period=2000,
         freeze_filter=pi_cot_config.PiCoTConfig(
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
@@ -1408,9 +1414,9 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=32,
         num_train_steps=50000,
-        save_interval=500,
+        save_interval=2000,
         log_interval=100,
-        keep_period=500,
+        keep_period=2000,
         freeze_filter=pi_cot_config.PiCoTConfig(
             paligemma_variant="gemma_2b_lora",
             action_expert_variant="gemma_300m",
@@ -1443,9 +1449,9 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=32,
         num_train_steps=50000,
-        save_interval=500,
+        save_interval=2000,
         log_interval=100,
-        keep_period=500,
+        keep_period=2000,
     ),
     TrainConfig(
         name="paligemma2_libero_finetune_local",
@@ -1472,9 +1478,9 @@ _CONFIGS = [
         fsdp_devices=1,
         batch_size=8,
         num_train_steps=50000,
-        save_interval=1000,
+        save_interval=2000,
         log_interval=100,
-        keep_period=5000,
+        keep_period=2000,
         checkpoint_base_dir="/n/fs/robot-data/pi0-cot/checkpoints",
     ),
     TrainConfig(
