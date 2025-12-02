@@ -580,9 +580,6 @@ class PiCoT(_pi0.Pi0):
             blend_mask = jnp.logical_and(units_number_mask, valid_digit_mask)[..., None]  # [b, s, 1]
             target_distribution = jnp.where(blend_mask, smoothed_dists, hard_targets)
 
-            breakpoint()
-
-            # Compute loss with soft targets
             per_sample_loss = cross_entropy_loss_with_soft_targets(
                 logits,
                 target_distribution,
@@ -824,8 +821,6 @@ class PiCoT(_pi0.Pi0):
                 sigma=self.label_smoothing_sigma,
                 support=self.label_smoothing_support,
             )
-
-        breakpoint()
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(

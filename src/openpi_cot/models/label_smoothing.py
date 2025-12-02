@@ -63,6 +63,10 @@ def create_digit_smoothing_kernel(
 
             # Only include valid digits [0, 9]
             if 0 <= neighbor <= 9:
+                # Exclude boundary edge cases to prevent smoothing toward extremes
+                # Digit 1 should not smooth to 0, digit 8 should not smooth to 9
+                if (digit == 1 and neighbor == 0) or (digit == 8 and neighbor == 9):
+                    continue
                 # Gaussian weight based on distance from center
                 weight = stats.norm.pdf(offset, loc=0, scale=sigma)
                 probs[neighbor] = weight
