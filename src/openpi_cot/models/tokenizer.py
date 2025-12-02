@@ -308,8 +308,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
                 else:
                     i += 1
 
-        breakpoint()
-
         return (
             np.asarray(tokens, dtype=np.int32),
             attn_mask,
