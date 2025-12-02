@@ -10,6 +10,7 @@ from openpi.models.model import Observation
 import openpi.models.pi0 as _pi0
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
+from functools import lru_cache
 from typing_extensions import override
 
 from openpi_cot.models.adapters.gemma_adapter import Gemma2ModuleWithDecode
@@ -27,6 +28,24 @@ import openpi_cot.models.siglip as _siglip_gemma3
 
 logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
+
+
+@lru_cache(maxsize=8)
+def _get_cached_smoothing_kernel(
+    vocab_size: int,
+    sigma: float,
+    support: int,
+    dtype: str,
+) -> jnp.ndarray:
+    """Create (once) and cache the smoothing kernel keyed by hyperparams + dtype."""
+    digit_to_token = get_digit_to_token_mapping()
+    kernel = create_digit_smoothing_kernel(
+        vocab_size=vocab_size,
+        digit_to_token_id=digit_to_token,
+        sigma=sigma,
+        support=support,
+    )
+    return kernel.astype(jnp.dtype(dtype))
 
 
 def cross_entropy_loss(
@@ -814,12 +833,11 @@ class PiCoT(_pi0.Pi0):
         # Create smoothing kernel on-the-fly if label smoothing is enabled
         smoothing_kernel = None
         if self.enable_number_label_smoothing:
-            digit_to_token = get_digit_to_token_mapping()
-            smoothing_kernel = create_digit_smoothing_kernel(
+            smoothing_kernel = _get_cached_smoothing_kernel(
                 vocab_size=PALIGEMMA_VOCAB_SIZE,
-                digit_to_token_id=digit_to_token,
-                sigma=self.label_smoothing_sigma,
-                support=self.label_smoothing_support,
+                sigma=float(self.label_smoothing_sigma),
+                support=int(self.label_smoothing_support),
+                dtype=str(shift_logits.dtype),
             )
 
         # Compute loss and metrics
