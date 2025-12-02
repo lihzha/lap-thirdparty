@@ -88,6 +88,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_langact_mask": reasoning_mask,
+            "units_number_token_mask": units_number_mask,
+            "digit_values": digit_values,
         }
 
         if self.verbose_mode:
@@ -96,8 +98,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
                     "critical_token_mask": critical_mask,
                     "number_token_mask": numeric_mask,
                     "direction_token_mask": direction_mask,
-                    "units_number_token_mask": units_number_mask,
-                    "digit_values": digit_values,
                     "tokenized_dataset_name": tokenized_dataset_name,
                 }
             )
@@ -282,6 +282,7 @@ class PadStates(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         data["state"] = pad_to_dim(data["state"], self.model_action_dim, axis=-1)
         return data
+
 
 @dataclasses.dataclass(frozen=True)
 class NormalizeActionAndProprio(DataTransformFn):
@@ -525,7 +526,6 @@ class ExtractFASTActions(DataTransformFn):
             **data,
             "actions": actions,
         }
-
 
 
 def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.0) -> np.ndarray:
