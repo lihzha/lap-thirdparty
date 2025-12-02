@@ -10,6 +10,7 @@ from openpi.models.model import Observation
 import openpi.models.pi0 as _pi0
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
+from functools import lru_cache
 from typing_extensions import override
 
 from openpi_cot.models.adapters.gemma_adapter import Gemma2ModuleWithDecode
@@ -20,10 +21,31 @@ from openpi_cot.models.adapters.model_adapter import preprocess_observation
 from openpi_cot.models.gemma import get_config as get_gemma_config
 from openpi_cot.models.gemma2 import get_config as get_gemma2_config
 from openpi_cot.models.gemma3 import get_config as get_gemma3_config
+from openpi_cot.models.label_smoothing import create_digit_smoothing_kernel
+from openpi_cot.models.label_smoothing import get_digit_to_token_mapping
 import openpi_cot.models.pi_cot_config as _pi_cot_config
 import openpi_cot.models.siglip as _siglip_gemma3
 
 logger = logging.getLogger("openpi")
+PALIGEMMA_VOCAB_SIZE = 257_152
+
+
+@lru_cache(maxsize=8)
+def _get_cached_smoothing_kernel(
+    vocab_size: int,
+    sigma: float,
+    support: int,
+    dtype: str,
+) -> jnp.ndarray:
+    """Create (once) and cache the smoothing kernel keyed by hyperparams + dtype."""
+    digit_to_token = get_digit_to_token_mapping()
+    kernel = create_digit_smoothing_kernel(
+        vocab_size=vocab_size,
+        digit_to_token_id=digit_to_token,
+        sigma=sigma,
+        support=support,
+    )
+    return kernel.astype(jnp.dtype(dtype))
 
 
 def cross_entropy_loss(
@@ -54,6 +76,55 @@ def cross_entropy_loss(
     gather_idx = jnp.expand_dims(labels.astype(jnp.int32), axis=axis)  # (..., 1)
     gold_logp = jnp.take_along_axis(log_probs, gather_idx, axis=axis)  # (..., 1)
     loss = -gold_logp.squeeze(axis)  # (...)
+
+    # optional masking
+    if per_example:
+        # Reduce over all non-batch dims (assume batch is leading dimension)
+        reduce_axes = tuple(range(1, loss.ndim))
+        if mask is not None:
+            loss = loss * mask
+            denom = jnp.maximum(mask.sum(axis=reduce_axes), 1)  # [B]
+        else:
+            # Mean over all trailing dims
+            denom = jnp.prod(jnp.array(loss.shape[1:]))
+        total = loss.sum(axis=reduce_axes)
+        return total / denom
+    if mask is not None:
+        loss = loss * mask
+        denom = jnp.maximum(mask.sum(), 1)  # avoid ÷0 for empty mask
+    else:
+        denom = loss.size
+    total = loss.sum()
+    return total / denom
+
+
+def cross_entropy_loss_with_soft_targets(
+    logits: jnp.ndarray,
+    target_distribution: jnp.ndarray,
+    mask: jnp.ndarray | None = None,
+    axis: int = -1,
+    *,
+    per_example: bool = False,
+) -> jnp.ndarray:
+    """Cross-entropy loss with soft target distributions (for label smoothing).
+
+    Args
+    ----
+      logits : (..., V)   – raw scores.
+      target_distribution : (..., V) – probability distribution over classes (sums to 1 over V).
+      mask   : (...) or None – 0/1 or bool; broadcastable to target shape.
+      axis   : int        – class dimension in `logits`.
+
+    Returns
+    -------
+      If per_example=False (default): scalar mean.
+      If per_example=True: per-example mean over non-batch dims (shape [B]).
+    """
+    # log-probs
+    log_probs = nnx.log_softmax(logits, axis=axis)  # (..., V)
+
+    # KL divergence: -sum(p_target * log(p_model))
+    loss = -jnp.sum(target_distribution * log_probs, axis=axis)  # (...)
 
     # optional masking
     if per_example:
@@ -166,6 +237,18 @@ class PiCoT(_pi0.Pi0):
             self.action_time_mlp_in = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+
+        # Label smoothing for number tokens - store only config, not the kernel itself
+        self.enable_number_label_smoothing = getattr(config, "enable_number_label_smoothing", False)
+        if self.enable_number_label_smoothing:
+            self.label_smoothing_sigma = getattr(config, "label_smoothing_sigma", 1.0)
+            self.label_smoothing_support = getattr(config, "label_smoothing_support", 3)
+            logger.info(
+                f"Label smoothing enabled for units digits: sigma={self.label_smoothing_sigma}, support={self.label_smoothing_support}"
+            )
+        else:
+            self.label_smoothing_sigma = None
+            self.label_smoothing_support = None
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
@@ -462,6 +545,9 @@ class PiCoT(_pi0.Pi0):
         critical_mask: at.Bool[at.Array, "b s"] | None = None,
         number_mask: at.Bool[at.Array, "b s"] | None = None,
         direction_mask: at.Bool[at.Array, "b s"] | None = None,
+        units_number_mask: at.Bool[at.Array, "b s"] | None = None,
+        digit_values: at.Int[at.Array, "b s"] | None = None,
+        smoothing_kernel: at.Float[at.Array, "10 v"] | None = None,
         verbose_mode: bool = False,
         return_predictions: bool = False,
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
@@ -474,6 +560,9 @@ class PiCoT(_pi0.Pi0):
             critical_mask: Optional mask for critical tokens [b, s] (only used if verbose_mode=True)
             number_mask: Optional mask for number tokens [b, s] (only used if verbose_mode=True)
             direction_mask: Optional mask for direction tokens [b, s] (only used if verbose_mode=True)
+            units_number_mask: Optional mask for units digit tokens [b, s]
+            digit_values: Optional digit values (0-9) for number tokens [b, s]
+            smoothing_kernel: Optional smoothing kernel [10, vocab_size] for label smoothing
             verbose_mode: Whether to compute detailed accuracy metrics (requires critical/number/direction masks)
             return_predictions: Whether to return predictions and labels in metrics (independent of verbose_mode)
 
@@ -482,14 +571,50 @@ class PiCoT(_pi0.Pi0):
         """
         metrics = {}
 
-        # Compute cross-entropy loss
-        per_sample_loss = cross_entropy_loss(
-            logits,
-            labels,
-            mask=token_mask,
-            axis=-1,
-            per_example=True,
+        # Check if label smoothing should be applied
+        use_label_smoothing = (
+            units_number_mask is not None
+            and digit_values is not None
+            and smoothing_kernel is not None
+            and jnp.any(units_number_mask)  # Only if there are units digits
         )
+
+        if use_label_smoothing:
+            # Create soft target distribution
+            b, s, vocab_size = logits.shape
+
+            # Start with hard targets (one-hot)
+            hard_targets = jax.nn.one_hot(labels, vocab_size, dtype=jnp.float32)  # [b, s, V]
+
+            # For units digits, replace with smoothed distributions
+            # digit_values: [b, s] with values 0-9 for digits, -1 for non-digits
+            valid_digit_mask = digit_values >= 0  # [b, s]
+
+            # Gather smoothed distributions: kernel[digit_values]
+            # Clip digit_values to valid range [0, 9] for indexing (invalid will be masked out anyway)
+            clipped_digit_values = jnp.clip(digit_values, 0, 9)
+            smoothed_dists = smoothing_kernel[clipped_digit_values]  # [b, s, V]
+
+            # Blend: use smoothed for units digits, hard for everything else
+            blend_mask = jnp.logical_and(units_number_mask, valid_digit_mask)[..., None]  # [b, s, 1]
+            target_distribution = jnp.where(blend_mask, smoothed_dists, hard_targets)
+
+            per_sample_loss = cross_entropy_loss_with_soft_targets(
+                logits,
+                target_distribution,
+                mask=token_mask,
+                axis=-1,
+                per_example=True,
+            )
+        else:
+            # Standard hard target loss
+            per_sample_loss = cross_entropy_loss(
+                logits,
+                labels,
+                mask=token_mask,
+                axis=-1,
+                per_example=True,
+            )
 
         # Return predictions if requested (independently of verbose_mode)
         # IMPORTANT: Predictions are ONLY returned when return_predictions=True
@@ -635,6 +760,8 @@ class PiCoT(_pi0.Pi0):
         critical_token_mask: at.Bool[at.Array, "b s"] | None,
         number_token_mask: at.Bool[at.Array, "b s"] | None,
         direction_token_mask: at.Bool[at.Array, "b s"] | None,
+        units_number_token_mask: at.Bool[at.Array, "b s"] | None,
+        digit_values: at.Int[at.Array, "b s"] | None,
         sample_mask: at.Bool[at.Array, "b"] | None,
         loss_name: str,
         metric_prefix: str,
@@ -653,6 +780,8 @@ class PiCoT(_pi0.Pi0):
             critical_token_mask: Mask for critical tokens
             number_token_mask: Mask for number tokens
             direction_token_mask: Mask for direction tokens
+            units_number_token_mask: Mask for units digit tokens
+            digit_values: Digit values (0-9) for number tokens
             sample_mask: Per-sample mask for batch-level filtering
             loss_name: Name to use for loss metric (e.g., "lang_loss", "pred_loss")
             metric_prefix: Prefix to add to metric names (e.g., "", "pred_")
@@ -678,26 +807,38 @@ class PiCoT(_pi0.Pi0):
             sample_mask,
         )
 
+        # Prepare masks for label smoothing and accuracy metrics
+        ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
+
+        def prepare_mask(mask):
+            if mask is None:
+                return None
+            shifted_mask = mask[:, 1:]
+            if ex_mask is not None:
+                return shifted_mask * ex_mask
+            return shifted_mask
+
+        # Always prepare units_number_mask and digit_values for label smoothing (if available)
+        units_mask_shifted = prepare_mask(units_number_token_mask)
+        digit_values_shifted = digit_values[:, 1:] if digit_values is not None else None
+
         # Only prepare detailed masks if verbose_mode is enabled (for accuracy metrics)
-        # When return_predictions=True but verbose_mode=False, we skip this expensive preparation
         if verbose_mode:
-            # Prepare additional masks for accuracy computation
-            ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
-
-            def prepare_mask(mask):
-                if mask is None:
-                    return None
-                shifted_mask = mask[:, 1:]
-                if ex_mask is not None:
-                    return shifted_mask * ex_mask
-                return shifted_mask
-
             critical_mask = prepare_mask(critical_token_mask)
             number_mask = prepare_mask(number_token_mask)
             direction_mask = prepare_mask(direction_token_mask)
         else:
-            # Skip mask preparation when only returning predictions
             critical_mask, number_mask, direction_mask = None, None, None
+
+        # Create smoothing kernel on-the-fly if label smoothing is enabled
+        smoothing_kernel = None
+        if self.enable_number_label_smoothing:
+            smoothing_kernel = _get_cached_smoothing_kernel(
+                vocab_size=PALIGEMMA_VOCAB_SIZE,
+                sigma=float(self.label_smoothing_sigma),
+                support=int(self.label_smoothing_support),
+                dtype=str(shift_logits.dtype),
+            )
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
@@ -707,6 +848,9 @@ class PiCoT(_pi0.Pi0):
             critical_mask=critical_mask,
             number_mask=number_mask,
             direction_mask=direction_mask,
+            units_number_mask=units_mask_shifted,
+            digit_values=digit_values_shifted,
+            smoothing_kernel=smoothing_kernel,
             verbose_mode=verbose_mode,
             return_predictions=return_predictions,
         )
@@ -771,6 +915,8 @@ class PiCoT(_pi0.Pi0):
             critical_token_mask=observation.critical_token_mask,
             number_token_mask=observation.number_token_mask,
             direction_token_mask=observation.direction_token_mask,
+            units_number_token_mask=getattr(observation, "units_number_token_mask", None),
+            digit_values=getattr(observation, "digit_values", None),
             sample_mask=effective_sample_mask,
             loss_name="lang_loss",
             metric_prefix="",

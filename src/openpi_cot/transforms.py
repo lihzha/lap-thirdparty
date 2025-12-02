@@ -63,7 +63,15 @@ class TokenizePromptAndReasoning(DataTransformFn):
         time_horizon_seconds = data.pop("time_horizon_seconds", None)
 
         # Tokenize regular reasoning
-        tokens, pad_mask, reasoning_mask, numeric_mask, direction_mask = self.tokenizer.tokenize_cot(
+        (
+            tokens,
+            pad_mask,
+            reasoning_mask,
+            numeric_mask,
+            direction_mask,
+            units_number_mask,
+            digit_values,
+        ) = self.tokenizer.tokenize_cot(
             prompt,
             language_actions,
             state,
@@ -80,6 +88,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_langact_mask": reasoning_mask,
+            "units_number_token_mask": units_number_mask,
+            "digit_values": digit_values,
         }
 
         if self.verbose_mode:
@@ -272,6 +282,7 @@ class PadStates(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         data["state"] = pad_to_dim(data["state"], self.model_action_dim, axis=-1)
         return data
+
 
 @dataclasses.dataclass(frozen=True)
 class NormalizeActionAndProprio(DataTransformFn):
@@ -515,7 +526,6 @@ class ExtractFASTActions(DataTransformFn):
             **data,
             "actions": actions,
         }
-
 
 
 def pad_to_dim(x: np.ndarray, target_dim: int, axis: int = -1, value: float = 0.0) -> np.ndarray:
