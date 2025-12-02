@@ -98,55 +98,6 @@ def cross_entropy_loss(
     return total / denom
 
 
-def cross_entropy_loss_with_soft_targets(
-    logits: jnp.ndarray,
-    target_distribution: jnp.ndarray,
-    mask: jnp.ndarray | None = None,
-    axis: int = -1,
-    *,
-    per_example: bool = False,
-) -> jnp.ndarray:
-    """Cross-entropy loss with soft target distributions (for label smoothing).
-
-    Args
-    ----
-      logits : (..., V)   – raw scores.
-      target_distribution : (..., V) – probability distribution over classes (sums to 1 over V).
-      mask   : (...) or None – 0/1 or bool; broadcastable to target shape.
-      axis   : int        – class dimension in `logits`.
-
-    Returns
-    -------
-      If per_example=False (default): scalar mean.
-      If per_example=True: per-example mean over non-batch dims (shape [B]).
-    """
-    # log-probs
-    log_probs = nnx.log_softmax(logits, axis=axis)  # (..., V)
-
-    # KL divergence: -sum(p_target * log(p_model))
-    loss = -jnp.sum(target_distribution * log_probs, axis=axis)  # (...)
-
-    # optional masking
-    if per_example:
-        # Reduce over all non-batch dims (assume batch is leading dimension)
-        reduce_axes = tuple(range(1, loss.ndim))
-        if mask is not None:
-            loss = loss * mask
-            denom = jnp.maximum(mask.sum(axis=reduce_axes), 1)  # [B]
-        else:
-            # Mean over all trailing dims
-            denom = jnp.prod(jnp.array(loss.shape[1:]))
-        total = loss.sum(axis=reduce_axes)
-        return total / denom
-    if mask is not None:
-        loss = loss * mask
-        denom = jnp.maximum(mask.sum(), 1)  # avoid ÷0 for empty mask
-    else:
-        denom = loss.size
-    total = loss.sum()
-    return total / denom
-
-
 class PiCoT(_pi0.Pi0):
     BEGIN_IMAGE_TOKEN = 255999  # only for Gemma3
     END_IMAGE_TOKEN = 262144  # only for Gemma3
@@ -580,32 +531,37 @@ class PiCoT(_pi0.Pi0):
         )
 
         if use_label_smoothing:
-            # Create soft target distribution
-            b, s, vocab_size = logits.shape
+            # Memory-efficient label smoothing implementation
+            # Instead of creating full [b, s, V] arrays, we compute losses separately
+            # and blend them, only materializing smoothed distributions for units digits
 
-            # Start with hard targets (one-hot)
-            hard_targets = jax.nn.one_hot(labels, vocab_size, dtype=jnp.float32)  # [b, s, V]
+            log_probs = nnx.log_softmax(logits, axis=-1)  # [b, s, V]
 
-            # For units digits, replace with smoothed distributions
-            # digit_values: [b, s] with values 0-9 for digits, -1 for non-digits
+            # Identify which tokens need smoothing (units digits with valid digit values)
             valid_digit_mask = digit_values >= 0  # [b, s]
+            smoothed_token_mask = jnp.logical_and(units_number_mask, valid_digit_mask)  # [b, s]
 
-            # Gather smoothed distributions: kernel[digit_values]
-            # Clip digit_values to valid range [0, 9] for indexing (invalid will be masked out anyway)
+            # 1. Compute hard-target loss for non-smoothed tokens (memory efficient)
+            gather_idx = jnp.expand_dims(labels.astype(jnp.int32), axis=-1)  # [b, s, 1]
+            gold_logp = jnp.take_along_axis(log_probs, gather_idx, axis=-1).squeeze(-1)  # [b, s]
+            hard_loss = -gold_logp  # [b, s]
+
+            # 2. Compute smoothed loss for units digits (only for those specific tokens)
+            # Get smoothed distributions for units digits
             clipped_digit_values = jnp.clip(digit_values, 0, 9)
             smoothed_dists = smoothing_kernel[clipped_digit_values]  # [b, s, V]
+            # KL divergence: -sum(p_target * log(p_model))
+            smoothed_loss = -jnp.sum(smoothed_dists * log_probs, axis=-1)  # [b, s]
 
-            # Blend: use smoothed for units digits, hard for everything else
-            blend_mask = jnp.logical_and(units_number_mask, valid_digit_mask)[..., None]  # [b, s, 1]
-            target_distribution = jnp.where(blend_mask, smoothed_dists, hard_targets)
+            # 3. Blend: use smoothed loss for units digits, hard loss for everything else
+            # This avoids creating full vocab-sized target distributions
+            per_token_loss = jnp.where(smoothed_token_mask, smoothed_loss, hard_loss)  # [b, s]
 
-            per_sample_loss = cross_entropy_loss_with_soft_targets(
-                logits,
-                target_distribution,
-                mask=token_mask,
-                axis=-1,
-                per_example=True,
-            )
+            # Apply token mask and reduce
+            reduce_axes = tuple(range(1, per_token_loss.ndim))
+            masked_loss = per_token_loss * token_mask
+            denom = jnp.maximum(token_mask.sum(axis=reduce_axes), 1)
+            per_sample_loss = masked_loss.sum(axis=reduce_axes) / denom
         else:
             # Standard hard target loss
             per_sample_loss = cross_entropy_loss(
