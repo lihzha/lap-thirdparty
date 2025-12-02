@@ -60,7 +60,7 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     # Label smoothing for number tokens (units digits)
     # When True, applies truncated Gaussian label smoothing to units digit predictions
-    enable_number_label_smoothing: bool = True
+    enable_number_label_smoothing: bool = False
     # Gaussian standard deviation for label smoothing (smaller = more concentrated)
     # Typical values: 0.5 (very concentrated) to 2.0 (very spread)
     label_smoothing_sigma: float = 1.0
