@@ -523,11 +523,12 @@ class PiCoT(_pi0.Pi0):
         metrics = {}
 
         # Check if label smoothing should be applied
+        # Note: We check only for None to keep the condition static (not traced)
+        # If units_number_mask is all False, the masking logic below handles it correctly
         use_label_smoothing = (
             units_number_mask is not None
             and digit_values is not None
             and smoothing_kernel is not None
-            and jnp.any(units_number_mask)  # Only if there are units digits
         )
 
         if use_label_smoothing:
