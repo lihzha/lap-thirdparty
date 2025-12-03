@@ -118,7 +118,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         is_vqa_sample: bool = False,
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarra | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
         """Tokenize prompt and reasoning for chain-of-thought model.
 
         Args:
