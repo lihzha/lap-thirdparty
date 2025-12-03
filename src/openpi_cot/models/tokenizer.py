@@ -260,6 +260,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         digit_values = None
 
         if not is_vqa_sample and self.enable_number_label_smoothing:
+            logging.info("Building units_number_mask and digit_values for label smoothing.")
             # Create units_number_mask and digit_values for label smoothing
             units_number_mask = np.zeros(self._max_len, dtype=bool)
             digit_values = np.full(self._max_len, -1, dtype=np.int8)  # -1 for non-digits
