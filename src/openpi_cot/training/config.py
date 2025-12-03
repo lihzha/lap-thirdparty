@@ -229,6 +229,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
                             tokenizer_type=self.tokenizer_type,
+                            enable_number_label_smoothing=model_config.enable_number_label_smoothing,
                         )
                     )
                 ]
@@ -242,6 +243,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
                             tokenizer_type=self.tokenizer_type,
+                            enable_number_label_smoothing=model_config.enable_number_label_smoothing,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         verbose_mode=model_config.verbose_mode,
