@@ -1212,7 +1212,20 @@ class PiCoT(_pi0.Pi0):
         if effective_verbose_mode:
             metrics["per_sample_loss"] = total_per_sample_loss
 
-        return jnp.mean(total_per_sample_loss), metrics
+        # Compute final loss with correct normalization
+        # When samples are masked out, their loss is 0 and shouldn't be counted in denominator
+        if self.enable_action_training:
+            # Action training applies to all samples, so use batch size normalization
+            final_loss = jnp.mean(total_per_sample_loss)
+        elif self.enable_langact_training and observation.sample_mask is not None:
+            # Only langact training with sample masking: divide by number of active samples
+            num_active_samples = jnp.maximum(jnp.sum(observation.sample_mask), 1.0)
+            final_loss = jnp.sum(total_per_sample_loss) / num_active_samples
+        else:
+            # No masking or fallback: use mean over all samples
+            final_loss = jnp.mean(total_per_sample_loss)
+
+        return final_loss, metrics
 
     @override
     def compute_loss_with_decoded_tokens(
@@ -1284,8 +1297,16 @@ class PiCoT(_pi0.Pi0):
 
         # Extract predictions, labels, and mask from metrics
         # These are always present because return_predictions=True above
+
+        # Compute loss with correct normalization (same as compute_loss)
+        if observation.sample_mask is not None:
+            num_active_samples = jnp.maximum(jnp.sum(observation.sample_mask), 1.0)
+            final_loss = jnp.sum(lang_loss) / num_active_samples
+        else:
+            final_loss = jnp.mean(lang_loss)
+
         metrics = {
-            "loss": jnp.mean(lang_loss),
+            "loss": final_loss,
             "predictions": lang_metrics["predictions"],
             "labels": lang_metrics["labels"],
             "token_mask": lang_metrics["token_mask"],
@@ -1298,7 +1319,7 @@ class PiCoT(_pi0.Pi0):
                 if key not in ["predictions", "labels", "token_mask"]:
                     metrics[key] = value
 
-        return jnp.mean(lang_loss), metrics
+        return final_loss, metrics
 
     def _slide_window_cache(
         self,
