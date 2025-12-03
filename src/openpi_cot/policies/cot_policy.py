@@ -159,6 +159,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     time_horizon_options: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 4.0)
     # Whether to filter out samples where all movements are exactly 1 cm (likely noisy data)
     filter_all_1s_actions: bool = False
+    enable_langact_training: bool = True
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
@@ -402,7 +403,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             initial_state = np.asarray(data["raw_state"])
 
         # Always prepare regular language actions for reasoning loss.
-        if "language_actions" in data:
+        if "language_actions" in data and self.enable_langact_training:
             inputs["language_actions"], time_horizon_seconds = self._prepare_text(
                 data, "language_actions", initial_state
             )

@@ -118,7 +118,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         is_vqa_sample: bool = False,
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarra | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
         """Tokenize prompt and reasoning for chain-of-thought model.
 
         Args:
@@ -213,18 +213,21 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         # Create masks
         attn_mask = np.zeros(self._max_len, dtype=bool)
-        reasoning_mask = np.zeros(self._max_len, dtype=bool)
         number_mask = np.zeros(self._max_len, dtype=bool)
         direction_mask = np.zeros(self._max_len, dtype=bool)
 
         # Mark all non-pad positions as valid for attention
         attn_mask[pad_count:] = True
 
-        # Shift reasoning indices by pad_count after left padding
-        start_idx = max(0, min(self._max_len, reasoning_start + pad_count))
-        end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
-        if end_idx > start_idx:
-            reasoning_mask[start_idx:end_idx] = True
+        if reasoning is not None:
+            reasoning_mask = np.zeros(self._max_len, dtype=bool)
+            # Shift reasoning indices by pad_count after left padding
+            start_idx = max(0, min(self._max_len, reasoning_start + pad_count))
+            end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
+            if end_idx > start_idx:
+                reasoning_mask[start_idx:end_idx] = True
+        else:
+            reasoning_mask = None
 
         # Build number and direction masks using format-specific checkers
         # Only mark tokens within reasoning span (not in the prompt)
