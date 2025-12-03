@@ -252,61 +252,61 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
                         direction_mask[i] = True
 
         # Create units_number_mask and digit_values for label smoothing
-        units_number_mask = np.zeros(self._max_len, dtype=bool)
-        digit_values = np.full(self._max_len, -1, dtype=np.int8)  # -1 for non-digits
+        # units_number_mask = np.zeros(self._max_len, dtype=bool)
+        # digit_values = np.full(self._max_len, -1, dtype=np.int8)  # -1 for non-digits
 
-        if not is_vqa_sample:
-            # Unit words that follow numbers in language actions
-            unit_words = {"cm", "▁cm", "degrees", "▁degrees", "mm", "▁mm", "m", "▁m", "radians", "▁radians"}
+        # if not is_vqa_sample:
+        #     # Unit words that follow numbers in language actions
+        #     unit_words = {"cm", "▁cm", "degrees", "▁degrees", "mm", "▁mm", "m", "▁m", "radians", "▁radians"}
 
-            # Find digit sequences followed by unit words
-            i = start_idx
-            while i < end_idx:
-                if i >= len(pieces):
-                    break
+        #     # Find digit sequences followed by unit words
+        #     i = start_idx
+        #     while i < end_idx:
+        #         if i >= len(pieces):
+        #             break
 
-                # Check if current position starts a digit sequence
-                if number_mask[i]:
-                    # Find the end of the digit sequence
-                    seq_start = i
-                    seq_end = i
-                    while seq_end < end_idx and seq_end < len(pieces) and number_mask[seq_end]:
-                        seq_end += 1
+        #         # Check if current position starts a digit sequence
+        #         if number_mask[i]:
+        #             # Find the end of the digit sequence
+        #             seq_start = i
+        #             seq_end = i
+        #             while seq_end < end_idx and seq_end < len(pieces) and number_mask[seq_end]:
+        #                 seq_end += 1
 
-                    # Check if the next token is a unit word
-                    next_idx = seq_end
-                    is_followed_by_unit = False
-                    if next_idx < len(pieces):
-                        next_piece = pieces[next_idx]
-                        if next_piece in unit_words:
-                            is_followed_by_unit = True
+        #             # Check if the next token is a unit word
+        #             next_idx = seq_end
+        #             is_followed_by_unit = False
+        #             if next_idx < len(pieces):
+        #                 next_piece = pieces[next_idx]
+        #                 if next_piece in unit_words:
+        #                     is_followed_by_unit = True
 
-                    # If followed by unit, mark the last digit in sequence as units digit
-                    if is_followed_by_unit:
-                        units_digit_idx = seq_end - 1
-                        units_number_mask[units_digit_idx] = True
+        #             # If followed by unit, mark the last digit in sequence as units digit
+        #             if is_followed_by_unit:
+        #                 units_digit_idx = seq_end - 1
+        #                 units_number_mask[units_digit_idx] = True
 
-                        # Extract the digit value from the piece
-                        units_piece = pieces[units_digit_idx]
-                        # Find the rightmost digit in the piece
-                        for char in reversed(units_piece):
-                            if char.isdigit():
-                                digit_values[units_digit_idx] = int(char)
-                                break
+        #                 # Extract the digit value from the piece
+        #                 units_piece = pieces[units_digit_idx]
+        #                 # Find the rightmost digit in the piece
+        #                 for char in reversed(units_piece):
+        #                     if char.isdigit():
+        #                         digit_values[units_digit_idx] = int(char)
+        #                         break
 
-                    # Also extract digit values for all number tokens (for potential future use)
-                    for j in range(seq_start, seq_end):
-                        if j < len(pieces):
-                            piece = pieces[j]
-                            for char in reversed(piece):
-                                if char.isdigit():
-                                    digit_values[j] = int(char)
-                                    break
+        #             # Also extract digit values for all number tokens (for potential future use)
+        #             for j in range(seq_start, seq_end):
+        #                 if j < len(pieces):
+        #                     piece = pieces[j]
+        #                     for char in reversed(piece):
+        #                         if char.isdigit():
+        #                             digit_values[j] = int(char)
+        #                             break
 
-                    # Move to the end of the sequence
-                    i = seq_end
-                else:
-                    i += 1
+        #             # Move to the end of the sequence
+        #             i = seq_end
+        #         else:
+        #             i += 1
 
         return (
             np.asarray(tokens, dtype=np.int32),
@@ -314,8 +314,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             reasoning_mask,
             number_mask,
             direction_mask,
-            units_number_mask,
-            digit_values,
+            # units_number_mask,
+            # digit_values,
         )
 
     def decode(self, tokens: np.ndarray) -> str:

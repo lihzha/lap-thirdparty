@@ -1,3 +1,4 @@
+from functools import lru_cache
 import logging
 
 import einops
@@ -10,7 +11,6 @@ from openpi.models.model import Observation
 import openpi.models.pi0 as _pi0
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
-from functools import lru_cache
 from typing_extensions import override
 
 from openpi_cot.models.adapters.gemma_adapter import Gemma2ModuleWithDecode
@@ -786,15 +786,15 @@ class PiCoT(_pi0.Pi0):
         else:
             critical_mask, number_mask, direction_mask = None, None, None
 
-        # Create smoothing kernel on-the-fly if label smoothing is enabled
-        smoothing_kernel = None
-        if self.enable_number_label_smoothing:
-            smoothing_kernel = _get_cached_smoothing_kernel(
-                vocab_size=PALIGEMMA_VOCAB_SIZE,
-                sigma=float(self.label_smoothing_sigma),
-                support=int(self.label_smoothing_support),
-                dtype=str(shift_logits.dtype),
-            )
+        # # Create smoothing kernel on-the-fly if label smoothing is enabled
+        # smoothing_kernel = None
+        # if self.enable_number_label_smoothing:
+        #     smoothing_kernel = _get_cached_smoothing_kernel(
+        #         vocab_size=PALIGEMMA_VOCAB_SIZE,
+        #         sigma=float(self.label_smoothing_sigma),
+        #         support=int(self.label_smoothing_support),
+        #         dtype=str(shift_logits.dtype),
+        #     )
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
@@ -806,7 +806,7 @@ class PiCoT(_pi0.Pi0):
             direction_mask=direction_mask,
             units_number_mask=units_mask_shifted,
             digit_values=digit_values_shifted,
-            smoothing_kernel=smoothing_kernel,
+            smoothing_kernel=None,
             verbose_mode=verbose_mode,
             return_predictions=return_predictions,
         )
