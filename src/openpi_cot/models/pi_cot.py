@@ -787,14 +787,14 @@ class PiCoT(_pi0.Pi0):
             critical_mask, number_mask, direction_mask = None, None, None
 
         # # Create smoothing kernel on-the-fly if label smoothing is enabled
-        # smoothing_kernel = None
-        # if self.enable_number_label_smoothing:
-        #     smoothing_kernel = _get_cached_smoothing_kernel(
-        #         vocab_size=PALIGEMMA_VOCAB_SIZE,
-        #         sigma=float(self.label_smoothing_sigma),
-        #         support=int(self.label_smoothing_support),
-        #         dtype=str(shift_logits.dtype),
-        #     )
+        smoothing_kernel = None
+        if self.enable_number_label_smoothing:
+            smoothing_kernel = _get_cached_smoothing_kernel(
+                vocab_size=PALIGEMMA_VOCAB_SIZE,
+                sigma=float(self.label_smoothing_sigma),
+                support=int(self.label_smoothing_support),
+                dtype=str(shift_logits.dtype),
+            )
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
@@ -806,7 +806,7 @@ class PiCoT(_pi0.Pi0):
             direction_mask=direction_mask,
             units_number_mask=units_mask_shifted,
             digit_values=digit_values_shifted,
-            smoothing_kernel=None,
+            smoothing_kernel=smoothing_kernel,
             verbose_mode=verbose_mode,
             return_predictions=return_predictions,
         )

@@ -69,8 +69,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
             reasoning_mask,
             numeric_mask,
             direction_mask,
-            # units_number_mask,
-            # digit_values,
+            units_number_mask,
+            digit_values,
         ) = self.tokenizer.tokenize_cot(
             prompt,
             language_actions,
@@ -88,8 +88,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_langact_mask": reasoning_mask,
-            # "units_number_token_mask": units_number_mask,
-            # "digit_values": digit_values,
+            "units_number_token_mask": units_number_mask,
+            "digit_values": digit_values,
         }
 
         if self.verbose_mode:
