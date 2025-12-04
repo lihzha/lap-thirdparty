@@ -1,4 +1,5 @@
 import logging
+from functools import lru_cache
 
 import einops
 import flax.nnx as nnx
@@ -29,8 +30,16 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
-# Removed cached function - smoothing kernel is now created once during model init
-# to avoid JAX tracer leaks when called inside JIT-compiled code
+@lru_cache(maxsize=None)
+def _get_cached_smoothing_kernel(sigma: float, support: int) -> jnp.ndarray:
+    """Create smoothing kernel once per (sigma, support) pair and reuse."""
+    digit_to_token = get_digit_to_token_mapping()
+    return create_digit_smoothing_kernel(
+        vocab_size=PALIGEMMA_VOCAB_SIZE,
+        digit_to_token_id=digit_to_token,
+        sigma=sigma,
+        support=support,
+    )
 
 
 def cross_entropy_loss(
@@ -182,21 +191,21 @@ class PiCoT(_pi0.Pi0):
             logger.info(
                 f"Label smoothing enabled for units digits: sigma={self.label_smoothing_sigma}, support={self.label_smoothing_support}"
             )
-            # Create smoothing kernel once during init to avoid JAX tracer leaks
-            digit_to_token = get_digit_to_token_mapping()
-            self.smoothing_kernel = create_digit_smoothing_kernel(
-                vocab_size=PALIGEMMA_VOCAB_SIZE,
-                digit_to_token_id=digit_to_token,
-                sigma=self.label_smoothing_sigma,
-                support=self.label_smoothing_support,
-            )
+            # Precompute once on the host to avoid caching a traced value when first accessed inside JIT.
+            _ = _get_cached_smoothing_kernel(self.label_smoothing_sigma, self.label_smoothing_support)
         else:
             self.label_smoothing_sigma = None
             self.label_smoothing_support = None
-            self.smoothing_kernel = None
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
+
+    @property
+    def smoothing_kernel(self) -> jnp.ndarray | None:
+        """Lazily construct and cache the smoothing kernel outside model state."""
+        if not self.enable_number_label_smoothing:
+            return None
+        return _get_cached_smoothing_kernel(self.label_smoothing_sigma, self.label_smoothing_support)
 
     def _embed_images(
         self, obs: CoTObservation | Observation, num_frames: int | None = None
