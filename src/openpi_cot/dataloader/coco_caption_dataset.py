@@ -5,7 +5,6 @@ import tensorflow as tf
 from openpi_cot.dataloader.vqa_base import _BaseVQADataset
 from openpi_cot.dataloader.vqa_base import ensure_dldataset
 
-
 # COCO caption prompts to randomly sample from
 COCO_PROMPTS = tf.constant(
     [
@@ -63,7 +62,7 @@ class CocoCaption(_BaseVQADataset):
 
     def get_num_transitions(self) -> int:
         """Return approximate number of COCO caption samples."""
-        return 82783  # Approximate number of COCO train images
+        return 80340  # Approximate number of COCO train images
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from COCO image filename and ID."""

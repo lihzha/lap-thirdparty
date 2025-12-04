@@ -119,8 +119,7 @@ class _BaseVQADataset(_SingleCoTDataset):
         # Split train/val (only if using train/val split)
         if split in ["train", "val"]:
             self.split_val(split_seed=seed)
-        ds = dataset_size(self.dataset)
-        breakpoint()
+
         self.apply_vqa_restructure()
 
         # Apply minimal transforms
@@ -128,6 +127,9 @@ class _BaseVQADataset(_SingleCoTDataset):
 
         # Apply frame filters
         self.apply_vqa_frame_filters()
+
+        ds = dataset_size(self.dataset)
+        breakpoint()
 
         # Create dummy statistics for compatibility
         from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats

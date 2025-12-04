@@ -116,10 +116,10 @@ def main(args: Args):
                     actions_from_chunk_completed = 0
 
                     request_data = {
-                        "observation":{
-                        IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
-                        IMAGE_KEYS[1]: image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
-                        "state": curr_obs["observation/state"],
+                        "observation": {
+                            IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs["observation/image"], 224, 224),
+                            IMAGE_KEYS[1]: image_tools.resize_with_pad(curr_obs["observation/wrist_image"], 224, 224),
+                            "state": curr_obs["observation/state"],
                         },
                         "prompt": instruction,
                         "batch_size": None,
@@ -131,7 +131,7 @@ def main(args: Args):
                         # Get response from policy server (may contain actions and/or reasoning)
                         st = time.time()
                         response = policy_client.infer(request_data)
-                        # breakpoint()
+                        # ()
 
                         # Extract actions from response (either pre-parsed or parse from reasoning)
                         if "actions" in response and response["actions"] is not None:
@@ -204,7 +204,14 @@ def _extract_observation(args: Args, obs_dict, *, save_to_disk=False):
     # In addition to image observations, also capture the proprioceptive state
     # obs_dict["base_pose"][2] = np.random.rand(*obs_dict["base_pose"].shape)[2]
     # print(obs_dict["base_pose"] )
-    state = np.concatenate([obs_dict["base_pose"], obs_dict["arm_pos"], quat_to_r6(obs_dict["arm_quat"]), np.array(obs_dict["gripper_pos"])])
+    state = np.concatenate(
+        [
+            obs_dict["base_pose"],
+            obs_dict["arm_pos"],
+            quat_to_r6(obs_dict["arm_quat"]),
+            np.array(obs_dict["gripper_pos"]),
+        ]
+    )
     # if gripper_position > 0.5:
     #     gripper_position = 1.0
     # else:
