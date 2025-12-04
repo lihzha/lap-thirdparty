@@ -1,4 +1,3 @@
-from functools import lru_cache
 import logging
 
 import einops
@@ -30,22 +29,8 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
-@lru_cache(maxsize=8)
-def _get_cached_smoothing_kernel(
-    vocab_size: int,
-    sigma: float,
-    support: int,
-    dtype: str,
-) -> jnp.ndarray:
-    """Create (once) and cache the smoothing kernel keyed by hyperparams + dtype."""
-    digit_to_token = get_digit_to_token_mapping()
-    kernel = create_digit_smoothing_kernel(
-        vocab_size=vocab_size,
-        digit_to_token_id=digit_to_token,
-        sigma=sigma,
-        support=support,
-    )
-    return kernel.astype(jnp.dtype(dtype))
+# Removed cached function - smoothing kernel is now created once during model init
+# to avoid JAX tracer leaks when called inside JIT-compiled code
 
 
 def cross_entropy_loss(
@@ -189,7 +174,7 @@ class PiCoT(_pi0.Pi0):
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
 
-        # Label smoothing for number tokens - store only config, not the kernel itself
+        # Label smoothing for number tokens
         self.enable_number_label_smoothing = getattr(config, "enable_number_label_smoothing", False)
         if self.enable_number_label_smoothing:
             self.label_smoothing_sigma = getattr(config, "label_smoothing_sigma", 1.0)
@@ -197,9 +182,18 @@ class PiCoT(_pi0.Pi0):
             logger.info(
                 f"Label smoothing enabled for units digits: sigma={self.label_smoothing_sigma}, support={self.label_smoothing_support}"
             )
+            # Create smoothing kernel once during init to avoid JAX tracer leaks
+            digit_to_token = get_digit_to_token_mapping()
+            self.smoothing_kernel = create_digit_smoothing_kernel(
+                vocab_size=PALIGEMMA_VOCAB_SIZE,
+                digit_to_token_id=digit_to_token,
+                sigma=self.label_smoothing_sigma,
+                support=self.label_smoothing_support,
+            )
         else:
             self.label_smoothing_sigma = None
             self.label_smoothing_support = None
+            self.smoothing_kernel = None
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
@@ -787,15 +781,11 @@ class PiCoT(_pi0.Pi0):
         else:
             critical_mask, number_mask, direction_mask = None, None, None
 
-        # # Create smoothing kernel on-the-fly if label smoothing is enabled
+        # Use pre-computed smoothing kernel if label smoothing is enabled
         smoothing_kernel = None
         if self.enable_number_label_smoothing:
-            smoothing_kernel = _get_cached_smoothing_kernel(
-                vocab_size=PALIGEMMA_VOCAB_SIZE,
-                sigma=float(self.label_smoothing_sigma),
-                support=int(self.label_smoothing_support),
-                dtype=str(shift_logits.dtype),
-            )
+            # Cast kernel to match logits dtype if needed
+            smoothing_kernel = self.smoothing_kernel.astype(shift_logits.dtype)
 
         # Compute loss and metrics
         per_sample_loss, raw_metrics = self._compute_cross_entropy_with_metrics(
