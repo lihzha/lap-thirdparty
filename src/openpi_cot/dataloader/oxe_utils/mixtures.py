@@ -136,7 +136,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # # ("toto", 1.0),   # no language instructions, 901 trajs, no wrist camera
         # # # ("language_table", 0.1),  442226 trajs
     ],
-    "oxe_pi_magic_soup_with_kuka": [
+    "oxe_pi_magic_soup_with_kuka_without_furniture": [
         ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
         ("bc_z", 1.0),
         ("droid", 1.0),
@@ -147,7 +147,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
             "jaco_play",
             1.0,
         ),  # gripper state and action still seems incorrect. Action sometimes should be 1 but is 0. State seems random. Ignore for now.
-        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        # ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
         (
@@ -164,7 +164,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 3.0),
+        ("molmoact_dataset", 2.0),
         ### Bimanual
         # ("agibot_large_dataset", 0.2),
         # ("sample_r1_lite", 1.0),
