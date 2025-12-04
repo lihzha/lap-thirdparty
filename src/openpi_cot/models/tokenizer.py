@@ -219,14 +219,14 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         # Mark all non-pad positions as valid for attention
         attn_mask[pad_count:] = True
 
-        if reasoning is not None:
-            reasoning_mask = np.zeros(self._max_len, dtype=bool)
-            # Shift reasoning indices by pad_count after left padding
-            start_idx = max(0, min(self._max_len, reasoning_start + pad_count))
-            end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
-            if end_idx > start_idx:
-                reasoning_mask[start_idx:end_idx] = True
-        else:
+        reasoning_mask = np.zeros(self._max_len, dtype=bool)
+        # Shift reasoning indices by pad_count after left padding
+        start_idx = max(0, min(self._max_len, reasoning_start + pad_count))
+        end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
+        if end_idx > start_idx:
+            reasoning_mask[start_idx:end_idx] = True
+
+        if reasoning is None:
             reasoning_mask = None
 
         # Build number and direction masks using format-specific checkers
