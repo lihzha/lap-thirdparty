@@ -60,7 +60,7 @@ class Lvis(_BaseVQADataset):
 
     def get_num_transitions(self) -> int:
         """Return approximate number of LVIS samples."""
-        return 100170  # Approximate number of LVIS train images
+        return 1231766  # Approximate number of LVIS train images
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from LVIS image ID and annotation.

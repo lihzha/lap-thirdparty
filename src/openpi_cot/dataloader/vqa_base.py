@@ -14,7 +14,6 @@ from openpi_cot.dataloader.helpers import StateEncoding
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
 
-from openpi_cot.dataloader.dataset_utils import dataset_size
 
 # Registry of VQA dataset names
 VQA_DATASET_NAMES: set[str] = {"coco_captions", "vqa", "pixmo_cap", "pixmo_point", "lvis"}
@@ -127,9 +126,6 @@ class _BaseVQADataset(_SingleCoTDataset):
 
         # Apply frame filters
         self.apply_vqa_frame_filters()
-
-        ds = dataset_size(self.dataset)
-        breakpoint()
 
         # Create dummy statistics for compatibility
         from openpi_cot.shared.adapters.normalize_adapter import ExtendedNormStats
@@ -272,6 +268,7 @@ class _BaseVQADataset(_SingleCoTDataset):
                 "is_prediction_sample": tf.constant(False, dtype=tf.bool),
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
                 "raw_state": tf.zeros([self.action_dim], dtype=tf.float32),
+                "valid_language_length": tf.constant(0, dtype=tf.int32),
             }
 
             return output

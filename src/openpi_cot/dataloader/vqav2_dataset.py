@@ -72,7 +72,7 @@ class Vqav2(_BaseVQADataset):
 
     def get_num_transitions(self) -> int:
         """Return approximate number of VQAv2 samples."""
-        return 444416  # Approximate number of VQAv2 train samples
+        return 430324  # Approximate number of VQAv2 train samples
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from VQAv2 question_id and image_id."""

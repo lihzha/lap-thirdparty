@@ -80,7 +80,7 @@ class PixmoPoint(_BaseVQADataset):
     def get_num_transitions(self) -> int:
         """Return approximate number of PixmoPoint samples."""
         # TODO: Update with actual count when known
-        return 100000  # Placeholder
+        return 1651357  # Placeholder
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from PixmoPoint image SHA256, label, and count.

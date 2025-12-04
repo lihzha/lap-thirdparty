@@ -62,7 +62,7 @@ class PixmoCap(_BaseVQADataset):
 
     def get_num_transitions(self) -> int:
         """Return approximate number of PixmoCap samples."""
-        return 100000  # Approximate, adjust based on actual dataset size
+        return 601664  # Approximate, adjust based on actual dataset size
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from PixmoCap image filename and caption.
