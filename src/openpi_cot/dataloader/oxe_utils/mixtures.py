@@ -243,7 +243,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("molmoact_dataset", 2.0),
     ],
     "oxe_magic_soup_vqa": [
-        # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
+        ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
         ("bc_z", 1.0),
         ("droid", 1.0),
         ("fractal20220817_data", 1.0),
@@ -253,7 +253,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
             "jaco_play",
             1.0,
         ),  # gripper state and action still seems incorrect. Action sometimes should be 1 but is 0. State seems random. Ignore for now.
-        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        # ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
         # (
@@ -270,7 +270,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 3.0),
+        ("molmoact_dataset", 2.0),
         ### Bimanual
         # ("agibot_large_dataset", 0.2),
         # ("sample_r1_lite", 1.0),
@@ -284,6 +284,9 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # # ("language_table", 0.1),  442226 trajs
         ("coco_captions", 1.0),  # 10% COCO caption samples
         ("vqa", 1.0),  # 10% vqa samples
+        ("lvis", 1.0),
+        ("pixmo_cap", 1.0),  # 10% COCO caption samples
+        ("pixmo_point", 1.0),  # 10% vqa samples
         # ("pixmo_cap", 1.0),
     ],
     "cotrain_test": [
