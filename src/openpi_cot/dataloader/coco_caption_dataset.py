@@ -5,15 +5,28 @@ import tensorflow as tf
 from openpi_cot.dataloader.vqa_base import _BaseVQADataset
 from openpi_cot.dataloader.vqa_base import ensure_dldataset
 
-# COCO caption prompts to randomly sample from
-COCO_PROMPTS = tf.constant(
+COCO_CAPTION_PROMPTS = tf.constant(
     [
-        "Describe the image.",
-        "Describe what is in the image.",
-        "What is in the image?",
-        "Tell me what the image is about.",
-        "What do you see in this image?",
-        "Describe what you see.",
+        "Caption the image.",
+        "Give a short caption.",
+        "Provide a brief description.",
+        "What is shown?",
+        "Summarize the image in a few words.",
+        "Describe it concisely.",
+        "One-sentence caption, please.",
+        "Give a minimal caption.",
+        "What’s happening?",
+        "A short description.",
+        "Describe this briefly.",
+        "Caption in one phrase.",
+        "What is depicted?",
+        "Label the image content.",
+        "Provide a simple caption.",
+        "In a few words, what is this?",
+        "Write a concise caption.",
+        "What does the picture show?",
+        "Give a very short image description.",
+        "Provide a compact caption.",
     ],
     dtype=tf.string,
 )
