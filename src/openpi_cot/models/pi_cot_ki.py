@@ -601,8 +601,6 @@ class PiCoTKI(_pi0.Pi0):
             # Only add accuracy metrics, not predictions (unless already added above)
             metrics.update(accuracy_metrics)
 
-        if return_kv_cache:
-            return per_sample_loss, metrics, kv_cache
         return per_sample_loss, metrics
 
     def _forward_language_model(
@@ -835,6 +833,8 @@ class PiCoTKI(_pi0.Pi0):
                     new_key = metric_rename_map.get(key, key)
                     metrics[new_key] = value
 
+        if return_kv_cache:
+            return per_sample_loss, metrics, kv_cache
         return per_sample_loss, metrics
 
     def _compute_language_loss(
