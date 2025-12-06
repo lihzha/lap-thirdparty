@@ -1,5 +1,5 @@
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 import flax.nnx as nnx
 import jax
@@ -90,7 +90,7 @@ class PiCoTConfig(_model.BaseModelConfig):
         return ExtendedModelType.PI_COT
 
     @override
-    def create(self, rng: at.KeyArrayLike) -> "PiCoT" | "PiCoTKI":
+    def create(self, rng: at.KeyArrayLike) -> Union["PiCoT", "PiCoTKI"]:
         if not self.use_ki:
             from openpi_cot.models.pi_cot import PiCoT
 
