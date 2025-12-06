@@ -17,6 +17,7 @@ import openpi_cot.models.gemma3 as _gemma3
 
 if TYPE_CHECKING:
     from openpi_cot.models.pi_cot import PiCoT
+    from openpi_cot.models.pi_cot_ki import PiCoTKI
 
 
 @dataclasses.dataclass(frozen=True)
@@ -68,6 +69,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     # For support=3, digit 5 gets non-zero prob for [2,3,4,5,6,7,8]
     label_smoothing_support: int = 3
 
+    use_ki: bool = False
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
@@ -87,10 +90,14 @@ class PiCoTConfig(_model.BaseModelConfig):
         return ExtendedModelType.PI_COT
 
     @override
-    def create(self, rng: at.KeyArrayLike) -> "PiCoT":
-        from openpi_cot.models.pi_cot import PiCoT
+    def create(self, rng: at.KeyArrayLike) -> "PiCoT" | "PiCoTKI":
+        if not self.use_ki:
+            from openpi_cot.models.pi_cot import PiCoT
 
-        return PiCoT(self, rngs=nnx.Rngs(rng))
+            return PiCoT(self, rngs=nnx.Rngs(rng))
+        from openpi_cot.models.pi_cot_ki import PiCoTKI
+
+        return PiCoTKI(self, rngs=nnx.Rngs(rng))
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[CoTObservation, _model.Actions]:

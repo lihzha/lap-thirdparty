@@ -1,5 +1,5 @@
+from functools import cache
 import logging
-from functools import lru_cache
 
 import einops
 import flax.nnx as nnx
@@ -31,7 +31,7 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
-@lru_cache(maxsize=None)
+@cache
 def _get_cached_smoothing_kernel(sigma: float, support: int) -> jnp.ndarray:
     """Create smoothing kernel once per (sigma, support) pair and reuse."""
     digit_to_token = get_digit_to_token_mapping()
@@ -93,7 +93,7 @@ def cross_entropy_loss(
     return total / denom
 
 
-class PiCoT(_pi0.Pi0):
+class PiCoTKI(_pi0.Pi0):
     BEGIN_IMAGE_TOKEN = 255999  # only for Gemma3
     END_IMAGE_TOKEN = 262144  # only for Gemma3
     NEW_LINE_TOKEN = 108  # only for Gemma3
@@ -530,9 +530,7 @@ class PiCoT(_pi0.Pi0):
         # Note: We check only for None to keep the condition static (not traced)
         # If units_number_mask is all False, the masking logic below handles it correctly
         use_label_smoothing = (
-            units_number_mask is not None
-            and digit_values is not None
-            and smoothing_kernel is not None
+            units_number_mask is not None and digit_values is not None and smoothing_kernel is not None
         )
 
         if use_label_smoothing:
@@ -946,9 +944,7 @@ class PiCoT(_pi0.Pi0):
         if prefix_kv_cache is None:
             # Build the cache using the utility helper so the action expert respects
             # its own masking when language training is disabled.
-            _, prefix_kv_cache = self._forward_language_model(
-                prefix_tokens, prefix_mask_action, prefix_ar_mask_action
-            )
+            _, prefix_kv_cache = self._forward_language_model(prefix_tokens, prefix_mask_action, prefix_ar_mask_action)
         prefix_kv_cache = jtu.tree_map(jax.lax.stop_gradient, prefix_kv_cache)
 
         batch_shape = actions.shape[:-2]

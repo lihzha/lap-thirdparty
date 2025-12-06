@@ -992,6 +992,26 @@ _CONFIGS = [
         keep_period=10000,
         resume=True,
     ),
+    *create_multi_device_configs(
+        base_name="pi_combined_cot",
+        devices=["v6", "v6europe", "v4", "local"],
+        model=build_picot_model(),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "shuffle_buffer_size": 400_000,
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(
+            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+        ),
+        save_interval=2500,
+        keep_period=10000,
+        resume=True,
+    ),
     # Gemma3 configs
     TrainConfig(
         name="gemma3_combined_cot_v4",
