@@ -14,7 +14,9 @@ from libero.libero.envs import OffScreenRenderEnv
 import numpy as np
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy as _websocket_client_policy
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+from PIL import ImageDraw
+from PIL import ImageFont
 import tqdm
 import tyro
 
@@ -48,13 +50,12 @@ def _draw_text_on_image(img: np.ndarray, text: str, font_size: int = 12) -> np.n
         bbox = draw.textbbox((0, 0), test_line, font=font)
         if bbox[2] - bbox[0] <= max_width:
             current_line.append(word)
+        elif current_line:
+            lines.append(" ".join(current_line))
+            current_line = [word]
         else:
-            if current_line:
-                lines.append(" ".join(current_line))
-                current_line = [word]
-            else:
-                # Single word is too long, add it anyway
-                lines.append(word)
+            # Single word is too long, add it anyway
+            lines.append(word)
     if current_line:
         lines.append(" ".join(current_line))
 
@@ -91,14 +92,14 @@ class Args:
     host: str = "0.0.0.0"
     port: int = 8000
     resize_size: int = 224
-    replan_steps: int = 6
+    replan_steps: int = 5
     policy_type: PolicyType = PolicyType.PI05
 
     #################################################################################################################
     # LIBERO environment-specific parameters
     #################################################################################################################
     task_suite_name: str = (
-        "libero_object"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
+        "libero_spatial"  # Task suite. Options: libero_spatial, libero_object, libero_goal, libero_10, libero_90
     )
     num_steps_wait: int = 10  # Number of steps to wait for objects to stabilize i n sim
     num_trials_per_task: int = 50  # Number of rollouts per task
@@ -311,6 +312,8 @@ def eval_libero(args: Args) -> None:
                         break
                     t += 1
 
+                    break
+
                 except Exception as e:
                     logging.error(f"Caught exception: {e}")
                     break
@@ -353,6 +356,8 @@ def eval_libero(args: Args) -> None:
             logging.info(f"# episodes completed so far: {total_episodes}")
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
 
+            break
+
         # Record per-task results
         task_success_rate = float(task_successes) / float(task_episodes) if task_episodes > 0 else 0.0
         task_result = {
@@ -367,6 +372,8 @@ def eval_libero(args: Args) -> None:
         # Log final results
         logging.info(f"Current task success rate: {task_success_rate}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
+
+        break
 
     # Calculate and save final summary
     overall_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0
