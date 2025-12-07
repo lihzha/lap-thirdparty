@@ -177,7 +177,7 @@ def _parse_loc_tokens(text: str) -> list[int]:
         List of integer indices (0-1023) extracted from loc tokens
     """
     # Find all loc tokens in format <locXXXX>
-    pattern = r'<loc(\d{4})>'
+    pattern = r"<loc(\d{4})>"
     matches = re.findall(pattern, text)
     return [int(m) for m in matches]
 
@@ -235,7 +235,9 @@ def _draw_points_on_image(
         Image with points drawn
     """
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image
+        from PIL import ImageDraw
+        from PIL import ImageFont
     except Exception:
         return img
 
@@ -246,7 +248,7 @@ def _draw_points_on_image(
     draw = ImageDraw.Draw(pil_img)
 
     # Draw each point
-    for y, x in points:
+    for x, y in points:
         # Convert to pixel coordinates
         px = int(x * w)
         py = int(y * h)
@@ -579,7 +581,7 @@ def main(config: _config.TrainConfig):
                 if prompt_text:
                     # Try to extract the object name
                     # Prompts are like "Point out all the chair in this image."
-                    match = re.search(r'(?:the|a|all)\s+([\w\s]+?)\s+(?:in|are)', prompt_text.lower())
+                    match = re.search(r"(?:the|a|all)\s+([\w\s]+?)\s+(?:in|are)", prompt_text.lower())
                     if match:
                         category_label = match.group(1).strip()
 
