@@ -69,7 +69,7 @@ class PixmoPoint(_BaseVQADataset):
     format with normalized coordinates.
     """
 
-    def __init__(self, *args, max_points: int = MAX_POINTS, scale: float = 100.0, **kwargs):
+    def __init__(self, *args, max_points: int = MAX_POINTS, scale: float = 1.0, **kwargs):
         """Initialize PixmoPoint dataset.
 
         Args:

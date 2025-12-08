@@ -248,7 +248,7 @@ def _draw_points_on_image(
     draw = ImageDraw.Draw(pil_img)
 
     # Draw each point
-    for x, y in points:
+    for y, x in points:
         # Convert to pixel coordinates
         px = int(x * w)
         py = int(y * h)
