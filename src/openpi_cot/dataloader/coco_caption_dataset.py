@@ -103,11 +103,11 @@ class CocoCaption(_BaseVQADataset):
         selected_caption = captions[caption_idx]
 
         # Randomly select a prompt (use different seed component for diversity)
-        num_prompts = tf.shape(COCO_PROMPTS)[0]
+        num_prompts = tf.shape(COCO_CAPTION_PROMPTS)[0]
         prompt_idx = tf.random.stateless_uniform(
             [], seed=[self.seed + 1, image_id_hash], minval=0, maxval=num_prompts, dtype=tf.int32
         )
-        prompt = COCO_PROMPTS[prompt_idx]
+        prompt = COCO_CAPTION_PROMPTS[prompt_idx]
 
         return prompt, selected_caption
 
