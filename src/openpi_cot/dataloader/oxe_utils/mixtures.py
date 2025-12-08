@@ -256,10 +256,10 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
-        # (
-        #     "cmu_stretch",
-        #     2.0,
-        # ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
+        (
+            "cmu_stretch",
+            2.0,
+        ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
         ("fmb", 1.0),
         # ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
@@ -284,9 +284,10 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         # # # ("language_table", 0.1),  442226 trajs
         ("coco_captions", 1.0),  # 10% COCO caption samples
         ("vqa", 1.0),  # 10% vqa samples
-        ("lvis", 1.0),
+        ("lvis", 0.1),
         ("pixmo_cap", 1.0),  # 10% COCO caption samples
         ("pixmo_point", 1.0),  # 10% vqa samples
+        ("paco", 1.0),
     ],
     "cotrain_test": [
         ("fmb", 1.0),
