@@ -197,11 +197,8 @@ class PiCoT(_pi0.Pi0):
                 t = num_frames
 
             # Flatten: [b*t, h, w, c]
-            image_flat = image.reshape(b * t, h, w, c) if not self.use_gemma3 else image
+            image_flat = image.reshape(b * t, h, w, c)
             image_tokens, _ = self.PaliGemma.img(image_flat, train=False)
-            # if self.use_gemma3:
-            #     image_tokens = self.resize_to_256(image_tokens)
-            # image_tokens: [b*t, num_patches, d]
 
             num_patches = image_tokens.shape[1]
             # Reshape: [b, t*num_patches, d]
@@ -554,8 +551,6 @@ class PiCoT(_pi0.Pi0):
     ) -> at.Bool[at.Array, "b s"]:
         if observation.tokenized_langact_mask is None:
             return prefix_mask
-        if self.use_gemma3:
-            return jnp.logical_and(prefix_mask, jnp.logical_not(observation.tokenized_langact_mask))
         img_seq_len = prefix_mask.shape[1] - observation.tokenized_langact_mask.shape[1]
         langact_mask_full = jnp.concatenate(
             [
