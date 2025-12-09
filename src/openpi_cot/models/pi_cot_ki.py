@@ -30,6 +30,31 @@ import openpi_cot.models.siglip as _siglip_gemma3
 logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
+import matplotlib.pyplot as plt
+import numpy as np
+import wandb
+
+
+def log_attention_mask_wandb(mask, name="attention_mask"):
+    """
+    mask: boolean or 0/1 array of shape (T_q, T_k)
+    Logs a True=white, False=black visualization to wandb.
+    """
+    mask = np.array(mask).astype(float)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(5, 5))
+    im = ax.imshow(mask, cmap="gray", interpolation="nearest")
+    ax.set_xlabel("Key positions (T_k)")
+    ax.set_ylabel("Query positions (T_q)")
+    ax.set_title(name)
+
+    # Log to wandb
+    wandb.log({name: wandb.Image(fig)})
+
+    # Close to avoid memory leak
+    plt.close(fig)
+
 
 @cache
 def _get_cached_smoothing_kernel(sigma: float, support: int) -> jnp.ndarray:
