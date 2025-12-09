@@ -21,7 +21,6 @@ from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.helpers import StateEncoding
 import openpi_cot.models.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
-import openpi_cot.models.pi_fast as pi_fast
 from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
@@ -1044,50 +1043,6 @@ _CONFIGS = [
         weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://template/cache/gemma3-4b-it"),
         save_interval=500,
         keep_period=5000,
-        resume=True,
-    ),
-    *create_multi_device_configs(
-        base_name="pi_combined_fast",
-        devices=["v6", "v6europe", "v4", "local"],
-        model=pi_fast.PiFastConfig(
-            action_horizon=16,
-            max_token_len=150,
-            pi05=True,
-            discrete_state_input=True,
-        ),
-        data_config_class=RLDSCoTDataConfig,
-        data_config_kwargs={
-            "repo_id": "combined",
-            "asset_id": "combined",
-            "dataset_type": "combined",
-            "droid_dataset_name": "droid",
-            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
-            "shuffle_buffer_size": 400_000,
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        save_interval=2500,
-        keep_period=10000,
-        resume=True,
-    ),
-    *create_multi_device_configs(
-        base_name="pi_droid_fast",
-        devices=["v6", "v6europe", "v4", "local"],
-        model=pi_fast.PiFastConfig(
-            action_horizon=16,
-            max_token_len=150,
-            pi05=True,
-            discrete_state_input=True,
-        ),
-        data_config_class=RLDSCoTDataConfig,
-        data_config_kwargs={
-            "repo_id": "droid",
-            "asset_id": "droid",
-            "dataset_type": "droid",
-            "droid_dataset_name": "droid",
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        save_interval=2500,
-        keep_period=10000,
         resume=True,
     ),
     # Evaluation and special single-instance configs
