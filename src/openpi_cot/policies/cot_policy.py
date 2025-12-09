@@ -223,8 +223,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             la_used = la[:num_steps]
             raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
 
-            breakpoint()
-
             # Transform to EEF frame if requested
             if self.language_action_format.use_eef_frame and initial_state is not None:
                 raw_array = [transform_actions_to_eef_frame(action, initial_state) for action in raw_array]

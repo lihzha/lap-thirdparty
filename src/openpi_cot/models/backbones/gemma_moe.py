@@ -409,9 +409,9 @@ class Module(nn.Module):
     def __call__(
         self,
         # list of token arrays, one for each expert, or None if that expert should not be run
-        embedded: Sequence[at.Float[at.Array, "b _t _d"] | None],
-        positions: at.Int[at.Array, "b t"],
-        mask: at.Bool[at.Array, "b t s"],
+        embedded: Sequence[at.Float[at.Array, "b _t _d"] | None] | None = None,
+        positions: at.Int[at.Array, "b t"] | None = None,
+        mask: at.Bool[at.Array, "b t s"] | None = None,
         adarms_cond: Sequence[at.Float[at.Array, "b _d"] | None] | None = None,
         *,
         kv_cache: CacheState | None = None,
@@ -438,7 +438,8 @@ class Module(nn.Module):
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
         encoded = [
-            f(e, a)[0] if e is not None else None for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
+            f(e, a)[0] if e is not None else None
+            for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
         ]
         out["encoded"] = encoded
 
