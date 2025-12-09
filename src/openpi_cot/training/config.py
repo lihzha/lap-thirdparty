@@ -25,6 +25,7 @@ import openpi_cot.models.pi_fast as pi_fast
 from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
+from openpi_cot.policies.lang_action_formats import get_language_action_format
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.libero_policy as libero_policy
 import openpi_cot.policies.planning_policy as planning_policy
@@ -371,7 +372,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     model_type=model_config.model_type,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     action_encoding=base_cfg.action_encoding,
-                    language_action_format=cot_policy.get_language_action_format(base_cfg.language_action_format_name),
+                    language_action_format=get_language_action_format(base_cfg.language_action_format_name),
                     random_time_horizon=base_cfg.random_time_horizon,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
                     enable_langact_training=model_config.enable_langact_training,
