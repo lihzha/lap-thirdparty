@@ -732,8 +732,6 @@ class PiCoT(_pi0.Pi0):
         # Encode images (only first frame needed since prediction is handled at dataset level)
         img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
 
-        breakpoint()
-
         # Build prefix for langact/action losses (first frame + text)
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(
             observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
@@ -780,6 +778,8 @@ class PiCoT(_pi0.Pi0):
                 sample_mask=combined_langact_mask,
                 verbose_mode=effective_verbose_mode,
             )
+
+            breakpoint()
 
             if self.enable_vqa_training or self.enable_prediction_training:
                 if vqa_mask is None:
@@ -843,6 +843,7 @@ class PiCoT(_pi0.Pi0):
                 total_per_sample_loss += self.language_loss_weight * lang_loss
 
         if suffix_out is not None and suffix_inputs is not None:
+            breakpoint()
             action_loss, action_metrics = self._compute_action_loss(suffix_out, suffix_inputs["u_t"])
             total_per_sample_loss += self.action_loss_weight * action_loss
             metrics.update(action_metrics)
