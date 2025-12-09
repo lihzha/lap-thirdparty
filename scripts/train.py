@@ -742,22 +742,24 @@ def main(config: _config.TrainConfig):
             sharding=data_sharding,
             shuffle=False,
             split="val",
+            seed=config.seed,
             max_samples=getattr(config.data, "val_max_samples", None),
             hash_tables=hash_tables,
             persistent_iterator=False,
         )
 
-        val_config = replace(
+        franka_val_config = replace(
             config,
             # model=replace(config.model, verbose_mode=True),
             batch_size=128,
             data=replace(config.data, data_mix="franka_dataset", val_fraction=1.0),
         )
         franka_val_loader = _data_loader.create_data_loader(
-            val_config,
+            franka_val_config,
             sharding=data_sharding,
             shuffle=False,
             split="val",
+            seed=config.seed,
             max_samples=getattr(config.data, "val_max_samples", None),
             hash_tables=hash_tables,
             persistent_iterator=False,
