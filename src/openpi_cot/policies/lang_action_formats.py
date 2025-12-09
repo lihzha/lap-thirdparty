@@ -245,19 +245,20 @@ COMPACT_BIMANUAL_WITH_ROTATION_FORMAT = LanguageActionFormat(
     use_schema_format=True,
 )
 
-# Registry for easy lookup of language action formats
 LANGUAGE_ACTION_FORMAT_REGISTRY = {
-    "default": VERBOSE_FORMAT,  # "default" maps to "verbose" for backward compatibility
-    "verbose": VERBOSE_FORMAT,
-    "verbose_with_rotation": VERBOSE_WITH_ROTATION_FORMAT,
-    "precision": PRECISION_FORMAT,
-    "compact": COMPACT_FORMAT,
-    "compact_with_rotation": COMPACT_WITH_ROTATION_FORMAT,
-    "directional_only": DIRECTIONAL_ONLY_FORMAT,
-    "verbose_eef": EEF_FORMAT,
-    "verbose_eef_with_rotation": EEF_WITH_ROTATION_FORMAT,
-    "compact_bimanual": COMPACT_BIMANUAL_FORMAT,
-    "compact_bimanual_with_rotation": COMPACT_BIMANUAL_WITH_ROTATION_FORMAT,
+    fmt.name: fmt
+    for fmt in [
+        VERBOSE_FORMAT,
+        VERBOSE_WITH_ROTATION_FORMAT,
+        PRECISION_FORMAT,
+        COMPACT_FORMAT,
+        COMPACT_WITH_ROTATION_FORMAT,
+        DIRECTIONAL_ONLY_FORMAT,
+        EEF_FORMAT,
+        EEF_WITH_ROTATION_FORMAT,
+        COMPACT_BIMANUAL_FORMAT,
+        COMPACT_BIMANUAL_WITH_ROTATION_FORMAT,
+    ]
 }
 
 
