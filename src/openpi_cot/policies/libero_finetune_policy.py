@@ -4,8 +4,8 @@ import numpy as np
 from openpi import transforms
 from openpi import transforms as upstream_transforms
 
-from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
-from openpi_cot.models.adapters.model_adapter import ExtendedModelType
+from openpi_cot.models.model_adapter import IMAGE_KEYS
+from openpi_cot.models.model_adapter import ExtendedModelType
 from openpi_cot.policies.utils import parse_image
 
 

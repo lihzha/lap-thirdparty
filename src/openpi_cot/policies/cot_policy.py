@@ -4,8 +4,8 @@ import numpy as np
 from openpi import transforms as upstream_transforms
 
 from openpi_cot.datasets.utils.helpers import ActionEncoding
-from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
-from openpi_cot.models.adapters.model_adapter import ExtendedModelType
+from openpi_cot.models.model_adapter import IMAGE_KEYS
+from openpi_cot.models.model_adapter import ExtendedModelType
 from openpi_cot.policies.lang_action_formats import VERBOSE_FORMAT
 from openpi_cot.policies.lang_action_formats import LanguageActionFormat
 from openpi_cot.policies.lang_action_formats import get_decoding_schema

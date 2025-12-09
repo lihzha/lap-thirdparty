@@ -19,7 +19,7 @@ import tyro
 from openpi_cot.datasets.utils.helpers import ActionEncoding
 from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.helpers import StateEncoding
-import openpi_cot.models.adapters.model_adapter as _model_adapter
+import openpi_cot.models.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.models.pi_fast as pi_fast
 from openpi_cot.models.tokenizer import FASTTokenizer

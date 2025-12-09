@@ -12,9 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Gemma model implementation from big_vision/models/ppp/gemma.py (with small modifications for NNX compatibility)
-Used for FAST autoregressive policies.
+"""Gemma adaptation for Pi, taken from big_vision.
+
+We follow this einsum axis naming convention:
+  B: batch
+  T: query length
+  S: k/v length
+  N: num query heads
+  K: num k/v heads
+  G: num query heads per k/v head
+  H: head dim
+  D: d_model ("features")
 """
 
 from collections.abc import Sequence
@@ -25,6 +33,7 @@ import einops
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+
 import openpi.models.lora as lora
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
@@ -101,17 +110,6 @@ def get_config(variant: Variant) -> Config:
 
 
 @at.typecheck
-class Einsum(nn.Module):
-    shape: tuple[int, ...]
-
-    @nn.compact
-    def __call__(self, eqn, x):
-        dtype = x.dtype  # original dtype, could be half-precision
-        w = self.param("w", nn.initializers.zeros_init(), self.shape).astype(dtype)
-        return jnp.einsum(eqn, x, w)
-
-
-@at.typecheck
 class RMSNorm(nn.Module):
     @nn.compact
     def __call__(self, x, cond):
@@ -143,7 +141,7 @@ class Embedder(nn.Module):
     def setup(self):
         self.input_embedding_table = self.param(
             "input_embedding",
-            nn.initializers.zeros_init(),
+            nn.initializers.normal(),
             (self.vocab_size, self.embed_dim),
         )
 
@@ -161,8 +159,6 @@ class Attention(nn.Module):
     """Attention module."""
 
     configs: Sequence[Config]
-
-    cache_dtype: str | None = None
 
     @nn.compact
     def __call__(self, xs, positions, attn_mask, kv_cache):
@@ -212,19 +208,25 @@ class Attention(nn.Module):
         # should still be half-precision here (if input was half-precision)
         assert q.dtype == k.dtype == v.dtype == dtype
 
-        # if kv_cache is not None:
-        #     cache_k, cache_v = kv_cache
-        #     k = jnp.concatenate([cache_k, k], axis=1)
-        #     v = jnp.concatenate([cache_v, v], axis=1)
+        active_experts = [i for i, x in enumerate(xs) if x is not None]
+        expert0_only = active_experts == [0]
+        cache_size = attn_mask.shape[-1]
+        has_flexible_cache = _is_flexible_kv_cache(kv_cache)
+        wants_flexible_cache = expert0_only and cache_size > k.shape[1]
 
-        if kv_cache is None:
-            idx, k_cache, v_cache = self._init_cache(k, v, attn_mask.shape[-1])
+        if has_flexible_cache or wants_flexible_cache:
+            if kv_cache is None or not has_flexible_cache:
+                idx, k_cache, v_cache = _init_flexible_kv_cache(k, v, cache_size)
+            else:
+                idx, k_cache, v_cache = _update_flexible_kv_cache(k, v, *kv_cache)
+            k, v = k_cache, v_cache
+            kv_cache = (idx, k_cache, v_cache)
         else:
-            idx, k_cache, v_cache = kv_cache
-            idx, k_cache, v_cache = self._update_cache(k, v, idx, k_cache, v_cache)
-
-        k, v = k_cache, v_cache
-        kv_cache = (idx, k_cache, v_cache)
+            if kv_cache is not None:
+                cache_k, cache_v = kv_cache
+                k = jnp.concatenate([cache_k, k], axis=1)
+                v = jnp.concatenate([cache_v, v], axis=1)
+            kv_cache = (k, v)
 
         q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
         logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
@@ -261,34 +263,44 @@ class Attention(nn.Module):
 
         return out, kv_cache
 
-    def _init_cache(self, k, v, cache_size):
-        """Initialize KV cache"""
-        prefill_len = k.shape[1]
-        pad_width = ((0, 0), (0, cache_size - prefill_len), (0, 0), (0, 0))
-        cache_dtype = self.cache_dtype or k.dtype
-        k_cache = jnp.pad(k.astype(cache_dtype), pad_width)
-        v_cache = jnp.pad(v.astype(cache_dtype), pad_width)
-        idx = jnp.zeros((k.shape[0],), dtype=jnp.int32) + prefill_len
-        return idx, k_cache, v_cache
 
-    def _update_cache(self, k, v, idx, k_cache, v_cache):
-        """Update KV cache with new values"""
-        assert k.shape[1] == 1, "Only support kv-cache updates of length 1"
-        indices = (0, idx[0], 0, 0)
-        cache_dtype = self.cache_dtype or k.dtype
-        k_new = jax.lax.dynamic_update_slice(k_cache, k.astype(cache_dtype), indices)
-        v_new = jax.lax.dynamic_update_slice(v_cache, v.astype(cache_dtype), indices)
-        idx_new = idx + 1
-        return idx_new, k_new, v_new
+@at.typecheck
+class FeedForward(nn.Module):
+    """Feed forward module."""
+
+    features: int
+    hidden_dim: int
+
+    @nn.compact
+    def __call__(self, x):
+        dtype = x.dtype  # original dtype, could be half-precision
+        w_gating = self.param(
+            "gating_einsum",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
+            (2, self.features, self.hidden_dim),
+        ).astype(dtype)
+        ff_gate = jnp.dot(x, w_gating[0])
+        gate_value = nn.gelu(ff_gate)
+
+        ff1 = jnp.dot(x, w_gating[1])
+        activations = gate_value * ff1
+
+        w_linear = self.param(
+            "linear",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1),
+            (self.hidden_dim, self.features),
+        ).astype(dtype)
+        outputs = jnp.dot(activations, w_linear)
+        assert outputs.dtype == dtype
+        return outputs
 
 
 @at.typecheck
 class Block(nn.Module):
     """Transformer block."""
 
-    cache_dtype: str | None = None
-
     configs: tuple[Config, ...]
+
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
 
@@ -297,7 +309,7 @@ class Block(nn.Module):
         xs = sharding.activation_sharding_constraint(xs)
         drop = nn.Dropout(self.dropout, self.dropout_bdims) if self.dropout else lambda x, _: x
 
-        attn = Attention(configs=self.configs, name="attn", cache_dtype=self.cache_dtype)
+        attn = Attention(configs=self.configs, name="attn")
 
         pre_attn = []
         gates = []
@@ -336,11 +348,13 @@ class Block(nn.Module):
         return xs, kv_cache
 
 
-KVCache: TypeAlias = tuple[
+KVCache: TypeAlias = tuple[at.Float[at.Array, "l b _t _k _h"], at.Float[at.Array, "l b _t _v _h"]]
+FlexibleKVCache: TypeAlias = tuple[
     at.Int[at.Array, "l b"],
     at.Float[at.Array, "l b _t _k _h"],
     at.Float[at.Array, "l b _t _v _h"],
 ]
+CacheState: TypeAlias = KVCache | FlexibleKVCache
 
 
 @at.typecheck
@@ -350,7 +364,6 @@ class Module(nn.Module):
     configs: Sequence[Config]  # list of configs, one for each expert
     embed_dtype: str
 
-    cache_dtype: str | None = None
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
     adarms: bool = False
@@ -386,122 +399,46 @@ class Module(nn.Module):
             configs=self.configs,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
-            cache_dtype=self.cache_dtype,
         )
         self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
 
     @at.typecheck
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
-        """Embeds tokens using the primary expert's embedding table."""
         return self.embedder.encode(tokens).astype(self.embed_dtype)
 
     @at.typecheck
     def __call__(
         self,
-        # list of token embeddings, one for each expert, or None if that expert should not be run
+        # list of token arrays, one for each expert, or None if that expert should not be run
         embedded: Sequence[at.Float[at.Array, "b _t _d"] | None],
         positions: at.Int[at.Array, "b t"],
         mask: at.Bool[at.Array, "b t s"],
         adarms_cond: Sequence[at.Float[at.Array, "b _d"] | None] | None = None,
         *,
-        kv_cache: KVCache | None = None,
+        kv_cache: CacheState | None = None,
         deterministic: bool = True,
-        return_prelogits: bool = False,
-        logits_expert: int = 0,
-        pre_logits: at.Float[at.Array, "b _t _d"] | None = None,
-    ) -> tuple[jnp.ndarray, KVCache | None, dict]:
-        """Runs the MoE transformer and returns logits or pre-logits for expert 0.
-
-        Args:
-          embedded: Sequence of embedded tokens per expert.
-          positions: Absolute positions for the concatenated sequence.
-          mask: Attention mask broadcastable to `[B, 1, T, S]`.
-          adarms_cond: Optional conditioning per expert for adaptive RMSNorm.
-          kv_cache: Optional kv-cache for fast autoregressive decoding.
-          deterministic: Controls dropout.
-          return_prelogits: If True, returns expert 0 pre-logits instead of logits.
-          logits_expert: Expert index to produce logits from (only 0 is supported).
-          pre_logits: Optional pre-logits to decode directly, bypassing the transformer.
-        """
-        out = {}
-
-        if pre_logits is not None:
-            out["pre_logits"] = pre_logits
-            logits = out["logits"] = self.embedder.decode(pre_logits)
-            return logits, kv_cache, out
-
-        if len(embedded) != len(self.configs):
-            raise ValueError(f"Expected {len(self.configs)} expert inputs, got {len(embedded)}.")
+    ) -> tuple[Sequence[at.Float[at.Array, "b _t _d"] | None], CacheState]:
+        embedded = jax.tree.map(lambda e: e.astype(self.embed_dtype), embedded)
+        mask = jnp.asarray(mask)[:, None, :, :]
         if adarms_cond is None:
             adarms_cond = [None] * len(self.configs)
-        if len(adarms_cond) != len(self.configs):
-            raise ValueError(f"adarms_cond length {len(adarms_cond)} must match number of experts {len(self.configs)}.")
 
-        positions = jnp.asarray(positions)
-        if positions.ndim != 2:
-            raise ValueError(f"positions must be 2D `[B, T]`, got shape {positions.shape}.")
-        embed_dtype = jnp.dtype(self.embed_dtype)
-        embedded = [e.astype(embed_dtype) if e is not None else None for e in embedded]
-        total_length = sum(e.shape[1] for e in embedded if e is not None)
-        if positions.shape[1] != total_length:
-            raise ValueError(f"positions length {positions.shape[1]} does not match total token count {total_length}.")
-        batch_size = next((e.shape[0] for e in embedded if e is not None), None)
-        if batch_size is None:
-            raise ValueError("At least one expert must provide embeddings.")
-        if positions.shape[0] != batch_size:
-            raise ValueError(f"positions batch {positions.shape[0]} does not match embeddings batch {batch_size}.")
+        embedded, kv_cache = self.layers(embedded, kv_cache, positions, mask, adarms_cond, deterministic)
 
-        attn_mask = jnp.asarray(mask, dtype=jnp.bool_)
-        if attn_mask.ndim == 3:
-            attn_mask = attn_mask[:, None, :, :]
-        if attn_mask.ndim != 4:
-            raise ValueError(f"Attention mask must be 3D or 4D, got shape {attn_mask.shape}.")
-        if attn_mask.shape[2] != positions.shape[1]:
-            raise ValueError(
-                f"Attention mask query dimension {attn_mask.shape[2]} does not match positions {positions.shape[1]}."
-            )
-        if attn_mask.shape[0] != batch_size:
-            raise ValueError(f"Attention mask batch {attn_mask.shape[0]} does not match embeddings batch {batch_size}.")
+        assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
-        embedded, kv_cache = self.layers(embedded, kv_cache, positions, attn_mask, adarms_cond, deterministic)
-        encoded = [
-            norm(e, cond)[0] if e is not None else None
-            for norm, e, cond in zip(self.final_norms, embedded, adarms_cond, strict=True)
-        ]
-        out["encoded"] = encoded
-
-        if logits_expert != 0:
-            raise NotImplementedError("Autoregressive generation is only supported for expert 0.")
-
-        primary = encoded[logits_expert]
-        if primary is None:
-            raise ValueError(f"Expert {logits_expert} activations are None; cannot produce logits.")
-
-        out["pre_logits"] = primary
-        if return_prelogits:
-            return primary, kv_cache, out
-
-        logits = self.embedder.decode(primary)
-        out["logits"] = logits
-        return logits, kv_cache, out
+        return [
+            f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
+        ], kv_cache
 
     def init(self, use_adarms: Sequence[bool]):
-        """Initializes parameters by running a dummy forward pass."""
-        if len(use_adarms) != len(self.configs):
-            raise ValueError(f"use_adarms length {len(use_adarms)} must match number of experts {len(self.configs)}.")
+        """Convenience method for initializing all parameters, necessary due to the quirks of linen."""
         self.embed(jnp.zeros((1, 1), dtype=jnp.int32))
-        embed_dtype = jnp.dtype(self.embed_dtype)
-        dummy_embeds = [jnp.zeros((1, 1, c.width), dtype=embed_dtype) for c in self.configs]
-        dummy_positions = jnp.zeros((1, len(self.configs)), dtype=jnp.int32)
-        dummy_mask = jnp.zeros((1, len(self.configs), len(self.configs)), dtype=bool)
-        adarms = [jnp.zeros((1, c.width)) if use else None for use, c in zip(use_adarms, self.configs, strict=True)]
         self(
-            dummy_embeds,
-            dummy_positions,
-            dummy_mask,
-            adarms_cond=adarms,
-            deterministic=True,
-            return_prelogits=True,
+            [jnp.zeros((1, 1, c.width)) for c in self.configs],
+            jnp.zeros((1, len(self.configs)), dtype=jnp.int32),
+            jnp.zeros((1, len(self.configs), len(self.configs)), dtype=bool),
+            adarms_cond=[jnp.zeros((1, c.width)) if u else None for u, c in zip(use_adarms, self.configs, strict=True)],
         )
 
 
@@ -517,7 +454,11 @@ def _apply_rope(x, *, positions, max_wavelength=10_000):
     x1, x2 = jnp.split(x, 2, axis=-1)
     res = jnp.concatenate([x1 * cos - x2 * sin, x2 * cos + x1 * sin], axis=-1)
     assert res.dtype == jnp.float32
-    return res
+    # The original bigvision impl allows RoPE to upcast to float32. It is then immediately downcast again to the cache
+    # dtype when in inference mode (but not in training mode). I don't think any of this was intentional. Based on the
+    # original DeepMind impl, as well as the widely-used transformers impl, it is ok to always downcast back to bfloat16
+    # here.
+    return res.astype(x.dtype)
 
 
 def _name(name, i):
@@ -537,3 +478,35 @@ def _gated_residual(x, y, gate):
     if gate is None:
         return x + y
     return x + y * gate
+
+
+def _is_flexible_kv_cache(kv_cache):
+    return isinstance(kv_cache, tuple) and len(kv_cache) == 3
+
+
+def _init_flexible_kv_cache(k, v, cache_size):
+    """Initializes a padded kv-cache for expert 0 decoding."""
+    prefill_len = k.shape[1]
+    if cache_size < prefill_len:
+        raise ValueError(f"Cache size {cache_size} is smaller than the provided sequence length {prefill_len}.")
+    pad_width = ((0, 0), (0, cache_size - prefill_len), (0, 0), (0, 0))
+    k_cache = jnp.pad(k, pad_width)
+    v_cache = jnp.pad(v, pad_width)
+    idx = jnp.zeros((k.shape[0],), dtype=jnp.int32) + prefill_len
+    return idx, k_cache, v_cache
+
+
+def _update_flexible_kv_cache(k, v, idx, k_cache, v_cache):
+    """Updates the padded kv-cache with the newest expert 0 token."""
+    if k.shape[1] != 1:
+        raise ValueError("Flexible kv-cache updates are only defined for autoregressive length-1 inserts.")
+
+    def _update(cache, value, start_idx):
+        return jax.lax.dynamic_update_slice(cache, value, (start_idx, 0, 0))
+
+    k_update = k.astype(k_cache.dtype)
+    v_update = v.astype(v_cache.dtype)
+    k_new = jax.vmap(_update)(k_cache, k_update[:, 0:1], idx)
+    v_new = jax.vmap(_update)(v_cache, v_update[:, 0:1], idx)
+    idx_new = idx + 1
+    return idx_new, k_new, v_new

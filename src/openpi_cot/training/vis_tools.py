@@ -21,7 +21,7 @@ import numpy as np
 from openpi.models import model as _model
 import wandb
 
-from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 from openpi_cot.training import utils as _utils
 

@@ -1,5 +1,5 @@
 import dataclasses
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 import flax.nnx as nnx
 import jax
@@ -9,22 +9,19 @@ from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
-from openpi_cot.models.adapters.model_adapter import CoTObservation
-from openpi_cot.models.adapters.model_adapter import ExtendedModelType
-import openpi_cot.models.gemma as _gemma
-import openpi_cot.models.gemma2 as _gemma2
-import openpi_cot.models.gemma3 as _gemma3
+import openpi_cot.models.backbones.gemma_moe as _gemma
+from openpi_cot.models.model_adapter import CoTObservation
+from openpi_cot.models.model_adapter import ExtendedModelType
 
 if TYPE_CHECKING:
     from openpi_cot.models.pi_cot import PiCoT
-    from openpi_cot.models.pi_cot_ki import PiCoTKI
 
 
 @dataclasses.dataclass(frozen=True)
 class PiCoTConfig(_model.BaseModelConfig):
     dtype: str = "bfloat16"
-    paligemma_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_2b"
-    action_expert_variant: _gemma.Variant | _gemma2.Variant | _gemma3.Variant = "gemma_300m"
+    paligemma_variant: _gemma.Variant = "gemma_2b"
+    action_expert_variant: _gemma.Variant = "gemma_300m"
 
     # Set the model specific defaults.
     action_dim: int = 32
@@ -90,14 +87,10 @@ class PiCoTConfig(_model.BaseModelConfig):
         return ExtendedModelType.PI_COT
 
     @override
-    def create(self, rng: at.KeyArrayLike) -> Union["PiCoT", "PiCoTKI"]:
-        if not self.use_ki:
-            from openpi_cot.models.pi_cot import PiCoT
+    def create(self, rng: at.KeyArrayLike) -> "PiCoT":
+        from openpi_cot.models.pi_cot import PiCoT
 
-            return PiCoT(self, rngs=nnx.Rngs(rng))
-        from openpi_cot.models.pi_cot_ki import PiCoTKI
-
-        return PiCoTKI(self, rngs=nnx.Rngs(rng))
+        return PiCoT(self, rngs=nnx.Rngs(rng))
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[CoTObservation, _model.Actions]:

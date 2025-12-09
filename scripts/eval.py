@@ -19,7 +19,7 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi_cot.datasets.cot_data_loader as _data_loader
-from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.model_adapter import CoTObservation
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding

@@ -3,10 +3,9 @@ import dataclasses
 import numpy as np
 from openpi import transforms as upstream_transforms
 
-from openpi_cot.models.adapters.model_adapter import IMAGE_KEYS
+from openpi_cot.models.model_adapter import IMAGE_KEYS
+from openpi_cot.models.model_adapter import ExtendedModelType
 from openpi_cot.policies.utils import parse_image
-
-from openpi_cot.models.adapters.model_adapter import ExtendedModelType
 
 
 @dataclasses.dataclass(frozen=True)
@@ -20,7 +19,6 @@ class RawActionInputs(upstream_transforms.DataTransformFn):
         base_image = parse_image(data["observation"][IMAGE_KEYS[0]])
         if base_image is None:
             raise ValueError("Base image missing from observation")
-
 
         images = []
         image_masks = []
@@ -39,7 +37,6 @@ class RawActionInputs(upstream_transforms.DataTransformFn):
             else:
                 wrist_image = np.zeros_like(base_image)
                 wrist_image_mask = np.False_
-
 
             images.append(wrist_image)
             image_masks.append(wrist_image_mask)
@@ -66,7 +63,6 @@ class RawActionInputs(upstream_transforms.DataTransformFn):
         if "dataset_name" in data:
             inputs["dataset_name"] = data["dataset_name"].decode()
 
-
         if "actions" in data:
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
@@ -75,6 +71,7 @@ class RawActionInputs(upstream_transforms.DataTransformFn):
         inputs["is_vqa_sample"] = False
         inputs["sample_mask"] = True
         return inputs
+
 
 @dataclasses.dataclass(frozen=True)
 class RawActionOutputs(upstream_transforms.DataTransformFn):

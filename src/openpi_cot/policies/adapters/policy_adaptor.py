@@ -7,7 +7,7 @@ import numpy as np
 import openpi.policies.policy as _policy
 from openpi.shared import nnx_utils
 
-from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.model_adapter import CoTObservation
 
 
 class CoTPolicy:

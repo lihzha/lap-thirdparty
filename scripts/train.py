@@ -30,7 +30,7 @@ import tqdm_loggable.auto as tqdm
 import wandb
 
 import openpi_cot.datasets.cot_data_loader as _data_loader
-from openpi_cot.models.adapters.model_adapter import CoTObservation
+from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
@@ -715,14 +715,14 @@ def main(config: _config.TrainConfig):
     sharding.log_batch_sharding(batch)
 
     train_runner = TrainingStepRunner(config)
-    ptrain_step = jax.jit(
-        train_runner,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-        out_shardings=(train_state_sharding, replicated_sharding),
-        donate_argnums=(1,),
-    )
+    # ptrain_step = jax.jit(
+    #     train_runner,
+    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    #     out_shardings=(train_state_sharding, replicated_sharding),
+    #     donate_argnums=(1,),
+    # )
 
-    # ptrain_step = train_runner
+    ptrain_step = train_runner
 
     if config.do_val:
         dataset = getattr(data_loader, "dataset", None)
