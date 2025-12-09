@@ -33,7 +33,6 @@ import einops
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-
 import openpi.models.lora as lora
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
@@ -417,7 +416,18 @@ class Module(nn.Module):
         *,
         kv_cache: CacheState | None = None,
         deterministic: bool = True,
-    ) -> tuple[Sequence[at.Float[at.Array, "b _t _d"] | None], CacheState]:
+        return_prelogits: bool = False,
+        logits_expert: int = 0,
+        pre_logits: at.Float[at.Array, "b _t _d"] | None = None,
+    ) -> tuple[jnp.ndarray, CacheState | None, dict]:
+        """Runs the transformer and decodes logits (or pre-logits) for expert `logits_expert`."""
+        out: dict[str, object] = {}
+
+        if pre_logits is not None:
+            out["pre_logits"] = pre_logits
+            logits = out["logits"] = self.embedder.decode(pre_logits)
+            return logits, kv_cache, out
+
         embedded = jax.tree.map(lambda e: e.astype(self.embed_dtype), embedded)
         mask = jnp.asarray(mask)[:, None, :, :]
         if adarms_cond is None:
@@ -427,9 +437,25 @@ class Module(nn.Module):
 
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
-        return [
-            f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
-        ], kv_cache
+        encoded = [
+            f(e, a)[0] if e is not None else None for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
+        ]
+        out["encoded"] = encoded
+
+        if logits_expert < 0 or logits_expert >= len(encoded):
+            raise ValueError(f"logits_expert {logits_expert} is out of range for {len(encoded)} experts.")
+
+        primary = encoded[logits_expert]
+        if primary is None:
+            raise ValueError(f"Expert {logits_expert} activations are None; cannot produce logits.")
+
+        out["pre_logits"] = primary
+        if return_prelogits:
+            return primary, kv_cache, out
+
+        logits = self.embedder.decode(primary)
+        out["logits"] = logits
+        return logits, kv_cache, out
 
     def init(self, use_adarms: Sequence[bool]):
         """Convenience method for initializing all parameters, necessary due to the quirks of linen."""
