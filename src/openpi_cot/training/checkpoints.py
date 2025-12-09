@@ -15,7 +15,7 @@ import orbax.checkpoint as ocp
 import orbax.checkpoint.future as future
 import tensorflow as tf
 
-from openpi_cot.dataloader import cot_data_loader as _data_loader
+from openpi_cot.datasets import cot_data_loader as _data_loader
 from openpi_cot.shared.adapters import normalize_adapter as _normalize_adapter
 from openpi_cot.training import utils as training_utils
 
@@ -242,16 +242,17 @@ def save_state(
                         process_idx = jax.process_index()
                         dataloader_dir = str(directory / f"dataloader_process_{process_idx}")
                         save_path = data_loader.save_dataloader_state(dataloader_dir)
-                        batches_seen = data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
+                        batches_seen = (
+                            data_loader.get_batches_seen() if hasattr(data_loader, "get_batches_seen") else "unknown"
+                        )
                         logging.info(
                             f"[Process {process_idx}] Saved dataloader state | batches_seen={batches_seen} | location={save_path}"
                         )
                     except Exception as e:
                         logging.warning(f"[Process {jax.process_index()}] Failed to save dataloader state: {e}")
                         logging.warning("Training will continue but dataloader state will not be checkpointed")
-                else:
-                    if jax.process_index() == 0:
-                        logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
+                elif jax.process_index() == 0:
+                    logging.info("Data loader does not support state checkpointing (persistent_iterator not enabled)")
 
             # Split params that can be used for inference into a separate item.
             with at.disable_typechecking():
@@ -360,7 +361,9 @@ def restore_state(
             # Each process has its own checkpoint: {checkpoint_dir}/{step}/assets/dataloader_process_{process_index}/
             checkpoint_dir = _extract_directory(checkpoint_manager)
             process_idx = jax.process_index()
-            dataloader_dir = str(epath.Path(checkpoint_dir) / str(restore_step) / "assets" / f"dataloader_process_{process_idx}")
+            dataloader_dir = str(
+                epath.Path(checkpoint_dir) / str(restore_step) / "assets" / f"dataloader_process_{process_idx}"
+            )
 
             # Check if dataloader checkpoint exists for this process
             if tf.io.gfile.exists(dataloader_dir):
@@ -404,6 +407,7 @@ def load_norm_stats(
 
     logging.warning(f"No valid norm stats folder found in {assets_dir}")
     return None
+
 
 class Callback(Protocol):
     def __call__(self, directory: epath.Path) -> None: ...

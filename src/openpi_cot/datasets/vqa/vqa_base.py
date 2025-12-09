@@ -6,10 +6,10 @@ from dlimp import DLataset
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
-from openpi_cot.dataloader.helpers import ActionEncoding
-from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.helpers import StateEncoding
+from openpi_cot.datasets.base_dataset import _SingleCoTDataset
+from openpi_cot.datasets.utils.helpers import ActionEncoding
+from openpi_cot.datasets.utils.helpers import NormalizationType
+from openpi_cot.datasets.utils.helpers import StateEncoding
 
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
@@ -151,7 +151,7 @@ class _BaseVQADataset(_SingleCoTDataset):
         }
 
         if standalone:
-            from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
+            from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
 
             self._prepare_batched_params = {
                 "want_val": self.want_val,

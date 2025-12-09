@@ -8,26 +8,26 @@ import dlimp as dl
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.dataloader.coco_caption_dataset import CocoCaption
-from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
-from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
-from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.helpers import state_encoding_to_type
-from openpi_cot.dataloader.lvis_dataset import Lvis
-from openpi_cot.dataloader.oxe_datasets import DobbeCoTDataset
-from openpi_cot.dataloader.oxe_datasets import LiberoCoTDataset
-from openpi_cot.dataloader.oxe_datasets import PlanningDataset
-from openpi_cot.dataloader.oxe_datasets import SampleR1LiteCoTDataset
-from openpi_cot.dataloader.oxe_datasets import _SingleOXECoTDataset
-from openpi_cot.dataloader.oxe_utils.data_utils import allocate_threads
-from openpi_cot.dataloader.oxe_utils.data_utils import pprint_data_mixture
-from openpi_cot.dataloader.oxe_utils.mixtures import OXE_NAMED_MIXTURES
-from openpi_cot.dataloader.paco_dataset import Paco
-from openpi_cot.dataloader.pixmo_cap_dataset import PixmoCap
-from openpi_cot.dataloader.pixmo_point_dataset import PixmoPoint
-from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
-from openpi_cot.dataloader.vqa_base import VQA_DATASET_NAMES
-from openpi_cot.dataloader.vqav2_dataset import Vqav2
+from openpi_cot.datasets.robot.droid_dataset import DroidCoTDataset
+from openpi_cot.datasets.robot.oxe_datasets import DobbeCoTDataset
+from openpi_cot.datasets.robot.oxe_datasets import LiberoCoTDataset
+from openpi_cot.datasets.robot.oxe_datasets import PlanningDataset
+from openpi_cot.datasets.robot.oxe_datasets import SampleR1LiteCoTDataset
+from openpi_cot.datasets.robot.oxe_datasets import _SingleOXECoTDataset
+from openpi_cot.datasets.utils.data_utils import allocate_threads
+from openpi_cot.datasets.utils.data_utils import pprint_data_mixture
+from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
+from openpi_cot.datasets.utils.helpers import NormalizationType
+from openpi_cot.datasets.utils.helpers import state_encoding_to_type
+from openpi_cot.datasets.utils.mixtures import OXE_NAMED_MIXTURES
+from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
+from openpi_cot.datasets.vqa.coco_caption_dataset import CocoCaption
+from openpi_cot.datasets.vqa.lvis_dataset import Lvis
+from openpi_cot.datasets.vqa.paco_dataset import Paco
+from openpi_cot.datasets.vqa.pixmo_cap_dataset import PixmoCap
+from openpi_cot.datasets.vqa.pixmo_point_dataset import PixmoPoint
+from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_NAMES
+from openpi_cot.datasets.vqa.vqav2_dataset import Vqav2
 from openpi_cot.transforms import NormalizeActionAndProprio
 
 if TYPE_CHECKING:

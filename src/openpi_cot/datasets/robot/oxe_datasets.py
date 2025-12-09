@@ -6,12 +6,12 @@ from typing import TYPE_CHECKING
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.dataloader.base_dataset import _SingleCoTDataset
-from openpi_cot.dataloader.dataset_utils import gather_with_padding
-from openpi_cot.dataloader.dataset_utils import print_memory_usage
-from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.helpers import convert_state_encoding
-from openpi_cot.dataloader.helpers import state_encoding_to_type
+from openpi_cot.datasets.base_dataset import _SingleCoTDataset
+from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
+from openpi_cot.datasets.utils.dataset_utils import print_memory_usage
+from openpi_cot.datasets.utils.helpers import NormalizationType
+from openpi_cot.datasets.utils.helpers import convert_state_encoding
+from openpi_cot.datasets.utils.helpers import state_encoding_to_type
 from openpi_cot.transforms import NormalizeActionAndProprio
 
 if TYPE_CHECKING:

@@ -6,7 +6,7 @@ import os
 import psutil
 import tensorflow as tf
 
-from openpi_cot.dataloader.image_utils import make_decode_images_fn
+from openpi_cot.datasets.utils.image_utils import make_decode_images_fn
 
 
 def print_memory_usage(label):

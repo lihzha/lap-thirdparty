@@ -11,12 +11,12 @@ import psutil
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
-from openpi_cot.dataloader.dataset_utils import gather_with_padding
-from openpi_cot.dataloader.dataset_utils import prepare_batched_dataset
-from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.helpers import StateEncoding
-from openpi_cot.dataloader.oxe_utils.data_utils import load_dataset_kwargs
-from openpi_cot.dataloader.specs import CoTRldsDatasetSpec
+from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
+from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
+from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
+from openpi_cot.datasets.utils.helpers import NormalizationType
+from openpi_cot.datasets.utils.helpers import StateEncoding
+from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
 from openpi_cot.transforms import NormalizeActionAndProprio

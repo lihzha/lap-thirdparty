@@ -11,8 +11,8 @@ import openpi.training.data_loader as up  # upstream module
 import openpi.transforms as up_tf
 import tensorflow as tf
 
-from openpi_cot.dataloader.dataset_mixer import OXECoTDatasets
-from openpi_cot.dataloader.droid_dataset import DroidCoTDataset
+from openpi_cot.datasets.dataset_mixer import OXECoTDatasets
+from openpi_cot.datasets.robot.droid_dataset import DroidCoTDataset
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
@@ -469,9 +469,7 @@ class CoTRLDSDataLoader:
                 )
                 checkpoint_path = process_0_checkpoint_path
             else:
-                raise ValueError(
-                    f"No checkpoint file found at {checkpoint_path} or {process_0_checkpoint_path}"
-                )
+                raise ValueError(f"No checkpoint file found at {checkpoint_path} or {process_0_checkpoint_path}")
 
         logging.info(f"Host {self._proc_idx}: Loading dataloader state from {checkpoint_path}...")
 

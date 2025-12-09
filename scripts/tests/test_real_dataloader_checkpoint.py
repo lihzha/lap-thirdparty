@@ -44,9 +44,9 @@ import numpy as np
 import tensorflow as tf
 
 # Import the actual dataloader
-from openpi_cot.dataloader import cot_data_loader
-from openpi_cot.training.config import TrainConfig
+from openpi_cot.datasets import cot_data_loader
 import openpi_cot.training.config as _config
+from openpi_cot.training.config import TrainConfig
 
 
 def setup_logging():
@@ -78,7 +78,7 @@ def setup_logging():
 def get_gcs_test_path(bucket: str = None) -> str:
     """Get GCS path for test checkpoints."""
     if bucket is None:
-        bucket = os.environ.get('GCS_TEST_BUCKET')
+        bucket = os.environ.get("GCS_TEST_BUCKET")
 
     if bucket is None:
         raise ValueError(
@@ -86,8 +86,8 @@ def get_gcs_test_path(bucket: str = None) -> str:
             "Example: export GCS_TEST_BUCKET='gs://my-bucket/test-checkpoints'"
         )
 
-    if not bucket.startswith('gs://'):
-        bucket = f'gs://{bucket}'
+    if not bucket.startswith("gs://"):
+        bucket = f"gs://{bucket}"
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     test_path = f"{bucket}/real_dataloader_test_{timestamp}"
@@ -198,15 +198,15 @@ def test_save_and_load_real_dataloader(
     logging.info(f"Data directory: {data_dir}")
 
     logging.info(f"\n{'=' * 80}")
-    logging.info(f"SKIP-BASED CHECKPOINT APPROACH:")
-    logging.info(f"  Checkpoint type: JSON with batch counter")
-    logging.info(f"  Checkpoint size: ~100 bytes (not GB!)")
-    logging.info(f"  Resume method: dataset.skip(n)")
-    logging.info(f"  No persistent_iterator needed: ✓")
+    logging.info("SKIP-BASED CHECKPOINT APPROACH:")
+    logging.info("  Checkpoint type: JSON with batch counter")
+    logging.info("  Checkpoint size: ~100 bytes (not GB!)")
+    logging.info("  Resume method: dataset.skip(n)")
+    logging.info("  No persistent_iterator needed: ✓")
     logging.info(f"{'=' * 80}")
 
     logging.info(f"\n{'=' * 80}")
-    logging.info(f"TEST CONFIG:")
+    logging.info("TEST CONFIG:")
     logging.info(f"  Buffer size: {test_buffer_size:,}")
     logging.info(f"  Batch size: {batch_size}")
     logging.info(f"{'=' * 80}")
@@ -237,9 +237,11 @@ def test_save_and_load_real_dataloader(
 
         # Create sharding (used for all dataloaders)
         devices = jax.local_devices()
-        mesh = jax.sharding.Mesh(devices, ('data',))
-        from jax.sharding import NamedSharding, PartitionSpec as P
-        data_sharding = NamedSharding(mesh, P('data'))
+        mesh = jax.sharding.Mesh(devices, ("data",))
+        from jax.sharding import NamedSharding
+        from jax.sharding import PartitionSpec as P
+
+        data_sharding = NamedSharding(mesh, P("data"))
 
         # Test parameters
         num_batches_before_checkpoint = 10
@@ -270,7 +272,9 @@ def test_save_and_load_real_dataloader(
         # Check batch counter
         batches_seen_before = dataloader1.get_batches_seen()
         logging.info(f"\nBatches seen: {batches_seen_before}")
-        assert batches_seen_before == num_batches_before_checkpoint, f"Expected {num_batches_before_checkpoint}, got {batches_seen_before}"
+        assert batches_seen_before == num_batches_before_checkpoint, (
+            f"Expected {num_batches_before_checkpoint}, got {batches_seen_before}"
+        )
 
         # Save checkpoint
         logging.info(f"\nSaving dataloader state to {checkpoint_dir}...")
@@ -288,7 +292,7 @@ def test_save_and_load_real_dataloader(
             logging.error(f"✗ Checkpoint file not found: {checkpoint_file}")
             return False
 
-        logging.info(f"✓ Checkpoint file created: dataloader_state.json")
+        logging.info("✓ Checkpoint file created: dataloader_state.json")
 
         # Check actual checkpoint size (should be tiny!)
         try:
@@ -302,7 +306,7 @@ def test_save_and_load_real_dataloader(
         # Continue iterating to get H more batches (these are what we expect after resume)
         logging.info(f"\n{'=' * 80}")
         logging.info(f"Continuing iteration to collect {num_test_batches} EXPECTED batches")
-        logging.info(f"These should match what we get after loading checkpoint")
+        logging.info("These should match what we get after loading checkpoint")
         logging.info(f"{'=' * 80}")
         expected_batches = collect_batch_ids(data_iter1, num_batches=num_test_batches)
 
@@ -310,7 +314,9 @@ def test_save_and_load_real_dataloader(
         expected_total = num_batches_before_checkpoint + num_test_batches
         logging.info(f"\nTotal batches seen in dataloader1: {batches_seen_after_continue}")
         logging.info(f"Expected: {expected_total}")
-        assert batches_seen_after_continue == expected_total, f"Expected {expected_total}, got {batches_seen_after_continue}"
+        assert batches_seen_after_continue == expected_total, (
+            f"Expected {expected_total}, got {batches_seen_after_continue}"
+        )
 
         # ========================================================================
         # Part 2: Create dataloader2, load checkpoint, and verify determinism
@@ -346,7 +352,7 @@ def test_save_and_load_real_dataloader(
         logging.info(f"✓ Batch counter correctly restored: {batches_seen_loaded}")
 
         # Create iterator (skip will be applied automatically)
-        logging.info(f"\nCreating iterator (skip will be applied automatically)...")
+        logging.info("\nCreating iterator (skip will be applied automatically)...")
         logging.info(f"Expected skip: {batches_seen_loaded} batches")
         data_iter2 = iter(dataloader2)
         logging.info("✓ Iterator created - skip should have been applied")
@@ -367,8 +373,8 @@ def test_save_and_load_real_dataloader(
         logging.info("\n" + "=" * 80)
         logging.info("CORE VERIFICATION: Determinism Check")
         logging.info("=" * 80)
-        logging.info(f"Comparing resumed batches from dataloader2")
-        logging.info(f"with expected batches (continuation from dataloader1)")
+        logging.info("Comparing resumed batches from dataloader2")
+        logging.info("with expected batches (continuation from dataloader1)")
         logging.info("These MUST match for checkpoint/resume to be correct!")
 
         if compare_batches(actual_batches, expected_batches):
@@ -416,11 +422,13 @@ def test_save_and_load_real_dataloader(
     except Exception as e:
         logging.error(f"Test failed with exception: {e}")
         import traceback
+
         traceback.print_exc()
         return False
     finally:
         # Clean up GCS checkpoint directory
         cleanup_gcs_path(base_path)
+
 
 def main(config: _config.TrainConfig):
     """Main test function with command-line argument parsing."""
@@ -428,9 +436,8 @@ def main(config: _config.TrainConfig):
 
     setup_logging()
 
-
     # Check that GCS bucket is configured
-    gcs_bucket = os.environ.get('GCS_TEST_BUCKET')
+    gcs_bucket = os.environ.get("GCS_TEST_BUCKET")
     if not gcs_bucket:
         logging.error("=" * 80)
         logging.error("ERROR: GCS_TEST_BUCKET not configured")
@@ -471,6 +478,7 @@ def main(config: _config.TrainConfig):
     logging.info("ALL TESTS PASSED SUCCESSFULLY! ✓")
     logging.info("=" * 80)
     sys.exit(0)
+
 
 if __name__ == "__main__":
     main(_config.cli())

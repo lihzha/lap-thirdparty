@@ -24,8 +24,8 @@ Configuration adopts the following structure:
     action_encoding: Type of action encoding (e.g., EEF Position vs. Joint Position)
 """
 
-from openpi_cot.dataloader.helpers import ActionEncoding
-from openpi_cot.dataloader.helpers import StateEncoding
+from openpi_cot.datasets.utils.helpers import ActionEncoding
+from openpi_cot.datasets.utils.helpers import StateEncoding
 
 # === Individual Dataset Configs ===
 OXE_DATASET_CONFIGS = {

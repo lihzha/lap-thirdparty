@@ -22,7 +22,7 @@ matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
 
-import openpi_cot.dataloader.cot_data_loader as _data_loader
+import openpi_cot.datasets.cot_data_loader as _data_loader
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
 

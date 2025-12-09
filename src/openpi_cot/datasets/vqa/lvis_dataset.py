@@ -2,8 +2,8 @@
 
 import tensorflow as tf
 
-from openpi_cot.dataloader.vqa_base import _BaseVQADataset
-from openpi_cot.dataloader.vqa_base import ensure_dldataset
+from openpi_cot.datasets.vqa.vqa_base import _BaseVQADataset
+from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # LVIS prompts to randomly sample from - split into prefix and suffix for category insertion
 LVIS_PROMPT_PARTS = [

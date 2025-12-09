@@ -25,7 +25,7 @@ import tensorflow as tf
 import tqdm_loggable.auto as tqdm
 import wandb
 
-import openpi_cot.dataloader.cot_data_loader as _data_loader
+import openpi_cot.datasets.cot_data_loader as _data_loader
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
@@ -93,9 +93,12 @@ def save_checkpoint(
         except Exception as e:
             logging.warning(f"[Process {process_idx}] Failed to save dataloader state: {e}")
             import traceback
+
             logging.warning(f"[Process {process_idx}] Traceback: {traceback.format_exc()}")
     else:
-        logging.warning(f"[Process {process_idx}] DataLoader does not support state checkpointing (persistent_iterator not enabled)")
+        logging.warning(
+            f"[Process {process_idx}] DataLoader does not support state checkpointing (persistent_iterator not enabled)"
+        )
 
     # Multi-host barrier to ensure all processes have saved before continuing
     if jax.process_count() > 1:
@@ -192,6 +195,7 @@ def load_checkpoint(
             # Broadcast whether stats were loaded successfully from process 0
             # If process 0 failed to load stats, all processes should abort the restore
             import jax.numpy as jnp
+
             success_flag = jnp.array([1 if stats_loaded_successfully else 0], dtype=jnp.int32)
             success_flag = multihost_utils.broadcast_one_to_all(success_flag)
             stats_loaded_successfully = bool(success_flag[0])
@@ -199,7 +203,7 @@ def load_checkpoint(
         # If stats failed to load on process 0, all processes should return None, 0
         if not stats_loaded_successfully:
             if process_idx == 0:
-                logging.warning(f"Stats loading failed, skipping checkpoint restore")
+                logging.warning("Stats loading failed, skipping checkpoint restore")
             return None, 0
 
         return stats, latest_step

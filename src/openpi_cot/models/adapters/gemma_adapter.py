@@ -5,9 +5,9 @@ from collections.abc import Sequence
 import jax.numpy as jnp
 import openpi.shared.array_typing as at
 
+from openpi_cot.models import gemma as _gemma
 from openpi_cot.models import gemma2 as _gemma2
 from openpi_cot.models import gemma3 as _gemma3
-import openpi_cot.models.gemma as _gemma
 
 
 class ModuleWithDecode(_gemma.Module):

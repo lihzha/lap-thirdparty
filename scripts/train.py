@@ -29,7 +29,7 @@ from rail_tpu_utils import prevent_cross_region
 import tqdm_loggable.auto as tqdm
 import wandb
 
-import openpi_cot.dataloader.cot_data_loader as _data_loader
+import openpi_cot.datasets.cot_data_loader as _data_loader
 from openpi_cot.models.adapters.model_adapter import CoTObservation
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints

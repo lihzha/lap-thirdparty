@@ -17,8 +17,8 @@ Transforms adopt the following structure:
 
 from typing import Any
 
-# from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_baseact_transform
-# from openpi_cot.dataloader.oxe_utils.rlds.oxe.utils.droid_utils import droid_finetuning_transform
+# from openpi_cot.datasets.oxe_utils.rlds.oxe.utils.droid_utils import droid_baseact_transform
+# from openpi_cot.datasets.oxe_utils.rlds.oxe.utils.droid_utils import droid_finetuning_transform
 import tensorflow as tf
 
 
@@ -116,7 +116,7 @@ def compute_padded_movement_actions(eef_state: tf.Tensor) -> tf.Tensor:
     Returns:
         Padded movement actions of shape (T, 6) containing [delta_xyz, delta_rpy]
     """
-    from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    from openpi_cot.datasets.utils.data_utils import euler_diff
 
     # Compute deltas between consecutive timesteps: action[t] = state[t+1] - state[t]
     movement_actions = tf.concat(
@@ -473,7 +473,7 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
 
 def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_jaco
+    from openpi_cot.datasets.utils.data_utils import coordinate_transform_jaco
 
     # make gripper action absolute action, +1 = open, 0 = close
     gripper_action = trajectory["action"]["gripper_closedness_action"][:, 0]
@@ -581,7 +581,7 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # )  # delete uninformative language instruction
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+    from openpi_cot.datasets.utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["ee_states"][:, -16:], [-1, 4, 4])
@@ -746,7 +746,7 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # # )  # delete uninformative language instruction
     # return trajectory
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+    from openpi_cot.datasets.utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
@@ -894,7 +894,7 @@ def cmu_franka_exploration_dataset_transform(trajectory: dict[str, Any]) -> dict
 
 
 def ucsd_kitchen_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    # from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+    # from openpi_cot.datasets.oxe_utils.data_utils import euler_diff
 
     # trajectory["observation"]["joint_state"] = trajectory["observation"]["state"][:, :7]
 
@@ -945,7 +945,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
     # # )  # delete uninformative language instruction
     # return trajectory
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+    from openpi_cot.datasets.utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["state_ee"][:, -16:], [-1, 4, 4])
@@ -1007,7 +1007,7 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+    from openpi_cot.datasets.utils.data_utils import matrix_to_xyzrpy
 
     # # invert gripper action + clip, +1 = open, 0 = close
     # trajectory["action"] = tf.concat(
@@ -1073,7 +1073,7 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_bcz
+    from openpi_cot.datasets.utils.data_utils import coordinate_transform_bcz
 
     trajectory["action"] = tf.concat(
         (
@@ -1219,7 +1219,7 @@ def dlr_sara_grid_clamp_dataset_transform(trajectory: dict[str, Any]) -> dict[st
 
 
 def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    from openpi_cot.dataloader.oxe_utils.data_utils import zxy_to_xyz_tf
+    from openpi_cot.datasets.utils.data_utils import zxy_to_xyz_tf
 
     # invert gripper action, +1 = open, 0 = close
     trajectory["action"] = tf.concat(
@@ -1304,7 +1304,7 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
         axis=-1,
     )
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import matrix_to_xyzrpy
+    from openpi_cot.datasets.utils.data_utils import matrix_to_xyzrpy
 
     # Reshape from column-major flattened format and transpose to row-major
     state_matrix = tf.reshape(trajectory["observation"]["state"][:, -16:], [-1, 4, 4])
@@ -1467,7 +1467,7 @@ def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 def dobbe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # every input feature is batched, ie has leading batch dimension
 
-    from openpi_cot.dataloader.oxe_utils.data_utils import coordinate_transform_dobbe
+    from openpi_cot.datasets.utils.data_utils import coordinate_transform_dobbe
 
     # every input feature is batched, ie has leading batch dimension
     trajectory["observation"]["proprio"] = tf.concat(

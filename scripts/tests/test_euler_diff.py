@@ -11,9 +11,9 @@ This test verifies that:
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.dataloader.oxe_utils.data_utils import _euler_xyz_from_R
-from openpi_cot.dataloader.oxe_utils.data_utils import _R_from_euler_xyz
-from openpi_cot.dataloader.oxe_utils.data_utils import euler_diff
+from openpi_cot.datasets.utils.data_utils import _euler_xyz_from_R
+from openpi_cot.datasets.utils.data_utils import _R_from_euler_xyz
+from openpi_cot.datasets.utils.data_utils import euler_diff
 
 
 def test_euler_diff_basic():

@@ -14,10 +14,10 @@ import dlimp as dl
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.oxe_utils.configs import OXE_DATASET_CONFIGS
-from openpi_cot.dataloader.oxe_utils.configs import ActionEncoding
-from openpi_cot.dataloader.oxe_utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
+from openpi_cot.datasets.utils.configs import OXE_DATASET_CONFIGS
+from openpi_cot.datasets.utils.configs import ActionEncoding
+from openpi_cot.datasets.utils.helpers import NormalizationType
+from openpi_cot.datasets.utils.transforms import OXE_STANDARDIZATION_TRANSFORMS
 
 
 def _tf_pi(dtype):

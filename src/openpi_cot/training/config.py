@@ -16,9 +16,9 @@ import openpi.transforms as upstream_transforms
 from typing_extensions import override
 import tyro
 
-from openpi_cot.dataloader.helpers import ActionEncoding
-from openpi_cot.dataloader.helpers import NormalizationType
-from openpi_cot.dataloader.helpers import StateEncoding
+from openpi_cot.datasets.utils.helpers import ActionEncoding
+from openpi_cot.datasets.utils.helpers import NormalizationType
+from openpi_cot.datasets.utils.helpers import StateEncoding
 import openpi_cot.models.adapters.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
 import openpi_cot.models.pi_fast as pi_fast

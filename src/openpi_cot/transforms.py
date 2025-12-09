@@ -10,7 +10,7 @@ from openpi.transforms import apply_tree
 from openpi.transforms import flatten_dict
 from openpi.transforms import unflatten_dict
 
-from openpi_cot.dataloader.helpers import NormalizationType
+from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
@@ -289,7 +289,7 @@ class NormalizeActionAndProprio(DataTransformFn):
     """Normalize `action` and `proprio`-like fields using dataset statistics.
 
     This class adapts the behavior of `normalize_action_and_proprio` from
-    `openpi_cot.dataloader.oxe_utils.data_utils` into a DataTransformFn so it can
+    `openpi_cot.datasets.oxe_utils.data_utils` into a DataTransformFn so it can
     be used directly in dataset pipelines.
 
     It supports both NumPy arrays and TensorFlow tensors. When TensorFlow tensors

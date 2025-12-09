@@ -2,8 +2,8 @@
 
 import tensorflow as tf
 
-from openpi_cot.dataloader.vqa_base import _BaseVQADataset
-from openpi_cot.dataloader.vqa_base import ensure_dldataset
+from openpi_cot.datasets.vqa.vqa_base import _BaseVQADataset
+from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # PixmoCap prompts to randomly sample from
 PIXMO_CAP_PROMPTS = tf.constant(

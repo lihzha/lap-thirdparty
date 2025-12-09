@@ -9,7 +9,7 @@ import jax.experimental.multihost_utils as multihost_utils
 import numpy as np
 from rail_tpu_utils import prevent_cross_region
 
-import openpi_cot.dataloader.cot_data_loader as _data_loader
+import openpi_cot.datasets.cot_data_loader as _data_loader
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
 import openpi_cot.training.mh_sharding as sharding
@@ -250,7 +250,7 @@ def _parse_loc_tokens(text: str) -> list[int]:
         List of integer indices (0-1023) extracted from loc tokens
     """
     # Find all loc tokens in format <locXXXX>
-    pattern = r'<loc(\d{4})>'
+    pattern = r"<loc(\d{4})>"
     matches = re.findall(pattern, text)
     return [int(m) for m in matches]
 
@@ -305,7 +305,9 @@ def _draw_bbox_on_image(
         Image with bbox drawn
     """
     try:
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image
+        from PIL import ImageDraw
+        from PIL import ImageFont
     except Exception:
         return img
 
@@ -663,7 +665,7 @@ def main(config: _config.TrainConfig):
                     category_label = None
                     if prompt_text:
                         # Try to extract the object name between "the " and " in"
-                        match = re.search(r'(?:the|a)\s+(\w+(?:\s+\w+)*)\s+(?:in|is)', prompt_text.lower())
+                        match = re.search(r"(?:the|a)\s+(\w+(?:\s+\w+)*)\s+(?:in|is)", prompt_text.lower())
                         if match:
                             category_label = match.group(1)
 

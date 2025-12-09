@@ -1,5 +1,5 @@
+from functools import cache
 import logging
-from functools import lru_cache
 
 import einops
 import flax.nnx as nnx
@@ -21,6 +21,8 @@ from openpi_cot.models.adapters.model_adapter import preprocess_observation
 from openpi_cot.models.gemma import get_config as get_gemma_config
 from openpi_cot.models.gemma2 import get_config as get_gemma2_config
 from openpi_cot.models.gemma3 import get_config as get_gemma3_config
+from openpi_cot.models.gemma3_helpers import replace_image_placeholders
+from openpi_cot.models.gemma3_helpers import replace_placeholder_masks
 from openpi_cot.models.label_smoothing import create_digit_smoothing_kernel
 from openpi_cot.models.label_smoothing import get_digit_to_token_mapping
 import openpi_cot.models.pi_cot_config as _pi_cot_config
@@ -30,7 +32,7 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
-@lru_cache(maxsize=None)
+@cache
 def _get_cached_smoothing_kernel(sigma: float, support: int) -> jnp.ndarray:
     """Create smoothing kernel once per (sigma, support) pair and reuse."""
     digit_to_token = get_digit_to_token_mapping()
@@ -277,96 +279,6 @@ class PiCoT(_pi0.Pi0):
         text_tokens = self.PaliGemma.llm(tokenized_text, method="embed")
         return text_tokens, text_mask, text_ar_mask
 
-    def _replace_image_placeholders(
-        self,
-        token_embeddings: at.Float[at.Array, "b s emb"],
-        tokenized_sequence: at.Int[at.Array, "b s"],
-        image_embeddings: at.Float[at.Array, "b n_img*n_patches emb"],
-    ) -> at.Float[at.Array, "b s emb"]:
-        """Replace placeholder tokens (-2) with actual image embeddings.
-
-        Args:
-            token_embeddings: Embeddings from tokenized sequence (includes placeholder embeddings)
-            tokenized_sequence: Token IDs (includes -2 for placeholders)
-            image_embeddings: Actual image embeddings from SigLIP [b, n_img*n_patches, emb]
-
-        Returns:
-            Updated embeddings with placeholders replaced
-        """
-        # Find placeholder positions: where token_id == -2
-        is_placeholder = tokenized_sequence == -2  # [b, s]
-
-        # Count total placeholders per batch element (should be same across batch)
-        num_placeholders = jnp.sum(is_placeholder, axis=1)  # [b]
-
-        # Create indices for scattering image embeddings into placeholder positions
-        # For each batch element, we need to map placeholder positions to image embedding indices
-        b, s, emb = token_embeddings.shape
-        _, n_img_patches, _ = image_embeddings.shape
-
-        # Build a mapping: for each position in sequence, what image index does it correspond to?
-        # Cumulative sum of is_placeholder gives us the image token index for each placeholder
-        placeholder_indices = jnp.cumsum(is_placeholder, axis=1) - 1  # [b, s], -1 to make 0-indexed
-
-        # Clamp to valid range [0, n_img_patches)
-        placeholder_indices = jnp.clip(placeholder_indices, 0, n_img_patches - 1)
-
-        # Gather image embeddings according to placeholder indices
-        # For each position, if it's a placeholder, get the corresponding image embedding
-        # Otherwise, keep the original token embedding
-        batch_indices = jnp.arange(b)[:, None]  # [b, 1]
-        selected_image_embs = image_embeddings[batch_indices, placeholder_indices]  # [b, s, emb]
-
-        # Replace: where is_placeholder, use image embedding; otherwise use token embedding
-        result = jnp.where(
-            is_placeholder[..., None],  # [b, s, 1] for broadcasting
-            selected_image_embs,
-            token_embeddings,
-        )
-
-        return result
-
-    def _replace_placeholder_masks(
-        self,
-        text_mask: at.Bool[at.Array, "b s"],
-        text_ar_mask: at.Bool[at.Array, "b s"],
-        tokenized_sequence: at.Int[at.Array, "b s"],
-        img_mask: at.Bool[at.Array, "b n_img"],
-        img_ar_mask: at.Bool[at.Array, "b n_img"],
-    ) -> tuple[at.Bool[at.Array, "b s"], at.Bool[at.Array, "b s"]]:
-        """Replace placeholder positions in text masks with actual image masks.
-
-        Args:
-            text_mask: Mask from tokenized sequence (includes placeholder positions)
-            text_ar_mask: AR mask from tokenized sequence (includes placeholder positions)
-            tokenized_sequence: Token IDs (includes -2 for placeholders)
-            img_mask: Actual image mask indicating which image tokens are valid
-            img_ar_mask: Actual image AR mask for autoregressive masking
-
-        Returns:
-            (updated_mask, updated_ar_mask) with placeholder positions replaced
-        """
-        # Find placeholder positions: where token_id == -2
-        is_placeholder = tokenized_sequence == -2  # [b, s]
-
-        b, s = text_mask.shape
-        _, n_img_patches = img_mask.shape
-
-        # Build a mapping: for each position in sequence, what image index does it correspond to?
-        placeholder_indices = jnp.cumsum(is_placeholder, axis=1) - 1  # [b, s], -1 to make 0-indexed
-        placeholder_indices = jnp.clip(placeholder_indices, 0, n_img_patches - 1)
-
-        # Gather image masks according to placeholder indices
-        batch_indices = jnp.arange(b)[:, None]  # [b, 1]
-        selected_img_mask = img_mask[batch_indices, placeholder_indices]  # [b, s]
-        selected_img_ar_mask = img_ar_mask[batch_indices, placeholder_indices]  # [b, s]
-
-        # Replace: where is_placeholder, use image mask; otherwise use text mask
-        updated_mask = jnp.where(is_placeholder, selected_img_mask, text_mask)
-        updated_ar_mask = jnp.where(is_placeholder, selected_img_ar_mask, text_ar_mask)
-
-        return updated_mask, updated_ar_mask
-
     @at.typecheck
     def embed_prefix(
         self,
@@ -402,28 +314,6 @@ class PiCoT(_pi0.Pi0):
         if self.use_gemma3 and obs.tokenized_prompt is not None:
             return self._build_prefix_gemma3(obs, img_tokens, img_mask, img_ar_mask)
         return self._build_prefix_legacy(obs, img_tokens, img_mask, img_ar_mask)
-
-    def _prepare_token_mask(
-        self,
-        langact_mask: at.Bool[at.Array, "b s"],
-        pad_mask: at.Bool[at.Array, "b s"],
-        sample_mask: at.Bool[at.Array, "b"] | None = None,
-    ) -> at.Bool[at.Array, "b s"]:
-        """Prepare token mask by combining langact, padding, and sample masks.
-
-        Args:
-            langact_mask: Mask indicating which tokens are part of language/action
-            pad_mask: Mask indicating which tokens are not padding
-            sample_mask: Optional per-sample mask for batch-level filtering
-
-        Returns:
-            Combined token mask
-        """
-        token_mask = jnp.logical_and(langact_mask, pad_mask)
-        if sample_mask is not None:
-            ex_mask = jnp.asarray(sample_mask)[..., None]
-            token_mask = token_mask * ex_mask
-        return token_mask
 
     def _compute_token_accuracy_metrics(
         self,
@@ -529,9 +419,7 @@ class PiCoT(_pi0.Pi0):
         # Note: We check only for None to keep the condition static (not traced)
         # If units_number_mask is all False, the masking logic below handles it correctly
         use_label_smoothing = (
-            units_number_mask is not None
-            and digit_values is not None
-            and smoothing_kernel is not None
+            units_number_mask is not None and digit_values is not None and smoothing_kernel is not None
         )
 
         if use_label_smoothing:
@@ -604,27 +492,6 @@ class PiCoT(_pi0.Pi0):
 
         return per_sample_loss, metrics
 
-    def _forward_language_model(
-        self,
-        prefix_tokens: at.Float[at.Array, "b s emb"],
-        prefix_mask: at.Bool[at.Array, "b s"],
-        prefix_ar_mask: at.Bool[at.Array, "b s"],
-    ) -> tuple[at.Float[at.Array, "b s emb"], at.Array]:
-        """Forward pass through language model with attention masking.
-
-        Args:
-            prefix_tokens: Input token embeddings
-            prefix_mask: Input mask indicating valid tokens
-            prefix_ar_mask: Autoregressive mask for causal attention
-
-        Returns:
-            (output_embeddings, kv_cache)
-        """
-        attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        (prefix_out, _), kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=attn_mask, positions=positions)
-        return prefix_out, kv_cache
-
     def _build_prefix_gemma3(
         self,
         obs: CoTObservation | Observation,
@@ -655,12 +522,12 @@ class PiCoT(_pi0.Pi0):
         )
 
         # Replace placeholder embeddings with actual image embeddings
-        tokens = self._replace_image_placeholders(text_tokens, obs.tokenized_prompt, img_tokens)
+        tokens = replace_image_placeholders(text_tokens, obs.tokenized_prompt, img_tokens)
 
         # Replace placeholder masks with actual image masks
         if text_ar_mask is None:
             text_ar_mask = jnp.zeros_like(text_mask, dtype=bool)
-        input_mask, ar_mask = self._replace_placeholder_masks(
+        input_mask, ar_mask = replace_placeholder_masks(
             text_mask, text_ar_mask, obs.tokenized_prompt, img_mask, img_ar_mask
         )
 
@@ -709,66 +576,55 @@ class PiCoT(_pi0.Pi0):
 
         return tokens, input_mask, ar_mask
 
-    def _compute_sequence_loss(
+    def _compute_language_loss(
         self,
+        observation: CoTObservation | Observation,
         prefix_tokens: at.Float[at.Array, "b s emb"],
         prefix_mask: at.Bool[at.Array, "b s"],
         prefix_ar_mask: at.Bool[at.Array, "b s"],
-        tokenized_sequence: at.Int[at.Array, "b s"],
-        tokenized_sequence_mask: at.Bool[at.Array, "b s"],
-        tokenized_langact_mask: at.Bool[at.Array, "b s"],
-        critical_token_mask: at.Bool[at.Array, "b s"] | None,
-        number_token_mask: at.Bool[at.Array, "b s"] | None,
-        direction_token_mask: at.Bool[at.Array, "b s"] | None,
-        units_number_token_mask: at.Bool[at.Array, "b s"] | None,
-        digit_values: at.Int[at.Array, "b s"] | None,
-        sample_mask: at.Bool[at.Array, "b"] | None,
-        loss_name: str,
-        metric_prefix: str,
+        sample_mask: at.Bool[at.Array, "b"] | None = None,
+        *,
         verbose_mode: bool = False,
         return_predictions: bool = False,
+        loss_name: str = "lang_loss",
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
-        """Shared logic for computing sequence prediction loss (language or prediction).
+        """Compute language/reasoning cross-entropy loss and accuracy metrics.
 
         Args:
+            observation: Observation containing tokenized prompts and masks
             prefix_tokens: Prefix embeddings (images + text)
             prefix_mask: Prefix attention mask
             prefix_ar_mask: Prefix autoregressive mask
-            tokenized_sequence: Tokenized sequence to predict
-            tokenized_sequence_mask: Mask for tokenized sequence
-            tokenized_langact_mask: Language/action mask for the sequence
-            critical_token_mask: Mask for critical tokens
-            number_token_mask: Mask for number tokens
-            direction_token_mask: Mask for direction tokens
-            units_number_token_mask: Mask for units digit tokens
-            digit_values: Digit values (0-9) for number tokens
-            sample_mask: Per-sample mask for batch-level filtering
-            loss_name: Name to use for loss metric (e.g., "lang_loss", "pred_loss")
-            metric_prefix: Prefix to add to metric names (e.g., "", "pred_")
+            sample_mask: Optional per-sample mask to override observation.sample_mask
             verbose_mode: Whether to compute detailed metrics
             return_predictions: Whether to return predictions and labels
 
         Returns:
-            (loss, metrics)
+            (loss, metrics, token_accuracy_scalar)
         """
-        # Forward pass
-        prefix_out, _ = self._forward_language_model(prefix_tokens, prefix_mask, prefix_ar_mask)
+        # Use provided sample_mask or fall back to observation's sample_mask
+        effective_sample_mask = sample_mask if sample_mask is not None else observation.sample_mask
+
+        attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        (prefix_out, _), kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=attn_mask, positions=positions)
 
         # Predict next tokens
-        shift_labels = tokenized_sequence[:, 1:]
-        max_len = tokenized_langact_mask.shape[1]
+        shift_labels = observation.tokenized_prompt[:, 1:]
+        max_len = observation.tokenized_langact_mask.shape[1]
         shift_tokens = prefix_out[:, -max_len:-1, :]
         shift_logits = self.PaliGemma.llm(shift_tokens, method="decode")
 
         # Prepare token mask
-        token_mask = self._prepare_token_mask(
-            tokenized_langact_mask[:, 1:],
-            tokenized_sequence_mask[:, 1:],
-            sample_mask,
+        token_mask = jnp.logical_and(
+            observation.tokenized_langact_mask[:, 1:], observation.tokenized_prompt_mask[:, 1:]
         )
+        if effective_sample_mask is not None:
+            ex_mask = jnp.asarray(effective_sample_mask)[..., None]
+            token_mask = token_mask * ex_mask
 
         # Prepare masks for label smoothing and accuracy metrics
-        ex_mask = jnp.asarray(sample_mask)[..., None] if sample_mask is not None else None
+        ex_mask = jnp.asarray(effective_sample_mask)[..., None] if effective_sample_mask is not None else None
 
         def prepare_mask(mask):
             if mask is None:
@@ -779,14 +635,15 @@ class PiCoT(_pi0.Pi0):
             return shifted_mask
 
         # Always prepare units_number_mask and digit_values for label smoothing (if available)
-        units_mask_shifted = prepare_mask(units_number_token_mask)
+        units_mask_shifted = prepare_mask(getattr(observation, "units_number_token_mask", None))
+        digit_values = getattr(observation, "digit_values", None)
         digit_values_shifted = digit_values[:, 1:] if digit_values is not None else None
 
         # Only prepare detailed masks if verbose_mode is enabled (for accuracy metrics)
         if verbose_mode:
-            critical_mask = prepare_mask(critical_token_mask)
-            number_mask = prepare_mask(number_token_mask)
-            direction_mask = prepare_mask(direction_token_mask)
+            critical_mask = prepare_mask(observation.critical_token_mask)
+            number_mask = prepare_mask(observation.number_token_mask)
+            direction_mask = prepare_mask(observation.direction_token_mask)
         else:
             critical_mask, number_mask, direction_mask = None, None, None
 
@@ -817,10 +674,10 @@ class PiCoT(_pi0.Pi0):
         # Add predictions/labels or accuracy metrics to output
         if return_predictions or verbose_mode:
             metric_rename_map = {
-                "token_accuracy": f"{metric_prefix}token_accuracy",
-                "critical_token_accuracy": f"{metric_prefix}critical_token_accuracy",
-                "number_token_accuracy": f"{metric_prefix}number_token_accuracy",
-                "direction_token_accuracy": f"{metric_prefix}direction_token_accuracy",
+                "token_accuracy": "token_accuracy",
+                "critical_token_accuracy": "critical_token_accuracy",
+                "number_token_accuracy": "number_token_accuracy",
+                "direction_token_accuracy": "direction_token_accuracy",
             }
 
             for key, value in raw_metrics.items():
@@ -831,54 +688,6 @@ class PiCoT(_pi0.Pi0):
                 else:
                     new_key = metric_rename_map.get(key, key)
                     metrics[new_key] = value
-
-        return per_sample_loss, metrics
-
-    def _compute_language_loss(
-        self,
-        observation: CoTObservation | Observation,
-        prefix_tokens: at.Float[at.Array, "b s emb"],
-        prefix_mask: at.Bool[at.Array, "b s"],
-        prefix_ar_mask: at.Bool[at.Array, "b s"],
-        sample_mask: at.Bool[at.Array, "b"] | None = None,
-        verbose_mode: bool = False,
-        return_predictions: bool = False,
-    ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
-        """Compute language/reasoning cross-entropy loss and accuracy metrics.
-
-        Args:
-            observation: Observation containing tokenized prompts and masks
-            prefix_tokens: Prefix embeddings (images + text)
-            prefix_mask: Prefix attention mask
-            prefix_ar_mask: Prefix autoregressive mask
-            sample_mask: Optional per-sample mask to override observation.sample_mask
-            verbose_mode: Whether to compute detailed metrics
-            return_predictions: Whether to return predictions and labels
-
-        Returns:
-            (loss, metrics, token_accuracy_scalar)
-        """
-        # Use provided sample_mask or fall back to observation's sample_mask
-        effective_sample_mask = sample_mask if sample_mask is not None else observation.sample_mask
-
-        per_sample_loss, metrics = self._compute_sequence_loss(
-            prefix_tokens=prefix_tokens,
-            prefix_mask=prefix_mask,
-            prefix_ar_mask=prefix_ar_mask,
-            tokenized_sequence=observation.tokenized_prompt,
-            tokenized_sequence_mask=observation.tokenized_prompt_mask,
-            tokenized_langact_mask=observation.tokenized_langact_mask,
-            critical_token_mask=observation.critical_token_mask,
-            number_token_mask=observation.number_token_mask,
-            direction_token_mask=observation.direction_token_mask,
-            units_number_token_mask=getattr(observation, "units_number_token_mask", None),
-            digit_values=getattr(observation, "digit_values", None),
-            sample_mask=effective_sample_mask,
-            loss_name="lang_loss",
-            metric_prefix="",
-            verbose_mode=verbose_mode,
-            return_predictions=return_predictions,
-        )
 
         return per_sample_loss, metrics
 
@@ -964,6 +773,7 @@ class PiCoT(_pi0.Pi0):
         lang_metrics: dict[str, at.Array],
         sample_mask: at.Bool[at.Array, "b"],
         prefix: str,
+        *,
         verbose_mode: bool = False,
     ) -> dict[str, at.Array]:
         """Compute comprehensive metrics for a specific subset of samples (pred or langact).
@@ -1224,100 +1034,6 @@ class PiCoT(_pi0.Pi0):
         else:
             # No masking or fallback: use mean over all samples
             final_loss = jnp.mean(total_per_sample_loss)
-
-        return final_loss, metrics
-
-    @override
-    def compute_loss_with_decoded_tokens(
-        self,
-        rng: at.KeyArrayLike,
-        observation: CoTObservation | Observation,
-        actions: _model.Actions,
-        *,
-        train: bool = False,
-        verbose_mode: bool = False,
-    ) -> tuple[float, dict[str, at.Array]]:
-        """Compute loss and return predictions and labels for visualization.
-
-        This is similar to compute_loss but optimized for visualization:
-        - Always returns predicted tokens, ground truth labels, and token masks
-        - By default, skips expensive accuracy metric computation (verbose_mode=False)
-        - Avoids preparing critical/number/direction masks when not needed
-
-        Args:
-            rng: Random key
-            observation: Observation containing images and tokenized text
-            actions: Ground truth actions (unused but kept for API compatibility)
-            train: Whether in training mode
-            verbose_mode: Whether to compute detailed accuracy metrics (default: False for efficiency)
-
-        Returns:
-            (loss, metrics) where metrics includes 'predictions', 'labels', and 'token_mask'
-        """
-        preprocess_rng, _, _, _ = jax.random.split(rng, 4)
-
-        # Use explicit verbose_mode (defaults to False for efficiency)
-        effective_verbose_mode = verbose_mode
-
-        # Preprocess observation
-        vqa_mask = None
-        if self.enable_vqa_training and hasattr(observation, "is_vqa_sample") and observation.is_vqa_sample is not None:
-            vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool)
-
-        observation = preprocess_observation(
-            preprocess_rng,
-            observation,
-            train=train,
-            image_keys=self.image_keys,
-            aug_wrist_image=self.aug_wrist_image,
-            vqa_mask=vqa_mask,
-        )
-
-        # Encode images (only first frame needed)
-        img_tokens_first, img_mask_first, img_ar_mask_first = self._embed_images(observation, num_frames=1)
-
-        # Build prefix
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(
-            observation, num_frames=1, precomputed_img_embeddings=(img_tokens_first, img_mask_first, img_ar_mask_first)
-        )
-
-        # Compute language loss with predictions
-        # NOTE: We always set return_predictions=True because this method's purpose
-        # is to return decoded tokens for visualization
-        combined_langact_mask = observation.sample_mask
-        lang_loss, lang_metrics = self._compute_language_loss(
-            observation,
-            prefix_tokens,
-            prefix_mask,
-            prefix_ar_mask,
-            sample_mask=combined_langact_mask,
-            verbose_mode=effective_verbose_mode,
-            return_predictions=True,  # Always True: this method is for visualization
-        )
-
-        # Extract predictions, labels, and mask from metrics
-        # These are always present because return_predictions=True above
-
-        # Compute loss with correct normalization (same as compute_loss)
-        if observation.sample_mask is not None:
-            num_active_samples = jnp.maximum(jnp.sum(observation.sample_mask), 1.0)
-            final_loss = jnp.sum(lang_loss) / num_active_samples
-        else:
-            final_loss = jnp.mean(lang_loss)
-
-        metrics = {
-            "loss": final_loss,
-            "predictions": lang_metrics["predictions"],
-            "labels": lang_metrics["labels"],
-            "token_mask": lang_metrics["token_mask"],
-        }
-
-        # Include accuracy metrics if verbose mode is enabled
-        # (predictions/labels/token_mask are already included above)
-        if effective_verbose_mode:
-            for key, value in lang_metrics.items():
-                if key not in ["predictions", "labels", "token_mask"]:
-                    metrics[key] = value
 
         return final_loss, metrics
 
