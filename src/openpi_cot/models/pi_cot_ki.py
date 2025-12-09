@@ -960,6 +960,7 @@ class PiCoTKI(_pi0.Pi0):
         prefix_to_suffix_mask = einops.repeat(prefix_mask_action, "b p -> b s p", s=suffix_tokens.shape[1])
         full_attn_mask = jnp.concatenate([prefix_to_suffix_mask, suffix_attn_mask], axis=-1)
         suffix_positions = jnp.sum(prefix_mask_action, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+        breakpoint()
         (_, suffix_out), _ = self.PaliGemma.llm(
             [None, suffix_tokens],
             mask=full_attn_mask,
