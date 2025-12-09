@@ -469,7 +469,7 @@ class PiCoT(_pi0.Pi0):
         # Drop final prefix token (no next-token target) then align to text targets.
         pre_logits = prefix_pre_logits[:, :-1]
         pre_logits = pre_logits[:, -targets.shape[1] :]
-        logits = self.PaliGemma.llm(pre_logits=pre_logits)
+        logits, _, _ = self.PaliGemma.llm(pre_logits=pre_logits)
 
         loss_mask = jnp.logical_and(observation.tokenized_langact_mask[:, 1:], observation.tokenized_prompt_mask[:, 1:])
         if effective_sample_mask is not None:

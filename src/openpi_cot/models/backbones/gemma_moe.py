@@ -419,14 +419,14 @@ class Module(nn.Module):
         return_prelogits: bool = False,
         logits_expert: int = 0,
         pre_logits: at.Float[at.Array, "b _t _d"] | None = None,
-    ) -> tuple[jnp.ndarray, CacheState | None, dict]:
+    ) -> tuple[jnp.ndarray, CacheState | None, dict | None]:
         """Runs the transformer and decodes logits (or pre-logits) for expert `logits_expert`."""
         out: dict[str, object] = {}
 
         if pre_logits is not None:
             out["pre_logits"] = pre_logits
             logits = out["logits"] = self.embedder.decode(pre_logits)
-            return logits, kv_cache, out
+            return logits, None, None
 
         embedded = jax.tree.map(lambda e: e.astype(self.embed_dtype), embedded)
         mask = jnp.asarray(mask)[:, None, :, :]
@@ -450,12 +450,10 @@ class Module(nn.Module):
         if primary is None:
             raise ValueError(f"Expert {logits_expert} activations are None; cannot produce logits.")
 
-        out["pre_logits"] = primary
         if return_prelogits:
-            return primary, kv_cache, out
+            return primary, None, out
 
         logits = self.embedder.decode(primary)
-        out["logits"] = logits
         return logits, kv_cache, out
 
     def init(self, use_adarms: Sequence[bool]):
