@@ -121,7 +121,9 @@ class RMSNorm(nn.Module):
         if cond is None:
             # regular RMSNorm
             scale = self.param(
-                "scale", nn.initializers.zeros_init(dtype=jnp.dtype(self.param_dtype)), (x.shape[-1])
+                "scale",
+                lambda rng, shape: nn.initializers.zeros_init()(rng, shape, jnp.dtype(self.param_dtype)),
+                (x.shape[-1]),
             )
             normed_inputs = normed_inputs * (
                 1 + scale
