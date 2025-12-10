@@ -847,7 +847,7 @@ def process_and_log_metrics(
     config: "_config.TrainConfig",
     host_batch_cache: vis_tools.HostBatchCache | None = None,
     dataset_log_tracker: vis_tools.DatasetLogTracker | None = None,
-    tok: "PaligemmaCoTTokenizer" | None = None,
+    tok: Union["PaligemmaCoTTokenizer", None] = None,
     prefix: str = "",
     *,
     verbose_mode: bool = False,
