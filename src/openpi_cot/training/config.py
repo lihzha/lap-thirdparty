@@ -200,7 +200,6 @@ class CoTDataConfig(upstream_config.DataConfig):
     droid_rlds_data_dir: str | None = None
     # support using droid_subset for debugging
     droid_dataset_name: Literal["droid", "droid_subset"] = "droid"
-    use_json_actions: bool = False
     force_recompute_stats: bool = False
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")

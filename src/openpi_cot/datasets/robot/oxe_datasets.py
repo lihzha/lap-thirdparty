@@ -41,8 +41,6 @@ class _SingleOXECoTDataset(_SingleCoTDataset):
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
     ):
-        self.use_json_actions = False
-
         super().__init__(
             dataset_name=dataset_name,
             data_dir=data_dir,
@@ -581,7 +579,6 @@ class SampleR1LiteCoTDataset(_SingleOXECoTDataset):
             eef_npz_path = f"{data_dir}/{dataset_name}/1.0.0/eef_poses.npz"
 
         self.eef_npz_path = eef_npz_path
-        self.use_json_actions = False
 
         # Build EEF pose lookup table before parent initialization
         self.eef_pose_table, self.episode_lookup = self.build_eef_pose_table(eef_npz_path)

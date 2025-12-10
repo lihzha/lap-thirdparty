@@ -73,7 +73,6 @@ class _BaseVQADataset(_SingleCoTDataset):
         primary_pred_prob: float | None = None,
     ):
         # VQA datasets don't have language actions in the traditional sense
-        self.use_json_actions = False
 
         # Store basic config
         self.config = config

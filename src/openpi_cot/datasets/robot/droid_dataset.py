@@ -419,8 +419,6 @@ class DroidCoTDataset(_SingleCoTDataset):
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
     ):
-        self.use_json_actions = config.use_json_actions
-
         if num_parallel_calls == -1 or num_parallel_reads == -1:
             total_threads = len(os.sched_getaffinity(0))
             num_parallel_reads = int(total_threads * 0.3)
