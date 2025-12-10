@@ -309,6 +309,23 @@ def main(config: _config.TrainConfig):
     # Restore checkpoint with explicit sharding for device mismatch handling
     import orbax.checkpoint as ocp
 
+    # Log available checkpoints and determine which to load
+    available_steps = list(checkpoint_manager.all_steps())
+    logging.info(f"Available checkpoints: {available_steps}")
+
+    if config.eval_checkpoint_step is None:
+        latest_step = checkpoint_manager.latest_step()
+        logging.info(f"No checkpoint step specified (--eval_checkpoint_step), using latest: {latest_step}")
+        checkpoint_step_to_load = latest_step
+    else:
+        checkpoint_step_to_load = config.eval_checkpoint_step
+        if checkpoint_step_to_load not in available_steps:
+            raise ValueError(
+                f"Requested checkpoint step {checkpoint_step_to_load} not found. "
+                f"Available steps: {available_steps}"
+            )
+        logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
+
     with at.disable_typechecking():
         # Split params for restoration
         def _split_params(state):
@@ -348,7 +365,7 @@ def main(config: _config.TrainConfig):
         )
 
         restored = checkpoint_manager.restore(
-            config.eval_checkpoint_step,
+            checkpoint_step_to_load,
             args=restore_args,
         )
 

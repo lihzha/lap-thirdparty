@@ -36,6 +36,12 @@ import jax.numpy as jnp
 import openpi.models.lora as lora
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
+from openpi_cot.models.gemma_common import Einsum as CommonEinsum
+from openpi_cot.models.gemma_common import Embedder as CommonEmbedder
+from openpi_cot.models.gemma_common import FeedForward as CommonFeedForward
+from openpi_cot.models.gemma_common import RMSNorm as CommonRMSNorm
+from openpi_cot.models.gemma_common import _gated_residual
+from openpi_cot.models.gemma_common import _name
 
 PALIGEMMA_VOCAB_SIZE = 257_152
 
@@ -109,81 +115,47 @@ def get_config(variant: Variant) -> Config:
     raise ValueError(f"Unknown variant: {variant}")
 
 
+# RMSNorm: Wrapper around common implementation with bfloat16 default for Gemma
 @at.typecheck
-class RMSNorm(nn.Module):
+class RMSNorm(CommonRMSNorm):
+    """RMSNorm with explicit bfloat16 parameter dtype (Gemma default).
+
+    Inherits from common implementation and sets param_dtype="bfloat16" by default.
+    """
+
     param_dtype: str = "bfloat16"
 
-    @nn.compact
-    def __call__(self, x, cond):
-        dtype = x.dtype  # original dtype, could be half-precision
-        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)  # compute variance in float32
-        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))  # compute normalization in float32
-        if cond is None:
-            # regular RMSNorm
-            scale = self.param(
-                "scale", nn.initializers.zeros_init(dtype=jnp.dtype(self.param_dtype)), (x.shape[-1])
-            )
-            normed_inputs = normed_inputs * (
-                1 + scale
-            )  # scale by learned parameter in float32 (matches Flax implementation)
-            return normed_inputs.astype(dtype), None  # return in original dtype
 
-        # adaptive RMSNorm
-        modulation = nn.Dense(
-            x.shape[-1] * 3, kernel_init=nn.initializers.zeros, dtype=dtype, param_dtype=jnp.dtype(self.param_dtype)
-        )(cond)
-        scale, shift, gate = jnp.split(modulation[:, None, :], 3, axis=-1)
-        normed_inputs = normed_inputs * (1 + scale) + shift  # scale and shift in float32
-        return normed_inputs.astype(dtype), gate
-
-
+# Embedder: Wrapper around common implementation with bfloat16 default for Gemma
 @at.typecheck
-class Embedder(nn.Module):
-    """Embedder module."""
+class Embedder(CommonEmbedder):
+    """Embedder module with explicit bfloat16 parameter dtype (Gemma default).
 
-    vocab_size: int
-    embed_dim: int
-    param_dtype: str = "bfloat16"
-
-    def setup(self):
-        self.input_embedding_table = self.param(
-            "input_embedding",
-            nn.initializers.normal(dtype=jnp.dtype(self.param_dtype)),
-            (self.vocab_size, self.embed_dim),
-        )
-
-    def encode(self, x):
-        x = self.input_embedding_table[(x,)]
-        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
-        return x
-
-    def decode(self, x):
-        return jnp.dot(x, self.input_embedding_table.T)
-
-
-class Einsum(lora.Einsum):
-    """Einsum with LoRA support and explicit bfloat16 parameter dtype."""
+    Inherits from common implementation and sets param_dtype="bfloat16" by default.
+    """
 
     param_dtype: str = "bfloat16"
 
-    def setup(self):
-        dtype = jnp.dtype(self.param_dtype)
 
-        def init_w(rng, shape):
-            return self.init_fn(rng, shape, dtype)
+# Einsum: Wrapper around common implementation with bfloat16 default for Gemma
+class Einsum(CommonEinsum):
+    """Einsum with LoRA support and explicit bfloat16 parameter dtype (Gemma default).
 
-        self.w = self.param("w", init_w, self.shape)
+    Inherits from common implementation and sets param_dtype="bfloat16" by default.
+    """
 
-        if config := self.lora_config:
-            shape_a, shape_b = list(self.shape), list(self.shape)
-            shape_a[config.axes[1]] = config.rank
-            shape_b[config.axes[0]] = config.rank
+    param_dtype: str = "bfloat16"
+    init_fn: nn.initializers.Initializer = nn.initializers.zeros
 
-            def init_lora(rng, shape):
-                return config.init_fn(rng, shape, dtype)
 
-            self.w_a = self.param("lora_a", init_lora, shape_a)
-            self.w_b = self.param("lora_b", init_lora, shape_b)
+# FeedForward: Wrapper around common implementation with bfloat16 default for Gemma
+class FeedForward(CommonFeedForward):
+    """Feed forward module with explicit bfloat16 parameter dtype (Gemma default).
+
+    Inherits from common implementation and sets param_dtype="bfloat16" by default.
+    """
+
+    param_dtype: str = "bfloat16"
 
 
 @at.typecheck
@@ -191,7 +163,6 @@ class Attention(nn.Module):
     """Attention module."""
 
     configs: Sequence[Config]
-    stop_action_to_vlm_grad: bool = False
 
     @nn.compact
     def __call__(self, xs, positions, attn_mask, kv_cache):
@@ -202,7 +173,6 @@ class Attention(nn.Module):
 
         dtype = next(x.dtype for x in xs if x is not None)  # original dtype, could be half-precision
 
-        token_lengths = [x.shape[1] if x is not None else 0 for x in xs]
         qkvs = []
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is None:
@@ -245,46 +215,13 @@ class Attention(nn.Module):
         # should still be half-precision here (if input was half-precision)
         assert q.dtype == k.dtype == v.dtype == dtype
 
-        cache_size = attn_mask.shape[-1]
-        if kv_cache is None:
-            idx, k_cache, v_cache = _init_flexible_kv_cache(k, v, cache_size)
-        else:
-            idx, k_cache, v_cache = _update_flexible_kv_cache(k, v, *kv_cache)
-        k, v = k_cache, v_cache
-        kv_cache = (idx, k_cache, v_cache)
+        if kv_cache is not None:
+            cache_k, cache_v = kv_cache
+            k = jnp.concatenate([cache_k, k], axis=1)
+            v = jnp.concatenate([cache_v, v], axis=1)
 
         q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
-
-        has_action_tokens = any(length > 0 for length in token_lengths[1:])
-        stop_condition = (
-            self.stop_action_to_vlm_grad and token_lengths[0] > 0 and has_action_tokens and q.shape[1] == k.shape[1]
-        )
-
-        if stop_condition:
-            # Build masks identifying action queries (experts >=1) and VLM keys (expert 0).
-            query_mask_parts = []
-            key_mask_parts = []
-            for idx, length in enumerate(token_lengths):
-                if length == 0:
-                    continue
-                query_mask_parts.append(jnp.full((length,), idx != 0, dtype=bool))
-                key_mask_parts.append(jnp.full((length,), idx == 0, dtype=bool))
-            query_action_mask = jnp.concatenate(query_mask_parts, axis=0)
-            key_vlm_mask = jnp.concatenate(key_mask_parts, axis=0)
-            # Broadcast masks to attention dimensions.
-            query_action_mask_q = query_action_mask[None, :, None, None, None]
-            key_vlm_mask_k = key_vlm_mask[None, :, None, None]
-
-            q_action = jnp.where(query_action_mask_q, q, 0)
-            q_non_action = q - q_action
-
-            k_blocked = k + key_vlm_mask_k * (jax.lax.stop_gradient(k) - k)
-
-            logits_non_action = jnp.einsum("BTKGH,BSKH->BKGTS", q_non_action, k, preferred_element_type=jnp.float32)
-            logits_action = jnp.einsum("BTKGH,BSKH->BKGTS", q_action, k_blocked, preferred_element_type=jnp.float32)
-            logits = logits_non_action + logits_action
-        else:
-            logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
+        logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
 
         if attn_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
             raise ValueError(
@@ -297,20 +234,7 @@ class Attention(nn.Module):
 
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
 
-        if stop_condition:
-            query_action_mask_probs = query_action_mask[None, None, None, :, None]
-            key_vlm_mask_v = key_vlm_mask[None, :, None, None]
-
-            probs_action = probs * query_action_mask_probs
-            probs_non_action = probs - probs_action
-
-            v_blocked = v + key_vlm_mask_v * (jax.lax.stop_gradient(v) - v)
-
-            encoded_non_action = jnp.einsum("BKGTS,BSKH->BTKGH", probs_non_action, v)
-            encoded_action = jnp.einsum("BKGTS,BSKH->BTKGH", probs_action, v_blocked)
-            encoded = encoded_non_action + encoded_action
-        else:
-            encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
+        encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
         encoded = einops.rearrange(encoded, "B T K G H -> B T (K G) H")
 
         out = []
@@ -330,37 +254,7 @@ class Attention(nn.Module):
             else:
                 out.append(None)
 
-        return out, kv_cache
-
-
-@at.typecheck
-class FeedForward(lora.FeedForward):
-    """Feed forward module with LoRA support and explicit bfloat16 parameter dtype."""
-
-    param_dtype: str = "bfloat16"
-
-    def setup(self):
-        dtype = jnp.dtype(self.param_dtype)
-        gating_init = nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,))
-        linear_init = nn.initializers.lecun_normal(in_axis=-2, out_axis=-1)
-        self.w_gating = self.param("gating_einsum", gating_init, (2, self.features, self.hidden_dim), dtype)
-        self.w_linear = self.param("linear", linear_init, (self.hidden_dim, self.features), dtype)
-        self.w_gating_lora = None
-        self.w_linear_lora = None
-        if self.lora_config:
-            lora_init = lambda rng, shape: self.lora_config.init_fn(rng, shape, dtype)  # noqa: E731
-            self.w_gating_lora = (
-                self.param("gating_einsum_lora_a", lora_init, (2, self.features, self.lora_config.rank)),
-                self.param("gating_einsum_lora_b", lora_init, (2, self.lora_config.rank, self.hidden_dim)),
-            )
-            self.w_linear_lora = (
-                self.param("linear_lora_a", lora_init, (self.hidden_dim, self.lora_config.rank)),
-                self.param("linear_lora_b", lora_init, (self.lora_config.rank, self.features)),
-            )
-
-    def param(self, name, init_fn, *init_args, **init_kwargs):  # type: ignore[override]
-        """Wraps nn.Module.param to allow passing dtype through setup."""
-        return super().param(name, init_fn, *init_args, **init_kwargs)
+        return out, (k, v)
 
 
 @at.typecheck
@@ -368,7 +262,7 @@ class Block(nn.Module):
     """Transformer block."""
 
     configs: tuple[Config, ...]
-    stop_action_to_vlm_grad: bool = False
+
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
 
@@ -377,15 +271,14 @@ class Block(nn.Module):
         xs = sharding.activation_sharding_constraint(xs)
         drop = nn.Dropout(self.dropout, self.dropout_bdims) if self.dropout else lambda x, _: x
 
-        attn = Attention(configs=self.configs, stop_action_to_vlm_grad=self.stop_action_to_vlm_grad, name="attn")
+        attn = Attention(configs=self.configs, name="attn")
 
         pre_attn = []
         gates = []
-        for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
+        for i, x in enumerate(xs):
             if x is not None:
                 x, gate = RMSNorm(  # noqa: PLW2901
-                    name=_name("pre_attention_norm", i),
-                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
+                    name=_name("pre_attention_norm", i), param_dtype=getattr(self.configs[i], "param_dtype", "bfloat16")
                 )(x, adarms_cond[i])
             pre_attn.append(x)
             gates.append(gate if x is not None else None)
@@ -402,8 +295,7 @@ class Block(nn.Module):
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is not None:
                 x, gate = RMSNorm(  # noqa: PLW2901
-                    name=_name("pre_ffw_norm", i),
-                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
+                    name=_name("pre_ffw_norm", i), param_dtype=getattr(config, "param_dtype", "bfloat16")
                 )(x, adarms_cond[i])
                 x = FeedForward(  # noqa: PLW2901
                     features=config.width,
@@ -424,12 +316,6 @@ class Block(nn.Module):
 
 
 KVCache: TypeAlias = tuple[at.Float[at.Array, "l b _t _k _h"], at.Float[at.Array, "l b _t _v _h"]]
-FlexibleKVCache: TypeAlias = tuple[
-    at.Int[at.Array, "l b"],
-    at.Float[at.Array, "l b _t _k _h"],
-    at.Float[at.Array, "l b _t _v _h"],
-]
-CacheState: TypeAlias = KVCache | FlexibleKVCache
 
 
 @at.typecheck
@@ -442,7 +328,6 @@ class Module(nn.Module):
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
     adarms: bool = False
-    stop_action_to_vlm_grad: bool = False
 
     def setup(self):
         # all experts must have the same depth
@@ -474,7 +359,6 @@ class Module(nn.Module):
             length=self.configs[0].depth,
         )(
             configs=self.configs,
-            stop_action_to_vlm_grad=self.stop_action_to_vlm_grad,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
         )
@@ -491,25 +375,14 @@ class Module(nn.Module):
     def __call__(
         self,
         # list of token arrays, one for each expert, or None if that expert should not be run
-        embedded: Sequence[at.Float[at.Array, "b _t _d"] | None] | None = None,
-        positions: at.Int[at.Array, "b t"] | None = None,
-        mask: at.Bool[at.Array, "b t s"] | None = None,
+        embedded: Sequence[at.Float[at.Array, "b _t _d"] | None],
+        positions: at.Int[at.Array, "b t"],
+        mask: at.Bool[at.Array, "b t s"],
         adarms_cond: Sequence[at.Float[at.Array, "b _d"] | None] | None = None,
         *,
-        kv_cache: CacheState | None = None,
+        kv_cache: KVCache | None = None,
         deterministic: bool = True,
-        return_prelogits: bool = False,
-        logits_expert: int = 0,
-        pre_logits: at.Float[at.Array, "b _t _d"] | None = None,
-    ) -> tuple[jnp.ndarray, CacheState | None, dict | None]:
-        """Runs the transformer and decodes logits (or pre-logits) for expert `logits_expert`."""
-        out: dict[str, object] = {}
-
-        if pre_logits is not None:
-            out["pre_logits"] = pre_logits
-            logits = out["logits"] = self.embedder.decode(pre_logits)
-            return logits, None, None
-
+    ) -> tuple[Sequence[at.Float[at.Array, "b _t _d"] | None], KVCache]:
         embedded = jax.tree.map(lambda e: e.astype(self.embed_dtype), embedded)
         mask = jnp.asarray(mask)[:, None, :, :]
         if adarms_cond is None:
@@ -519,24 +392,9 @@ class Module(nn.Module):
 
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
-        encoded = [
-            f(e, a)[0] if e is not None else None
-            for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
-        ]
-        out["encoded"] = encoded
-
-        if logits_expert < 0 or logits_expert >= len(encoded):
-            raise ValueError(f"logits_expert {logits_expert} is out of range for {len(encoded)} experts.")
-
-        primary = encoded[logits_expert]
-        if primary is None:
-            raise ValueError(f"Expert {logits_expert} activations are None; cannot produce logits.")
-
-        if return_prelogits:
-            return primary, None, out
-
-        logits = self.embedder.decode(primary)
-        return logits, kv_cache, out
+        return [
+            f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
+        ], kv_cache
 
     def init(self, use_adarms: Sequence[bool]):
         """Convenience method for initializing all parameters, necessary due to the quirks of linen."""
@@ -566,50 +424,3 @@ def _apply_rope(x, *, positions, max_wavelength=10_000):
     # original DeepMind impl, as well as the widely-used transformers impl, it is ok to always downcast back to bfloat16
     # here.
     return res.astype(x.dtype)
-
-
-def _name(name, i):
-    # we name layers like this because we want the first expert's weights to have no suffix (e.g., "attn"), so that they
-    # can be loaded seamlessly from the existing PaliGemma checkpoint. subsequent experts will have a suffix (e.g.,
-    # "attn_1") and their weights will be initialized from scratch. in practice, we only use two experts -- PaliGemma,
-    # and the action expert.
-    if i == 0:
-        return name
-    return f"{name}_{i}"
-
-
-def _gated_residual(x, y, gate):
-    assert (x is None) == (y is None)
-    if x is None:
-        return None
-    if gate is None:
-        return x + y
-    return x + y * gate
-
-
-def _init_flexible_kv_cache(k, v, cache_size):
-    """Initializes a padded kv-cache for expert 0 decoding."""
-    prefill_len = k.shape[1]
-    if cache_size < prefill_len:
-        raise ValueError(f"Cache size {cache_size} is smaller than the provided sequence length {prefill_len}.")
-    pad_width = ((0, 0), (0, cache_size - prefill_len), (0, 0), (0, 0))
-    k_cache = jnp.pad(k, pad_width)
-    v_cache = jnp.pad(v, pad_width)
-    idx = jnp.zeros((k.shape[0],), dtype=jnp.int32) + prefill_len
-    return idx, k_cache, v_cache
-
-
-def _update_flexible_kv_cache(k, v, idx, k_cache, v_cache):
-    """Updates the padded kv-cache with the newest expert 0 token."""
-    if k.shape[1] != 1:
-        raise ValueError("Flexible kv-cache updates are only defined for autoregressive length-1 inserts.")
-
-    def _update(cache, value, start_idx):
-        return jax.lax.dynamic_update_slice(cache, value, (start_idx, 0, 0))
-
-    k_update = k.astype(k_cache.dtype)
-    v_update = v.astype(v_cache.dtype)
-    k_new = jax.vmap(_update)(k_cache, k_update[:, 0:1], idx)
-    v_new = jax.vmap(_update)(v_cache, v_update[:, 0:1], idx)
-    idx_new = idx + 1
-    return idx_new, k_new, v_new
