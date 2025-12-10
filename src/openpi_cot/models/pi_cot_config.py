@@ -66,7 +66,6 @@ class PiCoTConfig(_model.BaseModelConfig):
     # For support=3, digit 5 gets non-zero prob for [2,3,4,5,6,7,8]
     label_smoothing_support: int = 3
 
-    use_ki: bool = False
     # When True, stops gradients produced by the action expert from flowing back
     # into the VLM expert through cross-attention.
     stop_action_to_vlm_grad: bool = False

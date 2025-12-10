@@ -9,7 +9,7 @@ This module provides unified functionality for:
 
 import logging
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Union
 
 from flax.training import common_utils
 import jax
@@ -841,7 +841,7 @@ def log_mem(msg: str):
 def process_and_log_metrics(
     step: int,
     infos: list[dict[str, at.Array]],
-    batch: tuple["CoTObservation" | Observation, _model.Actions],
+    batch: tuple[Union["CoTObservation", Observation], _model.Actions],
     dataset_stats_tracker: DatasetStatsTracker | None,
     dataset_info_buffer: LocalDatasetInfoBuffer | None,
     config: "_config.TrainConfig",
