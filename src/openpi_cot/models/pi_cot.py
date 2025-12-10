@@ -755,7 +755,7 @@ class PiCoT(_pi0.Pi0):
             suffix_inputs["suffix_ar_mask"] if suffix_inputs is not None else None,
         )
         combined_positions = self._build_combined_positions(
-            prefix_mask, suffix_inputs["suffix_mask"] if suffix_inputs is not None else None, prefix_mask_action
+            prefix_mask, prefix_mask_action, suffix_inputs["suffix_mask"] if suffix_inputs is not None else None
         )
         embedded_inputs = [prefix_tokens, suffix_inputs["suffix_tokens"] if suffix_inputs is not None else None]
         adarms_cond = [None, suffix_inputs["adarms_cond"] if suffix_inputs is not None else None]
