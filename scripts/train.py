@@ -290,26 +290,26 @@ class TrainingStepRunner:
         grad_norm_bf16 = optax.global_norm(grads)
         grad_norm_f32 = optax.global_norm(jax.tree.map(lambda g: g.astype(jnp.float32), grads))
 
-        # Trigger a host-side warning when gradients are non-finite or the bf16 norm is NaN/Inf; works under jit.
-        grads_all_finite = jax.tree.reduce(
-            lambda acc, x: acc & jnp.all(jnp.isfinite(x)),
-            grads,
-            init=jnp.array(True, dtype=bool),
-        )
-        def _debug_grad_callback(gn_bf16, gn_f32, finite):
-            logging.warning(
-                "Non-finite gradients detected: grad_norm_bf16=%s grad_norm_f32=%s all_finite=%s",
-                gn_bf16,
-                gn_f32,
-                bool(finite),
-            )
-        jax.debug.callback(
-            _debug_grad_callback,
-            grad_norm_bf16,
-            grad_norm_f32,
-            grads_all_finite,
-            ordered=True,
-        )
+        # # Trigger a host-side warning when gradients are non-finite or the bf16 norm is NaN/Inf; works under jit.
+        # grads_all_finite = jax.tree.reduce(
+        #     lambda acc, x: acc & jnp.all(jnp.isfinite(x)),
+        #     grads,
+        #     init=jnp.array(True, dtype=bool),
+        # )
+        # def _debug_grad_callback(gn_bf16, gn_f32, finite):
+        #     logging.warning(
+        #         "Non-finite gradients detected: grad_norm_bf16=%s grad_norm_f32=%s all_finite=%s",
+        #         gn_bf16,
+        #         gn_f32,
+        #         bool(finite),
+        #     )
+        # jax.debug.callback(
+        #     _debug_grad_callback,
+        #     grad_norm_bf16,
+        #     grad_norm_f32,
+        #     grads_all_finite,
+        #     ordered=True,
+        # )
 
         new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
         if state.ema_decay is not None:
