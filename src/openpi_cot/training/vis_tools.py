@@ -24,6 +24,7 @@ import wandb
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 from openpi_cot.training import utils as _utils
+import openpi_cot.training.utils as training_utils
 
 AXIS_PERM = np.array([0, 2, 1], dtype=np.int32)
 AXIS_SIGN = np.array([1.0, 1.0, 1.0], dtype=np.float32)
@@ -399,6 +400,26 @@ def visualize_language_actions(
         visuals.append({"image": combined, "language_action": text, "index": idx})
 
     return visuals
+
+
+@dataclasses.dataclass
+class HostBatchCache:
+    host_batch: tuple[CoTObservation, _model.Actions] | None = None
+    local_batch_size: int = 0
+    step: int | None = None
+
+    def ensure(
+        self,
+        *,
+        step: int,
+        batch: tuple[CoTObservation, _model.Actions],
+    ) -> tuple[tuple[CoTObservation, _model.Actions] | None, int]:
+        if self.step != step:
+            self.host_batch = jax.tree.map(training_utils.to_local_array, batch)
+            obs_local = self.host_batch[0] if self.host_batch else None
+            self.local_batch_size = infer_local_batch_size(obs_local)
+            self.step = step
+        return self.host_batch, self.local_batch_size
 
 
 @dataclass
@@ -1010,3 +1031,116 @@ def eval_step(
                 to_log.append(vis2)
             return l2_cm_values, to_log
     return l2_cm_values, None
+
+
+def vis_batch(batch, tok=None, step=None):
+    """Visualize a training batch for debugging purposes.
+
+    Args:
+        batch: Tuple of (observation, actions)
+        tok: Tokenizer for decoding tokenized prompts (optional)
+        step: Training step number for wandb logging (optional)
+    """
+    obs = batch[0]
+    actions = batch[1]
+
+    logging.info("=" * 80)
+    logging.info("BATCH VISUALIZATION")
+    logging.info("=" * 80)
+
+    # 1. Visualize images: print shape and log to wandb
+    logging.info("\n--- IMAGES ---")
+    wandb_images = {}
+    for key, img in obs.images.items():
+        logging.info(f"{key}: shape={img.shape}, dtype={img.dtype}, min={img.min():.3f}, max={img.max():.3f}")
+
+        num_samples = img.shape[0]
+        sample_images = []
+        for t in range(min(num_samples, 4)):  # Log up to 4 samples
+            sample_img = img[t, 0]  # [H, W, C]
+
+            # Convert from [-1, 1] to [0, 255]
+            sample_img_uint8 = ((sample_img + 1.0) / 2.0 * 255.0).clip(0, 255).astype(np.uint8)
+
+            # Convert to numpy if it's a JAX array
+            sample_img_uint8 = np.asarray(sample_img_uint8)
+
+            # Add to wandb images list
+            sample_images.append(wandb.Image(sample_img_uint8, caption=f"{key}_t{t}"))
+            logging.info(
+                f"  Prepared image [{key}] timestep {t} for wandb "
+                f"(range: [{sample_img_uint8.min()}, {sample_img_uint8.max()}])"
+            )
+
+        if sample_images:
+            wandb_images[f"batch_vis/{key}"] = sample_images
+
+    # 2. Visualize image_masks: print shape
+    logging.info("\n--- IMAGE MASKS ---")
+    for key, mask in obs.image_masks.items():
+        logging.info(f"{key}: shape={mask.shape}, dtype={mask.dtype}, true_count={mask.sum()}/{mask.size}")
+
+    # 3. Visualize state: print shape and min/max for each dimension
+    logging.info("\n--- STATE ---")
+    state = obs.state
+    logging.info(f"state: shape={state.shape}, dtype={state.dtype}")
+    if len(state.shape) >= 2:
+        for dim_idx in range(state.shape[-1]):
+            dim_data = state[..., dim_idx]
+            logging.info(
+                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
+            )
+
+    # 4. Visualize tokenized_prompt with tokenizer
+    logging.info("\n--- TOKENIZED PROMPTS ---")
+    tokenized_prompt = obs.tokenized_prompt
+    tokenized_prompt_mask = obs.tokenized_prompt_mask
+
+    logging.info(f"tokenized_prompt: shape={tokenized_prompt.shape}, dtype={tokenized_prompt.dtype}")
+    logging.info(f"tokenized_prompt_mask: shape={tokenized_prompt_mask.shape}, dtype={tokenized_prompt_mask.dtype}")
+    # logging.info(f"token_ar_mask: shape={token_ar_mask.shape}, dtype={token_ar_mask.dtype}")
+    # logging.info(f"token_loss_mask: shape={token_loss_mask.shape}, dtype={token_loss_mask.dtype}")
+
+    if tok is not None:
+        # Decode first sample in batch
+        sample_idx = 0
+        if tokenized_prompt.shape[0] > 0:
+            # Full tokenized prompt
+            tokens_full = tokenized_prompt[sample_idx]
+            decoded_full = tok.decode(tokens_full)
+            logging.info(f"\n[Sample {sample_idx}] Full tokenized_prompt:")
+            logging.info(f"  Decoded: {decoded_full[:500]}...")  # First 500 chars
+
+            # Tokenized prompt with prompt mask applied
+            tokens_masked = tokenized_prompt[sample_idx] * tokenized_prompt_mask[sample_idx]
+            decoded_masked = tok.decode(tokens_masked)
+            logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * tokenized_prompt_mask:")
+            logging.info(f"  Decoded: {decoded_masked[:500]}...")
+
+            # # Tokenized prompt with AR mask applied
+            # tokens_ar = tokenized_prompt[sample_idx] * token_ar_mask[sample_idx]
+            # decoded_ar = tok.decode(tokens_ar)
+            # logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * token_ar_mask:")
+            # logging.info(f"  Decoded: {decoded_ar[:500]}...")
+    else:
+        logging.info("  (Tokenizer not provided - skipping decode)")
+
+    # 5. Print token_loss_mask statistics
+    # logging.info(f"\ntoken_loss_mask: sum={token_loss_mask.sum()}, mean={token_loss_mask.mean():.4f}")
+
+    # 6. Visualize actions
+    logging.info("\n--- ACTIONS ---")
+    logging.info(f"actions: shape={actions.shape}, dtype={actions.dtype}")
+    if len(actions.shape) >= 2:
+        for dim_idx in range(actions.shape[-1]):
+            dim_data = actions[..., dim_idx]
+            logging.info(
+                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
+            )
+
+    logging.info("=" * 80)
+
+    # Log images to wandb
+    if wandb_images and jax.process_index() == 0 and step is not None:
+        wandb.log(wandb_images, step=step)
+        logging.info(f"Logged {len(wandb_images)} image groups to wandb")

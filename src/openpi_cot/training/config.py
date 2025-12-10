@@ -920,7 +920,7 @@ class TrainConfig(upstream_config.TrainConfig):
     resume: bool = True
     ema_decay: float | None = 0.999
     # New field
-    do_val: bool = True
+    use_validation: bool = True
     val_interval: int = 2000
     checkpoint_async_timeout_secs: int | None = 7200
     checkpoint_async_enable: bool = True

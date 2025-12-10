@@ -115,6 +115,7 @@ class PiCoT(_pi0.Pi0):
                 configs=[paligemma_config, action_expert_config],
                 embed_dtype=config.dtype,
                 adarms=config.pi05,
+                stop_action_to_vlm_grad=config.stop_action_to_vlm_grad,
             )
         )
         llm.lazy_init(rngs=rngs, method="init", use_adarms=[False, True] if config.pi05 else [False, False])
@@ -611,12 +612,13 @@ class PiCoT(_pi0.Pi0):
     def _build_combined_positions(
         self,
         prefix_mask: at.Bool[at.Array, "b p"],
+        prefix_mask_action: at.Bool[at.Array, "b p"],
         suffix_mask: at.Bool[at.Array, "b s"] | None,
     ) -> at.Int[at.Array, "b _t"]:
         prefix_positions = jnp.cumsum(prefix_mask, axis=1) - 1
         if suffix_mask is None:
             return prefix_positions.astype(jnp.int32)
-        suffix_positions = jnp.sum(prefix_mask, axis=-1, keepdims=True) + jnp.cumsum(suffix_mask, axis=-1) - 1
+        suffix_positions = jnp.sum(prefix_mask_action, axis=-1, keepdims=True) + jnp.cumsum(suffix_mask, axis=-1) - 1
         combined = jnp.concatenate([prefix_positions, suffix_positions], axis=1)
         return combined.astype(jnp.int32)
 
@@ -753,7 +755,7 @@ class PiCoT(_pi0.Pi0):
             suffix_inputs["suffix_ar_mask"] if suffix_inputs is not None else None,
         )
         combined_positions = self._build_combined_positions(
-            prefix_mask, suffix_inputs["suffix_mask"] if suffix_inputs is not None else None
+            prefix_mask, suffix_inputs["suffix_mask"] if suffix_inputs is not None else None, prefix_mask_action
         )
         embedded_inputs = [prefix_tokens, suffix_inputs["suffix_tokens"] if suffix_inputs is not None else None]
         adarms_cond = [None, suffix_inputs["adarms_cond"] if suffix_inputs is not None else None]
@@ -778,8 +780,6 @@ class PiCoT(_pi0.Pi0):
                 sample_mask=combined_langact_mask,
                 verbose_mode=effective_verbose_mode,
             )
-
-            breakpoint()
 
             if self.enable_vqa_training or self.enable_prediction_training:
                 if vqa_mask is None:
@@ -843,7 +843,6 @@ class PiCoT(_pi0.Pi0):
                 total_per_sample_loss += self.language_loss_weight * lang_loss
 
         if suffix_out is not None and suffix_inputs is not None:
-            breakpoint()
             action_loss, action_metrics = self._compute_action_loss(suffix_out, suffix_inputs["u_t"])
             total_per_sample_loss += self.action_loss_weight * action_loss
             metrics.update(action_metrics)
@@ -950,7 +949,6 @@ class PiCoT(_pi0.Pi0):
         max_decoding_steps: int | at.Int[at.Array, ""] = 256,
         temperature: float = 0.0,
     ) -> _model.Actions:
-        # TODO: this is a hack to get the image keys.
         observation = _model.preprocess_observation(
             None, observation, train=False, image_keys=list(observation.images.keys())
         )

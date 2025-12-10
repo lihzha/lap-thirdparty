@@ -5,26 +5,22 @@ import logging
 import os
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
 import platform
 from typing import Any
 
 import etils.epath as epath
 import flax.nnx as nnx
-from flax.training import common_utils
 import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
 import matplotlib
-
-matplotlib.use("Agg")  # Use non-interactive backend for remote environments
-import numpy as np
 from openpi.models import model as _model
 from openpi.models.model import Observation
 import openpi.shared.array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 import openpi.training.optimizer as _optimizer
 import optax
-import psutil
 from rail_tpu_utils import prevent_cross_region
 import tqdm_loggable.auto as tqdm
 import wandb
@@ -40,233 +36,7 @@ import openpi_cot.training.utils as training_utils
 import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.weight_loaders as _weight_loaders
 
-
-def vis_batch(batch, tok=None, step=None):
-    """Visualize a training batch for debugging purposes.
-
-    Args:
-        batch: Tuple of (observation, actions)
-        tok: Tokenizer for decoding tokenized prompts (optional)
-        step: Training step number for wandb logging (optional)
-    """
-    obs = batch[0]
-    actions = batch[1]
-
-    logging.info("=" * 80)
-    logging.info("BATCH VISUALIZATION")
-    logging.info("=" * 80)
-
-    # 1. Visualize images: print shape and log to wandb
-    logging.info("\n--- IMAGES ---")
-    wandb_images = {}
-    for key, img in obs.images.items():
-        logging.info(f"{key}: shape={img.shape}, dtype={img.dtype}, min={img.min():.3f}, max={img.max():.3f}")
-
-        num_samples = img.shape[0]
-        sample_images = []
-        for t in range(min(num_samples, 4)):  # Log up to 4 samples
-            sample_img = img[t, 0]  # [H, W, C]
-
-            # Convert from [-1, 1] to [0, 255]
-            sample_img_uint8 = ((sample_img + 1.0) / 2.0 * 255.0).clip(0, 255).astype(np.uint8)
-
-            # Convert to numpy if it's a JAX array
-            sample_img_uint8 = np.asarray(sample_img_uint8)
-
-            # Add to wandb images list
-            sample_images.append(wandb.Image(sample_img_uint8, caption=f"{key}_t{t}"))
-            logging.info(
-                f"  Prepared image [{key}] timestep {t} for wandb "
-                f"(range: [{sample_img_uint8.min()}, {sample_img_uint8.max()}])"
-            )
-
-        if sample_images:
-            wandb_images[f"batch_vis/{key}"] = sample_images
-
-    # 2. Visualize image_masks: print shape
-    logging.info("\n--- IMAGE MASKS ---")
-    for key, mask in obs.image_masks.items():
-        logging.info(f"{key}: shape={mask.shape}, dtype={mask.dtype}, true_count={mask.sum()}/{mask.size}")
-
-    # 3. Visualize state: print shape and min/max for each dimension
-    logging.info("\n--- STATE ---")
-    state = obs.state
-    logging.info(f"state: shape={state.shape}, dtype={state.dtype}")
-    if len(state.shape) >= 2:
-        for dim_idx in range(state.shape[-1]):
-            dim_data = state[..., dim_idx]
-            logging.info(
-                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
-            )
-
-    # 4. Visualize tokenized_prompt with tokenizer
-    logging.info("\n--- TOKENIZED PROMPTS ---")
-    tokenized_prompt = obs.tokenized_prompt
-    tokenized_prompt_mask = obs.tokenized_prompt_mask
-
-    logging.info(f"tokenized_prompt: shape={tokenized_prompt.shape}, dtype={tokenized_prompt.dtype}")
-    logging.info(f"tokenized_prompt_mask: shape={tokenized_prompt_mask.shape}, dtype={tokenized_prompt_mask.dtype}")
-    # logging.info(f"token_ar_mask: shape={token_ar_mask.shape}, dtype={token_ar_mask.dtype}")
-    # logging.info(f"token_loss_mask: shape={token_loss_mask.shape}, dtype={token_loss_mask.dtype}")
-
-    if tok is not None:
-        # Decode first sample in batch
-        sample_idx = 0
-        if tokenized_prompt.shape[0] > 0:
-            # Full tokenized prompt
-            tokens_full = tokenized_prompt[sample_idx]
-            decoded_full = tok.decode(tokens_full)
-            logging.info(f"\n[Sample {sample_idx}] Full tokenized_prompt:")
-            logging.info(f"  Decoded: {decoded_full[:500]}...")  # First 500 chars
-
-            # Tokenized prompt with prompt mask applied
-            tokens_masked = tokenized_prompt[sample_idx] * tokenized_prompt_mask[sample_idx]
-            decoded_masked = tok.decode(tokens_masked)
-            logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * tokenized_prompt_mask:")
-            logging.info(f"  Decoded: {decoded_masked[:500]}...")
-
-            # # Tokenized prompt with AR mask applied
-            # tokens_ar = tokenized_prompt[sample_idx] * token_ar_mask[sample_idx]
-            # decoded_ar = tok.decode(tokens_ar)
-            # logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * token_ar_mask:")
-            # logging.info(f"  Decoded: {decoded_ar[:500]}...")
-    else:
-        logging.info("  (Tokenizer not provided - skipping decode)")
-
-    # 5. Print token_loss_mask statistics
-    # logging.info(f"\ntoken_loss_mask: sum={token_loss_mask.sum()}, mean={token_loss_mask.mean():.4f}")
-
-    # 6. Visualize actions
-    logging.info("\n--- ACTIONS ---")
-    logging.info(f"actions: shape={actions.shape}, dtype={actions.dtype}")
-    if len(actions.shape) >= 2:
-        for dim_idx in range(actions.shape[-1]):
-            dim_data = actions[..., dim_idx]
-            logging.info(
-                f"  dim {dim_idx}: min={dim_data.min():.4f}, max={dim_data.max():.4f}, mean={dim_data.mean():.4f}"
-            )
-
-    logging.info("=" * 80)
-
-    # Log images to wandb
-    if wandb_images and jax.process_index() == 0 and step is not None:
-        wandb.log(wandb_images, step=step)
-        logging.info(f"Logged {len(wandb_images)} image groups to wandb")
-
-
-def log_mem(msg: str):
-    """
-    Returns:
-        ram (float): Host RAM usage in GB (RSS).
-        tpu_mem (float): TPU HBM memory usage in GB (sum across devices).
-    """
-    # --- Host RAM (Resident Set Size) ---
-    proc = psutil.Process(os.getpid())
-    ram_gb = proc.memory_info().rss / (1024**3)  # RSS in GB
-    logging.info(f"{msg}: RAM: {ram_gb:.2f}GB")
-
-
-def process_and_log_metrics(
-    step: int,
-    infos: list[dict[str, at.Array]],
-    batch: tuple[CoTObservation | Observation, _model.Actions],
-    dataset_stats_tracker: log_util.DatasetStatsTracker | None,
-    dataset_info_buffer: log_util.LocalDatasetInfoBuffer | None,
-    config: _config.TrainConfig,
-    host_batch_cache: "HostBatchCache | None" = None,
-    dataset_log_tracker: vis_tools.DatasetLogTracker | None = None,
-    tok: PaligemmaCoTTokenizer | None = None,
-    prefix: str = "",
-    verbose_mode: bool = False,
-) -> dict[str, float]:
-    """
-    Unified function to process and log training/validation metrics.
-
-    Args:
-        step: Current training step
-        infos: List of metric dictionaries to aggregate
-        batch: Current batch data
-        dataset_stats_tracker: Tracker for dataset-level statistics
-        dataset_info_buffer: Buffer for local dataset info
-        config: Training configuration
-        host_batch_cache: Cache for host batches (only for training with langact)
-        dataset_log_tracker: Tracker for dataset logging counts (only for training with langact)
-        tok: Tokenizer for decoding (only for training with langact)
-        prefix: Prefix for metric names (empty for train, "val_" for validation)
-
-    Returns:
-        Dictionary of reduced metrics
-    """
-    if verbose_mode:
-        # Gather and update dataset stats from buffered local data
-        dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
-
-    # Stack and reduce metrics
-    stacked_infos = common_utils.stack_forest(infos)
-    reduce_overrides = {
-        "grad_norm": jnp.mean,
-        "loss": jnp.mean,
-        "param_norm": jnp.mean,
-    }
-    reduced_info = {}
-
-    # Process metrics: average metrics go directly to logging, per_sample metrics are skipped
-    for key, value in stacked_infos.items():
-        if "per_sample_loss" in key:
-            reduced_info[f"{prefix}max_{key}"] = jnp.max(value)
-        elif "per_sample" in key:
-            # Skip per_sample_* metrics - they're only used for dataset-level statistics
-            continue
-        else:
-            # All other metrics are averaged and logged directly
-            # For validation, add prefix to non-prefixed keys
-            metric_key = key if key.startswith(prefix) else f"{prefix}{key}"
-            reduced_info[metric_key] = reduce_overrides.get(key, jnp.mean)(value)
-
-    reduced_info = jax.device_get(reduced_info)
-
-    if verbose_mode:
-        # Add dataset statistics to logging
-        dataset_metrics = dataset_stats_tracker.get_metrics(prefix=prefix)
-        reduced_info.update(dataset_metrics)
-
-    info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-    mode = "val" if prefix else "train"
-    logging.info(f"Step {step} ({mode}): {info_str}")
-
-    if jax.process_index() == 0:
-        wandb.log(reduced_info, step=step)
-
-        if verbose_mode:
-            # Create and log dataset statistics bar plots
-            if dataset_stats_tracker.dataset_stats:
-                plots = log_util.create_dataset_stats_plots(
-                    dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
-                )
-                log_util.log_dataset_plots(plots, step, prefix=prefix)
-
-        # Training-specific logging: random examples and dataset log counts
-        if not prefix and host_batch_cache is not None and tok is not None and dataset_log_tracker is not None:
-            host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
-            vis_tools.log_random_examples(
-                step,
-                host_batch_local,
-                tok,
-                local_batch_size=local_size,
-                dataset_log_tracker=dataset_log_tracker,
-                prefix=prefix[:-1] if prefix else "train",
-            )
-
-            # Log dataset logging statistics periodically
-            if step % (config.log_interval * 10) == 0:
-                log_stats = dataset_log_tracker.get_stats()
-                if log_stats:
-                    logging.info(f"Dataset logging counts: {log_stats}")
-                    # Log to wandb as well
-                    wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
-                    wandb.log(wandb_log_stats, step=step)
-
-    return reduced_info
+matplotlib.use("Agg")  # Use non-interactive backend for remote environments
 
 
 def init_logging():
@@ -387,26 +157,6 @@ def init_tpu(config: _config.TrainConfig):
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
     return effective_fsdp_devices
-
-
-@dataclasses.dataclass
-class HostBatchCache:
-    host_batch: tuple[CoTObservation, _model.Actions] | None = None
-    local_batch_size: int = 0
-    step: int | None = None
-
-    def ensure(
-        self,
-        *,
-        step: int,
-        batch: tuple[CoTObservation, _model.Actions],
-    ) -> tuple[tuple[CoTObservation, _model.Actions] | None, int]:
-        if self.step != step:
-            self.host_batch = jax.tree.map(training_utils.to_local_array, batch)
-            obs_local = self.host_batch[0] if self.host_batch else None
-            self.local_batch_size = vis_tools.infer_local_batch_size(obs_local)
-            self.step = step
-        return self.host_batch, self.local_batch_size
 
 
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -632,38 +382,12 @@ def main(config: _config.TrainConfig):
     logging.info(f"Training started at: {training_start_timestamp}")
     logging.info(f"Resuming from checkpoint: {resuming}")
 
-    # Log training schedule information if configured
-    if config.training_schedule is not None:
-        logging.info("=" * 80)
-        logging.info("TRAINING SCHEDULE CONFIGURED")
-        logging.info("=" * 80)
-        for i, stage in enumerate(config.training_schedule.stages):
-            end_str = f"step {stage.end_step}" if stage.end_step is not None else "end of training"
-            logging.info(f"Stage {i}: steps {stage.start_step} -> {end_str}")
-            logging.info(
-                f"  Loss enables: langact={stage.enable_langact_training}, "
-                f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}"
-            )
-            logging.info(
-                f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
-                f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}"
-            )
-            logging.info(
-                f"  Loss probs: lang={stage.langact_prob:.2f}, "
-                f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}"
-            )
-        logging.info("=" * 80)
-        # Validate schedule
-        config.training_schedule.validate_for_training(config.num_train_steps)
-    else:
-        logging.info("No training schedule configured - using static model configuration")
-
-    log_mem("Before init train state")
+    log_util.log_mem("Before init train state")
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
 
-    log_mem("After init train state")
+    log_util.log_mem("After init train state")
 
     logging.info(f"Initialized train state (param shapes):\n{training_utils.array_tree_to_info(train_state.params)}")
     sharding.log_param_sharding_planned(train_state_sharding)
@@ -697,78 +421,59 @@ def main(config: _config.TrainConfig):
     # Initialize dataset log tracker for uniform sample logging across datasets
     dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
 
-    # Create iterator and get first batch AFTER restoring checkpoint to ensure iterator state is restored
-    try:
-        data_iter = iter(data_loader)
-        log_mem("Before getting batch")
-        batch = next(data_iter)
-        vis_batch(batch, tok=tok)
-        dataloader_initialized = True
-        logging.info("Successfully initialized dataloader and retrieved first batch")
-    except Exception as e:
-        logging.error(f"Failed to initialize dataloader: {e}")
-        dataloader_initialized = False
-        raise  # Re-raise the exception as this is critical
-
-    log_mem("After getting batch")
+    data_iter = iter(data_loader)
+    log_util.log_mem("Before getting batch")
+    batch = next(data_iter)
+    vis_tools.vis_batch(batch, tok=tok)
+    log_util.log_mem("After getting batch")
+    logging.info("Successfully initialized dataloader and retrieved first batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     sharding.log_batch_sharding(batch)
 
     train_runner = TrainingStepRunner(config)
-    # ptrain_step = jax.jit(
-    #     train_runner,
-    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-    #     out_shardings=(train_state_sharding, replicated_sharding),
-    #     donate_argnums=(1,),
-    # )
+    ptrain_step = jax.jit(
+        train_runner,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(train_state_sharding, replicated_sharding),
+        donate_argnums=(1,),
+    )
 
-    ptrain_step = train_runner
+    # ptrain_step = train_runner
 
-    if config.do_val:
-        dataset = getattr(data_loader, "dataset", None)
-        hash_tables = None
-        if dataset:
-            hash_tables = dataset.hash_tables
+    if config.use_validation:
+        hash_tables_cache = data_loader.dataset.hash_tables
 
-        # # Set validation batch size to 1/2 of training batch size
-        # val_batch_size = int(config.batch_size * 1 / 2)
-        # val_config = replace(
-        #     config,
-        #     model=replace(config.model, verbose_mode=True),
-        #     batch_size=val_batch_size,
-        # )
-        val_loader = _data_loader.create_data_loader(
+        val_data_loader = _data_loader.create_data_loader(
             config,
             sharding=data_sharding,
             shuffle=False,
             split="val",
             seed=config.seed,
             max_samples=getattr(config.data, "val_max_samples", None),
-            hash_tables=hash_tables,
+            hash_tables=hash_tables_cache,
             persistent_iterator=False,
         )
 
-        franka_val_config = replace(
-            config,
-            # model=replace(config.model, verbose_mode=True),
-            batch_size=128,
-            data=replace(config.data, data_mix="franka_dataset", val_fraction=1.0),
-        )
-        franka_val_loader = _data_loader.create_data_loader(
-            franka_val_config,
+        franka_val_data_loader = _data_loader.create_data_loader(
+            replace(
+                config,
+                # model=replace(config.model, verbose_mode=True),
+                batch_size=128,
+                data=replace(config.data, data_mix="franka_dataset", val_fraction=1.0),
+            ),
             sharding=data_sharding,
             shuffle=False,
             split="val",
             seed=config.seed,
             max_samples=getattr(config.data, "val_max_samples", None),
-            hash_tables=hash_tables,
+            hash_tables=hash_tables_cache,
             persistent_iterator=False,
         )
 
-        num_val_batches = val_loader.num_val_batches()
+        num_val_batches = val_data_loader.num_val_batches()
         logging.info(f"Initial number of validation batches (from loader): {num_val_batches}")
         # Try to get dataset statistics
-        val_dataset = getattr(val_loader, "dataset", None)
+        val_dataset = getattr(val_data_loader, "dataset", None)
         if val_dataset:
             if hasattr(val_dataset, "dataset_statistics"):
                 logging.info(f"Validation dataset statistics: {val_dataset.dataset_statistics}")
@@ -785,10 +490,6 @@ def main(config: _config.TrainConfig):
             out_shardings=replicated_sharding,
         )
 
-        # Determine how many validation batches to evaluate each time.
-        # If a fixed validation subset size is configured, compute batches from it;
-        # otherwise fall back to a heuristic constant divided by global batch size.
-
     # Log preemption tracking information to wandb
     if jax.process_index() == 0:
         preemption_info = {
@@ -796,7 +497,6 @@ def main(config: _config.TrainConfig):
             "preemption/is_resuming": float(resuming),
             "preemption/start_step": start_step,
             "preemption/dataloader_restored": float(dataloader_restored),
-            "preemption/dataloader_initialized": float(dataloader_initialized),
         }
         wandb.log(preemption_info, step=start_step)
         logging.info(f"Logged preemption tracking info: {preemption_info}")
@@ -808,85 +508,18 @@ def main(config: _config.TrainConfig):
         dynamic_ncols=True,
         # disable=(jax.process_index() != 0),
     )
-
     infos = []
-    host_batch_cache = HostBatchCache()
-    val_host_batch_cache = HostBatchCache()
-
+    host_batch_cache = vis_tools.HostBatchCache()
+    val_host_batch_cache = vis_tools.HostBatchCache()
     verbose_mode = config.model.verbose_mode
-
     dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
     dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
-    # Profiling: Track timing metrics
-    # - batch_load_times: Time to fetch and transfer batch from data loader
-    # - train_step_times: Time for forward + backward pass + optimizer update
-    # Note: train_step_times includes both forward and backward since they're combined in value_and_grad
-    # To separate forward/backward, you would need to run without JIT or use JAX profiler tools
-    # timing_metrics = {
-    #     "batch_load_times": [],
-    #     "train_step_times": [],
-    # }
-
-    # Track current training stage for transition detection
-    current_stage_idx = None
-    if config.training_schedule is not None:
-        # Find the initial stage
-        for i, stage in enumerate(config.training_schedule.stages):
-            if stage.start_step <= start_step and (stage.end_step is None or start_step < stage.end_step):
-                current_stage_idx = i
-                logging.info(f"Starting training at step {start_step} in stage {i}")
-                break
-
     for step in pbar:
-        # Detect and log stage transitions
-        if config.training_schedule is not None:
-            for i, stage in enumerate(config.training_schedule.stages):
-                if stage.start_step == step and i != current_stage_idx:
-                    current_stage_idx = i
-                    end_str = f"step {stage.end_step}" if stage.end_step is not None else "end of training"
-                    logging.info("=" * 80)
-                    logging.info(f"STAGE TRANSITION at step {step}: Entering Stage {i}")
-                    logging.info(f"  Duration: steps {stage.start_step} -> {end_str}")
-                    logging.info(
-                        f"  Loss enables: langact={stage.enable_langact_training}, "
-                        f"action={stage.enable_action_training}, prediction={stage.enable_prediction_training}"
-                    )
-                    logging.info(
-                        f"  Loss weights: lang={stage.language_loss_weight:.2f}, "
-                        f"action={stage.action_loss_weight:.2f}, pred={stage.prediction_loss_weight:.2f}"
-                    )
-                    logging.info(
-                        f"  Loss probs: lang={stage.langact_prob:.2f}, "
-                        f"action={stage.action_prob:.2f}, pred={stage.prediction_prob:.2f}"
-                    )
-                    logging.info("=" * 80)
-                    if jax.process_index() == 0:
-                        wandb.log(
-                            {
-                                "stage/current_stage": i,
-                                "stage/langact_enabled": float(stage.enable_langact_training),
-                                "stage/action_enabled": float(stage.enable_action_training),
-                                "stage/prediction_enabled": float(stage.enable_prediction_training),
-                                "stage/language_loss_weight": stage.language_loss_weight,
-                                "stage/action_loss_weight": stage.action_loss_weight,
-                                "stage/prediction_loss_weight": stage.prediction_loss_weight,
-                            },
-                            step=step,
-                        )
-                    break
-
         # Profiling: Time training step
         # train_start = time.perf_counter()
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
-
-        # Block to ensure training step completes before measuring batch loading
-        # jax.block_until_ready(train_state)
-        # train_end = time.perf_counter()
-        # train_time = train_end - train_start
-        # timing_metrics["train_step_times"].append(train_time)
-
         infos.append(info)
 
         if verbose_mode:
@@ -896,7 +529,7 @@ def main(config: _config.TrainConfig):
 
         if step % config.log_interval == 0:
             # Use unified logging function for training metrics
-            process_and_log_metrics(
+            log_util.process_and_log_metrics(
                 step=step,
                 infos=infos,
                 batch=batch,
@@ -909,34 +542,12 @@ def main(config: _config.TrainConfig):
                 prefix="",
                 verbose_mode=verbose_mode,
             )
-
-            # # Log profiling metrics
-            # if timing_metrics["batch_load_times"] and timing_metrics["train_step_times"]:
-            #     avg_batch_time = sum(timing_metrics["batch_load_times"]) / len(timing_metrics["batch_load_times"])
-            #     avg_train_time = sum(timing_metrics["train_step_times"]) / len(timing_metrics["train_step_times"])
-
-            #     profiling_info = {
-            #         "profiling/avg_batch_load_time": avg_batch_time,
-            #         "profiling/avg_train_step_time": avg_train_time,
-            #     }
-
-            #     logging.info(
-            #         f"Profiling - Train step: {avg_train_time * 1000:.2f}ms, Batch load: {avg_batch_time * 1000:.2f}ms"
-            #     )
-
-            #     if jax.process_index() == 0:
-            #         wandb.log(profiling_info, step=step)
-
-            #     # Reset timing metrics for next interval
-            #     timing_metrics["batch_load_times"] = []
-            #     timing_metrics["train_step_times"] = []
-
             infos = []
             # Reset dataset stats tracker to only track the next log_interval window
             if verbose_mode:
                 dataset_stats_tracker.reset()
         # Periodic validation
-        if config.do_val and step % getattr(config, "val_interval", 500) == 0:
+        if config.use_validation and step % getattr(config, "val_interval", 500) == 0:
             # Initialize validation dataset trackers
             val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
             val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
@@ -944,7 +555,7 @@ def main(config: _config.TrainConfig):
             with sharding.set_mesh(mesh):
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
-                val_iter = iter(val_loader)
+                val_iter = iter(val_data_loader)
 
                 val_batch = None
 
@@ -964,44 +575,9 @@ def main(config: _config.TrainConfig):
                     val_infos.append(val_info)
                     if verbose_mode:
                         log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                # if first_val_run:
-                #     # First validation run: iterate until StopIteration to determine actual batch count
-                #     logging.info("First validation run - determining actual number of batches...")
-                #     batch_count = 0
-                #     try:
-                #         while True:
-                #             val_batch = next(val_iter)
-                #             val_info = pval_step(train_rng, train_state, val_batch)
-                #             val_info_local = jax.device_get(val_info)
-                #             val_infos.append(val_info_local)
-                #             log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                #             batch_count += 1
-                #     except StopIteration:
-                #         # Update num_val_batches with actual count minus 1
-                #         num_val_batches = max(1, batch_count - 1)
-                #         logging.info(f"Captured actual validation batches: {batch_count}")
-                #         logging.info(f"Updated num_val_batches to: {num_val_batches}")
-                #         # Remove the last batch info since we went one too far
-                #         if val_infos:
-                #             val_infos = val_infos[:-1]
-                #         first_val_run = False
-                # else:
-                #     # Subsequent validation runs: use progress bar with known batch count
-                #     val_pbar = tqdm.tqdm(
-                #         range(num_val_batches),
-                #         initial=0,
-                #         total=num_val_batches,
-                #         dynamic_ncols=True,
-                #         disable=(jax.process_index() != 0),
-                #     )
-                #     for _ in val_pbar:
-                #         val_batch = next(val_iter)
-                #         val_info = pval_step(train_rng, train_state, val_batch)
-                #         val_info_local = jax.device_get(val_info)
-                #         val_infos.append(val_info_local)
                 # Use unified logging function for validation metrics
                 if val_batch:
-                    process_and_log_metrics(
+                    log_util.process_and_log_metrics(
                         step=step,
                         infos=val_infos,
                         batch=val_batch,  # Use last val_batch for dataset info
@@ -1017,7 +593,7 @@ def main(config: _config.TrainConfig):
 
                 val_infos = []
                 # Recreate a fresh iterator to ensure the same fixed validation subset each time.
-                franka_val_iter = iter(franka_val_loader)
+                franka_val_iter = iter(franka_val_data_loader)
 
                 # Subsequent validation runs: use progress bar with known batch count
                 val_pbar = tqdm.tqdm(
@@ -1034,7 +610,7 @@ def main(config: _config.TrainConfig):
                     # val_infos.append(val_info_local)
                     val_infos.append(val_info)
 
-                process_and_log_metrics(
+                log_util.process_and_log_metrics(
                     step=step,
                     infos=val_infos,
                     batch=val_batch,  # Use last val_batch for dataset info
@@ -1048,13 +624,7 @@ def main(config: _config.TrainConfig):
                     verbose_mode=False,
                 )
 
-        # Profiling: Time batch loading
-        # batch_start = time.perf_counter()
         batch = next(data_iter)
-        # jax.block_until_ready(batch)
-        # batch_end = time.perf_counter()
-        # batch_time = batch_end - batch_start
-        # timing_metrics["batch_load_times"].append(batch_time)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
             checkpoint_manager = _checkpoints.save_state(

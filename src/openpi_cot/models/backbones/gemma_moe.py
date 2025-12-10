@@ -158,6 +158,7 @@ class Attention(nn.Module):
     """Attention module."""
 
     configs: Sequence[Config]
+    stop_action_to_vlm_grad: bool = False
 
     @nn.compact
     def __call__(self, xs, positions, attn_mask, kv_cache):
@@ -168,6 +169,7 @@ class Attention(nn.Module):
 
         dtype = next(x.dtype for x in xs if x is not None)  # original dtype, could be half-precision
 
+        token_lengths = [x.shape[1] if x is not None else 0 for x in xs]
         qkvs = []
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is None:
@@ -228,7 +230,37 @@ class Attention(nn.Module):
             kv_cache = (k, v)
 
         q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
-        logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
+
+        has_action_tokens = any(length > 0 for length in token_lengths[1:])
+        stop_condition = (
+            self.stop_action_to_vlm_grad and token_lengths[0] > 0 and has_action_tokens and q.shape[1] == k.shape[1]
+        )
+
+        if stop_condition:
+            # Build masks identifying action queries (experts >=1) and VLM keys (expert 0).
+            query_mask_parts = []
+            key_mask_parts = []
+            for idx, length in enumerate(token_lengths):
+                if length == 0:
+                    continue
+                query_mask_parts.append(jnp.full((length,), idx != 0, dtype=bool))
+                key_mask_parts.append(jnp.full((length,), idx == 0, dtype=bool))
+            query_action_mask = jnp.concatenate(query_mask_parts, axis=0)
+            key_vlm_mask = jnp.concatenate(key_mask_parts, axis=0)
+            # Broadcast masks to attention dimensions.
+            query_action_mask_q = query_action_mask[None, :, None, None, None]
+            key_vlm_mask_k = key_vlm_mask[None, :, None, None]
+
+            q_action = jnp.where(query_action_mask_q, q, 0)
+            q_non_action = q - q_action
+
+            k_blocked = k + key_vlm_mask_k * (jax.lax.stop_gradient(k) - k)
+
+            logits_non_action = jnp.einsum("BTKGH,BSKH->BKGTS", q_non_action, k, preferred_element_type=jnp.float32)
+            logits_action = jnp.einsum("BTKGH,BSKH->BKGTS", q_action, k_blocked, preferred_element_type=jnp.float32)
+            logits = logits_non_action + logits_action
+        else:
+            logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
 
         if attn_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
             raise ValueError(
@@ -241,7 +273,20 @@ class Attention(nn.Module):
 
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
 
-        encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
+        if stop_condition:
+            query_action_mask_probs = query_action_mask[None, None, None, :, None]
+            key_vlm_mask_v = key_vlm_mask[None, :, None, None]
+
+            probs_action = probs * query_action_mask_probs
+            probs_non_action = probs - probs_action
+
+            v_blocked = v + key_vlm_mask_v * (jax.lax.stop_gradient(v) - v)
+
+            encoded_non_action = jnp.einsum("BKGTS,BSKH->BTKGH", probs_non_action, v)
+            encoded_action = jnp.einsum("BKGTS,BSKH->BTKGH", probs_action, v_blocked)
+            encoded = encoded_non_action + encoded_action
+        else:
+            encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
         encoded = einops.rearrange(encoded, "B T K G H -> B T (K G) H")
 
         out = []
@@ -299,7 +344,7 @@ class Block(nn.Module):
     """Transformer block."""
 
     configs: tuple[Config, ...]
-
+    stop_action_to_vlm_grad: bool = False
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
 
@@ -308,7 +353,7 @@ class Block(nn.Module):
         xs = sharding.activation_sharding_constraint(xs)
         drop = nn.Dropout(self.dropout, self.dropout_bdims) if self.dropout else lambda x, _: x
 
-        attn = Attention(configs=self.configs, name="attn")
+        attn = Attention(configs=self.configs, stop_action_to_vlm_grad=self.stop_action_to_vlm_grad, name="attn")
 
         pre_attn = []
         gates = []
@@ -366,6 +411,7 @@ class Module(nn.Module):
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
     adarms: bool = False
+    stop_action_to_vlm_grad: bool = False
 
     def setup(self):
         # all experts must have the same depth
@@ -396,6 +442,7 @@ class Module(nn.Module):
             length=self.configs[0].depth,
         )(
             configs=self.configs,
+            stop_action_to_vlm_grad=self.stop_action_to_vlm_grad,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
         )

@@ -8,14 +8,31 @@ This module provides unified functionality for:
 """
 
 import logging
-from typing import Any
+import os
+from typing import TYPE_CHECKING, Any
 
+from flax.training import common_utils
 import jax
+import jax.numpy as jnp
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
+from openpi.models import model as _model
+from openpi.models.model import Observation
 import openpi.shared.array_typing as at
+import psutil
+import wandb
 
 import openpi_cot.training.utils as training_utils
+import openpi_cot.training.vis_tools as vis_tools
+
+if TYPE_CHECKING:
+    from openpi_cot.models.model_adapter import CoTObservation
+    from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
+    import openpi_cot.training.config as _config
+
+
+matplotlib.use("Agg")  # Use non-interactive backend for remote environments
 
 
 class DatasetStatsTracker:
@@ -286,10 +303,7 @@ class LocalDatasetInfoBuffer:
         if process_count > 1:
             # Use fixed possible types and check which ones any process has
             all_possible_types = ["langact", "pred"]
-            local_has_types = np.array([
-                "langact" in data_by_type,
-                "pred" in data_by_type
-            ], dtype=np.int32)
+            local_has_types = np.array(["langact" in data_by_type, "pred" in data_by_type], dtype=np.int32)
 
             # Gather from all processes
             all_has_types = jax.experimental.multihost_utils.process_allgather(local_has_types)
@@ -411,11 +425,10 @@ class LocalDatasetInfoBuffer:
                 return None
 
             return (all_correct, all_total)
-        else:
-            # Single host case
-            if not has_data:
-                return None
-            return (all_local_correct, all_local_total)
+        # Single host case
+        if not has_data:
+            return None
+        return (all_local_correct, all_local_total)
 
     def _decode_names(self, all_names: np.ndarray) -> list[str]:
         """Decode tokenized dataset names."""
@@ -811,3 +824,119 @@ def log_dataset_plots(plots: dict[str, plt.Figure], step: int, prefix: str = "")
     # Close all figures to prevent memory leaks
     for plot_fig in plots.values():
         plt.close(plot_fig)
+
+
+def log_mem(msg: str):
+    """
+    Returns:
+        ram (float): Host RAM usage in GB (RSS).
+        tpu_mem (float): TPU HBM memory usage in GB (sum across devices).
+    """
+    # --- Host RAM (Resident Set Size) ---
+    proc = psutil.Process(os.getpid())
+    ram_gb = proc.memory_info().rss / (1024**3)  # RSS in GB
+    logging.info(f"{msg}: RAM: {ram_gb:.2f}GB")
+
+
+def process_and_log_metrics(
+    step: int,
+    infos: list[dict[str, at.Array]],
+    batch: tuple["CoTObservation" | Observation, _model.Actions],
+    dataset_stats_tracker: DatasetStatsTracker | None,
+    dataset_info_buffer: LocalDatasetInfoBuffer | None,
+    config: "_config.TrainConfig",
+    host_batch_cache: vis_tools.HostBatchCache | None = None,
+    dataset_log_tracker: vis_tools.DatasetLogTracker | None = None,
+    tok: "PaligemmaCoTTokenizer" | None = None,
+    prefix: str = "",
+    *,
+    verbose_mode: bool = False,
+) -> dict[str, float]:
+    """
+    Unified function to process and log training/validation metrics.
+
+    Args:
+        step: Current training step
+        infos: List of metric dictionaries to aggregate
+        batch: Current batch data
+        dataset_stats_tracker: Tracker for dataset-level statistics
+        dataset_info_buffer: Buffer for local dataset info
+        config: Training configuration
+        host_batch_cache: Cache for host batches (only for training with langact)
+        dataset_log_tracker: Tracker for dataset logging counts (only for training with langact)
+        tok: Tokenizer for decoding (only for training with langact)
+        prefix: Prefix for metric names (empty for train, "val_" for validation)
+
+    Returns:
+        Dictionary of reduced metrics
+    """
+    if verbose_mode:
+        # Gather and update dataset stats from buffered local data
+        dataset_info_buffer.gather_and_update_stats(dataset_stats_tracker)
+
+    # Stack and reduce metrics
+    stacked_infos = common_utils.stack_forest(infos)
+    reduce_overrides = {
+        "grad_norm": jnp.mean,
+        "loss": jnp.mean,
+        "param_norm": jnp.mean,
+    }
+    reduced_info = {}
+
+    # Process metrics: average metrics go directly to logging, per_sample metrics are skipped
+    for key, value in stacked_infos.items():
+        if "per_sample_loss" in key:
+            reduced_info[f"{prefix}max_{key}"] = jnp.max(value)
+        elif "per_sample" in key:
+            # Skip per_sample_* metrics - they're only used for dataset-level statistics
+            continue
+        else:
+            # All other metrics are averaged and logged directly
+            # For validation, add prefix to non-prefixed keys
+            metric_key = key if key.startswith(prefix) else f"{prefix}{key}"
+            reduced_info[metric_key] = reduce_overrides.get(key, jnp.mean)(value)
+
+    reduced_info = jax.device_get(reduced_info)
+
+    if verbose_mode:
+        # Add dataset statistics to logging
+        dataset_metrics = dataset_stats_tracker.get_metrics(prefix=prefix)
+        reduced_info.update(dataset_metrics)
+
+    info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+    mode = "val" if prefix else "train"
+    logging.info(f"Step {step} ({mode}): {info_str}")
+
+    if jax.process_index() == 0:
+        wandb.log(reduced_info, step=step)
+
+        if verbose_mode:
+            # Create and log dataset statistics bar plots
+            if dataset_stats_tracker.dataset_stats:
+                plots = create_dataset_stats_plots(
+                    dataset_stats_tracker.dataset_stats, dataset_stats_tracker.cumulative_stats
+                )
+                log_dataset_plots(plots, step, prefix=prefix)
+
+        # Training-specific logging: random examples and dataset log counts
+        if not prefix and host_batch_cache is not None and tok is not None and dataset_log_tracker is not None:
+            host_batch_local, local_size = host_batch_cache.ensure(step=step, batch=batch)
+            vis_tools.log_random_examples(
+                step,
+                host_batch_local,
+                tok,
+                local_batch_size=local_size,
+                dataset_log_tracker=dataset_log_tracker,
+                prefix=prefix[:-1] if prefix else "train",
+            )
+
+            # Log dataset logging statistics periodically
+            if step % (config.log_interval * 10) == 0:
+                log_stats = dataset_log_tracker.get_stats()
+                if log_stats:
+                    logging.info(f"Dataset logging counts: {log_stats}")
+                    # Log to wandb as well
+                    wandb_log_stats = {f"dataset_log_count/{name}": count for name, count in log_stats.items()}
+                    wandb.log(wandb_log_stats, step=step)
+
+    return reduced_info

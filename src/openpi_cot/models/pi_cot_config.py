@@ -67,6 +67,9 @@ class PiCoTConfig(_model.BaseModelConfig):
     label_smoothing_support: int = 3
 
     use_ki: bool = False
+    # When True, stops gradients produced by the action expert from flowing back
+    # into the VLM expert through cross-attention.
+    stop_action_to_vlm_grad: bool = False
 
     def __post_init__(self):
         if self.max_token_len is None:
