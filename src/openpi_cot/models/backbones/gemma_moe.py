@@ -49,7 +49,7 @@ class Config:
     num_kv_heads: int
     head_dim: int
     lora_configs: dict[str, lora.LoRAConfig] = dataclasses.field(default_factory=dict)
-    param_dtype: str = "float32"  # parameter storage dtype
+    param_dtype: str = "bfloat16"  # parameter storage dtype
 
 
 Variant = Literal["dummy", "gemma_300m", "gemma_300m_lora", "gemma_2b", "gemma_2b_lora"]
