@@ -371,7 +371,6 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     action_encoding=base_cfg.action_encoding,
                     language_action_format=get_language_action_format(base_cfg.language_action_format_name),
-                    random_time_horizon=base_cfg.random_time_horizon,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
                     enable_langact_training=model_config.enable_langact_training,
                 )
