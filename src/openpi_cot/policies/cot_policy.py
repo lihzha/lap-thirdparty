@@ -175,8 +175,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         la = data[lang_action_key]
         is_bimanual: bool = data.get("is_bimanual", False)
 
-        breakpoint()
-
         # Transform to EEF frame if requested
         if self.language_action_format.use_eef_frame and initial_state is not None:
             la = transform_actions_to_eef_frame(la, initial_state)
