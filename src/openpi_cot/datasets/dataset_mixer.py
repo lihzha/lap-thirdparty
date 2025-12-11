@@ -11,7 +11,7 @@ import tensorflow as tf
 from openpi_cot.datasets.robot.droid_dataset import DroidCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import DobbeCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import LiberoCoTDataset
-from openpi_cot.datasets.robot.oxe_datasets import _SingleOXECoTDataset
+from openpi_cot.datasets.robot.oxe_datasets import SingleOXECoTDataset
 from openpi_cot.datasets.utils.data_utils import allocate_threads
 from openpi_cot.datasets.utils.data_utils import pprint_data_mixture
 from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
@@ -163,7 +163,7 @@ class OXECoTDatasets:
                     **kwargs,
                 )
             else:
-                ds = _SingleOXECoTDataset(
+                ds = SingleOXECoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )

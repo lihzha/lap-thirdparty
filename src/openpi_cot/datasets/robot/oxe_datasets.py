@@ -262,6 +262,6 @@ class LiberoCoTDataset(SingleOXECoTDataset):
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
 
-    # Note: Inheriting get_traj_identifier from parent class (_SingleOXECoTDataset)
+    # Note: Inheriting get_traj_identifier from parent class (SingleOXECoTDataset)
     # which uses action-based hashing for robust trajectory identification.
     # This avoids issues with missing or malformed trajectory metadata.
