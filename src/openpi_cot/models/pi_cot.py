@@ -49,7 +49,7 @@ class PiCoT(_pi0.Pi0):
                     configs=[paligemma_config, action_expert_config],
                     embed_dtype=config.dtype,
                     adarms=config.pi05,
-                    stop_action_to_vlm_grad=config.stop_action_to_vlm_grad,
+                    # stop_action_to_vlm_grad=config.stop_action_to_vlm_grad,
                 )
             )
             llm.lazy_init(rngs=rngs, method="init", use_adarms=[False, True] if config.pi05 else [False, False])
@@ -71,7 +71,7 @@ class PiCoT(_pi0.Pi0):
                     configs=[paligemma_config],
                     embed_dtype=config.dtype,
                     adarms=config.pi05,
-                    stop_action_to_vlm_grad=False,
+                    # stop_action_to_vlm_grad=False,
                 )
             )
             llm.lazy_init(rngs=rngs, method="init", use_adarms=[False])
