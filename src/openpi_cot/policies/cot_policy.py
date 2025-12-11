@@ -8,7 +8,7 @@ from openpi_cot.models.model_adapter import IMAGE_KEYS
 from openpi_cot.models.model_adapter import ExtendedModelType
 from openpi_cot.policies.lang_action_formats import VERBOSE_FORMAT
 from openpi_cot.policies.lang_action_formats import LanguageActionFormat
-from openpi_cot.policies.lang_action_formats import get_decoding_schema
+from openpi_cot.policies.lang_action_formats import get_language_action_format
 from openpi_cot.policies.utils import is_all_1s_language_action
 from openpi_cot.policies.utils import is_idle_language_action
 from openpi_cot.policies.utils import parse_image
@@ -268,16 +268,18 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 @dataclasses.dataclass(frozen=True)
 class CoTOutputs(upstream_transforms.DataTransformFn):
     # Optional decoding schema for parsing language actions to numeric actions
-    decoding_schema: LanguageActionFormat | str | None = None
+    language_action_format: LanguageActionFormat | str | None = None
     # Whether decoded actions should be in camera frame
     in_camera_frame: bool = False
     # Interpolatation steps
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
-        if self.decoding_schema is not None and not isinstance(self.decoding_schema, LanguageActionFormat):
-            schema = get_decoding_schema(self.decoding_schema)
-            object.__setattr__(self, "decoding_schema", schema)
+        if self.language_action_format is not None and not isinstance(
+            self.language_action_format, LanguageActionFormat
+        ):
+            schema = get_language_action_format(self.language_action_format)
+            object.__setattr__(self, "language_action_format", schema)
 
     def __call__(self, data: dict) -> dict:
         # Get actions and reasoning from data
@@ -287,16 +289,16 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         reasoning = data.get("reasoning")
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
-        assert self.decoding_schema is not None
+        assert self.language_action_format is not None
         assert reasoning is not None
 
         # Extract initial state for EEF frame transformation
         initial_state = None
-        if self.decoding_schema.use_eef_frame and "state" in data:
+        if self.language_action_format.use_eef_frame and "state" in data:
             initial_state = np.asarray(data["state"])
 
         # Parse reasoning to translation deltas, rotation deltas, and gripper actions
-        translations, rotations, gripper_actions = self.decoding_schema.parse_language_to_deltas(
+        translations, rotations, gripper_actions = self.language_action_format.parse_language_to_deltas(
             reasoning, in_camera_frame=self.in_camera_frame, initial_state=initial_state
         )
 

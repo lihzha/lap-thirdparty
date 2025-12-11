@@ -269,14 +269,3 @@ def get_language_action_format(name: str) -> LanguageActionFormat:
             f"Unknown language action format: {name}. Available formats: {list(LANGUAGE_ACTION_FORMAT_REGISTRY.keys())}"
         )
     return LANGUAGE_ACTION_FORMAT_REGISTRY[name]
-
-
-def get_decoding_schema(schema: LanguageActionFormat | str) -> LanguageActionFormat:
-    """Resolve a decoding schema to a LanguageActionFormat."""
-    if isinstance(schema, LanguageActionFormat):
-        return schema
-    if schema not in LANGUAGE_ACTION_FORMAT_REGISTRY:
-        raise ValueError(
-            f"Unknown decoding schema: {schema}. Available formats: {list(LANGUAGE_ACTION_FORMAT_REGISTRY.keys())}"
-        )
-    return get_language_action_format(schema)

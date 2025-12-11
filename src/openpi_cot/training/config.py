@@ -24,7 +24,6 @@ import openpi_cot.models.pi_cot_config as pi_cot_config
 from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
-from openpi_cot.policies.lang_action_formats import get_language_action_format
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.libero_policy as libero_policy
 import openpi_cot.policies.planning_policy as planning_policy
@@ -182,8 +181,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     resize_resolution: tuple[int, int] = (224, 224)
 
     # Language action format
-    language_action_format_name: str = "compact"
-    decoding_schema: str = "verbose"
+    language_action_format_name: str = "verbose_eef_with_rotation"
     random_time_horizon: bool = False
     filter_all_1s_actions: bool = False
 
@@ -363,12 +361,12 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     model_type=model_config.model_type,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
                     action_encoding=base_cfg.action_encoding,
-                    language_action_format=get_language_action_format(base_cfg.language_action_format_name),
+                    language_action_format=base_cfg.language_action_format_name,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
                     enable_langact_training=model_config.enable_langact_training,
                 )
             ],
-            outputs=[cot_policy.CoTOutputs(decoding_schema=base_cfg.decoding_schema)],
+            outputs=[cot_policy.CoTOutputs(language_action_format_name=base_cfg.language_action_format_name)],
         )
 
     @override
@@ -483,7 +481,7 @@ class LiberoCoTDataConfig(BaseCoTDataConfigFactory):
                     action_dim=model_config.action_dim,
                 )
             ],
-            outputs=[libero_policy.LiberoOutputs(decoding_schema=base_cfg.decoding_schema)],
+            outputs=[libero_policy.LiberoOutputs(language_action_format_name=base_cfg.language_action_format_name)],
         )
 
     @override
@@ -1117,9 +1115,7 @@ _CONFIGS = [
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
         ),
-        data=RLDSCoTDataConfig(
-            repo_id="droid", asset_id="droid", dataset_type="droid", decoding_schema="verbose_with_rotation"
-        ),
+        data=RLDSCoTDataConfig(repo_id="droid", asset_id="droid", dataset_type="droid"),
     ),
     TrainConfig(
         name="paligemma2_eval_compact",
@@ -1132,7 +1128,7 @@ _CONFIGS = [
             action_expert_variant="gemma2_300m",
             prompt_format="schema_compact",
         ),
-        data=RLDSCoTDataConfig(repo_id="droid", asset_id="droid", dataset_type="droid", decoding_schema="compact"),
+        data=RLDSCoTDataConfig(repo_id="droid", asset_id="droid", dataset_type="droid"),
     ),
     TrainConfig(
         name="paligemma2_eval_eeframe_rotation",
@@ -1148,7 +1144,6 @@ _CONFIGS = [
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
-            decoding_schema="verbose_eef_with_rotation",
         ),
     ),
     TrainConfig(
@@ -1165,7 +1160,6 @@ _CONFIGS = [
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
-            decoding_schema="verbose_eef_with_rotation",
         ),
     ),
     TrainConfig(
@@ -1178,9 +1172,7 @@ _CONFIGS = [
             paligemma_variant="gemma2_2b",
             action_expert_variant="gemma2_300m",
         ),
-        data=RLDSCoTDataConfig(
-            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_eef"
-        ),
+        data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined"),
     ),
     TrainConfig(
         name="paligemma_no_state",
@@ -1197,7 +1189,6 @@ _CONFIGS = [
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
-            decoding_schema="verbose_eef_with_rotation",
         ),
     ),
     TrainConfig(
@@ -1216,7 +1207,6 @@ _CONFIGS = [
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
-            decoding_schema="verbose_eef_with_rotation",
         ),
     ),
     TrainConfig(
@@ -1230,7 +1220,9 @@ _CONFIGS = [
             action_expert_variant="gemma2_300m",
         ),
         data=RLDSCoTDataConfig(
-            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="directional_only"
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
         ),
     ),
     TrainConfig(
@@ -1245,7 +1237,9 @@ _CONFIGS = [
             prompt_format="grouped_state_verbose",
         ),
         data=RLDSCoTDataConfig(
-            repo_id="combined", asset_id="combined", dataset_type="combined", decoding_schema="verbose_with_rotation"
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
         ),
     ),
     TrainConfig(
@@ -1286,7 +1280,6 @@ _CONFIGS = [
             "data_mix": "libero_finetune",
             "shuffle_buffer_size": 400_000,
             "language_action_format_name": "default",
-            "decoding_schema": "default",
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         fsdp_devices=1,
@@ -1317,7 +1310,6 @@ _CONFIGS = [
             "data_mix": "libero_finetune",
             "shuffle_buffer_size": 400_000,
             "language_action_format_name": "default",
-            "decoding_schema": "default",
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         fsdp_devices=1,
@@ -1352,7 +1344,6 @@ _CONFIGS = [
             "data_mix": "libero_finetune",
             "shuffle_buffer_size": 400_000,
             "language_action_format_name": "default",
-            "decoding_schema": "default",
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         fsdp_devices=1,
@@ -1387,7 +1378,6 @@ _CONFIGS = [
             "data_mix": "libero_finetune",
             "shuffle_buffer_size": 400_000,
             "language_action_format_name": "default",
-            "decoding_schema": "verbose_eef_with_rotation",
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         fsdp_devices=1,
@@ -1417,7 +1407,6 @@ _CONFIGS = [
             data_mix="libero_finetune",
             rlds_data_dir="/n/fs/robot-data/libero/tfds",
             language_action_format_name="default",
-            decoding_schema="default",
         ),
         fsdp_devices=1,
         batch_size=8,
