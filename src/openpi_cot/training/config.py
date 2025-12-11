@@ -366,7 +366,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     enable_langact_training=model_config.enable_langact_training,
                 )
             ],
-            outputs=[cot_policy.CoTOutputs(language_action_format_name=base_cfg.language_action_format_name)],
+            outputs=[cot_policy.CoTOutputs(language_action_format=base_cfg.language_action_format_name)],
         )
 
     @override
