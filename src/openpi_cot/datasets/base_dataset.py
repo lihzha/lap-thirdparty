@@ -316,6 +316,10 @@ class SingleCoTDataset:
             have a single language string aligned to its action chunk.
             """
             traj_len = tf.shape(traj[action_key])[0]
+            timestep_ids = tf.range(traj_len, dtype=tf.int32)
+            remaining = tf.maximum(traj_len - timestep_ids, 1)
+            window_size = tf.constant(self.control_frequency, dtype=tf.int32)
+            valid_lengths = tf.minimum(window_size, remaining)
 
             # Always gather summation_steps actions (without trimming to control_frequency)
             # The gather function will handle padding if we reach the end of trajectory
@@ -325,8 +329,8 @@ class SingleCoTDataset:
                 window_size=self.control_frequency,
             )  # [T, summation_steps, A]
 
-            traj["language_actions"] = sum_actions(actions_window)
-            traj["language_actions"].set_shape([None, 1])
+            traj["language_actions"] = sum_actions(actions_window, valid_lengths)
+            traj["language_actions"].set_shape([None, traj["raw_action"].shape[-1]])
 
             return traj
 
@@ -402,21 +406,10 @@ class SingleCoTDataset:
                 per_timestep_windows=deltas_clamped,  # Variable window per timestep
             )  # [T, summation_steps, A]
 
-            # Serialize each action in the 2D array
-            # Reshape to [T * summation_steps, A] for efficient serialization
-            flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
-            serialized_flat = tf.map_fn(
-                lambda v: tf.io.serialize_tensor(v),
-                flat_rows,
-                fn_output_signature=tf.string,
-            )
-            # Reshape back to [T, summation_steps]
-            prediction_lang_actions = tf.reshape(
-                serialized_flat,
-                [traj_len, summation_steps],
-            )
+            prediction_lang_actions = sum_actions(actions_window, deltas_clamped)  # [T, action_dim]
+            prediction_lang_actions.set_shape([None, self.action_dim])
 
-            traj["prediction_language_actions"] = prediction_lang_actions  # [T, summation_steps]
+            traj["prediction_language_actions"] = prediction_lang_actions
             traj["prediction_delta"] = deltas
 
             return traj
@@ -645,40 +638,63 @@ def _matrix_to_euler_xyz_extrinsic(R: tf.Tensor) -> tf.Tensor:
     return tf.stack([roll, pitch, yaw], axis=-1)
 
 
-def sum_actions(actions: tf.Tensor) -> tf.Tensor:
+def sum_actions(actions: tf.Tensor, valid_lengths: tf.Tensor | None = None) -> tf.Tensor:
     """Sum sequences of actions (x, y, z, roll, pitch, yaw).
 
     Args:
         actions: Tensor with shape [T, W, A] where the last dimension starts with
             (x, y, z, roll, pitch, yaw). Roll, pitch, yaw use extrinsic XYZ order.
+        valid_lengths: Optional [T] tensor specifying how many valid deltas to use per window.
 
     Returns:
-        Tensor of shape [T, 1] with serialized summed actions for each timestep.
+        Tensor of shape [T, A] where each row encodes the summed delta over the window.
     """
+    actions = tf.convert_to_tensor(actions)
+    num_windows = tf.shape(actions)[0]
+    window_size = tf.shape(actions)[1]
 
-    def _sum_single_window(window: tf.Tensor) -> tf.Tensor:
+    if valid_lengths is None:
+        valid_lengths = tf.fill([num_windows], window_size)
+    else:
+        valid_lengths = tf.cast(valid_lengths, tf.int32)
+
+    valid_lengths = tf.minimum(valid_lengths, window_size)
+    valid_lengths = tf.maximum(valid_lengths, 1)
+
+    def _sum_single_window(inputs: tuple[tf.Tensor, tf.Tensor]) -> tf.Tensor:
+        window, length = inputs
+        length = tf.cast(length, tf.int32)
+        window = window[:length]
+
         # Ensure at least 6 dimensions
         action_dim = tf.shape(window)[-1]
         pad_amt = tf.maximum(0, 6 - action_dim)
         window = tf.pad(window, [[0, 0], [0, pad_amt]])
+        padded_dim = tf.shape(window)[-1]
 
         # Sum translations directly (base frame deltas)
         translation_sum = tf.reduce_sum(window[:, :3], axis=0)
 
-        # Compose rotations sequentially using extrinsic XYZ (Rz * Ry * Rx)
-        def _compose_rotation(carry, rpy):
-            R_total = carry
+        # Compose rotations sequentially: R_total = R_step1 * R_step2 * ...
+        def _compose_rotation(R_total, rpy):
             R_step = _euler_xyz_extrinsic_to_matrix(rpy)
-            return tf.linalg.matmul(R_step, R_total)
+            return tf.linalg.matmul(R_total, R_step)
 
-        R_final = tf.foldl(_compose_rotation, window[:, 3:6], initializer=tf.eye(3, dtype=tf.float32))
+        R_final = tf.foldl(
+            _compose_rotation,
+            window[:, 3:6],
+            initializer=tf.eye(3, dtype=window.dtype),
+        )
         rpy_final = _matrix_to_euler_xyz_extrinsic(R_final)
 
-        # Sum any remaining action dimensions (if present)
-        tail = tf.reduce_sum(window[:, 6:], axis=0)
+        # For remaining action dimensions (if present), take the last valid value
+        last_index = tf.maximum(length - 1, 0)
+        last_action = tf.gather(window, last_index)
+        tail_indices = tf.range(6, padded_dim)
+        tail = tf.gather(last_action, tail_indices)
 
         summed = tf.concat([translation_sum, rpy_final, tail], axis=0)
-        return tf.io.serialize_tensor(summed)
+        return summed
 
-    serialized = tf.map_fn(_sum_single_window, actions, fn_output_signature=tf.string)
-    return tf.expand_dims(serialized, axis=-1)
+    output_spec = tf.TensorSpec(shape=actions.shape[-1:], dtype=actions.dtype)
+    return tf.map_fn(_sum_single_window, (actions, valid_lengths), fn_output_signature=output_spec)
