@@ -42,6 +42,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     enable_langact_training: bool = True
     filter_all_1s_actions: bool = False
 
+    def __post_init__(self):
+        """Resolve string schema name to LanguageActionFormat instance."""
+        if self.language_action_format is not None and not isinstance(
+            self.language_action_format, LanguageActionFormat
+        ):
+            schema = get_language_action_format(self.language_action_format)
+            object.__setattr__(self, "language_action_format", schema)
+
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
         assert "observation" in data
