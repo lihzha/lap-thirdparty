@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-from openpi_cot.datasets.vqa.vqa_base import _BaseVQADataset
+from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
 from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # Maximum number of points to include in the answer
@@ -61,7 +61,7 @@ PIXMO_POINT_PROMPT_PARTS = [
 ]
 
 
-class PixmoPoint(_BaseVQADataset):
+class PixmoPoint(BaseVQADataset):
     """PixmoPoint dataset for vision-language training with point annotations.
 
     This dataset loads images with point annotations and formats them to be

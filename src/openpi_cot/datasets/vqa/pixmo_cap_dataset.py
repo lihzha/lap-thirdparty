@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-from openpi_cot.datasets.vqa.vqa_base import _BaseVQADataset
+from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
 from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # PixmoCap prompts to randomly sample from
@@ -42,7 +42,7 @@ PIXMO_CAP_PROMPTS = tf.constant(
 )
 
 
-class PixmoCap(_BaseVQADataset):
+class PixmoCap(BaseVQADataset):
     """PixmoCap dataset for vision-language training.
 
     This dataset loads PixmoCap images with captions and formats them to be

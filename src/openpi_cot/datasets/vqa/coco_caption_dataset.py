@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-from openpi_cot.datasets.vqa.vqa_base import _BaseVQADataset
+from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
 from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 COCO_CAPTION_PROMPTS = tf.constant(
@@ -32,7 +32,7 @@ COCO_CAPTION_PROMPTS = tf.constant(
 )
 
 
-class CocoCaption(_BaseVQADataset):
+class CocoCaption(BaseVQADataset):
     """COCO Captions dataset for vision-language training.
 
     This dataset loads COCO images with captions and formats them to be

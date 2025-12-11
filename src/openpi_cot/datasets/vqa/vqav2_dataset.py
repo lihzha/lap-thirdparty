@@ -2,11 +2,11 @@
 
 import tensorflow as tf
 
-from openpi_cot.datasets.vqa.vqa_base import _BaseVQADataset
+from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
 from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 
-class Vqav2(_BaseVQADataset):
+class Vqav2(BaseVQADataset):
     """VQAv2 dataset for vision-language training.
 
     This dataset loads VQAv2 images with questions and answers and formats them

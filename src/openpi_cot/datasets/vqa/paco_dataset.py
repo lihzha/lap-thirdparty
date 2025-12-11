@@ -2,7 +2,7 @@
 
 import tensorflow as tf
 
-from openpi_cot.datasets.vqa.vqa_base import _BaseVQADataset
+from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
 from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # LVIS prompts to randomly sample from - split into prefix and suffix for category insertion
@@ -40,7 +40,7 @@ PACO_PROMPT_PARTS = [
 ]
 
 
-class Paco(_BaseVQADataset):
+class Paco(BaseVQADataset):
     """PACO dataset for vision-language training.
 
     This dataset loads PACO images with object annotations and formats them to be

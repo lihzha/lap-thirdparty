@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import tensorflow as tf
 
-from openpi_cot.datasets.base_dataset import _SingleCoTDataset
+from openpi_cot.datasets.base_dataset import SingleCoTDataset
 from openpi_cot.datasets.utils.dataset_utils import print_memory_usage
 from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.helpers import state_encoding_to_type
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
 
 
-class DroidCoTDataset(_SingleCoTDataset):
+class DroidCoTDataset(SingleCoTDataset):
     def _episode_id_from_traj(self, traj, ep_table):
         """Lookup episode_id from trajectory metadata using regex extraction."""
         from openpi_cot.datasets.utils.helpers import extract_episode_path_from_file_path

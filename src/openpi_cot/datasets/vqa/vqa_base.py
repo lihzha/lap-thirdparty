@@ -6,7 +6,7 @@ from dlimp import DLataset
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.datasets.base_dataset import _SingleCoTDataset
+from openpi_cot.datasets.base_dataset import SingleCoTDataset
 from openpi_cot.datasets.utils.helpers import ActionEncoding
 from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.helpers import StateEncoding
@@ -29,7 +29,7 @@ def ensure_dldataset(ds, is_flattened=False):
     return ds
 
 
-class _BaseVQADataset(_SingleCoTDataset):
+class BaseVQADataset(SingleCoTDataset):
     """Base class for VQA datasets (COCO Captions, VQAv2, etc.).
 
     This class contains shared functionality for all VQA datasets:
