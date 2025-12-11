@@ -210,14 +210,6 @@ def init_train_state(
             ema_params=None if config.ema_decay is None else params,
         )
 
-    # Pre-warm smoothing kernel cache on host to avoid tracer leaks when label smoothing is enabled.
-    if getattr(config.model, "enable_number_label_smoothing", False):
-        from openpi_cot.models.pi_cot import _get_cached_smoothing_kernel
-
-        sigma = getattr(config.model, "label_smoothing_sigma", 1.0)
-        support = getattr(config.model, "label_smoothing_support", 3)
-        _get_cached_smoothing_kernel(sigma, support)
-
     train_state_shape = jax.eval_shape(init, init_rng)
     state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
