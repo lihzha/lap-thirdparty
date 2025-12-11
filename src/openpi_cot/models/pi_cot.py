@@ -430,7 +430,7 @@ class PiCoT(_pi0.Pi0):
                 )
             else:
                 metrics.update(
-                    self._compute_sample_specific_metrics(
+                    _compute_sample_specific_metrics(
                         per_sample_loss=lang_loss,
                         lang_metrics=lang_metrics,
                         sample_mask=combined_langact_mask,
