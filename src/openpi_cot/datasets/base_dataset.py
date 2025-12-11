@@ -11,6 +11,7 @@ import psutil
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+from openpi_cot.datasets.utils.data_utils import _R_from_euler_xyz
 from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
 from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
 from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
@@ -586,37 +587,6 @@ class SingleCoTDataset:
         return self.dataset_statistics["state"].num_transitions
 
 
-def _euler_xyz_extrinsic_to_matrix(rpy: tf.Tensor) -> tf.Tensor:
-    """Convert extrinsic XYZ Euler angles to a rotation matrix."""
-    roll, pitch, yaw = tf.unstack(rpy, axis=-1)
-
-    cr, sr = tf.cos(roll), tf.sin(roll)
-    cp, sp = tf.cos(pitch), tf.sin(pitch)
-    cy, sy = tf.cos(yaw), tf.sin(yaw)
-
-    # Extrinsic XYZ is equivalent to intrinsic ZYX, so R = Rz * Ry * Rx
-    r00 = cy * cp
-    r01 = cy * sp * sr - sy * cr
-    r02 = cy * sp * cr + sy * sr
-
-    r10 = sy * cp
-    r11 = sy * sp * sr + cy * cr
-    r12 = sy * sp * cr - cy * sr
-
-    r20 = -sp
-    r21 = cp * sr
-    r22 = cp * cr
-
-    return tf.stack(
-        [
-            tf.stack([r00, r01, r02], axis=-1),
-            tf.stack([r10, r11, r12], axis=-1),
-            tf.stack([r20, r21, r22], axis=-1),
-        ],
-        axis=-2,
-    )
-
-
 def _matrix_to_euler_xyz_extrinsic(R: tf.Tensor) -> tf.Tensor:
     """Convert rotation matrix back to extrinsic XYZ Euler angles."""
     # Guard against numerical issues when computing pitch
@@ -677,7 +647,7 @@ def sum_actions(actions: tf.Tensor, valid_lengths: tf.Tensor | None = None) -> t
 
         # Compose rotations sequentially: R_total = R_step1 * R_step2 * ...
         def _compose_rotation(R_total, rpy):
-            R_step = _euler_xyz_extrinsic_to_matrix(rpy)
+            R_step = _R_from_euler_xyz(rpy)
             return tf.linalg.matmul(R_total, R_step)
 
         R_final = tf.foldl(

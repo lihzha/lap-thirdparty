@@ -345,32 +345,47 @@ def _rot_z(a):
     )
 
 
-@tf.function
-def _R_from_euler_xyz(angles):
-    """Extrinsic XYZ: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)."""
-    angles = tf.convert_to_tensor(angles)
-    # Ensure last dim is 3
-    roll = angles[..., 0]
-    pitch = angles[..., 1]
-    yaw = angles[..., 2]
-    return tf.linalg.matmul(tf.linalg.matmul(_rot_x(roll), _rot_y(pitch)), _rot_z(yaw))
+def _R_from_euler_xyz(rpy: tf.Tensor) -> tf.Tensor:
+    """Convert extrinsic XYZ Euler angles to a rotation matrix (R = Rz @ Ry @ Rx)."""
+    roll, pitch, yaw = tf.unstack(rpy, axis=-1)
+
+    cr, sr = tf.cos(roll), tf.sin(roll)
+    cp, sp = tf.cos(pitch), tf.sin(pitch)
+    cy, sy = tf.cos(yaw), tf.sin(yaw)
+
+    # Extrinsic XYZ is equivalent to intrinsic ZYX, so R = Rz * Ry * Rx
+    r00 = cy * cp
+    r01 = cy * sp * sr - sy * cr
+    r02 = cy * sp * cr + sy * sr
+
+    r10 = sy * cp
+    r11 = sy * sp * sr + cy * cr
+    r12 = sy * sp * cr - cy * sr
+
+    r20 = -sp
+    r21 = cp * sr
+    r22 = cp * cr
+
+    return tf.stack(
+        [
+            tf.stack([r00, r01, r02], axis=-1),
+            tf.stack([r10, r11, r12], axis=-1),
+            tf.stack([r20, r21, r22], axis=-1),
+        ],
+        axis=-2,
+    )
 
 
 @tf.function
 def _euler_xyz_from_R(R, eps=1e-6):
     """
-    Extract extrinsic XYZ (roll, pitch, yaw) from rotation matrix R.
-    Handles gimbal lock via elementwise tf.where (graph-safe).
+    Extract extrinsic XYZ (roll, pitch, yaw) from rotation matrix R (R = Rz @ Ry @ Rx).
 
-    For extrinsic XYZ: R = Rx(roll) @ Ry(pitch) @ Rz(yaw)
-    Matrix elements: r02 = sin(pitch), r12 = -sin(roll)cos(pitch), r22 = cos(roll)cos(pitch)
-                     r01 = -cos(pitch)sin(yaw), r00 = cos(pitch)cos(yaw)
+    Handles gimbal lock via elementwise tf.where.
     """
     R = tf.convert_to_tensor(R)
     dtype = R.dtype
     eps_t = tf.cast(eps, dtype)
-    zero = tf.zeros([], dtype)
-    one = tf.ones([], dtype)
 
     r00 = R[..., 0, 0]
     r01 = R[..., 0, 1]
@@ -378,24 +393,23 @@ def _euler_xyz_from_R(R, eps=1e-6):
     r10 = R[..., 1, 0]
     r11 = R[..., 1, 1]
     r12 = R[..., 1, 2]
+    r20 = R[..., 2, 0]
+    r21 = R[..., 2, 1]
     r22 = R[..., 2, 2]
 
-    # Regular case: |r02| < 1 - eps  (i.e., |cos(pitch)| != 0)
-    pitch_reg = tf.asin(tf.clip_by_value(r02, -one, one))
-    roll_reg = tf.math.atan2(-r12, r22)
-    yaw_reg = tf.math.atan2(-r01, r00)
+    sy = tf.sqrt(tf.maximum(r00 * r00 + r10 * r10, eps_t))
+    singular = sy < eps_t
 
-    # Gimbal lock: cos(pitch) ~ 0  -> pitch = ±pi/2
-    pitch_gl = (_tf_pi(dtype) / tf.cast(2.0, dtype)) * tf.sign(r02)
-    roll_gl = tf.zeros_like(pitch_gl)  # set roll = 0 by convention
-    # Both cases use same formula: yaw = atan2(r10, r11)
-    yaw_gl = tf.math.atan2(r10, r11)
+    roll_regular = tf.atan2(r21, r22)
+    roll_singular = tf.atan2(-r12, r11)
+    roll = tf.where(singular, roll_singular, roll_regular)
 
-    # Blend by condition
-    cond = tf.less(tf.abs(r02), (one - eps_t))
-    roll = tf.where(cond, roll_reg, roll_gl)
-    pitch = tf.where(cond, pitch_reg, pitch_gl)
-    yaw = tf.where(cond, yaw_reg, yaw_gl)
+    pitch = tf.atan2(-r20, sy)
+
+    yaw_regular = tf.atan2(r10, r00)
+    yaw_singular = tf.zeros_like(yaw_regular)
+    yaw = tf.where(singular, yaw_singular, yaw_regular)
+
     return tf.stack([roll, pitch, yaw], axis=-1)
 
 
