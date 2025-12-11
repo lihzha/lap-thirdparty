@@ -13,18 +13,6 @@ def _round_to_nearest_n(value: float, n: int = 5) -> int:
     return int(round(value / n) * n)
 
 
-def maybe_parse_serialized_tensor_to_ndarray(b) -> np.ndarray | None:
-    try:
-        if not isinstance(b, (bytes, np.bytes_)):
-            return None
-        import tensorflow as tf  # Lazy import to avoid TF dependency at module import time
-
-        t = tf.io.parse_tensor(b, out_type=tf.float32)
-        return t.numpy()
-    except Exception:
-        return None
-
-
 def parse_image(image) -> np.ndarray:
     if image is None:
         return None

@@ -11,12 +11,9 @@ from openpi_cot.policies.lang_action_formats import LanguageActionFormat
 from openpi_cot.policies.lang_action_formats import get_decoding_schema
 from openpi_cot.policies.utils import is_all_1s_language_action
 from openpi_cot.policies.utils import is_idle_language_action
-from openpi_cot.policies.utils import maybe_parse_serialized_tensor_to_ndarray
 from openpi_cot.policies.utils import parse_image
-from openpi_cot.policies.utils import sum_language_actions
 from openpi_cot.policies.utils import summarize_bimanual_numeric_actions
 from openpi_cot.policies.utils import summarize_numeric_actions
-from openpi_cot.policies.utils import to_str_list
 from openpi_cot.policies.utils import transform_actions_to_eef_frame
 
 # Datasets that need wrist camera rotation by 180 degrees
@@ -42,13 +39,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     # Determines which model will be used.
     model_type: ExtendedModelType = ExtendedModelType.PI_COT
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
-    # Whether to randomly sample time horizons for language actions (training only)
-    random_time_horizon: bool = True
-    # Available time horizons to sample from (in seconds)
-    time_horizon_options: tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 4.0)
-    # Whether to filter out samples where all movements are exactly 1 cm (likely noisy data)
-    filter_all_1s_actions: bool = False
     enable_langact_training: bool = True
+    filter_all_1s_actions: bool = False
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
@@ -181,73 +173,26 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         self, data: dict, lang_action_key: str, initial_state: np.ndarray = None
     ) -> tuple[dict, float | None]:
         la = data[lang_action_key]
-        assert isinstance(la[0], bytes)
+        is_bimanual: bool = data.get("is_bimanual", False)
 
-        # Get control frequency and valid language length from data
-        control_frequency = int(data.get("control_frequency", 10))  # Default to 10Hz if not present
-        valid_language_length = int(data.get("valid_language_length", len(la)))
+        breakpoint()
 
-        # Determine how many language actions to use
-        sampled_time_horizon = None
-        if self.random_time_horizon:
-            # Randomly sample a time horizon that has enough valid data
-            # Compute max time horizon based on valid length
-            max_time_horizon = valid_language_length / control_frequency
-
-            # Filter time horizon options to only those with enough data
-            valid_horizons = [h for h in self.time_horizon_options if h <= max_time_horizon]
-
-            if valid_horizons:
-                # Randomly sample from valid horizons
-                sampled_time_horizon = float(np.random.choice(valid_horizons))
-                num_steps = int(sampled_time_horizon * control_frequency)
-            else:
-                # If no valid horizons (e.g., very short trajectory), use all valid data
-                num_steps = valid_language_length
-                sampled_time_horizon = valid_language_length / control_frequency
+        # Transform to EEF frame if requested
+        if self.language_action_format.use_eef_frame and initial_state is not None:
+            la = transform_actions_to_eef_frame(la, initial_state)
+        if is_bimanual:
+            summed = summarize_bimanual_numeric_actions(
+                la,
+                self.language_action_format.get_sum_decimal(),
+                self.language_action_format.include_rotation,
+            )
         else:
-            # Use all valid language actions (validation/inference mode)
-            num_steps = min(control_frequency, valid_language_length)
-            sampled_time_horizon = None
-
-        # Ensure we don't exceed available data
-        num_steps = min(num_steps, len(la))
-
-        if (
-            maybe_parse_serialized_tensor_to_ndarray(la[0]) is not None
-        ):  # not use json actions case. language_actions is raw action
-            # Check if dataset is bimanual
-            is_bimanual: bool = data.get("is_bimanual", False)
-
-            # Use the computed number of steps
-            la_used = la[:num_steps]
-            raw_array = [maybe_parse_serialized_tensor_to_ndarray(x) for x in la_used]
-
-            # Transform to EEF frame if requested
-            if self.language_action_format.use_eef_frame and initial_state is not None:
-                raw_array = [transform_actions_to_eef_frame(action, initial_state) for action in raw_array]
-
-            if is_bimanual:
-                summed = summarize_bimanual_numeric_actions(
-                    raw_array,
-                    self.language_action_format.get_sum_decimal(),
-                    self.language_action_format.include_rotation,
-                )
-            else:
-                summed = summarize_numeric_actions(
-                    raw_array,
-                    self.language_action_format.get_sum_decimal(),
-                    self.language_action_format.include_rotation,
-                )
-            return summed, sampled_time_horizon
-        seq = to_str_list(la)
-        assert seq is not None
-        summed = sum_language_actions(
-            seq, self.language_action_format.get_sum_decimal(), self.language_action_format.include_rotation
-        )
-        assert summed is not None
-        assert len(summed) > 0
-        return summed, sampled_time_horizon
+            summed = summarize_numeric_actions(
+                la,
+                self.language_action_format.get_sum_decimal(),
+                self.language_action_format.include_rotation,
+            )
+        return summed
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
@@ -293,13 +238,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data and self.enable_langact_training:
-            inputs["language_actions"], time_horizon_seconds = self._prepare_text(
-                data, "language_actions", initial_state
-            )
-
-            # Save the time horizon in seconds if it was sampled
-            if time_horizon_seconds is not None:
-                inputs["time_horizon_seconds"] = time_horizon_seconds
+            inputs["language_actions"] = self._prepare_text(data, "language_actions", initial_state)
 
             # Only apply idle filtering for language actions and prediction
             if not is_vqa_sample:
@@ -324,14 +263,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 inputs["sample_mask"] = True
         else:
             inputs["sample_mask"] = True
-            # inputs["time_horizon_seconds"] = 2.0 # test time
-
-        # Optional calibration/context passthroughs for visualization
-        for k in ("camera_intrinsics", "camera_extrinsics"):
-            if k in data["observation"]:
-                inputs[k] = np.asarray(data[k])
-        if "cartesian_position_window" in data["observation"]:
-            inputs["cartesian_position_window"] = np.asarray(data["observation"]["cartesian_position_window"])
 
         return inputs
 

@@ -27,6 +27,7 @@ We follow this einsum axis naming convention:
 
 from collections.abc import Sequence
 import dataclasses
+import re
 from typing import Literal, TypeAlias
 
 import einops
@@ -36,12 +37,6 @@ import jax.numpy as jnp
 import openpi.models.lora as lora
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
-from openpi_cot.models.gemma_common import Einsum as CommonEinsum
-from openpi_cot.models.gemma_common import Embedder as CommonEmbedder
-from openpi_cot.models.gemma_common import FeedForward as CommonFeedForward
-from openpi_cot.models.gemma_common import RMSNorm as CommonRMSNorm
-from openpi_cot.models.gemma_common import _gated_residual
-from openpi_cot.models.gemma_common import _name
 
 PALIGEMMA_VOCAB_SIZE = 257_152
 
@@ -115,47 +110,218 @@ def get_config(variant: Variant) -> Config:
     raise ValueError(f"Unknown variant: {variant}")
 
 
-# RMSNorm: Wrapper around common implementation with bfloat16 default for Gemma
-@at.typecheck
-class RMSNorm(CommonRMSNorm):
-    """RMSNorm with explicit bfloat16 parameter dtype (Gemma default).
+class Einsum(nn.Module):
+    """Einsum layer with LoRA support and explicit parameter dtype.
 
-    Inherits from common implementation and sets param_dtype="bfloat16" by default.
+    This is a unified implementation that combines features from both gemma2 and gemma3.
+    Supports both compact-style and setup-style initialization.
     """
 
-    param_dtype: str = "bfloat16"
-
-
-# Embedder: Wrapper around common implementation with bfloat16 default for Gemma
-@at.typecheck
-class Embedder(CommonEmbedder):
-    """Embedder module with explicit bfloat16 parameter dtype (Gemma default).
-
-    Inherits from common implementation and sets param_dtype="bfloat16" by default.
-    """
-
-    param_dtype: str = "bfloat16"
-
-
-# Einsum: Wrapper around common implementation with bfloat16 default for Gemma
-class Einsum(CommonEinsum):
-    """Einsum with LoRA support and explicit bfloat16 parameter dtype (Gemma default).
-
-    Inherits from common implementation and sets param_dtype="bfloat16" by default.
-    """
-
-    param_dtype: str = "bfloat16"
+    # Shape of the weight.
+    shape: tuple[int, ...]
+    # Initialization function for the weight.
     init_fn: nn.initializers.Initializer = nn.initializers.zeros
+    # If not None, apply LoRA to the weight.
+    lora_config: lora.LoRAConfig | None = None
+    # Parameter dtype (for models that need explicit dtype handling)
+    param_dtype: str | None = None
+    # Weight name (for compatibility with gemma3 style)
+    weight_name: str = "w"
+
+    def setup(self):
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
+        self.w = self.param(self.weight_name, self.init_fn, self.shape, pdtype)
+
+        if config := self.lora_config:
+            # Setup LoRA parameters.
+            shape_a, shape_b = list(self.shape), list(self.shape)
+            shape_a[config.axes[1]] = config.rank
+            shape_b[config.axes[0]] = config.rank
+            self.w_a = self.param("lora_a", config.init_fn, shape_a, pdtype)
+            self.w_b = self.param("lora_b", config.init_fn, shape_b, pdtype)
+
+    def __call__(self, eqn: str, x):
+        dtype = x.dtype  # original dtype, could be half-precision
+        result = jnp.einsum(eqn, x, self.w.astype(dtype))
+
+        if config := self.lora_config:
+            eqn_a, eqn_b = self._make_lora_eqns(eqn)
+            lora_result = jnp.einsum(eqn_a, x, self.w_a.astype(dtype))
+            lora_result = jnp.einsum(eqn_b, lora_result, self.w_b.astype(dtype))
+            result = result + lora_result * config.scaling_value
+
+        return result
+
+    def _make_lora_eqns(self, eqn: str) -> tuple[str, str]:
+        if "L" in eqn:
+            raise ValueError(f"L already in eqn: {eqn}")
+        if not (m := re.match("(.*),(.*)->(.*)", eqn)):
+            raise ValueError(f"Unsupported einsum eqn: {eqn}")
+        lhs, rhs, out = m.groups()
+
+        assert self.lora_config is not None
+        a_label, b_label = (rhs[x] for x in self.lora_config.axes)
+        label = self.lora_config.label
+
+        a_rhs = rhs.replace(b_label, label)
+        a_out = out.replace(b_label, label)
+        eqn_a = f"{lhs},{a_rhs}->{a_out}"
+
+        b_rhs = rhs.replace(a_label, label)
+        eqn_b = f"{a_out},{b_rhs}->{out}"
+
+        return eqn_a, eqn_b
 
 
-# FeedForward: Wrapper around common implementation with bfloat16 default for Gemma
-class FeedForward(CommonFeedForward):
-    """Feed forward module with explicit bfloat16 parameter dtype (Gemma default).
+@at.typecheck
+class RMSNorm(nn.Module):
+    """RMSNorm with optional adaptive conditioning and explicit parameter dtype.
 
-    Inherits from common implementation and sets param_dtype="bfloat16" by default.
+    Unified implementation supporting both standard and adaptive (AdaRMS) normalization.
     """
 
-    param_dtype: str = "bfloat16"
+    param_dtype: str | None = None
+
+    @nn.compact
+    def __call__(self, x, cond):
+        dtype = x.dtype  # original dtype, could be half-precision
+        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
+
+        if cond is None:
+            # Standard RMSNorm
+            scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],), pdtype)
+            scale_dtype = scale.astype(jnp.float32) if self.param_dtype else scale
+            normed_inputs = normed_inputs * (1 + scale_dtype)
+            return normed_inputs.astype(dtype), None
+
+        # Adaptive RMSNorm (AdaRMS) for timestep/conditioning injection
+        modulation = nn.Dense(
+            x.shape[-1] * 3,
+            kernel_init=nn.initializers.zeros,
+            dtype=dtype,
+            param_dtype=pdtype,
+        )(cond)
+        scale, shift, gate = jnp.split(modulation[:, None, :], 3, axis=-1)
+        normed_inputs = normed_inputs * (1 + scale) + shift
+        return normed_inputs.astype(dtype), gate
+
+
+@at.typecheck
+class FeedForward(nn.Module):
+    """Feed forward module with LoRA support and explicit parameter dtype.
+
+    Unified implementation based on gemma2's cleaner approach.
+    """
+
+    features: int
+    hidden_dim: int
+    lora_config: lora.LoRAConfig | None = None
+    param_dtype: str | None = None
+
+    def setup(self):
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
+        self.w_gating = self.param(
+            "gating_einsum",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
+            (2, self.features, self.hidden_dim),
+            pdtype,
+        )
+        self.w_linear = self.param(
+            "linear",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1),
+            (self.hidden_dim, self.features),
+            pdtype,
+        )
+        self.w_gating_lora = None
+        self.w_linear_lora = None
+        if self.lora_config:
+            # Setup LoRA parameters.
+            self.w_gating_lora = (
+                self.param(
+                    "gating_einsum_lora_a",
+                    self.lora_config.init_fn,
+                    (2, self.features, self.lora_config.rank),
+                    pdtype,
+                ),
+                self.param(
+                    "gating_einsum_lora_b",
+                    self.lora_config.init_fn,
+                    (2, self.lora_config.rank, self.hidden_dim),
+                    pdtype,
+                ),
+            )
+            self.w_linear_lora = (
+                self.param(
+                    "linear_lora_a",
+                    self.lora_config.init_fn,
+                    (self.hidden_dim, self.lora_config.rank),
+                    pdtype,
+                ),
+                self.param(
+                    "linear_lora_b",
+                    self.lora_config.init_fn,
+                    (self.lora_config.rank, self.features),
+                    pdtype,
+                ),
+            )
+
+    @nn.compact
+    def __call__(self, x):
+        dtype = x.dtype  # original dtype, could be half-precision
+        ff_gate = self._dot(
+            x,
+            self.w_gating[0],
+            None if self.w_gating_lora is None else (self.w_gating_lora[0][0], self.w_gating_lora[1][0]),
+        )
+        gate_value = nn.gelu(ff_gate)
+
+        ff1 = self._dot(
+            x,
+            self.w_gating[1],
+            None if self.w_gating_lora is None else (self.w_gating_lora[0][1], self.w_gating_lora[1][1]),
+        )
+        activations = gate_value * ff1
+
+        outputs = self._dot(activations, self.w_linear, self.w_linear_lora)
+        assert outputs.dtype == dtype
+        return outputs
+
+    def _dot(self, x: at.Array, w: at.Array, lora_weights: tuple[at.Array, at.Array] | None) -> at.Array:
+        base = jnp.dot(x, w.astype(x.dtype))
+        if lora_weights is None:
+            return base
+        return base + jnp.dot(jnp.dot(x, lora_weights[0].astype(x.dtype)), lora_weights[1].astype(x.dtype))
+
+
+@at.typecheck
+class Embedder(nn.Module):
+    """Embedder module with optional explicit parameter dtype.
+
+    Supports both standard embedding with default dtype and explicit dtype specification.
+    """
+
+    vocab_size: int
+    embed_dim: int
+    param_dtype: str | None = None
+
+    def setup(self):
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
+        self.input_embedding_table = self.param(
+            "input_embedding",
+            nn.initializers.normal(),
+            (self.vocab_size, self.embed_dim),
+            pdtype,
+        )
+
+    def encode(self, x):
+        x = self.input_embedding_table[(x,)]
+        x *= jnp.sqrt(self.embed_dim).astype(x.dtype)
+        return x
+
+    def decode(self, x):
+        return jnp.dot(x, self.input_embedding_table.T)
 
 
 @at.typecheck
@@ -216,9 +382,10 @@ class Attention(nn.Module):
         assert q.dtype == k.dtype == v.dtype == dtype
 
         if kv_cache is not None:
-            cache_k, cache_v = kv_cache
-            k = jnp.concatenate([cache_k, k], axis=1)
-            v = jnp.concatenate([cache_v, v], axis=1)
+            idx, cache_k, cache_v = kv_cache
+            idx, k, v = _update_cache(k, v, idx, cache_k, cache_v)
+        else:
+            idx, k, v = _init_cache(k, v, attn_mask.shape[-1])
 
         q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
         logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
@@ -254,7 +421,7 @@ class Attention(nn.Module):
             else:
                 out.append(None)
 
-        return out, (k, v)
+        return out, (idx, k, v)
 
 
 @at.typecheck
@@ -315,7 +482,9 @@ class Block(nn.Module):
         return xs, kv_cache
 
 
-KVCache: TypeAlias = tuple[at.Float[at.Array, "l b _t _k _h"], at.Float[at.Array, "l b _t _v _h"]]
+KVCache: TypeAlias = tuple[
+    at.Int[at.Array, "l b"], at.Float[at.Array, "l b _t _k _h"], at.Float[at.Array, "l b _t _v _h"]
+]
 
 
 @at.typecheck
@@ -371,6 +540,10 @@ class Module(nn.Module):
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
         return self.embedder.encode(tokens).astype(self.embed_dtype)
 
+    # @at.typecheck
+    def decode(self, prelogits: at.Int[at.Array, "b t d"]) -> at.Float[at.Array, "b t"]:
+        return self.embedder.decode(prelogits)
+
     @at.typecheck
     def __call__(
         self,
@@ -382,6 +555,7 @@ class Module(nn.Module):
         *,
         kv_cache: KVCache | None = None,
         deterministic: bool = True,
+        return_prelogits: bool = False,
     ) -> tuple[Sequence[at.Float[at.Array, "b _t _d"] | None], KVCache]:
         embedded = jax.tree.map(lambda e: e.astype(self.embed_dtype), embedded)
         mask = jnp.asarray(mask)[:, None, :, :]
@@ -392,9 +566,10 @@ class Module(nn.Module):
 
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
-        return [
+        out = [
             f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
-        ], kv_cache
+        ]
+        return out, kv_cache
 
     def init(self, use_adarms: Sequence[bool]):
         """Convenience method for initializing all parameters, necessary due to the quirks of linen."""
@@ -424,3 +599,43 @@ def _apply_rope(x, *, positions, max_wavelength=10_000):
     # original DeepMind impl, as well as the widely-used transformers impl, it is ok to always downcast back to bfloat16
     # here.
     return res.astype(x.dtype)
+
+
+def _name(name, i):
+    # we name layers like this because we want the first expert's weights to have no suffix (e.g., "attn"), so that they
+    # can be loaded seamlessly from the existing PaliGemma checkpoint. subsequent experts will have a suffix (e.g.,
+    # "attn_1") and their weights will be initialized from scratch. in practice, we only use two experts -- PaliGemma,
+    # and the action expert.
+    if i == 0:
+        return name
+    return f"{name}_{i}"
+
+
+def _gated_residual(x, y, gate):
+    """Apply gated residual connection: x + y * gate (or x + y if no gate)."""
+    assert (x is None) == (y is None)
+    if x is None:
+        return None
+    dtype = x.dtype
+    result = (x + y) if gate is None else (x + y * gate)
+    return result.astype(dtype)
+
+
+def _init_cache(k, v, cache_size):
+    """Initialize KV cache"""
+    prefill_len = k.shape[1]
+    pad_width = ((0, 0), (0, cache_size - prefill_len), (0, 0), (0, 0))
+    k_cache = jnp.pad(k.astype(k.dtype), pad_width)
+    v_cache = jnp.pad(v.astype(k.dtype), pad_width)
+    idx = jnp.zeros((k.shape[0],), dtype=jnp.int32) + prefill_len
+    return idx, k_cache, v_cache
+
+
+def _update_cache(k, v, idx, k_cache, v_cache):
+    """Update KV cache with new values"""
+    assert k.shape[1] == 1, "Only support kv-cache updates of length 1"
+    indices = (0, idx[0], 0, 0)
+    k_new = jax.lax.dynamic_update_slice(k_cache, k, indices)
+    v_new = jax.lax.dynamic_update_slice(v_cache, v, indices)
+    idx_new = idx + 1
+    return idx_new, k_new, v_new

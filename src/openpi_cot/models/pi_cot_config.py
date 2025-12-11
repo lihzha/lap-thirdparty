@@ -9,7 +9,7 @@ from openpi.shared import array_typing as at
 import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
-import openpi_cot.models.backbones.gemma_moe as _gemma
+import openpi_cot.models.backbones.gemma as _gemma
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.model_adapter import ExtendedModelType
 
@@ -55,16 +55,6 @@ class PiCoTConfig(_model.BaseModelConfig):
     action_loss_weight: float = 1.0
     prediction_loss_weight: float = 0.2
     vqa_loss_weight: float = 0.1
-
-    # Label smoothing for number tokens (units digits)
-    # When True, applies truncated Gaussian label smoothing to units digit predictions
-    enable_number_label_smoothing: bool = False
-    # Gaussian standard deviation for label smoothing (smaller = more concentrated)
-    # Typical values: 0.5 (very concentrated) to 2.0 (very spread)
-    label_smoothing_sigma: float = 1.0
-    # Maximum distance from center digit to include (±support)
-    # For support=3, digit 5 gets non-zero prob for [2,3,4,5,6,7,8]
-    label_smoothing_support: int = 3
 
     # When True, stops gradients produced by the action expert from flowing back
     # into the VLM expert through cross-attention.

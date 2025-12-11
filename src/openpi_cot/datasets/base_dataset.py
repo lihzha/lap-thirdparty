@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
 
 
-class _SingleCoTDataset:
+class SingleCoTDataset:
     spec: ClassVar[CoTRldsDatasetSpec] = CoTRldsDatasetSpec()
 
     def __init__(
@@ -200,12 +200,16 @@ class _SingleCoTDataset:
         opts = tf.data.Options()
         # Always use deterministic operations for reproducibility
         # File interleaving will be deterministic but still provide good mixing
-        opts.experimental_deterministic = bool(self.want_val)
+        opts.experimental_deterministic = True
+        opts.autotune.enabled = True
+        opts.experimental_optimization.apply_default_optimizations = True
+        opts.experimental_optimization.map_fusion = True
+        opts.experimental_optimization.map_and_filter_fusion = True
+        opts.experimental_optimization.inject_prefetch = False
         opts.experimental_optimization.map_parallelization = True
         opts.experimental_optimization.parallel_batch = True
-        opts.experimental_optimization.map_fusion = True
-        cpu_count = psutil.cpu_count(logical=True) or 16
-        opts.experimental_threading.private_threadpool_size = int(max(16, cpu_count))
+        opts.experimental_warm_start = True
+        opts.experimental_threading.private_threadpool_size = int(max(16, psutil.cpu_count(logical=True)))
         dataset = dl.DLataset.from_rlds(
             builder,
             split="all",
@@ -318,35 +322,11 @@ class _SingleCoTDataset:
             actions_window = gather_with_padding(
                 data=traj["raw_action"],
                 sequence_length=traj_len,
-                window_size=summation_steps,
+                window_size=self.control_frequency,
             )  # [T, summation_steps, A]
 
-            # Unify spec with DROID by converting per-step numeric rows to tf.string via serialization.
-            # Result shape: [T, summation_steps] tf.string (each element is a serialized [A] float32 tensor)
-            flat_rows = tf.reshape(actions_window, [-1, tf.shape(actions_window)[-1]])
-            serialized_flat = tf.map_fn(
-                lambda v: tf.io.serialize_tensor(v),
-                flat_rows,
-                fn_output_signature=tf.string,
-            )
-            traj["language_actions"] = tf.reshape(
-                serialized_flat,
-                [tf.shape(actions_window)[0], int(summation_steps)],
-            )
-            # Set static shape for TensorFlow's shape inference
-            traj["language_actions"].set_shape([None, summation_steps])
-
-            # Store control_frequency as metadata (per timestep)
-            traj["control_frequency"] = tf.repeat(
-                tf.constant(self.control_frequency, dtype=tf.int32), tf.shape(traj[action_key])[0]
-            )
-
-            # Store valid_length: how many steps have actual data (not padding from gather_with_padding)
-            # For each timestep t, valid length is min(summation_steps, trajectory_length - t)
-            timestep_indices = tf.range(traj_len, dtype=tf.int32)
-            remaining_steps = traj_len - timestep_indices  # How many steps remain from current timestep
-            valid_lengths = tf.minimum(remaining_steps, tf.constant(summation_steps, dtype=tf.int32))
-            traj["valid_language_length"] = valid_lengths
+            traj["language_actions"] = sum_actions(actions_window)
+            traj["language_actions"].set_shape([None, 1])
 
             return traj
 
@@ -358,25 +338,9 @@ class _SingleCoTDataset:
             Derives prediction language actions from raw_action (same as language_actions),
             padded to summation_steps for consistency.
             """
-            traj_len = tf.shape(traj[action_key])[0]
-
             if not self.enable_prediction_training:
-                # Backward compatibility: add time dimension with single frame
-                traj["observation"][self.spec.primary_image_key] = tf.expand_dims(
-                    traj["observation"][self.spec.primary_image_key], axis=1
-                )  # [T, 1, H, W, C]
-
-                traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-                    traj["observation"][self.spec.wrist_image_key], axis=1
-                )  # [T, 1, H, W, C]
-
-                # Handle right wrist (for all datasets - bimanual and non-bimanual)
-                if self.spec.wrist_image_right_key in traj["observation"]:
-                    traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                        traj["observation"][self.spec.wrist_image_right_key], axis=1
-                    )  # [T, 1, H, W, C]
-
                 return traj
+            traj_len = tf.shape(traj[action_key])[0]
 
             # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
             max_horizon = getattr(self.config, "max_prediction_horizon", summation_steps)
@@ -627,3 +591,94 @@ class _SingleCoTDataset:
 
     def __len__(self):
         return self.dataset_statistics["state"].num_transitions
+
+
+def _euler_xyz_extrinsic_to_matrix(rpy: tf.Tensor) -> tf.Tensor:
+    """Convert extrinsic XYZ Euler angles to a rotation matrix."""
+    roll, pitch, yaw = tf.unstack(rpy, axis=-1)
+
+    cr, sr = tf.cos(roll), tf.sin(roll)
+    cp, sp = tf.cos(pitch), tf.sin(pitch)
+    cy, sy = tf.cos(yaw), tf.sin(yaw)
+
+    # Extrinsic XYZ is equivalent to intrinsic ZYX, so R = Rz * Ry * Rx
+    r00 = cy * cp
+    r01 = cy * sp * sr - sy * cr
+    r02 = cy * sp * cr + sy * sr
+
+    r10 = sy * cp
+    r11 = sy * sp * sr + cy * cr
+    r12 = sy * sp * cr - cy * sr
+
+    r20 = -sp
+    r21 = cp * sr
+    r22 = cp * cr
+
+    return tf.stack(
+        [
+            tf.stack([r00, r01, r02], axis=-1),
+            tf.stack([r10, r11, r12], axis=-1),
+            tf.stack([r20, r21, r22], axis=-1),
+        ],
+        axis=-2,
+    )
+
+
+def _matrix_to_euler_xyz_extrinsic(R: tf.Tensor) -> tf.Tensor:
+    """Convert rotation matrix back to extrinsic XYZ Euler angles."""
+    # Guard against numerical issues when computing pitch
+    sy = tf.sqrt(tf.maximum(R[..., 0, 0] * R[..., 0, 0] + R[..., 1, 0] * R[..., 1, 0], 1e-12))
+    singular = sy < 1e-6
+
+    roll = tf.where(
+        singular,
+        tf.atan2(-R[..., 1, 2], R[..., 1, 1]),
+        tf.atan2(R[..., 2, 1], R[..., 2, 2]),
+    )
+    pitch = tf.atan2(-R[..., 2, 0], sy)
+    yaw = tf.where(
+        singular,
+        tf.zeros_like(R[..., 0, 0]),
+        tf.atan2(R[..., 1, 0], R[..., 0, 0]),
+    )
+
+    return tf.stack([roll, pitch, yaw], axis=-1)
+
+
+def sum_actions(actions: tf.Tensor) -> tf.Tensor:
+    """Sum sequences of actions (x, y, z, roll, pitch, yaw).
+
+    Args:
+        actions: Tensor with shape [T, W, A] where the last dimension starts with
+            (x, y, z, roll, pitch, yaw). Roll, pitch, yaw use extrinsic XYZ order.
+
+    Returns:
+        Tensor of shape [T, 1] with serialized summed actions for each timestep.
+    """
+
+    def _sum_single_window(window: tf.Tensor) -> tf.Tensor:
+        # Ensure at least 6 dimensions
+        action_dim = tf.shape(window)[-1]
+        pad_amt = tf.maximum(0, 6 - action_dim)
+        window = tf.pad(window, [[0, 0], [0, pad_amt]])
+
+        # Sum translations directly (base frame deltas)
+        translation_sum = tf.reduce_sum(window[:, :3], axis=0)
+
+        # Compose rotations sequentially using extrinsic XYZ (Rz * Ry * Rx)
+        def _compose_rotation(carry, rpy):
+            R_total = carry
+            R_step = _euler_xyz_extrinsic_to_matrix(rpy)
+            return tf.linalg.matmul(R_step, R_total)
+
+        R_final = tf.foldl(_compose_rotation, window[:, 3:6], initializer=tf.eye(3, dtype=tf.float32))
+        rpy_final = _matrix_to_euler_xyz_extrinsic(R_final)
+
+        # Sum any remaining action dimensions (if present)
+        tail = tf.reduce_sum(window[:, 6:], axis=0)
+
+        summed = tf.concat([translation_sum, rpy_final, tail], axis=0)
+        return tf.io.serialize_tensor(summed)
+
+    serialized = tf.map_fn(_sum_single_window, actions, fn_output_signature=tf.string)
+    return tf.expand_dims(serialized, axis=-1)

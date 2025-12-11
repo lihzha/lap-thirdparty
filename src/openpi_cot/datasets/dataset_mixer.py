@@ -11,8 +11,6 @@ import tensorflow as tf
 from openpi_cot.datasets.robot.droid_dataset import DroidCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import DobbeCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import LiberoCoTDataset
-from openpi_cot.datasets.robot.oxe_datasets import PlanningDataset
-from openpi_cot.datasets.robot.oxe_datasets import SampleR1LiteCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import _SingleOXECoTDataset
 from openpi_cot.datasets.utils.data_utils import allocate_threads
 from openpi_cot.datasets.utils.data_utils import pprint_data_mixture
@@ -118,18 +116,9 @@ class OXECoTDatasets:
                     hash_tables=self.hash_tables,
                 )
                 self.hash_tables = {
-                    "cam_table": ds.cam_table,
-                    "lang_table": ds.lang_table,
                     "ep_table": ds.ep_table,
-                    "instr_table": ds.instr_table,
                     "filter_table": ds.filter_table,
                 }
-                has_robot_dataset = True
-            elif dataset_name == "sample_r1_lite":
-                ds = SampleR1LiteCoTDataset(
-                    dataset_name=dataset_name,
-                    **kwargs,
-                )
                 has_robot_dataset = True
             elif dataset_name == "dobbe":
                 ds = DobbeCoTDataset(
@@ -139,12 +128,6 @@ class OXECoTDatasets:
                 has_robot_dataset = True
             elif dataset_name.startswith("libero"):
                 ds = LiberoCoTDataset(
-                    dataset_name=dataset_name,
-                    **kwargs,
-                )
-                has_robot_dataset = True
-            elif dataset_name.startswith("planning"):
-                ds = PlanningDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )

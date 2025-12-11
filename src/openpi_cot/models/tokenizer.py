@@ -1,8 +1,6 @@
 import logging
-import os
 from typing import Literal
 
-from etils import epath  # optional, but handy
 import numpy as np
 from openpi.models import tokenizer as _tokenizer
 import sentencepiece
@@ -15,16 +13,8 @@ from openpi_cot.models.prompt_utils.prompt import PROMPT_FORMAT_REGISTRY
 from openpi_cot.models.prompt_utils.prompt import PromptFormat
 import openpi_cot.shared.download as download
 
-# Special token placeholder for image positions
-TOKEN_PLACEHOLDER = -2
-
 
 class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
-    # Gemma3 special tokens (only used when tokenizer_type == "gemma3")
-    BEGIN_IMAGE_TOKEN = 255999
-    END_IMAGE_TOKEN = 256000
-    NEW_LINE_TOKEN = 108
-
     def __init__(
         self,
         max_len: int = 48,
@@ -46,27 +36,12 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         ]
         | PromptFormat = "pi05",
         prediction_format: Literal["default", "grouped"] | PromptFormat = "default",
-        tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma",
-        num_images: int = 2,
-        tokens_per_image: int = 256,
-        enable_number_label_smoothing: bool = False,
     ):
         # super().__init__(max_len)
-        self.enable_number_label_smoothing = enable_number_label_smoothing
-        if tokenizer_type == "paligemma":
-            path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
-            with path.open("rb") as f:
-                self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
-        else:
-            cache_dir = os.environ.get("OPENPI_DATA_HOME", None)
-            path = epath.Path(cache_dir + "/gemma3-tokenizer.model")
-            with path.open("rb") as f:
-                self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
+        path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
+        with path.open("rb") as f:
+            self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
         self._max_len = max_len
-        self._stop_token_id = self._tokenizer.eos_id()
-        self._tokenizer_type = tokenizer_type
-        self._num_images = num_images
-        self._tokens_per_image = tokens_per_image
 
         # Support both string and PromptFormat instance
         if isinstance(prompt_format, str):
@@ -90,31 +65,13 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         self._vqa_format = DEFAULT_VQA_PROMPT_FORMAT
 
-    def _create_image_placeholders(self) -> list[int]:
-        """Create placeholder token sequence for images with special tokens (Gemma3 only).
-
-        Format for each image: [NL, BEGIN_IMAGE, -2 x tokens_per_image, END_IMAGE, NL]
-        Returns the full sequence for all images.
-        """
-        if self._tokenizer_type != "gemma3":
-            return []
-
-        return [TOKEN_PLACEHOLDER] * self._tokens_per_image
-
-        # single_image_seq = (
-        #     [self.NEW_LINE_TOKEN, self.BEGIN_IMAGE_TOKEN]
-        #     + [TOKEN_PLACEHOLDER] * self._tokens_per_image
-        #     + [self.NEW_LINE_TOKEN]
-        #     # + [self.END_IMAGE_TOKEN, self.NEW_LINE_TOKEN]
-        # )
-        # return single_image_seq * self._num_images
-
     def tokenize_cot(
         self,
         prompt: str,
         reasoning: str | None = None,
         state: np.ndarray | None = None,
         state_type: str | None = None,
+        *,
         is_vqa_sample: bool = False,
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
@@ -138,8 +95,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             - reasoning_mask: Mask for reasoning/language action tokens [max_len]
             - number_mask: Mask for all number tokens [max_len]
             - direction_mask: Mask for direction tokens [max_len]
-            - units_number_mask: Mask for units digit tokens only [max_len]
-            - digit_values: Digit values 0-9 for number tokens, -1 for non-digits [max_len]
         """
         # Resolve prompt format
 
@@ -158,39 +113,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         # Tokenize
         pad_id = self._tokenizer.pad_id()
 
-        # For Gemma3: [image_placeholders] + [BOS] + [text] + [reasoning] + [EOS]
-        # For others: [BOS] + [text] + [reasoning] + [EOS]
-        if self._tokenizer_type == "gemma3":
-            image_placeholders = self._create_image_placeholders()
-            # formatted_prompt = "<start_of_turn>user\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model"
-            text_tokens = (
-                self._tokenizer.encode("<start_of_turn>user\n<start_of_image>", add_bos=True, add_eos=False)
-                + image_placeholders
-                + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
-                + image_placeholders
-                + self._tokenizer.encode(
-                    "<end_of_image>\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model",
-                    add_bos=False,
-                    add_eos=False,
-                )
-            )
-            # text_tokens = (
-            #     self._tokenizer.encode("\n<start_of_image>", add_bos=False, add_eos=False)
-            #     + image_placeholders
-            #     + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
-            #     + image_placeholders
-            #     + self._tokenizer.encode(
-            #         "<end_of_image>\n" + formatted_prompt + "",
-            #         add_bos=False,
-            #         add_eos=False,
-            #     )
-            # )
-            tokens = text_tokens
-            # text_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
-            # tokens = image_placeholders + text_tokens
-        else:
-            # print(formatted_prompt)
-            tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+        tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         reasoning_start = len(tokens)
         if reasoning is not None:
@@ -206,114 +129,42 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             tokens = tokens[: self._max_len]
             reasoning_end = min(reasoning_end, self._max_len)
 
-        # Left pad to max length for generation/training
-        pad_count = self._max_len - len(tokens)
-        if pad_count > 0:
-            tokens = [pad_id] * pad_count + tokens
-
         # Create masks
         attn_mask = np.zeros(self._max_len, dtype=bool)
-        number_mask = np.zeros(self._max_len, dtype=bool)
-        direction_mask = np.zeros(self._max_len, dtype=bool)
+        reasoning_mask = np.zeros(self._max_len, dtype=bool)
 
         # Mark all non-pad positions as valid for attention
-        attn_mask[pad_count:] = True
-
-        reasoning_mask = np.zeros(self._max_len, dtype=bool)
+        attn_mask[: len(tokens)] = True
         # Shift reasoning indices by pad_count after left padding
-        start_idx = max(0, min(self._max_len, reasoning_start + pad_count))
-        end_idx = max(0, min(self._max_len, reasoning_end + pad_count))
+        start_idx = max(0, min(self._max_len, reasoning_start))
+        end_idx = max(0, min(self._max_len, reasoning_end))
         if end_idx > start_idx:
             reasoning_mask[start_idx:end_idx] = True
 
         if reasoning is None:
             reasoning_mask = None
+            direction_mask = None
+            number_mask = None
+        else:
+            number_mask = np.zeros(self._max_len, dtype=bool)
+            direction_mask = np.zeros(self._max_len, dtype=bool)
 
         # Build number and direction masks using format-specific checkers
         # Only mark tokens within reasoning span (not in the prompt)
-        # Skip placeholder tokens and special tokens when building pieces
-        pieces = []
-        for t in tokens:
-            if t == TOKEN_PLACEHOLDER:
-                pieces.append("")  # Empty string for placeholders
-            elif self._tokenizer_type == "gemma3" and t in (
-                self.BEGIN_IMAGE_TOKEN,
-                self.END_IMAGE_TOKEN,
-                self.NEW_LINE_TOKEN,
-            ):
-                pieces.append("")  # Empty string for Gemma3 special tokens
-            else:
-                pieces.append(self._tokenizer.id_to_piece(t))
 
-        if not is_vqa_sample:
+        if not is_vqa_sample and reasoning is not None:
             for i in range(start_idx, end_idx):
-                if i < 0 or i >= len(pieces):
-                    continue
-                piece = pieces[i]
+                piece = tokens[i]
                 if piece:
                     if is_number(piece):
                         number_mask[i] = True
                     if fmt.direction_token_checker(piece):
                         direction_mask[i] = True
 
-        units_number_mask = None
-        digit_values = None
-
-        if not is_vqa_sample and self.enable_number_label_smoothing:
-            # Create units_number_mask and digit_values for label smoothing
-            units_number_mask = np.zeros(self._max_len, dtype=bool)
-            digit_values = np.full(self._max_len, -1, dtype=np.int8)  # -1 for non-digits
-            # Unit words that follow numbers in language actions
-            unit_words = {"cm", "▁cm", "degrees", "▁degrees", "mm", "▁mm", "m", "▁m", "radians", "▁radians"}
-
-            # Find digit sequences followed by unit words
-            i = start_idx
-            while i < end_idx:
-                if i >= len(pieces):
-                    break
-
-                # Check if current position starts a digit sequence
-                if number_mask[i]:
-                    # Find the end of the digit sequence
-                    seq_start = i
-                    seq_end = i
-                    while seq_end < end_idx and seq_end < len(pieces) and number_mask[seq_end]:
-                        seq_end += 1
-
-                    # Check if the next token is a unit word
-                    next_idx = seq_end
-                    is_followed_by_unit = False
-                    if next_idx < len(pieces):
-                        next_piece = pieces[next_idx]
-                        if next_piece in unit_words:
-                            is_followed_by_unit = True
-
-                    # If followed by unit, mark the last digit in sequence as units digit
-                    if is_followed_by_unit:
-                        units_digit_idx = seq_end - 1
-                        units_number_mask[units_digit_idx] = True
-
-                        # Extract the digit value from the piece
-                        units_piece = pieces[units_digit_idx]
-                        # Find the rightmost digit in the piece
-                        for char in reversed(units_piece):
-                            if char.isdigit():
-                                digit_values[units_digit_idx] = int(char)
-                                break
-
-                    # Also extract digit values for all number tokens (for potential future use)
-                    for j in range(seq_start, seq_end):
-                        if j < len(pieces):
-                            piece = pieces[j]
-                            for char in reversed(piece):
-                                if char.isdigit():
-                                    digit_values[j] = int(char)
-                                    break
-
-                    # Move to the end of the sequence
-                    i = seq_end
-                else:
-                    i += 1
+        # Right pad
+        pad_count = self._max_len - len(tokens)
+        if pad_count > 0:
+            tokens = tokens + [pad_id] * pad_count
 
         return (
             np.asarray(tokens, dtype=np.int32),
@@ -321,8 +172,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             reasoning_mask,
             number_mask,
             direction_mask,
-            units_number_mask,
-            digit_values,
         )
 
     def decode(self, tokens: np.ndarray) -> str:
@@ -330,20 +179,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         if not isinstance(tokens, list):
             tokens = tokens.tolist()
 
-        # Filter out placeholder tokens and special tokens
-        filtered_tokens = []
-        for t in tokens:
-            if t == TOKEN_PLACEHOLDER:
-                continue  # Skip placeholder tokens
-            if self._tokenizer_type == "gemma3" and t in (
-                self.BEGIN_IMAGE_TOKEN,
-                self.END_IMAGE_TOKEN,
-                self.NEW_LINE_TOKEN,
-            ):
-                continue  # Skip Gemma3 special tokens
-            filtered_tokens.append(t)
-
-        return self._tokenizer.decode(filtered_tokens).strip()
+        return self._tokenizer.decode(tokens).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""

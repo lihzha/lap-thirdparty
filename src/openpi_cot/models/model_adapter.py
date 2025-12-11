@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-import copy
 import dataclasses
 from enum import Enum
 import logging
@@ -39,17 +38,12 @@ class ExtendedModelType(str, Enum):
 @struct.dataclass
 class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     # --- CoT / vis extras (all optional) ---
-    images: dict[str, at.Float[ArrayT, "*b t h w c"]]
+    images: dict[str, at.Float[ArrayT, "*b h w c"]]
     tokenized_langact_mask: at.Bool[ArrayT, "*b l"] | None = None
     critical_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
     direction_token_mask: at.Bool[ArrayT, "*b l"] | None = None
-    units_number_token_mask: at.Bool[ArrayT, "*b l"] | None = None
-    digit_values: at.Int[ArrayT, "*b l"] | None = None
     sample_mask: at.Bool[ArrayT, "*b"] | None = None
-    camera_intrinsics: at.Float[ArrayT, "*b t 4"] | None = None
-    camera_extrinsics: at.Float[ArrayT, "*b t 4 4"] | None = None
-    cartesian_position_window: at.Float[ArrayT, "*b t 6"] | None = None
     tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
     is_vqa_sample: at.Bool[ArrayT, "*b"] | None = None
     is_prediction_sample: at.Bool[ArrayT, "*b"] | None = None
@@ -59,11 +53,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         # Build the base Observation first (handles images, masks, dtype fixes, etc.)
         data_dict = dict(data)
 
-        # For base Observation, use first frame only
-        data_dict_downsampled = copy.deepcopy(data_dict)
-        data_dict_downsampled["image"] = {k: v[:, 0] for k, v in data_dict["image"].items() if v is not None}
-
-        base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict_downsampled)
+        base: _model.Observation[ArrayT] = _model.Observation.from_dict(data_dict)
 
         # Pull CoT extras from either flat keys or a namespaced location.
         cot_src = data.get("extras", {}).get("cot", {})
@@ -89,12 +79,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             critical_token_mask=getk("critical_token_mask"),
             number_token_mask=getk("number_token_mask"),
             direction_token_mask=getk("direction_token_mask"),
-            units_number_token_mask=getk("units_number_token_mask"),
-            digit_values=getk("digit_values"),
             sample_mask=getk("sample_mask"),
-            camera_intrinsics=getk("camera_intrinsics"),
-            camera_extrinsics=getk("camera_extrinsics"),
-            cartesian_position_window=getk("cartesian_position_window"),
             tokenized_dataset_name=getk("tokenized_dataset_name"),
             is_vqa_sample=getk("is_vqa_sample"),
             is_prediction_sample=getk("is_prediction_sample"),
@@ -208,12 +193,7 @@ def preprocess_observation(
         critical_token_mask=getattr(observation, "critical_token_mask", None),
         number_token_mask=getattr(observation, "number_token_mask", None),
         direction_token_mask=getattr(observation, "direction_token_mask", None),
-        units_number_token_mask=getattr(observation, "units_number_token_mask", None),
-        digit_values=getattr(observation, "digit_values", None),
         sample_mask=getattr(observation, "sample_mask", None),
-        camera_intrinsics=getattr(observation, "camera_intrinsics", None),
-        camera_extrinsics=getattr(observation, "camera_extrinsics", None),
-        cartesian_position_window=getattr(observation, "cartesian_position_window", None),
         tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
         is_vqa_sample=getattr(observation, "is_vqa_sample", None),
         is_prediction_sample=getattr(observation, "is_prediction_sample", None),
