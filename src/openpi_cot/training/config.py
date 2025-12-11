@@ -212,7 +212,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
 
     prompt_format: str = "pi05"
     prediction_format: str = "default"
-    tokenizer_type: Literal["gemma3", "paligemma"] = "paligemma"
     include_outputs: bool = True  # Toggle output transforms (e.g., detokenization)
     fast_tokenizer_path: str = "physical-intelligence/fast"  # KarlP/fast_droid_specialist
 
@@ -227,7 +226,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
-                            tokenizer_type=self.tokenizer_type,
                         )
                     )
                 ]
@@ -240,7 +238,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
-                            tokenizer_type=self.tokenizer_type,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         verbose_mode=model_config.verbose_mode,
@@ -260,7 +257,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             max_len=model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
-                            tokenizer_type=self.tokenizer_type,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                     ),
@@ -273,7 +269,6 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             max_len=model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
-                            tokenizer_type=self.tokenizer_type,
                         ),
                         action_horizon=model_config.action_horizon,
                         action_dim=model_config.action_dim,
@@ -383,7 +378,6 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
-            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
 
@@ -413,7 +407,6 @@ class RawActionDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
-            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
 
@@ -439,7 +432,6 @@ class VQADataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
-            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
         )(model_config)
 
 
@@ -470,7 +462,6 @@ class LiberoFinetuneDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
-            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
             include_outputs=False,  # Libero doesn't need output detokenization
         )(model_config)
 
@@ -502,7 +493,6 @@ class LiberoCoTDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
-            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
             include_outputs=True,  # Libero doesn't need output detokenization
         )(model_config)
 
@@ -534,7 +524,6 @@ class PlanningDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
-            tokenizer_type="gemma3" if "gemma3" in model_config.paligemma_variant else "paligemma",
             include_outputs=False,  # Planning doesn't need output detokenization
         )(model_config)
 

@@ -242,22 +242,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         # Tokenize prompt
         pad_id = self._tokenizer.pad_id()
 
-        if self._tokenizer_type == "gemma3":
-            image_placeholders = self._create_image_placeholders()
-            text_tokens = (
-                self._tokenizer.encode("<start_of_turn>user\n<start_of_image>", add_bos=True, add_eos=False)
-                + image_placeholders
-                + self._tokenizer.encode("<end_of_image>\n<start_of_image>", add_bos=False, add_eos=False)
-                + image_placeholders
-                + self._tokenizer.encode(
-                    "<end_of_image>\n" + formatted_prompt + "<end_of_turn>\n<start_of_turn>model",
-                    add_bos=False,
-                    add_eos=False,
-                )
-            )
-            prefix_tokens = text_tokens
-        else:
-            prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+        prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         # # TODO: ignore language actions for now
         # reasoning_start = len(tokens)
