@@ -120,7 +120,7 @@ class PiCoT(_pi0.Pi0):
             # All image tokens attend to each other (no autoregressive masking)
             ar_mask.append(
                 einops.repeat(
-                    jnp.array([False] * image_tokens.shape[1]),
+                    jnp.array([False] * image_tokens.shape[0]),
                     "b -> b s",
                     s=image_tokens.shape[1],
                 )
