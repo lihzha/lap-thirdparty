@@ -109,29 +109,21 @@ def preprocess_observation(
     for key in image_keys:
         image = observation.images[key]
 
-        if len(image.shape) == 4:
-            image = image[:, None]
-
-        b, t, h, w, c = image.shape
+        b, h, w, c = image.shape
 
         # Resize if needed (before augmentation)
         if (h, w) != image_resolution:
             logger.info(f"Resizing image {key} from {(h, w)} to {image_resolution}")
             # Process each frame
-            frames_resized = []
-            for i in range(t):
-                frame_resized = image_tools.resize_with_pad(image[:, i], *image_resolution)
-                frames_resized.append(frame_resized)
-            image = jnp.stack(frames_resized, axis=1)  # [b, t, h', w', c]
+            image = image_tools.resize_with_pad(image, *image_resolution)
 
         if train:
             # Augmentation: apply to each frame independently
             # Flatten: [b*t, h, w, c]
             h_new, w_new = image_resolution
-            image_flat = image.reshape(b * t, h_new, w_new, c)
 
             # Convert to [0, 1]
-            image_flat = image_flat / 2.0 + 0.5
+            image = image / 2.0 + 0.5
 
             # Build transforms
             transforms = []
@@ -151,24 +143,14 @@ def preprocess_observation(
             transforms += [augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)]
 
             # Apply augmentation
-            sub_rngs = jax.random.split(rng, b * t)
-            image_flat_aug = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image_flat)
+            sub_rngs = jax.random.split(rng, b)
+            image_aug = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
 
             # Skip augmentation for VQA samples if vqa_mask is provided
-            if vqa_mask is not None:
-                # Expand vqa_mask to [b, t] and then flatten to [b*t]
-                vqa_mask_expanded = jnp.repeat(vqa_mask[:, None], t, axis=1)  # [b, t]
-                vqa_mask_flat = vqa_mask_expanded.reshape(b * t)  # [b*t]
-                # Where vqa_mask is True, keep original; otherwise use augmented
-                image_flat = jnp.where(vqa_mask_flat[:, None, None, None], image_flat, image_flat_aug)
-            else:
-                image_flat = image_flat_aug
+            image = jnp.where(vqa_mask[:, None, None, None], image, image_aug) if vqa_mask is not None else image_aug
 
             # Back to [-1, 1]
-            image_flat = image_flat * 2.0 - 1.0
-
-            # Reshape: [b, t, h', w', c]
-            image = image_flat.reshape(b, t, h_new, w_new, c)
+            image = image * 2.0 - 1.0
 
         out_images[key] = image
 
