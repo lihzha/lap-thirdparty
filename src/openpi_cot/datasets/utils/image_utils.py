@@ -94,7 +94,7 @@ def make_decode_images_fn(
             # Set explicit shape for downstream processing
             if resize_to is not None:
                 h, w = resize_to
-                decoded_frames.set_shape([None, h, w, 3])
+                decoded_frames.set_shape([h, w, 3])
             return decoded_frames
         if rank == 4:  # [T, H, W, C] - already decoded with time dimension
             # Apply resize if needed (shouldn't normally happen in this path)
