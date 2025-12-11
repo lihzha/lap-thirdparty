@@ -154,7 +154,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         if not is_vqa_sample and reasoning is not None:
             for i in range(start_idx, end_idx):
-                piece = tokens[i]
+                piece = self._tokenizer.id_to_piece(tokens[i])
                 if piece:
                     if is_number(piece):
                         number_mask[i] = True
