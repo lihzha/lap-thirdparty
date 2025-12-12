@@ -84,11 +84,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     wrist_image = parse_image(data["observation"][k])
                     wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
 
-                    breakpoint()
-
                     # Rotate wrist image by 180 degrees for specific datasets
                     if needs_wrist_rotation and wrist_image_mask:
-                        wrist_image = np.stack([np.rot90(img, k=2) for img in wrist_image], axis=0)
+                        wrist_image = np.rot90(wrist_image, k=2)
                 else:
                     wrist_image = np.zeros_like(base_image)
                     wrist_image_mask = np.False_
