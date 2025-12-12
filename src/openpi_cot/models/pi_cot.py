@@ -22,6 +22,27 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
 
 
+def log_attention_mask_wandb(mask, name="attention_mask"):
+    """
+    mask: array-like of shape (L, L), bool or {0,1}
+    Logs True=white, False=black to Weights & Biases.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import wandb
+
+    mask = np.asarray(mask, dtype=float)
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    ax.imshow(mask, cmap="gray", vmin=0, vmax=1, interpolation="nearest")
+    ax.set_xlabel("Key positions")
+    ax.set_ylabel("Query positions")
+    ax.set_title(name)
+
+    wandb.log({name: wandb.Image(fig)})
+    plt.close(fig)
+
+
 class PiCoT(_pi0.Pi0):
     EOS_TOKEN: int = 1
 
@@ -353,6 +374,7 @@ class PiCoT(_pi0.Pi0):
             suffix_inputs["suffix_mask"] if self.enable_action_training else None,
             suffix_inputs["suffix_ar_mask"] if self.enable_action_training else None,
         )
+        breakpoint()
         combined_positions = self._build_combined_positions(
             prefix_mask, prefix_mask_action, suffix_inputs["suffix_mask"] if self.enable_action_training else None
         )
