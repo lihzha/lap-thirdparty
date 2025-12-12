@@ -427,7 +427,7 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     log_util.log_mem("Before getting batch")
     batch = next(data_iter)
-    vis_tools.vis_batch(batch, tok=tok)
+    vis_tools.vis_batch(batch, tok=tok, step=0)
     log_util.log_mem("After getting batch")
     logging.info("Successfully initialized dataloader and retrieved first batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
