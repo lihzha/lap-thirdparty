@@ -267,7 +267,6 @@ class BaseVQADataset(SingleCoTDataset):
                 "is_prediction_sample": tf.constant(False, dtype=tf.bool),
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
                 "raw_state": tf.zeros([self.action_dim], dtype=tf.float32),
-                "valid_language_length": tf.constant(0, dtype=tf.int32),
             }
 
             return output
@@ -290,21 +289,7 @@ class BaseVQADataset(SingleCoTDataset):
 
             # Create dummy language_actions (empty serialized tensors)
             # Use 30 to match robot datasets' default summation_steps
-            summation_steps = getattr(self.config, "summation_steps", 30)
-            dummy_tensor = tf.zeros([self.action_dim], dtype=tf.float32)
-            serialized = tf.io.serialize_tensor(dummy_tensor)
-            example["language_actions"] = tf.repeat(serialized, summation_steps)
-
-            # Single frame: [H, W, 3] -> [1, H, W, 3]
-            example["observation"][self.spec.primary_image_key] = tf.expand_dims(
-                example["observation"][self.spec.primary_image_key], axis=0
-            )
-            example["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-                example["observation"][self.spec.wrist_image_key], axis=0
-            )
-            example["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                example["observation"][self.spec.wrist_image_right_key], axis=0
-            )
+            example["language_actions"] = tf.zeros([7], dtype=tf.float32)
 
             return example
 
