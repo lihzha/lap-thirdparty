@@ -374,7 +374,6 @@ class PiCoT(_pi0.Pi0):
             suffix_inputs["suffix_mask"] if self.enable_action_training else None,
             suffix_inputs["suffix_ar_mask"] if self.enable_action_training else None,
         )
-        breakpoint()
         combined_positions = self._build_combined_positions(
             prefix_mask, prefix_mask_action, suffix_inputs["suffix_mask"] if self.enable_action_training else None
         )
