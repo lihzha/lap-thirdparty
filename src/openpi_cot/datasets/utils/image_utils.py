@@ -106,7 +106,7 @@ def make_decode_images_fn(
     def _decode_frame(traj: dict) -> dict:
         traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
         traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
-        traj["observation"][wrist_right_key] = _decode_single(traj["observation"][wrist_right_key])
+        # traj["observation"][wrist_right_key] = _decode_single(traj["observation"][wrist_right_key])
 
         return traj
 
