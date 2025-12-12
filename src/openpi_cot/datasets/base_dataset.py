@@ -408,7 +408,7 @@ class SingleCoTDataset:
             )  # [T, summation_steps, A]
 
             prediction_lang_actions = sum_actions(actions_window, deltas_clamped)  # [T, action_dim]
-            prediction_lang_actions.set_shape([None, self.action_dim])
+            prediction_lang_actions.set_shape([None, traj["raw_action"].shape[-1]])
 
             traj["prediction_language_actions"] = prediction_lang_actions
             traj["prediction_delta"] = deltas

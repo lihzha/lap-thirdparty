@@ -411,7 +411,7 @@ def main(config: _config.TrainConfig):
     sharding.log_param_sharding_planned(train_state_sharding)
     sharding.log_param_sharding_actual(train_state.params)
 
-    data_loader = _data_loader.create_data_loader(
+    data_loader: _data_loader.CoTRLDSDataLoader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
         shuffle=True,
