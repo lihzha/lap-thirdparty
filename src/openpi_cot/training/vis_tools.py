@@ -1061,7 +1061,7 @@ def vis_batch(batch, tok=None, step=None):
         num_samples = img.shape[0]
         sample_images = []
         for t in range(min(num_samples, 4)):  # Log up to 4 samples
-            sample_img = img[t, 0]  # [H, W, C]
+            sample_img = img[t]  # [H, W, C]
 
             # Convert from [-1, 1] to [0, 255]
             sample_img_uint8 = ((sample_img + 1.0) / 2.0 * 255.0).clip(0, 255).astype(np.uint8)

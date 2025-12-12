@@ -432,8 +432,6 @@ def main(config: _config.TrainConfig):
     logging.info("Successfully initialized dataloader and retrieved first batch")
     logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
     sharding.log_batch_sharding(batch)
-
-    breakpoint()
     # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
     dataloader_restored = False
     if resuming:
@@ -449,14 +447,12 @@ def main(config: _config.TrainConfig):
     start_step = int(train_state.step)
 
     train_runner = TrainingStepRunner(config)
-    # ptrain_step = jax.jit(
-    #     train_runner,
-    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-    #     out_shardings=(train_state_sharding, replicated_sharding),
-    #     donate_argnums=(1,),
-    # )
-
-    ptrain_step = train_runner
+    ptrain_step = jax.jit(
+        train_runner,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(train_state_sharding, replicated_sharding),
+        donate_argnums=(1,),
+    )
 
     if config.use_validation:
         hash_tables_cache = data_loader.dataset.hash_tables
