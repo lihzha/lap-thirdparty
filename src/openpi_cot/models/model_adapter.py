@@ -62,16 +62,16 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
         def getk(k):
             return data.get(k, cot_src.get(k, None))
 
-        # Process images: normalize to [-1, 1]
-        images_processed = {}
-        for k, v in data_dict["image"].items():
-            if v is not None:
-                # Handle both [B, H, W, C] and [B, T, H, W, C]
-                images_processed[k] = v.astype(np.float32) / 255.0 * 2.0 - 1.0
+        # # Process images: normalize to [-1, 1]
+        # images_processed = {}
+        # for k, v in data_dict["image"].items():
+        #     if v is not None:
+        #         # Handle both [B, H, W, C] and [B, T, H, W, C]
+        #         images_processed[k] = v.astype(np.float32) / 255.0 * 2.0 - 1.0
 
         # Construct subclass using base fields
         base_dict = dataclasses.asdict(base)
-        base_dict["images"] = images_processed
+        # base_dict["images"] = images_processed
 
         return cls(
             **base_dict,
