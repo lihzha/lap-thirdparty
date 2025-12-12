@@ -68,6 +68,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 if new == "primary":
                     img_key = self.spec.primary_image_key
                 elif new == "wrist_right":
+                    continue
                     img_key = self.spec.wrist_image_right_key
                 elif new == "wrist":
                     img_key = self.spec.wrist_image_key

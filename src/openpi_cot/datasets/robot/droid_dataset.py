@@ -139,7 +139,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 # Empty strings will be decoded to zero images later, matching the decoded image shape
             else:
                 _return_dict["observation"][self.spec.wrist_image_key] = tf.repeat("", traj_len)
-            _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
+            # _return_dict["observation"][self.spec.wrist_image_right_key] = tf.repeat("", traj_len)
 
             return _return_dict
 

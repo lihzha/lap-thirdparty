@@ -378,20 +378,15 @@ class SingleCoTDataset:
                 [current_imgs, future_imgs], axis=1
             )  # [T, 2, H, W, C]
 
-            # # Wrist image: single frame only
-            # traj["observation"][self.spec.wrist_image_key] = tf.expand_dims(
-            #     traj["observation"][self.spec.wrist_image_key], axis=1
-            # )  # [T, 1, H, W, C]
+            # # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
+            # if self.spec.wrist_image_right_key in traj["observation"]:
+            #     # traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
+            #     #     traj["observation"][self.spec.wrist_image_right_key], axis=1
+            #     # )  # [T, 1, H, W, C]
 
-            # Right wrist image: single frame only (for all datasets - bimanual and non-bimanual)
-            if self.spec.wrist_image_right_key in traj["observation"]:
-                # traj["observation"][self.spec.wrist_image_right_key] = tf.expand_dims(
-                #     traj["observation"][self.spec.wrist_image_right_key], axis=1
-                # )  # [T, 1, H, W, C]
-
-                traj["observation"][self.spec.wrist_image_right_key] = tf.stack(
-                    [current_imgs, future_imgs], axis=1
-                )  # [T, 2, H, W, C]
+            #     traj["observation"][self.spec.wrist_image_right_key] = tf.stack(
+            #         [current_imgs, future_imgs], axis=1
+            #     )  # [T, 2, H, W, C]
 
             # Numeric case: Use 2D gather with variable-length windows (more efficient than tf.map_fn)
             # Use realized_deltas (not original deltas) to ensure we only gather valid actions
@@ -496,10 +491,10 @@ class SingleCoTDataset:
 
             # Get frame 0 and frame 1 for both cameras
             # After flattening, images have shape [t, H, W, C] where t=2 for prediction-enabled
-            primary_frame0 = sample["observation"][self.spec.primary_image_key][0:1]  # [1, H, W, C]
-            primary_frame1 = sample["observation"][self.spec.primary_image_key][1:2]  # [1, H, W, C]
-            wrist_frame0 = sample["observation"][self.spec.wrist_image_key][0:1]  # [1, H, W, C]
-            wrist_frame1 = sample["observation"][self.spec.wrist_image_key][1:2]  # [1, H, W, C]
+            primary_frame0 = sample["observation"][self.spec.primary_image_key][0]  # [H, W, C]
+            primary_frame1 = sample["observation"][self.spec.primary_image_key][1]  # [H, W, C]
+            wrist_frame0 = sample["observation"][self.spec.wrist_image_key][0]  # [H, W, C]
+            wrist_frame1 = sample["observation"][self.spec.wrist_image_key][1]  # [H, W, C]
 
             # Swap frames based on camera choice
             def use_primary_camera():
@@ -525,12 +520,12 @@ class SingleCoTDataset:
             sample["observation"][self.spec.primary_image_key] = final_primary_img
             sample["observation"][self.spec.wrist_image_key] = final_wrist_img
 
-            # Handle right wrist image if present
-            if self.spec.wrist_image_right_key in sample["observation"]:
-                # For now, just use first frame for right wrist
-                sample["observation"][self.spec.wrist_image_right_key] = sample["observation"][
-                    self.spec.wrist_image_right_key
-                ][0:1]
+            # # Handle right wrist image if present
+            # if self.spec.wrist_image_right_key in sample["observation"]:
+            #     # For now, just use first frame for right wrist
+            #     sample["observation"][self.spec.wrist_image_right_key] = sample["observation"][
+            #         self.spec.wrist_image_right_key
+            #     ][0:1]
 
             # Replace prompt with prediction_prompt for prediction samples
             if "prompt" in sample:

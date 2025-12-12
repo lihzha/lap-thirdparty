@@ -250,7 +250,7 @@ class BaseVQADataset(SingleCoTDataset):
             observation = {
                 self.spec.primary_image_key: image_encoded,
                 self.spec.wrist_image_key: tf.constant("", dtype=tf.string),
-                self.spec.wrist_image_right_key: tf.constant("", dtype=tf.string),
+                # self.spec.wrist_image_right_key: tf.constant("", dtype=tf.string),
                 "state": tf.zeros([self.action_dim], dtype=tf.float32),
             }
 
