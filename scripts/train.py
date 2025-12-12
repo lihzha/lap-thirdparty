@@ -380,28 +380,6 @@ def main(config: _config.TrainConfig):
     logging.info("Data sharding spec: %s", sharding.format_sharding(data_sharding))
     logging.info("Replicated sharding spec: %s", sharding.format_sharding(replicated_sharding))
 
-    data_loader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=True,
-        # seed=config.seed + start_step,
-        seed=config.seed,
-        persistent_iterator=True,
-    )
-    tok = PaligemmaCoTTokenizer(max_len=300)
-
-    # Initialize dataset log tracker for uniform sample logging across datasets
-    dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
-
-    data_iter = iter(data_loader)
-    log_util.log_mem("Before getting batch")
-    batch = next(data_iter)
-    vis_tools.vis_batch(batch, tok=tok)
-    log_util.log_mem("After getting batch")
-    logging.info("Successfully initialized dataloader and retrieved first batch")
-    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
-    sharding.log_batch_sharding(batch)
-
     checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
         config.checkpoint_dir,
         keep_period=config.keep_period,
@@ -433,6 +411,29 @@ def main(config: _config.TrainConfig):
     sharding.log_param_sharding_planned(train_state_sharding)
     sharding.log_param_sharding_actual(train_state.params)
 
+    data_loader = _data_loader.create_data_loader(
+        config,
+        sharding=data_sharding,
+        shuffle=True,
+        # seed=config.seed + start_step,
+        seed=config.seed,
+        persistent_iterator=True,
+    )
+    tok = PaligemmaCoTTokenizer(max_len=300)
+
+    # Initialize dataset log tracker for uniform sample logging across datasets
+    dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
+
+    data_iter = iter(data_loader)
+    log_util.log_mem("Before getting batch")
+    batch = next(data_iter)
+    vis_tools.vis_batch(batch, tok=tok)
+    log_util.log_mem("After getting batch")
+    logging.info("Successfully initialized dataloader and retrieved first batch")
+    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
+    sharding.log_batch_sharding(batch)
+
+    breakpoint()
     # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
     dataloader_restored = False
     if resuming:
@@ -448,14 +449,14 @@ def main(config: _config.TrainConfig):
     start_step = int(train_state.step)
 
     train_runner = TrainingStepRunner(config)
-    ptrain_step = jax.jit(
-        train_runner,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-        out_shardings=(train_state_sharding, replicated_sharding),
-        donate_argnums=(1,),
-    )
+    # ptrain_step = jax.jit(
+    #     train_runner,
+    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    #     out_shardings=(train_state_sharding, replicated_sharding),
+    #     donate_argnums=(1,),
+    # )
 
-    # ptrain_step = train_runner
+    ptrain_step = train_runner
 
     if config.use_validation:
         hash_tables_cache = data_loader.dataset.hash_tables

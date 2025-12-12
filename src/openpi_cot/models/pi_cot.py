@@ -337,6 +337,7 @@ class PiCoT(_pi0.Pi0):
             vqa_mask=vqa_mask,
         )
 
+        breakpoint()
         # Build prefix for langact/action losses (first frame + text)
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
 

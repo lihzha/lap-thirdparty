@@ -203,8 +203,8 @@ def test_droid_identifier_split_uses_episode_lookup():
 
 def test_oxe_identifier_split_preserves_hash_partitioning():
     dataset_name = "fake_oxe"
-    num_traj = 24
-    val_fraction = 0.25
+    num_traj = 9000
+    val_fraction = 0.03
     split_seed = 21
 
     # Collect the unique identifiers produced before splitting.
@@ -231,6 +231,7 @@ def test_oxe_identifier_split_preserves_hash_partitioning():
         dataset_name=dataset_name,
         num_traj=num_traj,
     )
+    breakpoint()
 
     val_ids = _collect_traj_ids(val_dataset.dataset)
     train_ids = _collect_traj_ids(train_dataset.dataset)
