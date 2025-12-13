@@ -51,6 +51,7 @@ class Config:
     head_dim: int
     lora_configs: dict[str, lora.LoRAConfig] = dataclasses.field(default_factory=dict)
     param_dtype: str = "bfloat16"  # parameter storage dtype
+    stop_grad_expert0_cross: bool = False
 
 
 Variant = Literal["dummy", "gemma_300m", "gemma_300m_lora", "gemma_2b", "gemma_2b_lora"]
@@ -373,6 +374,16 @@ class Attention(nn.Module):
 
         q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
+        stop_cross = getattr(self.configs[0], "stop_grad_expert0_cross", False)
+        token_owner = None
+        if stop_cross:
+            # Track which expert owns each token position so we can stop gradients for cross-expert attention into expert 0.
+            token_owner = []
+            for i, x in enumerate(xs):
+                if x is not None:
+                    token_owner.append(jnp.full((x.shape[0], x.shape[1]), i, dtype=jnp.int32))
+            token_owner = jnp.concatenate(token_owner, axis=1)
+
         q = _apply_rope(q, positions=positions)
         q *= self.configs[0].head_dim ** -0.5
 
@@ -395,13 +406,28 @@ class Attention(nn.Module):
                 f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
             )
 
+        if stop_cross:
+            # Stop gradients when non-zero experts attend to expert 0 (expert 0 -> others is already masked).
+            q_owner = token_owner[:, None, None, :, None]  # B,1,1,T,1
+            k_owner = token_owner[:, None, None, None, :]  # B,1,1,1,S
+            cross_to_expert0 = (q_owner != 0) & (k_owner == 0)
+            logits = jnp.where(cross_to_expert0, jax.lax.stop_gradient(logits), logits)
+
         # big_neg = jnp.finfo(logits.dtype).min
         big_neg = -2.3819763e38  # See gemma/modules.py
         masked_logits = jnp.where(attn_mask[:, :, None, :, :], logits, big_neg)
 
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
 
-        encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
+        if stop_cross:
+            # Detach values from expert 0 when consumed by other experts.
+            probs_cross = probs * cross_to_expert0.astype(probs.dtype)
+            probs_self = probs - probs_cross
+            encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs_self, v) + jnp.einsum(
+                "BKGTS,BSKH->BTKGH", probs_cross, jax.lax.stop_gradient(v)
+            )
+        else:
+            encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs, v)
         encoded = einops.rearrange(encoded, "B T K G H -> B T (K G) H")
 
         out = []

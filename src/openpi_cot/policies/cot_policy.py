@@ -106,8 +106,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
                     # Rotate both images by 180 degrees for specific datasets
                     if needs_wrist_rotation and image_mask:
-                        breakpoint()
-                        image = np.stack([np.rot90(img, k=2) for img in image], axis=0)
+                        image = np.rot90(image, k=2)
                 else:
                     image = np.zeros_like(base_image)
                     image_mask = np.False_
