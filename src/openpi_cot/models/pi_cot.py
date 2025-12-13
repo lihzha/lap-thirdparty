@@ -598,7 +598,7 @@ class PiCoT(_pi0.Pi0):
         )
 
         # prepare decoding -- final logit decodes the first token
-        last_logit = self.PaliGemma.llm(pre_logits[:, -1:], method="decode")
+        last_logit = self.PaliGemma.llm(pre_logits[0][:, -1:], method="decode")
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps), dtype=jnp.int32)
 
         def step(carry):
@@ -634,7 +634,7 @@ class PiCoT(_pi0.Pi0):
                 adarms_cond=[None],
                 deterministic=self.deterministic,
             )
-            last_logit = self.PaliGemma.llm(last_prelogit, method="decode")
+            last_logit = self.PaliGemma.llm(last_prelogit[0], method="decode")
 
             return rng, last_logit, output_tokens, kv_cache, all_eos, step + 1
 
