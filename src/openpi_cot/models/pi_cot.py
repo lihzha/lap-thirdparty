@@ -589,7 +589,7 @@ class PiCoT(_pi0.Pi0):
         # First fill KV cache with the prefix; pad attention to the full cache size for flexible expert-0 decoding.
         prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
         prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
-        prefix_logits, kv_cache = self.PaliGemma.llm(
+        pre_logits, kv_cache = self.PaliGemma.llm(
             [prefix_token_embeddings],
             mask=prefix_attn_mask,
             positions=prefix_positions,
@@ -598,7 +598,7 @@ class PiCoT(_pi0.Pi0):
         )
 
         # prepare decoding -- final logit decodes the first token
-        last_logit = prefix_logits[:, -1:]
+        last_logit = self.PaliGemma.llm(pre_logits[:, -1:], method="decode")
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps), dtype=jnp.int32)
 
         def step(carry):
@@ -626,7 +626,7 @@ class PiCoT(_pi0.Pi0):
                 jnp.arange(cache_size)[None, None, :] >= prefix_start[:, None, None],
                 jnp.arange(cache_size)[None, None, :] < (prefill_size + step + 1),
             )
-            last_logit, kv_cache = self.PaliGemma.llm(
+            last_prelogit, kv_cache = self.PaliGemma.llm(
                 [token_embedding],
                 mask=mask,
                 positions=positions,
@@ -634,6 +634,7 @@ class PiCoT(_pi0.Pi0):
                 adarms_cond=[None],
                 deterministic=self.deterministic,
             )
+            last_logit = self.PaliGemma.llm(last_prelogit, method="decode")
 
             return rng, last_logit, output_tokens, kv_cache, all_eos, step + 1
 
