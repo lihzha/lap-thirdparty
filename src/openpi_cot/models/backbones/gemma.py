@@ -51,7 +51,6 @@ class Config:
     head_dim: int
     lora_configs: dict[str, lora.LoRAConfig] = dataclasses.field(default_factory=dict)
     param_dtype: str = "bfloat16"  # parameter storage dtype
-    stop_action_to_vlm_grad: bool = False
 
 
 Variant = Literal["dummy", "gemma_300m", "gemma_300m_lora", "gemma_2b", "gemma_2b_lora"]
@@ -330,6 +329,7 @@ class Attention(nn.Module):
     """Attention module."""
 
     configs: Sequence[Config]
+    stop_action_to_vlm_grad: bool = False
 
     @nn.compact
     def __call__(self, xs, positions, attn_mask, kv_cache):
@@ -374,9 +374,8 @@ class Attention(nn.Module):
 
         q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
-        stop_cross = getattr(self.configs[0], "stop_action_to_vlm_grad", False)
         token_owner = None
-        if stop_cross:
+        if self.stop_action_to_vlm_grad:
             # Track which expert owns each token position so we can stop gradients for cross-expert attention into expert 0.
             token_owner = []
             for i, x in enumerate(xs):
@@ -406,7 +405,7 @@ class Attention(nn.Module):
                 f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
             )
 
-        if stop_cross:
+        if self.stop_action_to_vlm_grad:
             # Stop gradients when non-zero experts attend to expert 0 (expert 0 -> others is already masked).
             q_owner = token_owner[:, None, None, :, None]  # B,1,1,T,1
             k_owner = token_owner[:, None, None, None, :]  # B,1,1,1,S
@@ -419,7 +418,7 @@ class Attention(nn.Module):
 
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
 
-        if stop_cross:
+        if self.stop_action_to_vlm_grad:
             # Detach values from expert 0 when consumed by other experts.
             probs_cross = probs * cross_to_expert0.astype(probs.dtype)
             probs_self = probs - probs_cross
@@ -455,6 +454,7 @@ class Block(nn.Module):
     """Transformer block."""
 
     configs: tuple[Config, ...]
+    stop_action_to_vlm_grad: bool = False
 
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
@@ -464,7 +464,7 @@ class Block(nn.Module):
         xs = sharding.activation_sharding_constraint(xs)
         drop = nn.Dropout(self.dropout, self.dropout_bdims) if self.dropout else lambda x, _: x
 
-        attn = Attention(configs=self.configs, name="attn")
+        attn = Attention(configs=self.configs, stop_action_to_vlm_grad=self.stop_action_to_vlm_grad, name="attn")
 
         pre_attn = []
         gates = []
@@ -526,10 +526,6 @@ class Module(nn.Module):
     stop_action_to_vlm_grad: bool = False
 
     def setup(self):
-        if self.stop_action_to_vlm_grad and len(self.configs) > 0:
-            cfgs = list(self.configs)
-            cfgs[0] = dataclasses.replace(cfgs[0], stop_action_to_vlm_grad=True)
-            self.configs = tuple(cfgs)
         # all experts must have the same depth
         assert all(config.depth == self.configs[0].depth for config in self.configs)
 
@@ -561,6 +557,7 @@ class Module(nn.Module):
             configs=self.configs,
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
+            stop_action_to_vlm_grad=self.stop_action_to_vlm_grad,
         )
         self.final_norms = [
             RMSNorm(name=_name("final_norm", i), param_dtype=getattr(self.configs[i], "param_dtype", "bfloat16"))
