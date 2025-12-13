@@ -590,10 +590,10 @@ class PiCoT(_pi0.Pi0):
         prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
         prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
         prefix_logits, kv_cache, _ = self.PaliGemma.llm(
-            [prefix_token_embeddings, None],
+            [prefix_token_embeddings],
             mask=prefix_attn_mask,
             positions=prefix_positions,
-            adarms_cond=[None, None],
+            adarms_cond=[None],
             deterministic=self.deterministic,
         )
 
@@ -627,11 +627,11 @@ class PiCoT(_pi0.Pi0):
                 jnp.arange(cache_size)[None, None, :] < (prefill_size + step + 1),
             )
             last_logit, kv_cache, _ = self.PaliGemma.llm(
-                [token_embedding, None],
+                [token_embedding],
                 mask=mask,
                 positions=positions,
                 kv_cache=cache,
-                adarms_cond=[None, None],
+                adarms_cond=[None],
                 deterministic=self.deterministic,
             )
 
