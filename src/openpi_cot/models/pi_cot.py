@@ -591,10 +591,10 @@ class PiCoT(_pi0.Pi0):
         prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
 
-        # # Right-align sequences so padded tokens live on the left.
-        # prefix_token_embeddings, prefix_mask, prefix_attn_mask = _pi0_fast.left_to_right_align(
-        #     prefix_token_embeddings, prefix_mask, prefix_attn_mask
-        # )
+        # Right-align sequences so padded tokens live on the left and we can use prefix_start logic.
+        prefix_token_embeddings, prefix_mask, prefix_attn_mask = _pi0_fast.left_to_right_align(
+            prefix_token_embeddings, prefix_mask, prefix_attn_mask
+        )
         prefill_size = prefix_token_embeddings.shape[1]
         prefill_len = jnp.sum(prefix_mask, axis=-1)
         prefix_start = prefill_size - prefill_len
