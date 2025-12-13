@@ -574,7 +574,7 @@ class PiCoT(_pi0.Pi0):
         )
 
         # Embed only the VLM (expert 0) prefix tokens (images + text).
-        prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_prefix(observation, num_frames=1)
+        prefix_token_embeddings, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
 
         # # Right-align sequences so padded tokens live on the left.
