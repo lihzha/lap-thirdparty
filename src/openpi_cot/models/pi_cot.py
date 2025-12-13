@@ -589,7 +589,7 @@ class PiCoT(_pi0.Pi0):
         # First fill KV cache with the prefix; pad attention to the full cache size for flexible expert-0 decoding.
         prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
         prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
-        prefix_logits, kv_cache, _ = self.PaliGemma.llm(
+        prefix_logits, kv_cache = self.PaliGemma.llm(
             [prefix_token_embeddings],
             mask=prefix_attn_mask,
             positions=prefix_positions,
@@ -626,7 +626,7 @@ class PiCoT(_pi0.Pi0):
                 jnp.arange(cache_size)[None, None, :] >= prefix_start[:, None, None],
                 jnp.arange(cache_size)[None, None, :] < (prefill_size + step + 1),
             )
-            last_logit, kv_cache, _ = self.PaliGemma.llm(
+            last_logit, kv_cache = self.PaliGemma.llm(
                 [token_embedding],
                 mask=mask,
                 positions=positions,
