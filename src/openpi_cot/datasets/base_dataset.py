@@ -282,47 +282,38 @@ class SingleCoTDataset:
         def chunk_actions(traj):
             """Splits episode into action chunks with proper zero-padding."""
             traj_len = tf.shape(traj[action_key])[0]
+            timestep_ids = tf.range(traj_len, dtype=tf.int32)
+            remaining = tf.maximum(traj_len - timestep_ids, 1)
+            control_window = tf.constant(self.control_frequency, dtype=tf.int32)
+            action_horizon_tf = tf.constant(action_horizon, dtype=tf.int32)
+            effective_window = tf.minimum(control_window, action_horizon_tf)
+            valid_lengths = tf.minimum(effective_window, remaining)
+            per_timestep_windows = tf.fill(tf.shape(timestep_ids), effective_window)
 
             # Use unified gather function with proper zero-padding
             traj[action_key] = gather_with_padding(
                 data=traj[action_key],
                 sequence_length=traj_len,
+                per_timestep_windows=per_timestep_windows,
                 window_size=action_horizon,
             )
             # Ensure static shape is preserved: [T, action_horizon, action_dim]
             traj[action_key].set_shape([None, action_horizon, self.action_dim])
-            return traj
 
-        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
-
-        def group_language_actions(traj):
-            """Compute per-timestep summed language actions over future steps.
-
-            For each timestep t, we sum the language actions from t to
-            t + summation_steps - 1 (capped at trajectory end). We DO NOT
-            chunk the language actions; after flattening, each sample will
-            have a single language string aligned to its action chunk.
-            """
-            traj_len = tf.shape(traj[action_key])[0]
-            timestep_ids = tf.range(traj_len, dtype=tf.int32)
-            remaining = tf.maximum(traj_len - timestep_ids, 1)
-            window_size = tf.constant(self.control_frequency, dtype=tf.int32)
-            valid_lengths = tf.minimum(window_size, remaining)
-
-            # Always gather summation_steps actions (without trimming to control_frequency)
+            # Gather actions up to the effective control window (clamped by action_horizon)
             # The gather function will handle padding if we reach the end of trajectory
             actions_window = gather_with_padding(
                 data=traj["raw_action"],
                 sequence_length=traj_len,
-                window_size=self.control_frequency,
-            )  # [T, summation_steps, A]
+                window_size=effective_window,
+            )  # [T, effective_window, A]
 
             traj["language_actions"] = sum_actions(actions_window, valid_lengths)
             traj["language_actions"].set_shape([None, traj["raw_action"].shape[-1]])
 
             return traj
 
-        self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
+        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
         def add_prediction_pairs(traj):
             """Add prediction frame pairs and corresponding language actions.

@@ -284,12 +284,13 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
     """
     tokens = _utils.to_local_array(obs.tokenized_prompt)
     rmask = _utils.to_local_array(obs.tokenized_prompt_mask)
+    langact_mask = _utils.to_local_array(obs.tokenized_langact_mask)
     texts: list[str] = []
     lang_acts: list[str] = []
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
         text = tokenizer.decode(sel.astype(np.int32))
-        lang_act = tokens[i][~rmask[i].astype(bool)]
+        lang_act = tokens[i][langact_mask[i].astype(bool)]
         lang_act = tokenizer.decode(lang_act.astype(np.int32))
         lang_acts.append(lang_act)
         texts.append(text)
@@ -963,8 +964,7 @@ def eval_step(
         k_decode = int(min(k_local, ids.shape[0], len(gt_texts)))
         pred_texts: list[str] = []
         for bi in range(k_decode):
-            breakpoint()
-            seq = ids[bi, :, 0].astype(np.int32)
+            seq = ids[bi, :].astype(np.int32)
             pred_texts.append(tok.decode(seq))
 
         # Compute L2 metric over parsed movement vectors (in cm)

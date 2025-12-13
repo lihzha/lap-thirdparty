@@ -601,6 +601,8 @@ class PiCoT(_pi0.Pi0):
         last_logit = self.PaliGemma.llm(pre_logits[0][:, -1:], method="decode")
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps), dtype=jnp.int32)
 
+        breakpoint()
+
         def step(carry):
             rng, last_logit, output_tokens, cache, _, step = carry
 
