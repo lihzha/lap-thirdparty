@@ -51,7 +51,7 @@ class Config:
     head_dim: int
     lora_configs: dict[str, lora.LoRAConfig] = dataclasses.field(default_factory=dict)
     param_dtype: str = "bfloat16"  # parameter storage dtype
-    stop_grad_expert0_cross: bool = False
+    stop_action_to_vlm_grad: bool = False
 
 
 Variant = Literal["dummy", "gemma_300m", "gemma_300m_lora", "gemma_2b", "gemma_2b_lora"]
@@ -374,7 +374,7 @@ class Attention(nn.Module):
 
         q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
-        stop_cross = getattr(self.configs[0], "stop_grad_expert0_cross", False)
+        stop_cross = getattr(self.configs[0], "stop_action_to_vlm_grad", False)
         token_owner = None
         if stop_cross:
             # Track which expert owns each token position so we can stop gradients for cross-expert attention into expert 0.
@@ -523,8 +523,13 @@ class Module(nn.Module):
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()  # Every float is dropped independently.
     adarms: bool = False
+    stop_action_to_vlm_grad: bool = False
 
     def setup(self):
+        if self.stop_action_to_vlm_grad and len(self.configs) > 0:
+            cfgs = list(self.configs)
+            cfgs[0] = dataclasses.replace(cfgs[0], stop_action_to_vlm_grad=True)
+            self.configs = tuple(cfgs)
         # all experts must have the same depth
         assert all(config.depth == self.configs[0].depth for config in self.configs)
 
