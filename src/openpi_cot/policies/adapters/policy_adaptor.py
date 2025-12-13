@@ -15,9 +15,9 @@ class CoTPolicy:
 
     def __init__(self, base: _policy.Policy, *, sample_kwargs: dict[str, Any] | None = None):
         self._base = base
-        assert hasattr(base._model, "sample_reasoning"), "Model must have a sample_reasoning method"  # noqa: SLF001
-        self._sample_reasoning = nnx_utils.module_jit(base._model.sample_reasoning)
-        # self._sample_reasoning = base._model.sample_reasoning
+        assert hasattr(base._model, "sample_tokens"), "Model must have a sample_tokens method"  # noqa: SLF001
+        self._sample_tokens = nnx_utils.module_jit(base._model.sample_tokens)
+        # self._sample_tokens = base._model.sample_tokens
 
     def __getattr__(self, name: str):
         return getattr(self._base, name)
@@ -31,7 +31,7 @@ class CoTPolicy:
 
         start_time = time.monotonic()
         self._rng, _ = jax.random.split(self._base._rng)  # noqa: SLF001
-        logits, t = self._sample_reasoning(CoTObservation.from_dict(inputs))
+        logits, t = self._sample_tokens(CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],
             "actions": jnp.zeros((1, 1, 32)),  # TODO

@@ -192,9 +192,9 @@ class RolloutEvaluator:
         observation, _ = batch
 
         # Sample language action tokens
-        id_buf, t_final = model.sample_reasoning(observation)
+        output_tokens = model.sample_tokens(observation)
 
-        return id_buf, t_final
+        return output_tokens
 
 
 class TokenVisualizationEvaluator:
@@ -321,8 +321,7 @@ def main(config: _config.TrainConfig):
         checkpoint_step_to_load = config.eval_checkpoint_step
         if checkpoint_step_to_load not in available_steps:
             raise ValueError(
-                f"Requested checkpoint step {checkpoint_step_to_load} not found. "
-                f"Available steps: {available_steps}"
+                f"Requested checkpoint step {checkpoint_step_to_load} not found. Available steps: {available_steps}"
             )
         logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
 
@@ -582,12 +581,12 @@ def evaluate_rollout(
             eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
 
             # Run rollout evaluation
-            id_buf, t_final = peval_step(eval_rng, train_state, eval_batch_replicated)
+            output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
 
             # Process results on host
             if jax.process_index() == 0:
                 k_local = min(config.batch_size, batch[0].state.shape[0])
-                l2_cm_values, to_log = vis_tools.eval_step(batch, id_buf, t_final, tokenizer, k_local)
+                l2_cm_values, to_log = vis_tools.eval_step(batch, output_tokens, tokenizer, k_local)
 
                 if l2_cm_values:
                     l2_cm_values_all.extend(l2_cm_values)

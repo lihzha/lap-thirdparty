@@ -595,7 +595,6 @@ class PiCoT(_pi0.Pi0):
             positions=prefix_positions,
             adarms_cond=[None, None],
             deterministic=self.deterministic,
-            logits_expert=0,
         )
 
         # prepare decoding -- final logit decodes the first token
@@ -634,7 +633,6 @@ class PiCoT(_pi0.Pi0):
                 kv_cache=cache,
                 adarms_cond=[None, None],
                 deterministic=self.deterministic,
-                logits_expert=0,
             )
 
             return rng, last_logit, output_tokens, kv_cache, all_eos, step + 1

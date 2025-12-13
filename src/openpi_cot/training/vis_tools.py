@@ -947,8 +947,7 @@ def _draw_line(
 
 def eval_step(
     gt_batch: tuple[CoTObservation, _model.Actions],
-    id_buf: jax.Array,
-    t_final: jax.Array,
+    output_tokens: jax.Array,
     tok: PaligemmaCoTTokenizer,
     k_local: int,
     vis_dataset: bool = False,
@@ -959,14 +958,13 @@ def eval_step(
     if jax.process_index() == 0:
         _, gt_texts = _decode_reasoning_strings(gt_batch[0], tok)
         # Decode sampled reasoning tokens
-        ids = _utils.to_local_array(id_buf)
-        # Be robust to bounds: clamp final index
-        t_host = int(np.clip(_utils.to_local_scalar(t_final), 0, ids.shape[1] - 1))
+        ids = _utils.to_local_array(output_tokens)
         # Derive safe local loop bound across all sources
         k_decode = int(min(k_local, ids.shape[0], len(gt_texts)))
         pred_texts: list[str] = []
         for bi in range(k_decode):
-            seq = ids[bi, : t_host + 1, 0].astype(np.int32)
+            breakpoint()
+            seq = ids[bi, :, 0].astype(np.int32)
             pred_texts.append(tok.decode(seq))
 
         # Compute L2 metric over parsed movement vectors (in cm)

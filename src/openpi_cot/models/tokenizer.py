@@ -196,7 +196,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         prompt: str,
         state: np.ndarray,
         actions: np.ndarray | None = None,
-        reasoning: str | None = None,
         state_type: str | None = None,
         *,
         is_vqa_sample: bool = False,
