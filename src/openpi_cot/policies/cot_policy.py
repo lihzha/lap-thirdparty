@@ -182,6 +182,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 mask = action_chunk_mask
                 while mask.ndim < actions.ndim:
                     mask = np.expand_dims(mask, axis=-1)
+                breakpoint()
+
                 actions = np.asarray(actions) * mask.astype(actions.dtype)
             inputs["actions"] = np.array(actions)
         if action_chunk_mask is not None:
