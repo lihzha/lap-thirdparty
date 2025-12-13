@@ -253,7 +253,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
 
         tokens = prefix_tokens + postfix_tokens
         token_mask = [True] * len(tokens)
-        ar_mask = [0] * len(prefix_tokens) + [1] * len(postfix_tokens)
+        ar_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
         loss_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
 
         if len(tokens) > self._max_len:
@@ -271,11 +271,11 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         if pad_count > 0:
             tokens = tokens + [pad_id] * pad_count
             token_mask = token_mask + [False] * pad_count
-            ar_mask = ar_mask + [0] * pad_count
+            ar_mask = ar_mask + [False] * pad_count
             loss_mask = loss_mask + [False] * pad_count
 
         return (
-            np.asarray(tokens, dtype=np.int32),
+            np.asarray(tokens),
             np.asarray(token_mask),
             np.asarray(ar_mask),
         )
