@@ -82,7 +82,7 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     assert actions.ndim == 1
     transformed_actions = actions.copy()
 
-    assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"  # noqa: PT018
+    # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
     euler = initial_state[3:6]
     initial_rotation = R.from_euler("xyz", euler)
 

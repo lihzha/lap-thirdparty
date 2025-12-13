@@ -50,7 +50,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             schema = get_language_action_format(self.language_action_format)
             object.__setattr__(self, "language_action_format", schema)
 
-    def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
+    def _prepare_inputs(self, data: dict, initial_state: np.ndarray | None = None) -> tuple[dict, dict]:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
         assert "observation" in data
         assert IMAGE_KEYS[0] in data["observation"]
@@ -171,6 +171,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         #     inputs["state_type"] = "eef_pose"
 
         if "actions" in data:
+            if self.language_action_format.use_eef_frame and initial_state is not None:
+                actions = transform_actions_to_eef_frame(data["actions"], initial_state)
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
 
@@ -204,7 +206,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
         # stores as float32 (C,H,W), gets skipped for policy inference
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
-        inputs = self._prepare_inputs(data)
+        # Extract initial state for EEF frame transformation
+        initial_state = None
+        if self.language_action_format.use_eef_frame:
+            initial_state = np.asarray(data["raw_state"])
+
+        inputs = self._prepare_inputs(data, initial_state=initial_state)
 
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)
         dataset_name = data.get("dataset_name")
@@ -236,11 +243,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # Regular robot dataset processing
         if self.language_action_format.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
-
-        # Extract initial state for EEF frame transformation
-        initial_state = None
-        if self.language_action_format.use_eef_frame and "observation" in data and "state" in data["observation"]:
-            initial_state = np.asarray(data["raw_state"])
 
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data and self.enable_langact_training:
