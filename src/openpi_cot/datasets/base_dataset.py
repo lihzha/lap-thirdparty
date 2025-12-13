@@ -300,6 +300,12 @@ class SingleCoTDataset:
             # Ensure static shape is preserved: [T, action_horizon, action_dim]
             traj[action_key].set_shape([None, action_horizon, self.action_dim])
 
+            # Track which steps contain real actions (True) vs padding (False)
+            mask_positions = tf.range(action_horizon, dtype=tf.int32)
+            chunk_mask = mask_positions[None, :] < valid_lengths[:, None]
+            traj["action_chunk_mask"] = tf.cast(chunk_mask, tf.bool)
+            traj["action_chunk_mask"].set_shape([None, action_horizon])
+
             # Gather actions up to the effective control window (clamped by action_horizon)
             # The gather function will handle padding if we reach the end of trajectory
             actions_window = gather_with_padding(
