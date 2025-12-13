@@ -375,7 +375,7 @@ def main(config: _config.TrainConfig):
         config,
         sharding=data_sharding,
         shuffle=False,
-        split="val",
+        split="train",
         seed=config.seed,
         max_samples=getattr(config.data, "val_max_samples", None),
     )
