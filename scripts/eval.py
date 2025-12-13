@@ -193,7 +193,7 @@ class RolloutEvaluator:
         observation, _ = batch
 
         # Sample language action tokens
-        output_tokens = model.sample_tokens(observation)
+        output_tokens = model.sample_tokens(rng, observation)
 
         return output_tokens
 
