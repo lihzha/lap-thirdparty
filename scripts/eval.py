@@ -547,7 +547,7 @@ def evaluate_rollout(
     peval_step = jax.jit(
         evaluator,
         in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
-        out_shardings=(replicated_sharding, replicated_sharding),
+        out_shardings=(replicated_sharding),
     )
 
     # Get tokenizer for decoding

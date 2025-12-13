@@ -20,7 +20,6 @@ from openpi_cot.datasets.utils.helpers import StateEncoding
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.shared.adapters.normalize_adapter import check_dataset_statistics
 from openpi_cot.shared.adapters.normalize_adapter import get_dataset_statistics
-from openpi_cot.transforms import NormalizeActionAndProprio
 
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
@@ -46,7 +45,6 @@ class SingleCoTDataset:
         shuffle: bool = False,
         batch_size: int = 1,
         max_samples: int | None = None,
-        skip_normalization: bool = False,
         enable_prediction_training: bool = False,
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
@@ -60,7 +58,6 @@ class SingleCoTDataset:
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.use_wrist_image = bool(config.use_wrist_image)
         self.standalone = standalone
-        self.skip_normalization = skip_normalization
         self.enable_prediction_training = enable_prediction_training
         self.pred_prob = pred_prob
         self.primary_pred_prob = primary_pred_prob
@@ -250,16 +247,6 @@ class SingleCoTDataset:
         - drop_goal_or_instruction
         - subsample_length
         """
-        if not self.skip_normalization and not self.vis_dataset:
-            self.dataset = self.dataset.traj_map(
-                NormalizeActionAndProprio(
-                    norm_stats=self.dataset_statistics,
-                    normalization_type=self.action_proprio_normalization_type,
-                    action_key=action_key,
-                    state_key=state_key,
-                ),
-                self.num_parallel_calls,
-            )
 
         def pad_action_state(traj):
             # Pad actions to action_dim (only if not already padded)

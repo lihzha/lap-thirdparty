@@ -67,7 +67,6 @@ class BaseVQADataset(SingleCoTDataset):
         shuffle: bool = False,
         batch_size: int = 1,
         max_samples: int | None = None,
-        skip_normalization: bool = False,
         enable_prediction_training: bool = False,
         pred_prob: float | None = None,
         primary_pred_prob: float | None = None,
@@ -84,7 +83,6 @@ class BaseVQADataset(SingleCoTDataset):
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.use_wrist_image = False  # VQA has no wrist images
         self.standalone = standalone
-        self.skip_normalization = skip_normalization
         self.action_horizon = action_horizon
 
         # VQA-specific settings (shared across all VQA datasets)
