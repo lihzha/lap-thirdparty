@@ -747,12 +747,12 @@ def prepare_eval_batch(batch):
         # Since we're removing reasoning, langact_mask should be all False
         langact_mask_cut = jnp.zeros(cut_idx, dtype=jnp.bool_)
 
-        # Left-pad to max_cut_idx
+        # Right-pad to max_cut_idx
         pad_len = max_cut_idx - cut_idx
         if pad_len > 0:
-            prompt_padded = jnp.concatenate([jnp.zeros(pad_len, dtype=prompt_cut.dtype), prompt_cut])
-            prompt_mask_padded = jnp.concatenate([jnp.zeros(pad_len, dtype=jnp.bool_), prompt_mask_cut])
-            langact_mask_padded = jnp.concatenate([jnp.zeros(pad_len, dtype=jnp.bool_), langact_mask_cut])
+            prompt_padded = jnp.concatenate([prompt_cut, jnp.zeros(pad_len, dtype=prompt_cut.dtype)])
+            prompt_mask_padded = jnp.concatenate([prompt_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
+            langact_mask_padded = jnp.concatenate([langact_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
         else:
             prompt_padded = prompt_cut
             prompt_mask_padded = prompt_mask_cut
