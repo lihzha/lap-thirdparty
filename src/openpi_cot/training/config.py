@@ -979,7 +979,9 @@ _CONFIGS = [
     *create_multi_device_configs(
         base_name="pi_combined_fast_cot",
         devices=["v6", "v6europe", "v4", "local"],
-        model=build_picot_model(),
+        model=pi_cot_config.PiCoTConfig(
+            action_dim=7, action_horizon=16, max_token_len=250, pi05=True, discrete_state_input=True, use_fast=True
+        ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
             "repo_id": "combined",
@@ -989,9 +991,7 @@ _CONFIGS = [
             "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
             "shuffle_buffer_size": 400_000,
         },
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
-        ),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         save_interval=2500,
         keep_period=10000,
         resume=True,

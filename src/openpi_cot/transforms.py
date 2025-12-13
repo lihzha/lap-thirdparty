@@ -465,11 +465,6 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             if state is None:
                 raise ValueError("State is required for FAST tokenization.")
 
-        # Get language actions if available (for CoT)
-        language_actions = data.pop("language_actions", None)
-        if language_actions is not None and not isinstance(language_actions, str):
-            language_actions = language_actions.item()
-
         time_horizon_seconds = data.pop("time_horizon_seconds", None)
 
         # Get state type if available
@@ -489,7 +484,6 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             prompt=prompt,
             state=state,
             actions=actions,
-            reasoning=language_actions,
             state_type=state_type,
             is_vqa_sample=is_vqa_sample,
             is_prediction_sample=is_prediction_sample,

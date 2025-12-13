@@ -35,6 +35,7 @@ class PiCoTConfig(_model.BaseModelConfig):
     discrete_state_input: bool = None
     prompt_format: str = "pi05"
     prediction_format: str = "default"
+    use_fast: bool = False
 
     aug_wrist_image: bool = True
     # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
@@ -76,6 +77,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     @property
     @override
     def model_type(self) -> ExtendedModelType:
+        if self.use_fast:
+            return ExtendedModelType.PI_FAST
         return ExtendedModelType.PI_COT
 
     @override
