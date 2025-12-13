@@ -179,7 +179,7 @@ class RolloutEvaluator:
         rng: at.KeyArrayLike,
         state: training_utils.TrainState,
         batch: tuple[CoTObservation, _model.Actions],
-    ) -> tuple[jax.Array, jax.Array]:
+    ) -> jax.Array:
         """Sample language action tokens for rollout evaluation.
 
         Returns:

@@ -24,8 +24,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     action_expert_variant: _gemma.Variant = "gemma_300m"
 
     # Set the model specific defaults.
-    action_dim: int = 32
-    action_horizon: int = 50
+    action_dim: int = 7
+    action_horizon: int = 16
     max_token_len: int = None
 
     # if verbose_mode=True, log per sample metrics
