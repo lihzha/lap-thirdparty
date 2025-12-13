@@ -374,7 +374,7 @@ def main(config: _config.TrainConfig):
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
-        shuffle=False,
+        shuffle=True,
         split="train",
         seed=config.seed,
         max_samples=getattr(config.data, "val_max_samples", None),
