@@ -485,7 +485,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
         actions = data.get("actions")
 
         # Tokenize using the FAST CoT tokenizer
-        tokens, token_mask, ar_mask, loss_mask = self.tokenizer.tokenize_fast_cot(
+        tokens, token_mask, ar_mask = self.tokenizer.tokenize_fast_cot(
             prompt=prompt,
             state=state,
             actions=actions,
@@ -500,9 +500,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             **data,
             "tokenized_prompt": tokens,
             "tokenized_prompt_mask": token_mask,
-            "token_ar_mask": ar_mask,
-            "token_loss_mask": loss_mask,  # For compatibility with CoT models
-            "tokenized_langact_mask": token_mask,  # only for vis_oxe_dataset
+            "tokenized_langact_mask": ar_mask,
         }
 
 

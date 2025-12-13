@@ -189,6 +189,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 class FASTTokenizer(PaligemmaCoTTokenizer):
     def __init__(self, fast_tokenizer_path: str, **kwargs):
         super().__init__(**kwargs)
+        self._fast_skip_tokens = 128  # Skip last 128 tokens in PaliGemma vocab since they are special tokens
         self._fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
 
     def tokenize_fast_cot(
@@ -201,7 +202,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         is_vqa_sample: bool = False,
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Tokenize prompt, language actions (if any), state, and actions for FAST model.
 
         This method combines CoT-style reasoning with FAST-style action token prediction:
@@ -243,17 +244,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
 
         prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
-        # # TODO: ignore language actions for now
-        # reasoning_start = len(tokens)
-
-        # # Add language actions if provided
-        # if reasoning is not None:
-        #     clean_reason = reasoning.strip().replace("_", " ").replace("\n", " ")
-        #     reasoning_tokens = self._tokenizer.encode(clean_reason, add_bos=False, add_eos=False)
-        #     tokens += reasoning_tokens
-
-        # reasoning_end = len(tokens)
-
         if actions is not None:
             action_tokens = self._fast_tokenizer(actions[None])[0]
             action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
@@ -276,25 +266,24 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             ar_mask = ar_mask[: self._max_len]
             loss_mask = loss_mask[: self._max_len]
 
-        # Left pad to max length
+        # Right pad to max length
         pad_count = self._max_len - len(tokens)
         if pad_count > 0:
-            tokens = [pad_id] * pad_count + tokens
-            token_mask = [False] * pad_count + token_mask
-            ar_mask = [0] * pad_count + ar_mask
-            loss_mask = [False] * pad_count + loss_mask
+            tokens = tokens + [pad_id] * pad_count
+            token_mask = token_mask + [False] * pad_count
+            ar_mask = ar_mask + [0] * pad_count
+            loss_mask = loss_mask + [False] * pad_count
 
         return (
             np.asarray(tokens, dtype=np.int32),
             np.asarray(token_mask),
             np.asarray(ar_mask),
-            np.asarray(loss_mask),
         )
 
     def _act_tokens_to_paligemma_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
         if isinstance(tokens, list):
             tokens = np.array(tokens)
-        return self._tokenizer.vocab_size() - 1 - 128 - tokens
+        return self._tokenizer.vocab_size() - 1 - self._fast_skip_tokens - tokens
 
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
         # Decode predicted output tokens

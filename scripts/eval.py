@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 from openpi.models import model as _model
 import openpi.shared.array_typing as at
+from openpi.training import optimizer as _optimizer
 from rail_tpu_utils import prevent_cross_region
 import tqdm_loggable.auto as tqdm
 import wandb
@@ -266,17 +267,7 @@ def main(config: _config.TrainConfig):
         async_enable=False,  # No async for evaluation
     )
 
-    data_loader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=False,
-        split="val",
-        seed=config.seed,
-        max_samples=getattr(config.data, "val_max_samples", None),
-    )
-
     # Initialize train state shape and sharding
-    from openpi.training import optimizer as _optimizer
 
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
 
@@ -379,6 +370,15 @@ def main(config: _config.TrainConfig):
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
+
+    data_loader = _data_loader.create_data_loader(
+        config,
+        sharding=data_sharding,
+        shuffle=False,
+        split="val",
+        seed=config.seed,
+        max_samples=getattr(config.data, "val_max_samples", None),
+    )
 
     # Determine number of evaluation batches
     num_eval_batches = config.num_eval_batches
