@@ -34,8 +34,12 @@ class TaskModule:
     """
 
     template: str = "Task: {prompt}"
+    # Whether to include time horizon instruction when provided
+    include_time_horizon: bool = False
+    # Template for time horizon instruction
+    time_horizon_template: str = "predict the robot's actions in the future {time_horizon_seconds} seconds. "
 
-    def format_task(self, prompt: str) -> str:
+    def format_task(self, prompt: str, time_horizon_seconds: float | None = None) -> str:
         """Format task prompt.
 
         Args:
@@ -45,6 +49,10 @@ class TaskModule:
             Formatted task string
         """
         cleaned_prompt = prompt.strip().replace("_", " ").replace("\n", " ").rstrip(".")
+        if self.include_time_horizon:
+            assert time_horizon_seconds is not None, "Time horizon must be provided if include_time_horizon is True"
+            cleaned_prompt += ", "
+            cleaned_prompt += self.time_horizon_template.format(time_horizon_seconds=time_horizon_seconds)
         return self.template.format(prompt=cleaned_prompt)
 
 
@@ -52,19 +60,15 @@ class TaskModule:
 class ActionModule:
     """Module for action prefix that appears before action output.
 
-    Examples:
+    Examples:s
     - "Action: "
 
     Can optionally include time horizon information.
     """
 
     prefix: str = "Action: "
-    # Whether to include time horizon instruction when provided
-    include_time_horizon: bool = True
-    # Template for time horizon instruction
-    time_horizon_template: str = "Predict the robot's actions in the future {time_seconds} seconds. "
 
-    def format_action_prefix(self, time_horizon_seconds: float | None = None) -> str:
+    def format_action_prefix(self) -> str:
         """Return the action prefix, optionally including time horizon.
 
         Args:
@@ -73,18 +77,8 @@ class ActionModule:
         Returns:
             Formatted action prefix string
         """
-        parts = []
 
-        # Add time horizon instruction if provided and enabled
-        if self.include_time_horizon and time_horizon_seconds is not None:
-            # Format time horizon nicely (e.g., 0.5 -> "0.5", 1.0 -> "1", 2.5 -> "2.5")
-            time_str = f"{time_horizon_seconds:.1f}".rstrip("0").rstrip(".")
-            parts.append(self.time_horizon_template.format(time_seconds=time_str))
-
-        # Add the action prefix
-        parts.append(self.prefix)
-
-        return "".join(parts)
+        return self.prefix
 
 
 @dataclasses.dataclass
@@ -139,7 +133,7 @@ class PromptFormat:
 
         # Add task
         if self.task_module is not None:
-            parts.append(self.task_module.format_task(prompt))
+            parts.append(self.task_module.format_task(prompt=prompt, time_horizon_seconds=time_horizon_seconds))
 
         # Add state if module is present
         if self.state_module is not None:
@@ -149,7 +143,7 @@ class PromptFormat:
 
         # Add action prefix (with optional time horizon)
         if self.action_module is not None:
-            parts.append(self.action_module.format_action_prefix(time_horizon_seconds=time_horizon_seconds))
+            parts.append(self.action_module.format_action_prefix())
 
         return self.separator.join(parts)
 
@@ -157,7 +151,7 @@ class PromptFormat:
 # Predefined prompt formats - easily extensible by adding new instances
 PI05_PROMPT_FORMAT = PromptFormat(
     name="pi05",
-    task_module=TaskModule(template="Task: {prompt}"),
+    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=True),
     state_module=StateModule(
         discretization=StateDiscretizationConfig(bins=256, min_dim=7),
         state_prefix_template="State{state_label}: {state}",
@@ -170,14 +164,14 @@ PI05_PROMPT_FORMAT = PromptFormat(
 )
 
 PI05_NOTIME_PROMPT_FORMAT = PromptFormat(
-    name="pi05",
-    task_module=TaskModule(template="Task: {prompt}"),
+    name="pi05_notime",
+    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
     state_module=StateModule(
         discretization=StateDiscretizationConfig(bins=256, min_dim=7),
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(prefix="Action: ", include_time_horizon=False),
+    action_module=ActionModule(prefix="Action: "),
     separator=", ",
     critical_token_checker=checkers.is_critical_directional,
     direction_token_checker=checkers.is_direction_natural,
@@ -246,15 +240,13 @@ GROUPED_STATE_PROMPT_FORMAT = PromptFormat(
 GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
     name="grouped_state_verbose",
     prefix_module=PrefixModule("Predict what is the action that the robot should take"),
-    task_module=TaskModule(template="Task: {prompt}"),
+    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
     state_module=StateModule(
         discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
         state_prefix_template=". Robot current state{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(
-        prefix="Represent the action in robot's end effector frame. Action: ", include_time_horizon=False
-    ),
+    action_module=ActionModule(prefix="Represent the action in robot's end effector frame. Action: "),
     separator=". ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
@@ -275,14 +267,15 @@ NO_STATE_FORMAT = PromptFormat(
 UNIFIED_PROMPT_FORMAT = PromptFormat(
     name="cotrain",
     task_module=TaskModule(
-        template="Task: {prompt}. What actions should the robot take at current step to fulfill the task? Represent the action in robot's end effector frame"
+        template="Task: {prompt}. What actions should the robot take at current step to fulfill the task? Represent the action in robot's end effector frame",
+        include_time_horizon=False,
     ),
     state_module=StateModule(
         discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
         state_prefix_template="Robot current state{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(prefix="Answer: ", include_time_horizon=False),
+    action_module=ActionModule(prefix="Answer: "),
     separator=". ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
@@ -315,8 +308,8 @@ DEFAULT_PREDICTION_PROMPT_FORMAT = PromptFormat(
 DEFAULT_VQA_PROMPT_FORMAT = PromptFormat(
     name="default_vqa",
     state_module=None,
-    task_module=TaskModule(template="Task: {prompt}"),
-    action_module=ActionModule(prefix="Answer: ", include_time_horizon=False),
+    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
+    action_module=ActionModule(prefix="Answer: "),
     separator=". ",
     critical_token_checker=None,
     direction_token_checker=None,
