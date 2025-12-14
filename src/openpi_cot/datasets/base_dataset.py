@@ -302,7 +302,7 @@ class SingleCoTDataset:
             remaining = tf.maximum(traj_len - timestep_ids, 1)
 
             # Candidate horizons in seconds and corresponding step counts
-            horizon_seconds = tf.constant([0.5, 1.0, 1.5, 2.0, 2.5, 3.0], dtype=tf.float32)
+            horizon_seconds = tf.constant([1.0, 2.0, 3.0], dtype=tf.float32)
             control_freq = tf.cast(self.control_frequency, tf.float32)
             horizon_steps = tf.cast(tf.round(horizon_seconds * control_freq), tf.int32)
             horizon_steps = tf.maximum(horizon_steps, 1)
@@ -553,9 +553,7 @@ class SingleCoTDataset:
                     time_str = tf.strings.regex_replace(time_str, r"\.$", "")
 
                     # Replace optional {time_seconds} placeholder or default "next 1 seconds" wording
-                    prediction_prompt = tf.strings.regex_replace(
-                        prediction_prompt, r"\{time_seconds\}", time_str
-                    )
+                    prediction_prompt = tf.strings.regex_replace(prediction_prompt, r"\{time_seconds\}", time_str)
                     prediction_prompt = tf.strings.regex_replace(
                         prediction_prompt,
                         r"next\s+1\s+seconds",

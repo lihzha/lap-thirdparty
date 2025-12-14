@@ -52,6 +52,7 @@ class TaskModule:
         if self.include_time_horizon:
             assert time_horizon_seconds is not None, "Time horizon must be provided if include_time_horizon is True"
             cleaned_prompt += ", "
+            time_horizon_seconds = int(time_horizon_seconds)
             cleaned_prompt += self.time_horizon_template.format(time_horizon_seconds=time_horizon_seconds)
         return self.template.format(prompt=cleaned_prompt)
 
