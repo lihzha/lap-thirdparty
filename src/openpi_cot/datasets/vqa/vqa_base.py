@@ -258,7 +258,7 @@ class BaseVQADataset(SingleCoTDataset):
                 "prompt": prompt,
                 "caption": caption,
                 "dataset_name": tf.constant(self.get_dataset_name(), dtype=tf.string),
-                "control_frequency": tf.constant(self.control_frequency, dtype=tf.int32),
+                "time_horizon_seconds": tf.constant(self.control_frequency, dtype=tf.float32),
                 "is_bimanual": tf.constant(False, dtype=tf.bool),
                 "state_type": tf.constant("none", dtype=tf.string),
                 "is_vqa_sample": tf.constant(True, dtype=tf.bool),

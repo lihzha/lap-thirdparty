@@ -171,26 +171,12 @@ class PiCoT(_pi0.Pi0):
         time_rng: at.KeyArrayLike,
     ) -> dict[str, at.Array]:
         batch_shape = actions.shape[:-2]
-        raw_action_mask = getattr(observation, "action_chunk_mask", None)
-        action_mask_bool = None
-        action_mask = None
-        if raw_action_mask is not None:
-            action_mask_bool = jnp.reshape(jnp.asarray(raw_action_mask, dtype=bool), actions.shape[:-1])
-            action_mask = action_mask_bool[..., None].astype(actions.dtype)
-
         noise = jax.random.normal(noise_rng, actions.shape)
-        if action_mask is not None:
-            noise = noise * action_mask
-            masked_actions = actions * action_mask
-        else:
-            masked_actions = actions
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
         time_expanded = time[..., None, None]
-        x_t = time_expanded * noise + (1 - time_expanded) * masked_actions
-        u_t = noise - masked_actions
+        x_t = time_expanded * noise + (1 - time_expanded) * actions
+        u_t = noise - actions
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
-        if action_mask_bool is not None:
-            suffix_mask = suffix_mask.at[:, -self.action_horizon :].set(action_mask_bool)
         suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
         return {
             "suffix_tokens": suffix_tokens,

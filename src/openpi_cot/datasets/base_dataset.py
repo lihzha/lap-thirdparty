@@ -282,44 +282,63 @@ class SingleCoTDataset:
         def chunk_actions(traj):
             """Splits episode into action chunks with proper zero-padding."""
             traj_len = tf.shape(traj[action_key])[0]
-            timestep_ids = tf.range(traj_len, dtype=tf.int32)
-            remaining = tf.maximum(traj_len - timestep_ids, 1)
-            control_window = tf.constant(self.control_frequency, dtype=tf.int32)
-            action_horizon_tf = tf.constant(action_horizon, dtype=tf.int32)
-            effective_window = tf.minimum(control_window, action_horizon_tf)
-            valid_lengths = tf.minimum(effective_window, remaining)
-            per_timestep_windows = tf.fill(tf.shape(timestep_ids), effective_window)
 
             # Use unified gather function with proper zero-padding
             traj[action_key] = gather_with_padding(
                 data=traj[action_key],
                 sequence_length=traj_len,
-                per_timestep_windows=per_timestep_windows,
                 window_size=action_horizon,
             )
             # Ensure static shape is preserved: [T, action_horizon, action_dim]
             traj[action_key].set_shape([None, action_horizon, self.action_dim])
+            return traj
 
-            # Track which steps contain real actions (True) vs padding (False)
-            mask_positions = tf.range(action_horizon, dtype=tf.int32)
-            chunk_mask = mask_positions[None, :] < valid_lengths[:, None]
-            traj["action_chunk_mask"] = tf.cast(chunk_mask, tf.bool)
-            traj["action_chunk_mask"].set_shape([None, action_horizon])
+        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
-            # Gather actions up to the effective control window (clamped by action_horizon)
-            # The gather function will handle padding if we reach the end of trajectory
+        def group_language_actions(traj):
+            """Compute per-timestep summed language actions over variable horizons."""
+            traj_len = tf.shape(traj[action_key])[0]
+            timestep_ids = tf.range(traj_len, dtype=tf.int32)
+            remaining = tf.maximum(traj_len - timestep_ids, 1)
+
+            # Candidate horizons in seconds and corresponding step counts
+            horizon_seconds = tf.constant([0.5, 1.0, 1.5, 2.0, 2.5, 3.0], dtype=tf.float32)
+            control_freq = tf.cast(self.control_frequency, tf.float32)
+            horizon_steps = tf.cast(tf.round(horizon_seconds * control_freq), tf.int32)
+            horizon_steps = tf.maximum(horizon_steps, 1)
+
+            # Deterministically sample a horizon for each timestep using trajectory hash
+            traj_id_hash = tf.strings.to_hash_bucket_fast(traj["trajectory_id"][0], 2147483647)
+            seed_pair = [self.seed, traj_id_hash]
+            horizon_idx = tf.random.stateless_uniform(
+                [traj_len],
+                seed=seed_pair,
+                minval=0,
+                maxval=tf.shape(horizon_steps)[0],
+                dtype=tf.int32,
+            )
+            chosen_steps = tf.gather(horizon_steps, horizon_idx)
+            valid_lengths = tf.minimum(chosen_steps, remaining)
+
+            max_window = tf.reduce_max(horizon_steps)
             actions_window = gather_with_padding(
                 data=traj["raw_action"],
                 sequence_length=traj_len,
-                window_size=effective_window,
-            )  # [T, effective_window, A]
+                window_size=max_window,
+                per_timestep_windows=chosen_steps,
+            )  # [T, max_window, A]
 
             traj["language_actions"] = sum_actions(actions_window, valid_lengths)
             traj["language_actions"].set_shape([None, traj["raw_action"].shape[-1]])
 
+            # Record the actual (clipped) horizon in seconds for downstream prompting
+            actual_horizon_seconds = tf.cast(valid_lengths, tf.float32) / control_freq
+            traj["time_horizon_seconds"] = actual_horizon_seconds
+            traj["time_horizon_seconds"].set_shape([None])
+
             return traj
 
-        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
+        self.dataset = self.dataset.traj_map(group_language_actions, self.num_parallel_calls)
 
         def add_prediction_pairs(traj):
             """Add prediction frame pairs and corresponding language actions.
@@ -511,12 +530,38 @@ class SingleCoTDataset:
             #         self.spec.wrist_image_right_key
             #     ][0:1]
 
-            # Replace prompt with prediction_prompt for prediction samples
+            pred_horizon_seconds = None
+            if "prediction_delta" in sample:
+                pred_horizon_seconds = tf.cast(sample["prediction_delta"], tf.float32) / tf.cast(
+                    self.control_frequency, tf.float32
+                )
+
             if "prompt" in sample:
                 prediction_prompt = tf.constant(
-                    getattr(self.config, "prediction_prompt", "What is the robot's movement between two frames?"),
+                    getattr(
+                        self.config,
+                        "prediction_prompt",
+                        "What is the robot's movement between two frames in the next 1 seconds?",
+                    ),
                     dtype=tf.string,
                 )
+
+                if pred_horizon_seconds is not None:
+                    # Format horizon with 1 decimal place and strip trailing zeros/dot
+                    time_str = tf.strings.format("{:.1f}", pred_horizon_seconds)
+                    time_str = tf.strings.regex_replace(time_str, r"0+$", "")
+                    time_str = tf.strings.regex_replace(time_str, r"\.$", "")
+
+                    # Replace optional {time_seconds} placeholder or default "next 1 seconds" wording
+                    prediction_prompt = tf.strings.regex_replace(
+                        prediction_prompt, r"\{time_seconds\}", time_str
+                    )
+                    prediction_prompt = tf.strings.regex_replace(
+                        prediction_prompt,
+                        r"next\s+1\s+seconds",
+                        tf.strings.join(["next ", time_str, " seconds"]),
+                    )
+
                 sample["prompt"] = tf.cond(
                     is_pred_sample,
                     lambda: prediction_prompt,
@@ -531,12 +576,15 @@ class SingleCoTDataset:
                     lambda: sample["language_actions"],
                 )
 
-            # Replace control_frequency with prediction_delta for prediction samples
-            if "control_frequency" in sample and "prediction_delta" in sample:
-                sample["control_frequency"] = tf.cond(
+            if "time_horizon_seconds" in sample and "prediction_delta" in sample:
+                if pred_horizon_seconds is None:
+                    pred_horizon_seconds = tf.cast(sample["prediction_delta"], tf.float32) / tf.cast(
+                        self.control_frequency, tf.float32
+                    )
+                sample["time_horizon_seconds"] = tf.cond(
                     is_pred_sample,
-                    lambda: sample["prediction_delta"],
-                    lambda: sample["control_frequency"],
+                    lambda: pred_horizon_seconds,
+                    lambda: sample["time_horizon_seconds"],
                 )
 
             # Add is_prediction_sample mask

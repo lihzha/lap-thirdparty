@@ -102,7 +102,6 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": traj["trajectory_id"],
                 "raw_action": tf.cast(traj["action"], tf.float32),
-                "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
@@ -253,7 +252,6 @@ class LiberoCoTDataset(SingleOXECoTDataset):
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": traj["trajectory_id"],  # Preserve existing trajectory_id
                 "raw_action": actions,
-                "control_frequency": tf.fill([traj_len], tf.cast(self.control_frequency, tf.int32)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # LIBERO is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],

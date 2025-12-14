@@ -170,23 +170,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         #     # Default to "eef_pose" if not provided (for backward compatibility)
         #     inputs["state_type"] = "eef_pose"
 
-        action_chunk_mask = data.get("action_chunk_mask")
-        if action_chunk_mask is not None:
-            action_chunk_mask = np.asarray(action_chunk_mask)
-
         if "actions" in data:
             if self.language_action_format.use_eef_frame and initial_state is not None:
                 actions = transform_actions_to_eef_frame(data["actions"], initial_state)
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
-            if action_chunk_mask is not None:
-                mask = action_chunk_mask
-                while mask.ndim < actions.ndim:
-                    mask = np.expand_dims(mask, axis=-1)
-
-                actions = np.asarray(actions) * mask.astype(actions.dtype)
             inputs["actions"] = np.array(actions)
-        if action_chunk_mask is not None:
-            inputs["action_chunk_mask"] = action_chunk_mask
 
         inputs["is_prediction_sample"] = is_prediction_sample
         return inputs
@@ -232,6 +220,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         is_vqa_sample = data.get("is_vqa_sample")
         inputs["is_vqa_sample"] = is_vqa_sample
+
+        inputs["time_horizon_seconds"] = data.get("time_horizon_seconds")
 
         # Special handling for VQA datasets
         if is_vqa_sample:
