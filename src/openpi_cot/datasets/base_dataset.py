@@ -302,7 +302,7 @@ class SingleCoTDataset:
             remaining = tf.maximum(traj_len - timestep_ids, 1)
 
             # Candidate horizons in seconds and corresponding step counts
-            horizon_seconds = tf.constant([0.5, 1.0, 2.0, 3.0], dtype=tf.float32)
+            horizon_seconds = tf.constant([0.5, 1.0, 2.0], dtype=tf.float32)
             control_freq = tf.cast(self.control_frequency, tf.float32)
             horizon_steps = tf.cast(tf.round(horizon_seconds * control_freq), tf.int32)
             horizon_steps = tf.maximum(horizon_steps, 1)
