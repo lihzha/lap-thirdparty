@@ -423,7 +423,8 @@ def main(config: _config.TrainConfig):
             dataloader_restored = False
 
     # Get start step after restoring checkpoint (if resuming)
-    start_step = int(train_state.step)
+    # start_step = int(train_state.step)
+    start_step = 50000
 
     train_runner = TrainingStepRunner(config)
     # ptrain_step = jax.jit(
