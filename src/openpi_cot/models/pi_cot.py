@@ -581,6 +581,7 @@ class PiCoT(_pi0.Pi0):
         prefix_token_embeddings, prefix_mask, prefix_attn_mask = _pi0_fast.left_to_right_align(
             prefix_token_embeddings, prefix_mask, prefix_attn_mask
         )
+        breakpoint()
         prefill_size = prefix_token_embeddings.shape[1]
         prefill_len = jnp.sum(prefix_mask, axis=-1)
         prefix_start = prefill_size - prefill_len
@@ -599,6 +600,7 @@ class PiCoT(_pi0.Pi0):
 
         # prepare decoding -- final logit decodes the first token
         last_logit = self.PaliGemma.llm(pre_logits[0][:, -1:], method="decode")
+        breakpoint()
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps), dtype=jnp.int32)
 
         def step(carry):
