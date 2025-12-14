@@ -265,7 +265,8 @@ class TrainingStepRunner:
             loss, metrics = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
             return loss, metrics
 
-        train_rng = jax.random.fold_in(rng, state.step)
+        train_rng = jax.random.fold_in(rng, 50000)
+        # train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
         (loss, loss_metrics), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
@@ -282,7 +283,8 @@ class TrainingStepRunner:
         grad_norm_bf16 = optax.global_norm(grads)
         grad_norm_f32 = optax.global_norm(jax.tree.map(lambda g: g.astype(jnp.float32), grads))
 
-        new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
+        new_state = dataclasses.replace(state, step=50000 + 1, params=new_params, opt_state=new_opt_state)
+        # new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
         if state.ema_decay is not None:
             new_state = dataclasses.replace(
                 new_state,
