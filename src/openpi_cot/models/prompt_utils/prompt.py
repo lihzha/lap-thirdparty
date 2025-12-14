@@ -37,7 +37,9 @@ class TaskModule:
     # Whether to include time horizon instruction when provided
     include_time_horizon: bool = False
     # Template for time horizon instruction
-    time_horizon_template: str = "predict the robot's actions in the future {time_horizon_seconds} seconds"
+    time_horizon_template: str = (
+        "predict the robot's action in the future {time_horizon_seconds} seconds in the end-effector frame"
+    )
 
     def format_task(self, prompt: str, time_horizon_seconds: float | None = None) -> str:
         """Format task prompt.
@@ -52,7 +54,8 @@ class TaskModule:
         if self.include_time_horizon:
             assert time_horizon_seconds is not None, "Time horizon must be provided if include_time_horizon is True"
             cleaned_prompt += ", "
-            time_horizon_seconds = int(time_horizon_seconds)
+            # TODO: round time_horizon_seconds to nearest 0.5s for cleaner prompts
+            time_horizon_seconds = round(time_horizon_seconds * 2) / 2.0
             cleaned_prompt += self.time_horizon_template.format(time_horizon_seconds=time_horizon_seconds)
         return self.template.format(prompt=cleaned_prompt)
 
