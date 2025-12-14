@@ -544,12 +544,11 @@ def evaluate_rollout(
     """Evaluate rollout performance (language action prediction accuracy)."""
     evaluator = RolloutEvaluator(config)
     # Note: batch input uses replicated sharding because prepare_eval_batch is called outside JIT
-    # peval_step = jax.jit(
-    #     evaluator,
-    #     in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
-    #     out_shardings=(replicated_sharding),
-    # )
-    peval_step = evaluator
+    peval_step = jax.jit(
+        evaluator,
+        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
+        out_shardings=(replicated_sharding),
+    )
 
     # Get tokenizer for decoding
     tokenizer = data_loader.tokenizer
