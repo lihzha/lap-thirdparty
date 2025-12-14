@@ -259,9 +259,9 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
         droll_rad = float(arr[..., 3].sum())
         dpitch_rad = float(arr[..., 4].sum())
         dyaw_rad = float(arr[..., 5].sum())
-        droll = _round_to_nearest_n(abs(droll_rad * 180.0 / np.pi), 5)
-        dpitch = _round_to_nearest_n(abs(dpitch_rad * 180.0 / np.pi), 5)
-        dyaw = _round_to_nearest_n(abs(dyaw_rad * 180.0 / np.pi), 5)
+        droll = _round_to_nearest_n(abs(droll_rad * 180.0 / np.pi), 1)
+        dpitch = _round_to_nearest_n(abs(dpitch_rad * 180.0 / np.pi), 1)
+        dyaw = _round_to_nearest_n(abs(dyaw_rad * 180.0 / np.pi), 1)
 
     parts: list[str] = []
 
