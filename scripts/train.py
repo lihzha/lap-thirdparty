@@ -265,8 +265,7 @@ class TrainingStepRunner:
             loss, metrics = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
             return loss, metrics
 
-        train_rng = jax.random.fold_in(rng, 50000)
-        # train_rng = jax.random.fold_in(rng, state.step)
+        train_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         diff_state = nnx.DiffState(0, self.config.trainable_filter)
         (loss, loss_metrics), grads = nnx.value_and_grad(loss_fn, argnums=diff_state, has_aux=True)(
@@ -283,8 +282,7 @@ class TrainingStepRunner:
         grad_norm_bf16 = optax.global_norm(grads)
         grad_norm_f32 = optax.global_norm(jax.tree.map(lambda g: g.astype(jnp.float32), grads))
 
-        new_state = dataclasses.replace(state, step=50000 + 1, params=new_params, opt_state=new_opt_state)
-        # new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
+        new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
         if state.ema_decay is not None:
             new_state = dataclasses.replace(
                 new_state,
@@ -425,17 +423,15 @@ def main(config: _config.TrainConfig):
             dataloader_restored = False
 
     # Get start step after restoring checkpoint (if resuming)
-    # start_step = int(train_state.step)
-    start_step = 50000
+    start_step = int(train_state.step)
 
     train_runner = TrainingStepRunner(config)
-    # ptrain_step = jax.jit(
-    #     train_runner,
-    #     in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-    #     out_shardings=(train_state_sharding, replicated_sharding),
-    #     donate_argnums=(1,),
-    # )
-    ptrain_step = train_runner
+    ptrain_step = jax.jit(
+        train_runner,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(train_state_sharding, replicated_sharding),
+        donate_argnums=(1,),
+    )
 
     if config.use_validation:
         hash_tables_cache = data_loader.dataset.hash_tables

@@ -230,7 +230,7 @@ class PiCoT(_pi0.Pi0):
         else:
             critical_mask = number_mask = direction_mask = None
 
-        breakpoint()
+        # breakpoint()
 
         per_sample_loss, raw_metrics = _compute_cross_entropy_with_metrics(
             logits=logits,
@@ -753,7 +753,7 @@ def _compute_cross_entropy_with_metrics(
     # Standard hard target loss
     per_sample_loss = -jnp.sum(token_pplx * token_mask, axis=-1) / jnp.clip(jnp.sum(token_mask, -1), 1)
 
-    breakpoint()
+    # breakpoint()
 
     # Return predictions if requested (independently of verbose_mode)
     # IMPORTANT: Predictions are ONLY returned when return_predictions=True
