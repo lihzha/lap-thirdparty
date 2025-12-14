@@ -37,7 +37,7 @@ class TaskModule:
     # Whether to include time horizon instruction when provided
     include_time_horizon: bool = False
     # Template for time horizon instruction
-    time_horizon_template: str = "predict the robot's actions in the future {time_horizon_seconds} seconds. "
+    time_horizon_template: str = "predict the robot's actions in the future {time_horizon_seconds} seconds"
 
     def format_task(self, prompt: str, time_horizon_seconds: float | None = None) -> str:
         """Format task prompt.
@@ -158,7 +158,7 @@ PI05_PROMPT_FORMAT = PromptFormat(
         include_state_type=False,
     ),
     action_module=ActionModule(prefix="Action: "),
-    separator=", ",
+    separator="; ",
     critical_token_checker=checkers.is_critical_directional,
     direction_token_checker=checkers.is_direction_natural,
 )
