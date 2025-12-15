@@ -281,7 +281,7 @@ def main(config: _config.TrainConfig):
     init_wandb(
         config,
         resuming=False,
-        enabled=config.wandb_enabled,
+        enabled=True,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
 
