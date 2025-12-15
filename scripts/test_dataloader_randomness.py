@@ -55,7 +55,6 @@ def _collect_examples(loader, count: int):
     batches = []
     for _ in range(count):
         batches.append(_normalize_batch(next(iterator)))
-        breakpoint()
     return batches
 
 
@@ -163,7 +162,7 @@ def main(config: _config.TrainConfig):
         sharding=data_sharding,
         shuffle=True,
         split="train",
-        seed=456,
+        seed=123,
         persistent_iterator=True,
     )
     second_examples = _collect_examples(second_loader, 50)
