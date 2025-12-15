@@ -57,9 +57,9 @@ class Lvis(BaseVQADataset):
     annotations with category labels.
     """
 
-    def __init__(self, *args, directional: bool = False, direction_margin: float = 0.1, **kwargs):
+    def __init__(self, *args, directional: bool = True, direction_slope: float = 2.0, **kwargs):
         self.directional = directional
-        self.direction_margin = direction_margin
+        self.direction_slope = direction_slope
         super().__init__(*args, **kwargs)
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
@@ -203,40 +203,48 @@ class Lvis(BaseVQADataset):
         bottom_right = bbox[1]
         center = (top_left + bottom_right) / 2.0
 
-        x_rel = center[0] - 0.5
-        y_rel = center[1] - 0.5
+        x_rel = center[0] - 0.5  # +x is right
+        y_rel = 0.5 - center[1]  # invert so +y is up as described
 
-        margin = tf.constant(self.direction_margin, dtype=tf.float32)
-
-        horizontal = tf.where(x_rel < 0.0, tf.constant("left"), tf.constant("right"))
-        vertical = tf.where(y_rel < 0.0, tf.constant("forward"), tf.constant("back"))
+        k = tf.constant(self.direction_slope, dtype=tf.float32)
+        inv_k = 1.0 / k
 
         abs_x = tf.abs(x_rel)
         abs_y = tf.abs(y_rel)
 
-        has_horizontal = abs_x >= margin
-        has_vertical = abs_y >= margin
+        # Primary axis regions using slopes k and 1/k
+        is_forward = y_rel >= k * abs_x
+        is_back = y_rel <= -k * abs_x
+        is_right = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
+        is_right = tf.logical_and(is_right, x_rel >= inv_k * abs_y)
+        is_left = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
+        is_left = tf.logical_and(is_left, x_rel <= -inv_k * abs_y)
 
-        def both():
-            return tf.strings.join([horizontal, " and ", vertical])
+        def forward():
+            return tf.constant("forward")
 
-        def horiz_only():
-            return horizontal
+        def back():
+            return tf.constant("back")
 
-        def vert_only():
-            return vertical
+        def right():
+            return tf.constant("right")
 
-        def fallback():
-            # Near the center: pick the dominant axis to keep outputs in the fixed set
-            return tf.cond(abs_x > abs_y, lambda: horizontal, lambda: vertical)
+        def left():
+            return tf.constant("left")
+
+        def diagonal():
+            base_dir = tf.where(x_rel < 0.0, tf.constant("left"), tf.constant("right"))
+            vert_dir = tf.where(y_rel >= 0.0, tf.constant("forward"), tf.constant("back"))
+            return tf.strings.join([base_dir, " and ", vert_dir])
 
         return tf.case(
             [
-                (tf.logical_and(has_horizontal, has_vertical), both),
-                (has_horizontal, horiz_only),
-                (has_vertical, vert_only),
+                (is_forward, forward),
+                (is_back, back),
+                (is_right, right),
+                (is_left, left),
             ],
-            default=fallback,
+            default=diagonal,
             exclusive=True,
         )
 
