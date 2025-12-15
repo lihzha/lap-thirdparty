@@ -10,6 +10,7 @@ import logging
 import os
 
 import jax
+from jax.experimental import multihost_utils
 import numpy as np
 
 try:
@@ -107,7 +108,7 @@ def init_wandb(
 
 
 def _visualize_dataset_distribution(
-    dataset_batches: list[tuple[np.ndarray | None, np.ndarray | None]],
+    dataset_batches: list[np.ndarray | None],
     tokenizer: PaligemmaCoTTokenizer,
     *,
     log_to_wandb: bool = False,
@@ -186,24 +187,43 @@ def _visualize_dataset_distribution(
         wandb.log(wandb_data)
 
 
-def _normalize_batch(batch):
-    """Convert leaves to host numpy arrays for stable comparisons."""
+def _materialize_tokenized_dataset_name(
+    tokenized_dataset_name: jax.Array | np.ndarray | None,
+) -> np.ndarray | None:
+    """Return a host numpy array for dataset names, gathering across hosts if needed."""
+    if tokenized_dataset_name is None:
+        return None
+    if isinstance(tokenized_dataset_name, np.ndarray):
+        return tokenized_dataset_name
+    if not isinstance(tokenized_dataset_name, jax.Array):
+        return np.asarray(tokenized_dataset_name)
 
-    def _to_numpy(value):
-        if isinstance(value, jax.Array):
-            return np.asarray(value)
-        if isinstance(value, np.ndarray):
-            return value
-        return value
+    try:
+        return np.asarray(tokenized_dataset_name)
+    except RuntimeError as err:
+        if "non-addressable" not in str(err).lower():
+            raise
+        logging.debug("Encountered non-addressable dataset-name array; gathering shards across hosts.")
+        try:
+            dtype = np.dtype(tokenized_dataset_name.dtype)
+        except TypeError:
+            first_shard = tokenized_dataset_name.addressable_shards[0] if tokenized_dataset_name.addressable_shards else None
+            dtype = np.asarray(first_shard.data).dtype if first_shard is not None else np.float32
+        host_buf = np.zeros(tokenized_dataset_name.shape, dtype=dtype)
+        for shard in tokenized_dataset_name.addressable_shards:
+            host_buf[shard.index] = np.asarray(shard.data)
+        if jax.process_count() == 1:
+            return host_buf
+        reduced = multihost_utils.process_allreduce(jax.device_put(host_buf))
+        return np.asarray(reduced)
 
-    return jax.tree_util.tree_map(_to_numpy, jax.device_get(batch))
 
-
-def _collect_examples(loader, count: int):
+def _collect_dataset_name_batches(loader, count: int) -> list[np.ndarray | None]:
     iterator = iter(loader)
-    batches = []
+    batches: list[np.ndarray | None] = []
     for _ in range(count):
-        batches.append(_normalize_batch(next(iterator)))
+        observation, _ = next(iterator)
+        batches.append(_materialize_tokenized_dataset_name(observation.tokenized_dataset_name))
     return batches
 
 
@@ -307,10 +327,8 @@ def main(config: _config.TrainConfig):
         seed=42,
         persistent_iterator=True,
     )
-    batches = _collect_examples(first_loader, 1000)
+    dataset_batches = _collect_dataset_name_batches(first_loader, 1000)
     tok = PaligemmaCoTTokenizer(max_len=300)
-
-    dataset_batches = [batch[0].tokenized_dataset_name for batch in batches]
     _visualize_dataset_distribution(dataset_batches, tok, log_to_wandb=True)
 
 
