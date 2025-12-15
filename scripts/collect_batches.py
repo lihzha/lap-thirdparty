@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections import Counter
 import datetime
 import logging
@@ -10,11 +11,16 @@ import os
 from pathlib import Path
 
 import jax
-import numpy as np
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+try:
+    import wandb
+except ImportError:  # pragma: no cover - wandb is optional for offline runs
+    wandb = None  # type: ignore[assignment]
 
 import openpi_cot.datasets.cot_data_loader as cot_data_loader
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
@@ -51,8 +57,80 @@ def _decode_tokenized_names(tokenized_names, tokenizer: PaligemmaCoTTokenizer) -
     return decoded
 
 
+def init_wandb(
+    config: _config.TrainConfig,
+    *,
+    resuming: bool,
+    log_code: bool = False,
+    enabled: bool = True,
+    rewind_to_step: int | None = None,
+):
+    if not enabled:
+        logging.info("wandb disabled via config; skipping remote logging.")
+        return False
+
+    if wandb is None:
+        logging.warning("wandb requested but the package is not installed; skipping remote logging.")
+        return False
+
+    # Only initialize wandb in the main process
+    if jax.process_index() != 0:
+        wandb.init(mode="disabled")
+        return False
+
+    ckpt_dir = config.checkpoint_dir
+    if not ckpt_dir.exists():
+        logging.warning("Checkpoint directory %s does not exist; skipping wandb logging.", ckpt_dir)
+        return False
+
+    if resuming:
+        run_id_path = ckpt_dir / "wandb_id.txt"
+        if not run_id_path.exists():
+            logging.warning("wandb resume requested but %s not found; starting a fresh run.", run_id_path)
+            resuming = False
+        else:
+            run_id = run_id_path.read_text().strip()
+            if rewind_to_step is not None:
+                # Use wandb's rewind feature to resume from a specific step
+                wandb.init(
+                    resume_from=f"{run_id}?_step={rewind_to_step}",
+                    project=config.project_name,
+                )
+            else:
+                wandb.init(id=run_id, resume="must", project=config.project_name)
+    if not resuming:
+        wandb_mode = "online" if os.environ.get("WANDB_DISABLED", "false").lower() not in {"1", "true"} else "offline"
+        run_name = f"collect-batches-{config.name}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        wandb.init(
+            name=run_name,
+            config=dataclasses.asdict(config),
+            project=config.project_name,
+            reinit=True,
+            mode=wandb_mode,
+        )
+        if rewind_to_step is not None:
+            logging.info("Requested rewind_to_step=%s but starting a new run; ignoring rewind.", rewind_to_step)
+
+    if log_code:
+        wandb.run.log_code(epath.Path(__file__).parent.parent)
+
+    return True
+
+
+def _log_plot_to_wandb(image_path: Path, key: str) -> None:
+    if wandb is None or getattr(wandb, "run", None) is None:
+        return
+    try:
+        wandb.log({key: wandb.Image(str(image_path))})
+    except Exception as err:  # pragma: no cover - best effort logging
+        logging.warning("Failed to log %s to wandb: %s", key, err)
+
+
 def _visualize_dataset_distribution(
-    dataset_batches: list[tuple[np.ndarray | None, np.ndarray | None]], tokenizer: PaligemmaCoTTokenizer
+    dataset_batches: list[tuple[np.ndarray | None, np.ndarray | None]],
+    tokenizer: PaligemmaCoTTokenizer,
+    *,
+    log_to_wandb: bool = False,
 ) -> None:
     """Visualize dataset distributions per batch and across all batches."""
     if not dataset_batches:
@@ -125,6 +203,8 @@ def _visualize_dataset_distribution(
     fig.savefig(per_batch_path, dpi=200)
     plt.close(fig)
     logging.info("Saved per-batch dataset distribution plot to %s", per_batch_path)
+    if log_to_wandb:
+        _log_plot_to_wandb(per_batch_path, "dataset_distribution/per_batch")
 
     fig2, ax2 = plt.subplots(figsize=(max(8, len(unique_datasets) * 0.5), 6))
     ax2.bar(unique_datasets, [total_counts[name] for name in unique_datasets])
@@ -137,6 +217,8 @@ def _visualize_dataset_distribution(
     fig2.savefig(overall_path, dpi=200)
     plt.close(fig2)
     logging.info("Saved overall dataset distribution plot to %s", overall_path)
+    if log_to_wandb:
+        _log_plot_to_wandb(overall_path, "dataset_distribution/overall")
 
 
 def _normalize_batch(batch):
@@ -255,6 +337,12 @@ def init_tpu(config: _config.TrainConfig):
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
+    wandb_run_active = init_wandb(
+        config,
+        resuming=False,
+        enabled=config.wandb_enabled,
+        rewind_to_step=getattr(config, "rewind_to_step", None),
+    )
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)
@@ -275,10 +363,11 @@ def main(config: _config.TrainConfig):
     batches = _collect_examples(first_loader, 100)
     tok = PaligemmaCoTTokenizer(max_len=300)
 
-    dataset_batches = [
-        (batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in batches
-    ]
-    _visualize_dataset_distribution(dataset_batches, tok)
+    dataset_batches = [(batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in batches]
+    _visualize_dataset_distribution(dataset_batches, tok, log_to_wandb=bool(wandb_run_active))
+
+    if wandb_run_active and wandb is not None and getattr(wandb, "run", None) is not None:
+        wandb.finish()
 
 
 if __name__ == "__main__":
