@@ -106,8 +106,8 @@ class DetokenizeReasoning(DataTransformFn):
     tokenizer: PaligemmaCoTTokenizer
 
     def __call__(self, data: DataDict) -> DataDict:
-        if "reasoning_logits" in data:
-            text = self.tokenizer.decode(data["reasoning_logits"].squeeze()[: data["final_length"]].astype(np.int32))
+        if "tokens" in data:
+            text = self.tokenizer.decode(data["tokens"].squeeze().astype(np.int32))
             return {**data, "reasoning": text}
         return data
 
@@ -505,10 +505,10 @@ class ExtractFASTActions(DataTransformFn):
     action_dim: int
 
     def __call__(self, data: DataDict) -> DataDict:
-        if "actions" not in data:
+        if "tokens" not in data:
             return data
         # Model outputs are saved in "actions", but for FAST models they represent tokens.
-        tokens = data.pop("actions")
+        tokens = data.pop("tokens")
         actions = self.tokenizer.extract_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
         return {
             **data,

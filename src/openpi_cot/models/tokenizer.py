@@ -287,6 +287,8 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
 
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
         # Decode predicted output tokens
+        if tokens.ndim > 1:
+            tokens = tokens[0]
         decoded_tokens = self._tokenizer.decode(tokens.tolist())
 
         # Extract actions from FAST model outputs

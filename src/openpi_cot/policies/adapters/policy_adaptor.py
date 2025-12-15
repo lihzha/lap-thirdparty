@@ -28,15 +28,14 @@ class CoTPolicy:
         inputs = self._base._input_transform(inputs)  # noqa: SLF001
         # Make a batch and convert to jax.Array.
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
+        self._rng, sample_rng_or_pytorch_device = jax.random.split(self._base._rng)
 
         start_time = time.monotonic()
-        self._rng, _ = jax.random.split(self._base._rng)  # noqa: SLF001
-        logits, t = self._sample_tokens(CoTObservation.from_dict(inputs))
+        tokens = self._sample_tokens(sample_rng_or_pytorch_device, CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],
-            "actions": jnp.zeros((1, 1, 32)),  # TODO
-            "reasoning_logits": logits,
-            "final_length": t,
+            "actions": jnp.zeros((1, 1, 7)),  # TODO
+            "tokens": tokens,
         }
         # Unbatch and convert to np.ndarray.        # Unbatch and convert to np.ndarray.
         # outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)

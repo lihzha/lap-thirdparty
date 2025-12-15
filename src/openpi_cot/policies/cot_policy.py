@@ -50,7 +50,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             schema = get_language_action_format(self.language_action_format)
             object.__setattr__(self, "language_action_format", schema)
 
-    def _prepare_inputs(self, data: dict, initial_state: np.ndarray | None = None) -> tuple[dict, dict]:
+    def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
         assert "observation" in data
         assert IMAGE_KEYS[0] in data["observation"]
@@ -208,11 +208,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         # Extract initial state for EEF frame transformation
         initial_state = None
-        if self.language_action_format.use_eef_frame:
+        if self.language_action_format.use_eef_frame and "raw_state" in data:
             initial_state = np.asarray(data["raw_state"])
 
-        inputs = self._prepare_inputs(data, initial_state=initial_state)
-
+        inputs = self._prepare_inputs(data)
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)
         dataset_name = data.get("dataset_name")
         if isinstance(dataset_name, bytes):

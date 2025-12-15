@@ -980,7 +980,7 @@ _CONFIGS = [
         base_name="pi_combined_fast_cot",
         devices=["v6", "v6europe", "v4", "local", "v5"],
         model=pi_cot_config.PiCoTConfig(
-            action_dim=7, action_horizon=16, max_token_len=250, pi05=True, discrete_state_input=True, use_fast=True
+            action_dim=7, action_horizon=16, max_token_len=250, pi05=True, discrete_state_input=True, use_fast=True, prompt_format="pi05_notime"
         ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
@@ -990,6 +990,7 @@ _CONFIGS = [
             "droid_dataset_name": "droid",
             "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
             "shuffle_buffer_size": 400_000,
+            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         save_interval=2500,
