@@ -59,6 +59,10 @@ class OXECoTDatasets:
         self.hash_tables = hash_tables
         self.batch_size = batch_size
 
+        # Set global seed for file-level operations (shuffle, interleave)
+        # Data-level randomness uses stateless ops with explicit seeds
+        tf.random.set_seed(seed)
+
         # Configure RLDS Dataset(s)
         assert config.data_mix in OXE_NAMED_MIXTURES
         mixture_spec = OXE_NAMED_MIXTURES[config.data_mix]
@@ -252,23 +256,6 @@ class OXECoTDatasets:
                 datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
             )
             self.global_statistics = None
-
-        # Store parameters needed for creating checkpointable dataset
-        self._prepare_batched_params = {
-            "want_val": want_val,
-            "shuffle": shuffle,
-            "shuffle_buffer_size": config.shuffle_buffer_size,
-            "seed": seed,
-            "max_samples": max_samples,
-            "batch_size": batch_size,
-            "resize_resolution": config.resize_resolution,
-            "primary_image_key": self.spec.primary_image_key,
-            "wrist_image_key": self.spec.wrist_image_key,
-            "wrist_image_right_key": self.spec.wrist_image_right_key,
-        }
-
-        # Store the pre-batched dataset for creating checkpointable versions
-        self._pre_batched_dataset = self.dataset
 
         self.dataset = prepare_batched_dataset(
             dataset=self.dataset,

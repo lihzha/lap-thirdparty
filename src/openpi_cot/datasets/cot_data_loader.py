@@ -259,7 +259,7 @@ class CoTRLDSDataLoader:
         sizes = [x.shape[0] for x in jax.tree_util.tree_leaves(batch) if hasattr(x, "shape") and x.shape]
         if not sizes:
             return
-        b = max(sizes)  # this is per-host if dataset was shard(...)’ed
+        b = max(sizes)  # this is per-host if dataset was sharded
 
         if isinstance(self._sharding, jax.sharding.NamedSharding):
             mesh = self._sharding.mesh

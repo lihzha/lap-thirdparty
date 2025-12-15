@@ -87,10 +87,6 @@ class SingleCoTDataset:
         with contextlib.suppress(Exception):
             tf.config.set_visible_devices([], "TPU")
 
-        # Set global seed for file-level operations (shuffle, interleave)
-        # Data-level randomness uses stateless ops with explicit seeds
-        tf.random.set_seed(self.seed)
-
         self.builder = self.build_dataset_builder(dataset_name, data_dir)
 
         # Check if we have cached statistics
@@ -146,8 +142,6 @@ class SingleCoTDataset:
 
         self.apply_repack_transforms()
 
-        # self.dataset = self.dataset.shuffle(60_000, seed=self.seed)
-
         self.apply_flatten()
 
         self.apply_prediction_frame_transform()
@@ -155,23 +149,6 @@ class SingleCoTDataset:
         self.apply_frame_filters()
 
         if standalone:
-            # Store parameters needed for creating checkpointable dataset
-            self._prepare_batched_params = {
-                "want_val": self.want_val,
-                "shuffle": shuffle,
-                "shuffle_buffer_size": config.shuffle_buffer_size,
-                "seed": seed,
-                "max_samples": max_samples,
-                "batch_size": batch_size,
-                "resize_resolution": config.resize_resolution,
-                "primary_image_key": self.spec.primary_image_key,
-                "wrist_image_key": self.spec.wrist_image_key,
-                "wrist_image_right_key": self.spec.wrist_image_right_key,
-            }
-
-            # Store the pre-batched dataset for creating checkpointable versions
-            self._pre_batched_dataset = self.dataset
-
             # Apply common shuffling/take/cache behavior
             self.dataset = prepare_batched_dataset(
                 dataset=self.dataset,
@@ -215,6 +192,7 @@ class SingleCoTDataset:
             split="all",
             shuffle=bool(not self.want_val),  # shuffle at file/shard level for deterministic interleaving
             num_parallel_reads=self.num_parallel_reads,
+            seed=self.seed,
         )
         dataset = dataset.shard(jax.process_count(), jax.process_index())
         # Repeat early to increase interleaving across files/episodes

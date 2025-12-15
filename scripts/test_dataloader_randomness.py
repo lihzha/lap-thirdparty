@@ -175,12 +175,10 @@ def main(config: _config.TrainConfig):
     for i, (first_batch, second_batch) in enumerate(zip(first_dataset_batches, second_dataset_batches)):
         first_decoded = []
         for ids in first_batch:
-            for _id in ids:
-                first_decoded.append(tok.decode(_id))
+            first_decoded.append(tok.decode(ids))
         second_decoded = []
         for ids in second_batch:
-            for _id in ids:
-                second_decoded.append(tok.decode(_id))
+            second_decoded.append(tok.decode(ids))
         for j, (first_str, second_str) in enumerate(zip(first_decoded, second_decoded)):
             if first_str != second_str:
                 logging.info("Difference found in batch %d, example %d:", i, j)
