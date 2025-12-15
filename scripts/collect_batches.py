@@ -11,17 +11,12 @@ import os
 
 import jax
 import numpy as np
-
-import openpi_cot.training.utils as training_utils
-
-try:
-    import wandb
-except ImportError:  # pragma: no cover - wandb is optional for offline runs
-    wandb = None  # type: ignore[assignment]
+import wandb
 
 import openpi_cot.datasets.cot_data_loader as cot_data_loader
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.config as _config
+import openpi_cot.training.utils as training_utils
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
@@ -105,6 +100,7 @@ def init_wandb(
     if log_code:
         wandb.run.log_code(epath.Path(__file__).parent.parent)
 
+    logging.info("wandb initialized (run_id=%s, run_name=%s)", wandb.run.id, wandb.run.name)
     return True
 
 
@@ -155,7 +151,7 @@ def _visualize_dataset_distribution(
 
     wandb_table = None
     wandb_table_has_rows = False
-    if log_to_wandb and wandb is not None and unique_datasets:
+    if log_to_wandb and wandb is not None and unique_datasets and jax.process_index() == 0:
         table_columns = ["batch_index", *unique_datasets]
         wandb_table = wandb.Table(columns=table_columns)
 
@@ -166,7 +162,7 @@ def _visualize_dataset_distribution(
             continue
         formatted = ", ".join(f"{name}: {pct:.2f}%%" for name, pct in percentages.items())
         logging.info("Batch %d dataset percentages: %s", idx, formatted)
-        if wandb_table is not None:
+        if wandb_table is not None and jax.process_index() == 0:
             wandb_table.add_data(idx, *(percentages.get(name, 0.0) for name in unique_datasets))
             wandb_table_has_rows = True
 
@@ -179,7 +175,7 @@ def _visualize_dataset_distribution(
     formatted_overall = ", ".join(f"{name}: {pct:.2f}%%" for name, pct in overall_percentages.items())
     logging.info("Overall dataset percentages: %s", formatted_overall)
 
-    if log_to_wandb and wandb is not None:
+    if log_to_wandb and wandb is not None and jax.process_index() == 0:
         wandb_data: dict[str, object] = {
             "dataset_distribution/overall_percentages": overall_percentages,
         }
@@ -282,14 +278,12 @@ def init_tpu(config: _config.TrainConfig):
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
-    wandb_enabled = init_wandb(
+    init_wandb(
         config,
         resuming=False,
         enabled=config.wandb_enabled,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
-    if not wandb_enabled:
-        raise RuntimeError("wandb initialization failed or disabled; aborting batch collection.")
 
     mesh = sharding.make_mesh(effective_fsdp_devices)
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
