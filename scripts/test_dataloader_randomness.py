@@ -55,6 +55,7 @@ def _collect_examples(loader, count: int):
     batches = []
     for _ in range(count):
         batches.append(_normalize_batch(next(iterator)))
+        breakpoint()
     return batches
 
 
