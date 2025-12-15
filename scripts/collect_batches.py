@@ -41,19 +41,13 @@ def _decode_tokenized_names(tokenized_names, tokenizer: PaligemmaCoTTokenizer) -
     if tokenized_names is None:
         return []
 
-    pad_id = tokenizer._tokenizer.pad_id()
     tokenized_names = np.asarray(tokenized_names)
     if tokenized_names.ndim == 1:
         tokenized_names = tokenized_names[None, :]
 
     decoded = []
     for sample_tokens in tokenized_names:
-        filtered = [int(t) for t in sample_tokens.tolist() if int(t) != pad_id]
-        if filtered:
-            text = tokenizer.decode(filtered).strip()
-            decoded.append(text if text else "<unknown>")
-        else:
-            decoded.append("<unknown>")
+        decoded.append(tokenizer.decode(sample_tokens))
     return decoded
 
 
@@ -139,25 +133,11 @@ def _visualize_dataset_distribution(
 
     valid_batches = []
     batch_indices = []
-    for idx, (tokenized_names, sample_mask) in enumerate(dataset_batches):
+    for idx, tokenized_names in enumerate(dataset_batches):
         if tokenized_names is None:
             logging.warning("Batch %d missing tokenized dataset names; skipping.", idx)
             continue
-
         decoded_names = _decode_tokenized_names(tokenized_names, tokenizer)
-        mask = None
-        if sample_mask is not None:
-            mask = np.asarray(sample_mask).astype(bool)
-            if mask.shape[0] != len(decoded_names):
-                logging.warning(
-                    "Batch %d sample mask has shape %s but decoded names length %d; ignoring mask.",
-                    idx,
-                    mask.shape,
-                    len(decoded_names),
-                )
-                mask = None
-        if mask is not None:
-            decoded_names = [name for name, keep in zip(decoded_names, mask) if keep]
 
         if not decoded_names:
             continue
@@ -232,21 +212,6 @@ def _normalize_batch(batch):
         return value
 
     return jax.tree_util.tree_map(_to_numpy, jax.device_get(batch))
-
-
-def _trees_equal(left, right) -> bool:
-    """Return True if both pytrees share the same structure and values."""
-    try:
-        comparison = jax.tree_util.tree_map(
-            lambda x, y: np.array_equal(x, y) if isinstance(x, np.ndarray) else x == y,
-            left,
-            right,
-        )
-    except ValueError:
-        return False
-
-    flat, _ = jax.tree_util.tree_flatten(comparison)
-    return bool(all(flat))
 
 
 def _collect_examples(loader, count: int):
@@ -344,9 +309,6 @@ def main(config: _config.TrainConfig):
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
 
-    rng = jax.random.key(config.seed)
-    train_rng, init_rng = jax.random.split(rng)
-
     mesh = sharding.make_mesh(effective_fsdp_devices)
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
     # Human-readable mesh overview
@@ -363,7 +325,7 @@ def main(config: _config.TrainConfig):
     batches = _collect_examples(first_loader, 100)
     tok = PaligemmaCoTTokenizer(max_len=300)
 
-    dataset_batches = [(batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in batches]
+    dataset_batches = [batch[0].tokenized_dataset_name for batch in batches]
     _visualize_dataset_distribution(dataset_batches, tok)
 
 
