@@ -3,11 +3,18 @@
 
 from __future__ import annotations
 
+from collections import Counter
+import datetime
 import logging
 import os
+from pathlib import Path
 
 import jax
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 import openpi_cot.datasets.cot_data_loader as cot_data_loader
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
@@ -21,6 +28,115 @@ import etils.epath as epath
 from rail_tpu_utils import prevent_cross_region
 
 import openpi_cot.training.mh_sharding as sharding
+
+
+def _decode_tokenized_names(tokenized_names, tokenizer: PaligemmaCoTTokenizer) -> list[str]:
+    """Convert padded token IDs into dataset name strings."""
+    if tokenized_names is None:
+        return []
+
+    pad_id = tokenizer._tokenizer.pad_id()
+    tokenized_names = np.asarray(tokenized_names)
+    if tokenized_names.ndim == 1:
+        tokenized_names = tokenized_names[None, :]
+
+    decoded = []
+    for sample_tokens in tokenized_names:
+        filtered = [int(t) for t in sample_tokens.tolist() if int(t) != pad_id]
+        if filtered:
+            text = tokenizer.decode(filtered).strip()
+            decoded.append(text if text else "<unknown>")
+        else:
+            decoded.append("<unknown>")
+    return decoded
+
+
+def _visualize_dataset_distribution(
+    dataset_batches: list[tuple[np.ndarray | None, np.ndarray | None]], tokenizer: PaligemmaCoTTokenizer
+) -> None:
+    """Visualize dataset distributions per batch and across all batches."""
+    if not dataset_batches:
+        logging.warning("No dataset batches provided; skipping visualization.")
+        return
+
+    valid_batches = []
+    batch_indices = []
+    for idx, (tokenized_names, sample_mask) in enumerate(dataset_batches):
+        if tokenized_names is None:
+            logging.warning("Batch %d missing tokenized dataset names; skipping.", idx)
+            continue
+
+        decoded_names = _decode_tokenized_names(tokenized_names, tokenizer)
+        mask = None
+        if sample_mask is not None:
+            mask = np.asarray(sample_mask).astype(bool)
+            if mask.shape[0] != len(decoded_names):
+                logging.warning(
+                    "Batch %d sample mask has shape %s but decoded names length %d; ignoring mask.",
+                    idx,
+                    mask.shape,
+                    len(decoded_names),
+                )
+                mask = None
+        if mask is not None:
+            decoded_names = [name for name, keep in zip(decoded_names, mask) if keep]
+
+        if not decoded_names:
+            continue
+
+        valid_batches.append(decoded_names)
+        batch_indices.append(idx)
+
+    if not valid_batches:
+        logging.warning("No valid dataset names found; visualization skipped.")
+        return
+
+    batch_counters = [Counter(batch_names) for batch_names in valid_batches]
+    total_counts = Counter()
+    for counter in batch_counters:
+        total_counts.update(counter)
+
+    unique_datasets = sorted(total_counts, key=total_counts.get, reverse=True)
+    logging.info("Found %d unique datasets across %d batches.", len(unique_datasets), len(valid_batches))
+    logging.info("Top datasets: %s", total_counts.most_common(10))
+
+    per_batch_counts = np.asarray([[counter.get(name, 0) for name in unique_datasets] for counter in batch_counters])
+    x = np.arange(len(valid_batches))
+    fig_width = max(12, len(valid_batches) * 0.2)
+    fig_height = max(6, len(unique_datasets) * 0.3)
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    bottom = np.zeros(len(valid_batches))
+    for dataset_name_idx, dataset_name in enumerate(unique_datasets):
+        counts = per_batch_counts[:, dataset_name_idx]
+        ax.bar(x, counts, bottom=bottom, label=dataset_name)
+        bottom += counts
+
+    ax.set_xlabel("Batch index")
+    ax.set_ylabel("Samples per dataset")
+    ax.set_title("Dataset distribution per batch")
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(idx) for idx in batch_indices], rotation=45, ha="right")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), frameon=False)
+    fig.tight_layout()
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    per_batch_path = Path(f"dataset_visualization_{timestamp}_per_batch.png")
+    fig.savefig(per_batch_path, dpi=200)
+    plt.close(fig)
+    logging.info("Saved per-batch dataset distribution plot to %s", per_batch_path)
+
+    fig2, ax2 = plt.subplots(figsize=(max(8, len(unique_datasets) * 0.5), 6))
+    ax2.bar(unique_datasets, [total_counts[name] for name in unique_datasets])
+    ax2.set_ylabel("Total samples")
+    ax2.set_xlabel("Dataset")
+    ax2.set_title("Overall dataset distribution across batches")
+    plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
+    fig2.tight_layout()
+    overall_path = Path(f"dataset_visualization_{timestamp}_overall.png")
+    fig2.savefig(overall_path, dpi=200)
+    plt.close(fig2)
+    logging.info("Saved overall dataset distribution plot to %s", overall_path)
 
 
 def _normalize_batch(batch):
@@ -153,51 +269,16 @@ def main(config: _config.TrainConfig):
         sharding=data_sharding,
         shuffle=True,
         split="train",
-        seed=123,
+        seed=42,
         persistent_iterator=True,
     )
-    first_examples = _collect_examples(first_loader, 10)
-
-    second_loader = cot_data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=True,
-        split="train",
-        seed=123,
-        persistent_iterator=True,
-    )
-    second_examples = _collect_examples(second_loader, 10)
-
-    breakpoint()
+    batches = _collect_examples(first_loader, 100)
     tok = PaligemmaCoTTokenizer(max_len=300)
 
-    first_dataset_batches = [
-        (batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in first_examples
+    dataset_batches = [
+        (batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in batches
     ]
-    second_dataset_batches = [
-        (batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in second_examples
-    ]
-
-    comparisons = [_trees_equal(a, b) for a, b in zip(first_examples, second_examples, strict=True)]
-    identical = sum(comparisons)
-    logging.info(
-        "Compared %d example batches: %d identical, %d different",
-        50,
-        identical,
-        50 - identical,
-    )
-
-    for idx, same in enumerate(comparisons):
-        status = "IDENTICAL" if same else "DIFFERENT"
-        logging.info("Example %d: %s", idx, status)
-
-    if identical == 50:
-        logging.warning(
-            "All sampled batches are identical. If you expected randomness, "
-            "ensure that shuffling is enabled and that the second seed differs."
-        )
-    else:
-        logging.info("At least one batch differed between the two runs.")
+    _visualize_dataset_distribution(dataset_batches, tok)
 
 
 if __name__ == "__main__":
