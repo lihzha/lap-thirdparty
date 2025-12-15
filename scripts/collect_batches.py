@@ -298,7 +298,7 @@ def main(config: _config.TrainConfig):
         seed=42,
         persistent_iterator=True,
     )
-    dataset_batches = _collect_dataset_name_batches(first_loader, 1000)
+    dataset_batches = _collect_dataset_name_batches(first_loader, 100)
     tok = PaligemmaCoTTokenizer(max_len=300)
     _visualize_dataset_distribution(dataset_batches, tok, log_to_wandb=True)
 
