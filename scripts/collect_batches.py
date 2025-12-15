@@ -10,8 +10,9 @@ import logging
 import os
 
 import jax
-from jax.experimental import multihost_utils
 import numpy as np
+
+import openpi_cot.training.utils as training_utils
 
 try:
     import wandb
@@ -187,43 +188,17 @@ def _visualize_dataset_distribution(
         wandb.log(wandb_data)
 
 
-def _materialize_tokenized_dataset_name(
-    tokenized_dataset_name: jax.Array | np.ndarray | None,
-) -> np.ndarray | None:
-    """Return a host numpy array for dataset names, gathering across hosts if needed."""
-    if tokenized_dataset_name is None:
-        return None
-    if isinstance(tokenized_dataset_name, np.ndarray):
-        return tokenized_dataset_name
-    if not isinstance(tokenized_dataset_name, jax.Array):
-        return np.asarray(tokenized_dataset_name)
+def _normalize_batch(batch):
+    """Convert leaves to host numpy arrays for stable comparisons."""
 
-    try:
-        return np.asarray(tokenized_dataset_name)
-    except RuntimeError as err:
-        if "non-addressable" not in str(err).lower():
-            raise
-        logging.debug("Encountered non-addressable dataset-name array; gathering shards across hosts.")
-        try:
-            dtype = np.dtype(tokenized_dataset_name.dtype)
-        except TypeError:
-            first_shard = tokenized_dataset_name.addressable_shards[0] if tokenized_dataset_name.addressable_shards else None
-            dtype = np.asarray(first_shard.data).dtype if first_shard is not None else np.float32
-        host_buf = np.zeros(tokenized_dataset_name.shape, dtype=dtype)
-        for shard in tokenized_dataset_name.addressable_shards:
-            host_buf[shard.index] = np.asarray(shard.data)
-        if jax.process_count() == 1:
-            return host_buf
-        reduced = multihost_utils.process_allreduce(jax.device_put(host_buf))
-        return np.asarray(reduced)
+    return jax.tree_util.tree_map(training_utils.to_local_array, batch)
 
 
 def _collect_dataset_name_batches(loader, count: int) -> list[np.ndarray | None]:
     iterator = iter(loader)
     batches: list[np.ndarray | None] = []
     for _ in range(count):
-        observation, _ = next(iterator)
-        batches.append(_materialize_tokenized_dataset_name(observation.tokenized_dataset_name))
+        batches.append(_normalize_batch(next(iterator)))
     return batches
 
 
@@ -307,12 +282,14 @@ def init_tpu(config: _config.TrainConfig):
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
-    init_wandb(
+    wandb_enabled = init_wandb(
         config,
         resuming=False,
         enabled=config.wandb_enabled,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
+    if not wandb_enabled:
+        raise RuntimeError("wandb initialization failed or disabled; aborting batch collection.")
 
     mesh = sharding.make_mesh(effective_fsdp_devices)
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
