@@ -12,6 +12,10 @@ import os
 import jax
 import numpy as np
 import wandb
+import matplotlib
+
+matplotlib.use("Agg")  # Non-interactive backend for headless environments
+import matplotlib.pyplot as plt
 
 import openpi_cot.datasets.cot_data_loader as cot_data_loader
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
@@ -125,6 +129,8 @@ def _visualize_dataset_distribution(
 
     wandb_table = None
     wandb_table_has_rows = False
+    per_batch_percentages: list[dict[str, float]] = []
+    plot_batch_indices: list[int] = []
     if log_to_wandb and wandb is not None and unique_datasets and jax.process_index() == 0:
         table_columns = ["batch_index", *unique_datasets]
         wandb_table = wandb.Table(columns=table_columns)
@@ -139,6 +145,8 @@ def _visualize_dataset_distribution(
         if wandb_table is not None and jax.process_index() == 0:
             wandb_table.add_data(idx, *(percentages.get(name, 0.0) for name in unique_datasets))
             wandb_table_has_rows = True
+        per_batch_percentages.append(percentages)
+        plot_batch_indices.append(idx)
 
     overall_total = sum(total_counts.values())
     if overall_total == 0:
@@ -149,12 +157,37 @@ def _visualize_dataset_distribution(
     formatted_overall = ", ".join(f"{name}: {pct:.2f}%%" for name, pct in overall_percentages.items())
     logging.info("Overall dataset percentages: %s", formatted_overall)
 
+    def _create_line_plot() -> matplotlib.figure.Figure | None:
+        if not plot_batch_indices or not per_batch_percentages:
+            return None
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for dataset_name in unique_datasets:
+            y_values = [batch_pct.get(dataset_name, 0.0) for batch_pct in per_batch_percentages]
+            ax.plot(plot_batch_indices, y_values, marker="o", linewidth=1.5, label=dataset_name)
+        ax.set_xlabel("Batch index")
+        ax.set_ylabel("Dataset percentage")
+        ax.set_ylim(0, 100)
+        ax.set_title("Dataset percentage per batch")
+        ax.grid(True, linestyle="--", alpha=0.3)
+        if unique_datasets:
+            ax.legend(loc="upper right", bbox_to_anchor=(1.25, 1.0))
+        fig.tight_layout()
+        return fig
+
     if log_to_wandb and wandb is not None and jax.process_index() == 0:
         wandb_data: dict[str, object] = {
             "dataset_distribution/overall_percentages": overall_percentages,
         }
         if wandb_table is not None and wandb_table_has_rows:
             wandb_data["dataset_distribution/batch_percentages"] = wandb_table
+        overall_table = wandb.Table(columns=["dataset", "percentage"])
+        for dataset_name in unique_datasets:
+            overall_table.add_data(dataset_name, overall_percentages.get(dataset_name, 0.0))
+        wandb_data["dataset_distribution/overall_percentage_table"] = overall_table
+        line_plot_figure = _create_line_plot()
+        if line_plot_figure is not None:
+            wandb_data["dataset_distribution/batch_percentage_plot"] = wandb.Image(line_plot_figure)
+            plt.close(line_plot_figure)
         wandb.log(wandb_data)
 
 
