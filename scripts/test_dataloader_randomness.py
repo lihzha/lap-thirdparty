@@ -168,15 +168,24 @@ def main(config: _config.TrainConfig):
     )
     second_examples = _collect_examples(second_loader, 10)
 
-    breakpoint()
     tok = PaligemmaCoTTokenizer(max_len=300)
 
-    first_dataset_batches = [
-        (batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in first_examples
-    ]
-    second_dataset_batches = [
-        (batch[0].tokenized_dataset_name, getattr(batch[0], "sample_mask", None)) for batch in second_examples
-    ]
+    first_dataset_batches = [batch[0].tokenized_dataset_name for batch in first_examples]
+    second_dataset_batches = [batch[0].tokenized_dataset_name for batch in second_examples]
+    for i, (first_batch, second_batch) in enumerate(zip(first_dataset_batches, second_dataset_batches)):
+        first_decoded = []
+        for ids in first_batch:
+            for _id in ids:
+                first_decoded.append(tok.decode(_id))
+        second_decoded = []
+        for ids in second_batch:
+            for _id in ids:
+                second_decoded.append(tok.decode(_id))
+        for j, (first_str, second_str) in enumerate(zip(first_decoded, second_decoded)):
+            if first_str != second_str:
+                logging.info("Difference found in batch %d, example %d:", i, j)
+                logging.info("First:  %s", first_str)
+                logging.info("Second: %s", second_str)
 
     comparisons = [_trees_equal(a, b) for a, b in zip(first_examples, second_examples, strict=True)]
     identical = sum(comparisons)
