@@ -8,14 +8,9 @@ import dataclasses
 import datetime
 import logging
 import os
-from pathlib import Path
 
 import jax
-import matplotlib
 import numpy as np
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 try:
     import wandb
@@ -111,22 +106,13 @@ def init_wandb(
     return True
 
 
-def _log_plot_to_wandb(image_path: Path, key: str) -> None:
-    if wandb is None or getattr(wandb, "run", None) is None:
-        return
-    try:
-        wandb.log({key: wandb.Image(str(image_path))})
-    except Exception as err:  # pragma: no cover - best effort logging
-        logging.warning("Failed to log %s to wandb: %s", key, err)
-
-
 def _visualize_dataset_distribution(
     dataset_batches: list[tuple[np.ndarray | None, np.ndarray | None]],
     tokenizer: PaligemmaCoTTokenizer,
     *,
     log_to_wandb: bool = False,
 ) -> None:
-    """Visualize dataset distributions per batch and across all batches."""
+    """Log dataset distribution percentages per batch and overall."""
     if not dataset_batches:
         logging.warning("No dataset batches provided; skipping visualization.")
         return
@@ -158,47 +144,46 @@ def _visualize_dataset_distribution(
     logging.info("Found %d unique datasets across %d batches.", len(unique_datasets), len(valid_batches))
     logging.info("Top datasets: %s", total_counts.most_common(10))
 
-    per_batch_counts = np.asarray([[counter.get(name, 0) for name in unique_datasets] for counter in batch_counters])
-    x = np.arange(len(valid_batches))
-    fig_width = max(12, len(valid_batches) * 0.2)
-    fig_height = max(6, len(unique_datasets) * 0.3)
+    def _percentage_map(counter: Counter[str]) -> tuple[float, dict[str, float]]:
+        total = sum(counter.values())
+        if total == 0:
+            return 0.0, {}
+        percentages = {name: (counter.get(name, 0) / total) * 100.0 for name in unique_datasets}
+        return float(total), percentages
 
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    bottom = np.zeros(len(valid_batches))
-    for dataset_name_idx, dataset_name in enumerate(unique_datasets):
-        counts = per_batch_counts[:, dataset_name_idx]
-        ax.bar(x, counts, bottom=bottom, label=dataset_name)
-        bottom += counts
+    wandb_table = None
+    wandb_table_has_rows = False
+    if log_to_wandb and wandb is not None and unique_datasets:
+        table_columns = ["batch_index", *unique_datasets]
+        wandb_table = wandb.Table(columns=table_columns)
 
-    ax.set_xlabel("Batch index")
-    ax.set_ylabel("Samples per dataset")
-    ax.set_title("Dataset distribution per batch")
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(idx) for idx in batch_indices], rotation=45, ha="right")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1.0), frameon=False)
-    fig.tight_layout()
+    for idx, counter in zip(batch_indices, batch_counters):
+        total, percentages = _percentage_map(counter)
+        if total == 0:
+            logging.info("Batch %d has no dataset samples.", idx)
+            continue
+        formatted = ", ".join(f"{name}: {pct:.2f}%%" for name, pct in percentages.items())
+        logging.info("Batch %d dataset percentages: %s", idx, formatted)
+        if wandb_table is not None:
+            wandb_table.add_data(idx, *(percentages.get(name, 0.0) for name in unique_datasets))
+            wandb_table_has_rows = True
 
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    per_batch_path = Path(f"dataset_visualization_{timestamp}_per_batch.png")
-    fig.savefig(per_batch_path, dpi=200)
-    plt.close(fig)
-    logging.info("Saved per-batch dataset distribution plot to %s", per_batch_path)
-    if log_to_wandb:
-        _log_plot_to_wandb(per_batch_path, "dataset_distribution/per_batch")
+    overall_total = sum(total_counts.values())
+    if overall_total == 0:
+        logging.warning("Total dataset count is zero; percentage logging skipped.")
+        return
 
-    fig2, ax2 = plt.subplots(figsize=(max(8, len(unique_datasets) * 0.5), 6))
-    ax2.bar(unique_datasets, [total_counts[name] for name in unique_datasets])
-    ax2.set_ylabel("Total samples")
-    ax2.set_xlabel("Dataset")
-    ax2.set_title("Overall dataset distribution across batches")
-    plt.setp(ax2.get_xticklabels(), rotation=45, ha="right")
-    fig2.tight_layout()
-    overall_path = Path(f"dataset_visualization_{timestamp}_overall.png")
-    fig2.savefig(overall_path, dpi=200)
-    plt.close(fig2)
-    logging.info("Saved overall dataset distribution plot to %s", overall_path)
-    if log_to_wandb:
-        _log_plot_to_wandb(overall_path, "dataset_distribution/overall")
+    overall_percentages = {name: (total_counts[name] / overall_total) * 100.0 for name in unique_datasets}
+    formatted_overall = ", ".join(f"{name}: {pct:.2f}%%" for name, pct in overall_percentages.items())
+    logging.info("Overall dataset percentages: %s", formatted_overall)
+
+    if log_to_wandb and wandb is not None:
+        wandb_data: dict[str, object] = {
+            "dataset_distribution/overall_percentages": overall_percentages,
+        }
+        if wandb_table is not None and wandb_table_has_rows:
+            wandb_data["dataset_distribution/batch_percentages"] = wandb_table
+        wandb.log(wandb_data)
 
 
 def _normalize_batch(batch):
@@ -322,11 +307,11 @@ def main(config: _config.TrainConfig):
         seed=42,
         persistent_iterator=True,
     )
-    batches = _collect_examples(first_loader, 100)
+    batches = _collect_examples(first_loader, 1000)
     tok = PaligemmaCoTTokenizer(max_len=300)
 
     dataset_batches = [batch[0].tokenized_dataset_name for batch in batches]
-    _visualize_dataset_distribution(dataset_batches, tok)
+    _visualize_dataset_distribution(dataset_batches, tok, log_to_wandb=True)
 
 
 if __name__ == "__main__":
