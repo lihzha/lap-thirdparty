@@ -331,6 +331,59 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
     return ", ".join(parts)
 
 
+def describe_language_action_scale(language_action: str) -> str | None:
+    """Add qualitative descriptors (a little/a bit more/a lot) to language actions.
+
+    Args:
+        language_action: Output string produced by summarize_numeric_actions.
+
+    Returns:
+        The language action with magnitude descriptors appended. Returns None if the
+        input is None.
+    """
+
+    def _describe_translation(cm_value: float) -> str:
+        if cm_value <= 3.0:
+            return "a little"
+        if cm_value < 8.0:
+            return "a bit more"
+        return "a lot"
+
+    def _describe_rotation(deg_value: float) -> str:
+        if deg_value < 10.0:
+            return "a little"
+        if deg_value < 30.0:
+            return "a bit more"
+        return "a lot"
+
+    if language_action is None:
+        return None
+    if not isinstance(language_action, str) or not language_action.strip():
+        return language_action
+
+    translation_pattern = re.compile(r"(move\s+(?:forward|back|left|right|up|down))\s+([+\-]?\d+(?:\.\d+)?)\s*cm")
+    rotation_pattern = re.compile(
+        r"((?:tilt\s+(?:left|right|back|forward))|(?:rotate\s+(?:clockwise|counterclockwise)))\s+([+\-]?\d+(?:\.\d+)?)\s*degrees"
+    )
+
+    def _annotate(text: str, pattern: re.Pattern, descriptor_fn, unit: str) -> str:
+        def _replace(match: re.Match) -> str:
+            phrase = match.group(1)
+            raw_value = match.group(2)
+            try:
+                magnitude = float(raw_value)
+            except ValueError:
+                return match.group(0)
+            descriptor = descriptor_fn(magnitude)
+            return f"{phrase} {descriptor} ({raw_value} {unit})"
+
+        return pattern.sub(_replace, text)
+
+    with_translation = _annotate(language_action, translation_pattern, _describe_translation, "cm")
+    with_rotation = _annotate(with_translation, rotation_pattern, _describe_rotation, "degrees")
+    return with_rotation
+
+
 def summarize_bimanual_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:
     """Convert bimanual numeric delta EE actions into a language string.
 

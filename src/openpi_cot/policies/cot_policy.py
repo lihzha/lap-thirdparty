@@ -9,6 +9,7 @@ from openpi_cot.models.model_adapter import ExtendedModelType
 from openpi_cot.policies.lang_action_formats import VERBOSE_FORMAT
 from openpi_cot.policies.lang_action_formats import LanguageActionFormat
 from openpi_cot.policies.lang_action_formats import get_language_action_format
+from openpi_cot.policies.utils import describe_language_action_scale
 from openpi_cot.policies.utils import is_all_1s_language_action
 from openpi_cot.policies.utils import is_idle_language_action
 from openpi_cot.policies.utils import parse_image
@@ -41,6 +42,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     enable_langact_training: bool = True
     filter_all_1s_actions: bool = False
+    use_rough_scale: bool = False
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -248,6 +250,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data and self.enable_langact_training:
             inputs["language_actions"] = self._prepare_text(data, "language_actions", initial_state)
+            if self.use_rough_scale:
+                inputs["language_actions"] = describe_language_action_scale(
+                    inputs["language_actions"],
+                )
 
             # Only apply idle filtering for language actions and prediction
             if not is_vqa_sample:
