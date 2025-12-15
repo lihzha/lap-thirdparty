@@ -39,6 +39,14 @@ PACO_PROMPT_PARTS = [
     ("Mark one instance of ", " using a bounding box."),
 ]
 
+DIRECTION_PROMPT_PARTS = [
+    ("From the image center, which direction is the ", " located?"),
+    ("Relative to the center point of the image, where is the ", "?"),
+    ("If you stand at the center of the image, which way do you go to reach the ", "?"),
+    ("Looking from the center of the frame, in what direction is the ", " situated?"),
+    ("Which direction from the center is the ", " in this image?"),
+]
+
 
 class Paco(BaseVQADataset):
     """PACO dataset for vision-language training.
@@ -47,6 +55,11 @@ class Paco(BaseVQADataset):
     compatible with the robot dataset structure. Each image contains multiple object
     annotations with category labels.
     """
+
+    def __init__(self, *args, directional: bool = False, direction_slope: float = 2.0, **kwargs):
+        self.directional = directional
+        self.direction_slope = direction_slope
+        super().__init__(*args, **kwargs)
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
         """Build TFDS builder for LVIS."""
@@ -146,6 +159,9 @@ class Paco(BaseVQADataset):
             (prompt, caption) where prompt asks about the specific category
             and caption contains the formatted bbox.
         """
+        if self.directional:
+            return self._extract_direction_prompt_and_caption(example)
+
         # Generate deterministic seed from image ID hash
         image_id = example["image_id"]
         image_id_hash = tf.strings.to_hash_bucket_fast(image_id, 2147483647)
@@ -179,6 +195,85 @@ class Paco(BaseVQADataset):
         caption = self.bbox_to_text(bbox)
 
         return prompt, caption
+
+    def _direction_from_bbox(self, bbox: tf.Tensor) -> tf.Tensor:
+        """Map bbox center to one of 8 direction strings relative to image center."""
+        top_left = bbox[0]
+        bottom_right = bbox[1]
+        center = (top_left + bottom_right) / 2.0
+
+        x_rel = center[0] - 0.5  # +x is right
+        y_rel = 0.5 - center[1]  # invert so +y is up as described
+
+        k = tf.constant(self.direction_slope, dtype=tf.float32)
+        inv_k = 1.0 / k
+
+        abs_x = tf.abs(x_rel)
+        abs_y = tf.abs(y_rel)
+
+        is_forward = y_rel >= k * abs_x
+        is_back = y_rel <= -k * abs_x
+        is_right = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
+        is_right = tf.logical_and(is_right, x_rel >= inv_k * abs_y)
+        is_left = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
+        is_left = tf.logical_and(is_left, x_rel <= -inv_k * abs_y)
+
+        def forward():
+            return tf.constant("forward")
+
+        def back():
+            return tf.constant("back")
+
+        def right():
+            return tf.constant("right")
+
+        def left():
+            return tf.constant("left")
+
+        def diagonal():
+            base_dir = tf.where(x_rel < 0.0, tf.constant("left"), tf.constant("right"))
+            vert_dir = tf.where(y_rel >= 0.0, tf.constant("forward"), tf.constant("back"))
+            return tf.strings.join([base_dir, " and ", vert_dir])
+
+        return tf.case(
+            [
+                (is_forward, forward),
+                (is_back, back),
+                (is_right, right),
+                (is_left, left),
+            ],
+            default=diagonal,
+            exclusive=True,
+        )
+
+    def _extract_direction_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
+        """Extract prompt/caption asking for direction of the object relative to center."""
+        image_id = example["image_id"]
+        image_id_hash = tf.strings.to_hash_bucket_fast(image_id, 2147483647)
+        image_id_hash = tf.cast(image_id_hash, tf.int32)
+
+        category_name = example["annotations"]["category_name"][0]
+        bbox = example["annotations"]["bbox"][0]
+
+        num_prompts = len(DIRECTION_PROMPT_PARTS)
+        prompt_idx = tf.random.stateless_uniform(
+            [], seed=[self.seed, image_id_hash], minval=0, maxval=num_prompts, dtype=tf.int32
+        )
+
+        def make_prompt_fn(idx):
+            prefix, suffix = DIRECTION_PROMPT_PARTS[idx]
+
+            def fn():
+                return tf.strings.join([prefix, category_name, suffix])
+
+            return fn
+
+        prompt_branches = {i: make_prompt_fn(i) for i in range(num_prompts)}
+        prompt = tf.switch_case(prompt_idx, branch_fns=prompt_branches)
+
+        direction_caption = self._direction_from_bbox(bbox)
+
+        return prompt, direction_caption
 
     def extract_and_encode_image(self, example: dict) -> tf.Tensor:
         """Extract and encode LVIS image to JPEG bytes."""

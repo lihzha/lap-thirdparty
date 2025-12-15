@@ -978,7 +978,7 @@ _CONFIGS = [
     # Combined dataset configs for v4, v6, v6europe
     *create_multi_device_configs(
         base_name="pi_combined_fast_cot",
-        devices=["v6", "v6europe", "v4", "local"],
+        devices=["v6", "v6europe", "v4", "local", "v5"],
         model=pi_cot_config.PiCoTConfig(
             action_dim=7, action_horizon=16, max_token_len=250, pi05=True, discrete_state_input=True, use_fast=True
         ),
