@@ -192,7 +192,6 @@ class SingleCoTDataset:
             split="all",
             shuffle=bool(not self.want_val),  # shuffle at file/shard level for deterministic interleaving
             num_parallel_reads=self.num_parallel_reads,
-            seed=self.seed,
         )
         dataset = dataset.shard(jax.process_count(), jax.process_index())
         # Repeat early to increase interleaving across files/episodes
