@@ -20,7 +20,7 @@ from openpi_cot.policies.utils import transform_actions_to_eef_frame
 DATASETS_REQUIRING_WRIST_ROTATION = {
     # "taco_play",
     "droid",
-    # "furniture_bench_dataset_converted_externally_to_rlds",
+    "furniture_bench_dataset_converted_externally_to_rlds",
     "berkeley_fanuc_manipulation",
     "berkeley_autolab_ur5",
     "fmb",
@@ -171,8 +171,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         #     inputs["state_type"] = "eef_pose"
 
         if "actions" in data:
-            if self.language_action_format.use_eef_frame and initial_state is not None:
-                actions = transform_actions_to_eef_frame(data["actions"], initial_state)
+            # if self.language_action_format.use_eef_frame and initial_state is not None:
+            # actions = transform_actions_to_eef_frame(data["actions"], initial_state)
             actions = upstream_transforms.pad_to_dim(data["actions"], self.action_dim)
             inputs["actions"] = np.array(actions)
 
