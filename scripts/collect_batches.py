@@ -34,6 +34,7 @@ import etils.epath as epath
 from rail_tpu_utils import prevent_cross_region
 
 import openpi_cot.training.mh_sharding as sharding
+import openpi_cot.training.utils as training_utils
 
 
 def _decode_tokenized_names(tokenized_names, tokenizer: PaligemmaCoTTokenizer) -> list[str]:
@@ -224,14 +225,7 @@ def _visualize_dataset_distribution(
 def _normalize_batch(batch):
     """Convert leaves to host numpy arrays for stable comparisons."""
 
-    def _to_numpy(value):
-        if isinstance(value, jax.Array):
-            return np.asarray(value)
-        if isinstance(value, np.ndarray):
-            return value
-        return value
-
-    return jax.tree_util.tree_map(_to_numpy, jax.device_get(batch))
+    return jax.tree_util.tree_map(training_utils.to_local_array, batch)
 
 
 def _trees_equal(left, right) -> bool:
