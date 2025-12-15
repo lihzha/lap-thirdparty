@@ -51,19 +51,10 @@ def init_wandb(
     enabled: bool = True,
     rewind_to_step: int | None = None,
 ):
-    if not enabled:
-        logging.info("wandb disabled via config; skipping remote logging.")
-        return False
-
-    if wandb is None:
-        logging.warning("wandb requested but the package is not installed; skipping remote logging.")
-        return False
-
     # Only initialize wandb in the main process
     if jax.process_index() != 0:
         wandb.init(mode="disabled")
         return False
-
     ckpt_dir = config.checkpoint_dir
     if not ckpt_dir.exists():
         logging.warning("Checkpoint directory %s does not exist; skipping wandb logging.", ckpt_dir)
@@ -278,12 +269,14 @@ def init_tpu(config: _config.TrainConfig):
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
-    init_wandb(
+    wandb_enabled = init_wandb(
         config,
         resuming=False,
         enabled=True,
         rewind_to_step=getattr(config, "rewind_to_step", None),
     )
+    logging.info("Effective FSDP devices: %d", effective_fsdp_devices)
+    logging.info("wandb enabled: %s", wandb_enabled)
 
     mesh = sharding.make_mesh(effective_fsdp_devices)
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
