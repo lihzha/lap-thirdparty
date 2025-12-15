@@ -55,26 +55,9 @@ def init_wandb(
     if jax.process_index() != 0:
         wandb.init(mode="disabled")
         return False
-    ckpt_dir = config.checkpoint_dir
-    if not ckpt_dir.exists():
-        logging.warning("Checkpoint directory %s does not exist; skipping wandb logging.", ckpt_dir)
-        return False
 
     if resuming:
-        run_id_path = ckpt_dir / "wandb_id.txt"
-        if not run_id_path.exists():
-            logging.warning("wandb resume requested but %s not found; starting a fresh run.", run_id_path)
-            resuming = False
-        else:
-            run_id = run_id_path.read_text().strip()
-            if rewind_to_step is not None:
-                # Use wandb's rewind feature to resume from a specific step
-                wandb.init(
-                    resume_from=f"{run_id}?_step={rewind_to_step}",
-                    project=config.project_name,
-                )
-            else:
-                wandb.init(id=run_id, resume="must", project=config.project_name)
+        resuming = False
     if not resuming:
         wandb_mode = "online" if os.environ.get("WANDB_DISABLED", "false").lower() not in {"1", "true"} else "offline"
         run_name = f"collect-batches-{config.name}-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
