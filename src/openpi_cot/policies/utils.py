@@ -344,9 +344,9 @@ def describe_language_action_scale(language_action: str) -> str | None:
 
     def _describe_translation(cm_value: float) -> str:
         if cm_value <= 3.0:
-            return "a little"
+            return "slightly"
         if cm_value < 8.0:
-            return "a bit more"
+            return "moderately"
         return "a lot"
 
     def _describe_rotation(deg_value: float) -> str:
