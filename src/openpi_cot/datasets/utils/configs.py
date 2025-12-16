@@ -559,6 +559,20 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
+    "droid_100": {
+        "image_obs_keys": {
+            "primary": "exterior_image_1_left",
+            "secondary": "exterior_image_2_left",
+            "wrist": "wrist_image_left",
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            "cartesian_position",
+            "gripper_position",
+        ],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
     "fmb": {
         "image_obs_keys": {
             "primary": "image_side_1",
@@ -1157,6 +1171,12 @@ OXE_DATASET_METADATA = {
         "has_suboptimal": "No",
     },
     "droid": {
+        "control_frequency": 15,
+        "language_annotations": "Natural",
+        "robot_morphology": "Single Arm",
+        "has_suboptimal": "Yes",
+    },
+    "droid_100": {
         "control_frequency": 15,
         "language_annotations": "Natural",
         "robot_morphology": "Single Arm",

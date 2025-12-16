@@ -198,7 +198,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     # Optional path when DROID path is different from OXE path
     droid_rlds_data_dir: str | None = None
     # support using droid_subset for debugging
-    droid_dataset_name: Literal["droid", "droid_subset"] = "droid"
+    droid_dataset_name: Literal["droid", "droid_100"] = "droid"
     force_recompute_stats: bool = False
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
@@ -982,7 +982,13 @@ _CONFIGS = [
         base_name="pi_combined_fast_cot",
         devices=["v6", "v6europe", "v4", "local", "v5"],
         model=pi_cot_config.PiCoTConfig(
-            action_dim=7, action_horizon=16, max_token_len=250, pi05=True, discrete_state_input=True, use_fast=True, prompt_format="pi05_notime"
+            action_dim=7,
+            action_horizon=16,
+            max_token_len=250,
+            pi05=True,
+            discrete_state_input=True,
+            use_fast=True,
+            prompt_format="pi05_notime",
         ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
