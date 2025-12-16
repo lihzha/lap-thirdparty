@@ -63,6 +63,7 @@ class SingleCoTDataset:
         self.pred_prob = pred_prob
         self.primary_pred_prob = primary_pred_prob
         self.random_time_horizon = bool(config.random_time_horizon)
+        self.want_full_determinism = bool(config.want_full_determinism)
         dataset_kwargs = load_dataset_kwargs(
             dataset_name, data_dir, load_camera_views=("primary", "wrist", "wrist_right")
         )
@@ -177,7 +178,11 @@ class SingleCoTDataset:
         opts = tf.data.Options()
         # Always use deterministic operations for reproducibility
         # File interleaving will be deterministic but still provide good mixing
-        opts.experimental_deterministic = True
+        want_full_determinism = self.want_full_determinism or self.want_val
+        if want_full_determinism:
+            opts.experimental_deterministic = True
+        else:
+            opts.experimental_deterministic = False
         opts.autotune.enabled = True
         opts.experimental_optimization.apply_default_optimizations = True
         opts.experimental_optimization.map_fusion = True
@@ -190,7 +195,7 @@ class SingleCoTDataset:
         dataset = dl.DLataset.from_rlds(
             builder,
             split="all",
-            shuffle=bool(not self.want_val),  # shuffle at file/shard level for deterministic interleaving
+            shuffle=bool(not want_full_determinism),  # shuffle at file/shard level for deterministic interleaving
             num_parallel_reads=self.num_parallel_reads,
         )
         dataset = dataset.shard(jax.process_count(), jax.process_index())

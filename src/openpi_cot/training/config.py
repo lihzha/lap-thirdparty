@@ -201,6 +201,8 @@ class CoTDataConfig(upstream_config.DataConfig):
     droid_dataset_name: Literal["droid", "droid_100"] = "droid"
     force_recompute_stats: bool = False
 
+    want_full_determinism: bool = False
+
     ### OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_pi_magic_soup_with_other_states_with_bimanual"
 
