@@ -251,12 +251,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "language_actions" in data and self.enable_langact_training:
             inputs["language_actions"] = self._prepare_text(data, "language_actions", initial_state)
             if self.use_rough_scale:
-                inputs["language_actions"] = describe_language_action_scale(
-                    inputs["language_actions"],
-                )
+                inputs["language_actions"] = describe_language_action_scale(inputs["language_actions"])
 
             # Only apply idle filtering for language actions and prediction
-            if not is_vqa_sample:
+            if not is_vqa_sample and not self.use_rough_scale:
                 is_idle = is_idle_language_action(
                     inputs["language_actions"],
                     self.language_action_format.get_sum_decimal(),
