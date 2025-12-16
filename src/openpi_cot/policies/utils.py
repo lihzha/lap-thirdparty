@@ -375,7 +375,8 @@ def describe_language_action_scale(language_action: str) -> str | None:
             except ValueError:
                 return match.group(0)
             descriptor = descriptor_fn(magnitude)
-            return f"{phrase} {descriptor} ({raw_value} {unit})"
+            # return f"{phrase} {descriptor} ({raw_value} {unit})"
+            return f"{phrase} {descriptor}"
 
         return pattern.sub(_replace, text)
 
