@@ -11,6 +11,7 @@ import tensorflow as tf
 from openpi_cot.datasets.robot.droid_dataset import DroidCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import DobbeCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import LiberoCoTDataset
+from openpi_cot.datasets.robot.oxe_datasets import NavigationCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import SingleOXECoTDataset
 from openpi_cot.datasets.utils.data_utils import allocate_threads
 from openpi_cot.datasets.utils.data_utils import pprint_data_mixture
@@ -131,6 +132,12 @@ class OXECoTDatasets:
                 has_robot_dataset = True
             elif dataset_name.startswith("libero"):
                 ds = LiberoCoTDataset(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+                has_robot_dataset = True
+            elif "gnm_" in dataset_name:
+                ds = NavigationCoTDataset(
                     dataset_name=dataset_name,
                     **kwargs,
                 )
