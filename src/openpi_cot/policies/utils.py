@@ -79,13 +79,7 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     actions = np.asarray(actions, dtype=float)
     initial_state = np.asarray(initial_state, dtype=float)
 
-    squeeze_result = False
-    if actions.ndim == 1:
-        actions = actions[None, :]
-        squeeze_result = True
-    elif actions.ndim != 2:
-        raise ValueError(f"Expected actions.ndim to be 1 or 2, got {actions.ndim}")
-
+    assert actions.ndim == 1
     transformed_actions = actions.copy()
 
     # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
@@ -95,24 +89,25 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     # Get rotation matrix: base -> EEF
     R_base_to_eef = initial_rotation.as_matrix().T  # Transpose to get EEF <- base
 
-    delta_pos_base = actions[:, :3]
-    # Apply rotation and sign adjustments in base -> EEF conversion
-    delta_pos_eef = delta_pos_base @ R_base_to_eef.T
-    delta_pos_eef[:, 1] = -delta_pos_eef[:, 1]
-    delta_pos_eef[:, 2] = -delta_pos_eef[:, 2]
-    transformed_actions[:, :3] = delta_pos_eef
+    delta_pos_base = actions[:3]
+    delta_pos_eef = R_base_to_eef @ delta_pos_base
+    # Apply additional transformation: y -> -y, z -> -z
+    delta_pos_eef[1] = -delta_pos_eef[1]
+    delta_pos_eef[2] = -delta_pos_eef[2]
+    transformed_actions[:3] = delta_pos_eef
 
-    if actions.shape[-1] >= 6:
-        delta_rot_base = actions[:, 3:6]  # [roll, pitch, yaw] in radians
-        R_delta_base = R.from_euler("xyz", delta_rot_base).as_matrix()
-        R_delta_eef = np.einsum("ij,bjk,kl->bil", R_base_to_eef, R_delta_base, R_base_to_eef.T)
-        delta_rot_eef = R.from_matrix(R_delta_eef).as_euler("xyz")
-        delta_rot_eef[:, 1] = -delta_rot_eef[:, 1]
-        delta_rot_eef[:, 2] = -delta_rot_eef[:, 2]
-        transformed_actions[:, 3:6] = delta_rot_eef
+    delta_rot_base = actions[3:6]  # [roll, pitch, yaw] in radians
+    # Convert euler angles to rotation matrix
+    R_delta_base = R.from_euler("xyz", delta_rot_base).as_matrix()
+    # Transform to EEF frame: R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
+    R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
+    # Convert back to euler angles
+    delta_rot_eef = R.from_matrix(R_delta_eef).as_euler("xyz")
+    # Apply additional transformation: y -> -y, z -> -z to rotation as well
+    delta_rot_eef[1] = -delta_rot_eef[1]
+    delta_rot_eef[2] = -delta_rot_eef[2]
+    transformed_actions[3:6] = delta_rot_eef
 
-    if squeeze_result:
-        return transformed_actions[0]
     return transformed_actions
 
 
