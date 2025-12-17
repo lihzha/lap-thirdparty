@@ -1435,6 +1435,7 @@ def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
+    trajectory["observation"]["state"] = tf.cast(trajectory["observation"]["state"], tf.float32)
 
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
     trajectory["action"] = tf.concat([padded_movement_actions, tf.zeros_like(trajectory["action"][:, :1])], axis=1)
