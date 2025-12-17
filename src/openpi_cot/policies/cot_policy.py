@@ -186,6 +186,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     ) -> tuple[dict, float | None]:
         la = data[lang_action_key]
         is_bimanual: bool = data.get("is_bimanual", False)
+        is_navigation: bool = data.get("is_navigation", False)
 
         # Transform to EEF frame if requested
         if self.language_action_format.use_eef_frame and initial_state is not None:
@@ -195,6 +196,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 la,
                 self.language_action_format.get_sum_decimal(),
                 self.language_action_format.include_rotation,
+            )
+        elif is_navigation:
+            summed = summarize_numeric_actions(
+                la,
+                "nearest_10",
+                include_rotation=True,
+                rotation_precision=10,
             )
         else:
             summed = summarize_numeric_actions(

@@ -129,6 +129,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": tf.cast(traj["state"], tf.float32),
                 "passes_filter": passes_filter,
+                "is_navigation": tf.fill([traj_len], tf.constant(False)),
             }
 
             if self.use_wrist_image:

@@ -250,6 +250,7 @@ class BaseVQADataset(SingleCoTDataset):
                 "is_prediction_sample": tf.constant(False, dtype=tf.bool),
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
                 "raw_state": tf.zeros([self.action_dim], dtype=tf.float32),
+                "is_navigation": tf.constant(False, dtype=tf.bool),
             }
 
             return output

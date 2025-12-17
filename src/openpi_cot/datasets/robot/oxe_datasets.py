@@ -105,6 +105,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
+                "is_navigation": tf.fill([traj_len], tf.constant(False)),
             }
 
             return traj
@@ -203,6 +204,67 @@ class DobbeCoTDataset(SingleOXECoTDataset):
         self.dataset = self.dataset.filter(_action_within_bounds)
 
 
+class NavigationCoTDataset(SingleOXECoTDataset):
+    """Custom dataset for Navigation with 2D position state observations."""
+
+    def apply_restructure(self):
+        def restructure(traj):
+            # extracts images, depth images and proprio from the "observation" dict
+            traj_len = tf.shape(traj["action"])[0]
+            old_obs = traj["observation"]
+            new_obs = {}
+
+            for new, old in self.image_obs_keys.items():
+                if new == "primary":
+                    img_key = self.spec.primary_image_key
+                elif new == "wrist_right":
+                    continue
+                    img_key = self.spec.wrist_image_right_key
+                elif new == "wrist":
+                    img_key = self.spec.wrist_image_key
+                else:
+                    raise ValueError(f"Unknown image key: {new}")
+                # Check if key exists in observation dict
+                if old is None or old not in old_obs:
+                    new_obs[img_key] = tf.repeat("", traj_len)  # padding
+                else:
+                    new_obs[img_key] = old_obs[old]
+
+            if self.state_obs_keys:
+                # Note: instead of padding with zeros, we drop the key if it is None
+                new_obs["state"] = tf.concat(
+                    [tf.cast(old_obs[key], tf.float32) for key in self.state_obs_keys if key is not None],
+                    axis=1,
+                )
+
+            else:
+                new_obs["state"] = tf.zeros((traj_len, 0), dtype=tf.float32)  # Empty state
+
+            # Determine state type from state encoding
+            state_type_str = state_encoding_to_type(self.state_encoding)
+
+            # Build a deterministic per-trajectory identifier using a strong hash
+            # of the dataset name and the serialized action tensor. This avoids
+            # relying on per-dataset metadata with inconsistent schemas.
+
+            traj = {
+                "observation": new_obs,
+                "language_instruction": traj["language_instruction"],
+                "actions": tf.cast(traj["action"], tf.float32),
+                "dataset_name": tf.repeat(self.dataset_name, traj_len),
+                "trajectory_id": traj["trajectory_id"],
+                "raw_action": tf.cast(traj["action"], tf.float32),
+                "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
+                "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
+                "raw_state": new_obs["state"],
+                "is_navigation": tf.fill([traj_len], tf.constant(True)),
+            }
+
+            return traj
+
+        self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
+
+
 class LiberoCoTDataset(SingleOXECoTDataset):
     """Custom dataset for LIBERO with EEF state observations."""
 
@@ -255,6 +317,7 @@ class LiberoCoTDataset(SingleOXECoTDataset):
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # LIBERO is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
+                "is_navigation": tf.fill([traj_len], tf.constant(False)),
             }
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)

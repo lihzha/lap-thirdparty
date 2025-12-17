@@ -339,6 +339,8 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "planning_dataset": [("planning_dataset", 1.0)],
     "franka_dataset": [("franka_dataset", 1.0)],
     "berkeley_gnm_recon": [("berkeley_gnm_recon", 1.0)],
+    "berkeley_gnm_sac_son": [("berkeley_gnm_sac_son", 1.0)],
+    "berkeley_gnm_cory_hall": [("berkeley_gnm_cory_hall", 1.0)],
     "libero_10_no_noops": [("libero_10_no_noops", 1.0)],
     "libero_goal_no_noops": [("libero_goal_no_noops", 1.0)],
     "libero_object_no_noops": [("libero_object_no_noops", 1.0)],
