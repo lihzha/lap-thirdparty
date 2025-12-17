@@ -56,6 +56,8 @@ def _format_numeric(val: float, sum_decimal: str) -> str:
     if isinstance(sum_decimal, str):
         if sum_decimal == "no_number":
             return ""
+        if sum_decimal == "nearest_10":
+            return str(int(round(val / 10) * 10))
         m = re.fullmatch(r"(\d+)f", sum_decimal)
         if m:
             decimals = int(m.group(1))
@@ -220,7 +222,12 @@ def _summarize_compact_numeric_actions(arr_like, include_rotation: bool = False)
     # return " ".join(parts)
 
 
-def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool = False) -> str | None:
+def summarize_numeric_actions(
+    arr_like,
+    sum_decimal: str,
+    include_rotation: bool = False,
+    rotation_precision: int = 10,
+) -> str | None:
     """Convert numeric delta EE actions ([..., 7]) into a language string.
 
     Expects translation in indices [0,1,2] (meters) and gripper at index 6.
@@ -237,7 +244,7 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
         return _summarize_compact_numeric_actions(arr, include_rotation)
 
     # Convert to centimeters
-    if sum_decimal == "no_number":
+    if sum_decimal == "no_number" or sum_decimal == "nearest_10":
         decimals = 0
     else:
         decimals = int(re.fullmatch(r"(\d+)f", sum_decimal).group(1))
@@ -254,9 +261,9 @@ def summarize_numeric_actions(arr_like, sum_decimal: str, include_rotation: bool
         droll_rad = float(arr[..., 3].sum())
         dpitch_rad = float(arr[..., 4].sum())
         dyaw_rad = float(arr[..., 5].sum())
-        droll = _round_to_nearest_n(abs(droll_rad * 180.0 / np.pi), 5)
-        dpitch = _round_to_nearest_n(abs(dpitch_rad * 180.0 / np.pi), 5)
-        dyaw = _round_to_nearest_n(abs(dyaw_rad * 180.0 / np.pi), 5)
+        droll = _round_to_nearest_n(abs(droll_rad * 180.0 / np.pi), rotation_precision)
+        dpitch = _round_to_nearest_n(abs(dpitch_rad * 180.0 / np.pi), rotation_precision)
+        dyaw = _round_to_nearest_n(abs(dyaw_rad * 180.0 / np.pi), rotation_precision)
 
     parts: list[str] = []
 
