@@ -1148,19 +1148,19 @@ OXE_DATASET_METADATA = {
     },
     "berkeley_gnm_recon": {
         "control_frequency": 3,
-        "language_annotations": "None",
+        "language_annotations": "Natural",
         "robot_morphology": "Wheeled Robot",
         "has_suboptimal": "Yes",
     },
     "berkeley_gnm_cory_hall": {
         "control_frequency": 5,
-        "language_annotations": "None",
+        "language_annotations": "Natural",
         "robot_morphology": "Wheeled Robot",
         "has_suboptimal": "No",
     },
     "berkeley_gnm_sac_son": {
         "control_frequency": 10,
-        "language_annotations": "None",
+        "language_annotations": "Natural",
         "robot_morphology": "Wheeled Robot",
         "has_suboptimal": "No",
     },
