@@ -323,6 +323,7 @@ def restore_state(
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader | None,
     step: int | None = None,
+    train_state_sharding: training_utils.TrainState | None = None,
 ) -> training_utils.TrainState:
     """Restore training state and dataloader state from checkpoint.
 
@@ -331,6 +332,7 @@ def restore_state(
         state: Training state template to restore into
         data_loader: Data loader to restore iterator state
         step: Specific checkpoint step to restore (None = latest)
+        train_state_sharding: Optional sharding tree to restore with explicit placement (e.g. evaluation)
 
     Returns:
         Restored training state
@@ -338,13 +340,33 @@ def restore_state(
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.
         train_state, params = _split_params(state)
-        restored = checkpoint_manager.restore(
-            step,
-            items={
-                "train_state": train_state,
-                "params": {"params": params},
-            },
-        )
+        if train_state_sharding is not None:
+            train_state_sharding_without_params, params_sharding = _split_params(train_state_sharding)
+            restore_args = ocp.args.Composite(
+                train_state=ocp.args.PyTreeRestore(
+                    item=train_state,
+                    transforms={},
+                    restore_args=ocp.checkpoint_utils.construct_restore_args(
+                        train_state, sharding_tree=train_state_sharding_without_params
+                    ),
+                ),
+                params=ocp.args.PyTreeRestore(
+                    item={"params": params},
+                    transforms={},
+                    restore_args=ocp.checkpoint_utils.construct_restore_args(
+                        {"params": params}, sharding_tree={"params": params_sharding}
+                    ),
+                ),
+            )
+            restored = checkpoint_manager.restore(step, args=restore_args)
+        else:
+            restored = checkpoint_manager.restore(
+                step,
+                items={
+                    "train_state": train_state,
+                    "params": {"params": params},
+                },
+            )
 
     # Restore dataloader state if available
     # Multi-host: Each host restores from its own checkpoint (saved per-process)

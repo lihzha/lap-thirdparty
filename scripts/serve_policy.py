@@ -57,26 +57,12 @@ class Args:
 
 # Default checkpoints that should be used for each environment.
 DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
-    EnvMode.ALOHA: Checkpoint(
-        config="pi05_aloha",
-        dir="gs://openpi-assets/checkpoints/pi05_base",
-        type="raw"
-    ),
+    EnvMode.ALOHA: Checkpoint(config="pi05_aloha", dir="gs://openpi-assets/checkpoints/pi05_base", type="raw"),
     EnvMode.ALOHA_SIM: Checkpoint(
-        config="pi0_aloha_sim",
-        dir="gs://openpi-assets/checkpoints/pi0_aloha_sim",
-        type="raw"
+        config="pi0_aloha_sim", dir="gs://openpi-assets/checkpoints/pi0_aloha_sim", type="raw"
     ),
-    EnvMode.DROID: Checkpoint(
-        config="pi05_droid",
-        dir="gs://openpi-assets/checkpoints/pi05_droid",
-        type="raw"
-    ),
-    EnvMode.LIBERO: Checkpoint(
-        config="pi05_libero",
-        dir="gs://openpi-assets/checkpoints/pi05_libero",
-        type="raw"
-    ),
+    EnvMode.DROID: Checkpoint(config="pi05_droid", dir="gs://openpi-assets/checkpoints/pi05_droid", type="raw"),
+    EnvMode.LIBERO: Checkpoint(config="pi05_libero", dir="gs://openpi-assets/checkpoints/pi05_libero", type="raw"),
 }
 
 
@@ -97,12 +83,11 @@ def create_policy(args: Args) -> _policy.Policy:
                 return _policy_config.create_trained_policy_cot(
                     _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
                 )
-            elif args.policy.type == "raw":
+            if args.policy.type == "raw":
                 return _policy_config.create_trained_policy(
                     _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
                 )
-            else:
-                raise NotImplementedError
+            raise NotImplementedError
 
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

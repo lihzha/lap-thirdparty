@@ -1,20 +1,100 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+import flax.nnx as nnx
+import jax
 import jax.numpy as jnp
 from openpi.models import model as _model
 import openpi.policies.policy as _policy
+import openpi.shared.array_typing as at
 from openpi.training import config as _config
+from openpi.training import optimizer as _optimizer
 import openpi.transforms as up_transforms
 
 from openpi_cot.policies.adapters.policy_adaptor import CoTPolicy
+import openpi_cot.training.checkpoints as _checkpoints
+import openpi_cot.training.mh_sharding as sharding
+import openpi_cot.training.utils as training_utils
 import openpi_cot.transforms as transforms
 
 # Lazy imports to avoid loading TensorFlow (and allocating GPU memory) at import time
 # These will be imported when create_trained_policy() is actually called
 # from openpi_cot.shared.download import maybe_download
 # from openpi_cot.training import checkpoints as _checkpoints
+
+
+def load_model_from_train_state(config, checkpoint_dir):
+    rng = jax.random.key(config.seed)
+    eval_rng, init_rng = jax.random.split(rng)
+    mesh = sharding.make_mesh(1)
+    data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+
+    # Human-readable mesh overview
+    sharding.log_mesh_and_sharding_header(mesh, title="Device mesh")
+    logging.info("Data sharding spec: %s", sharding.format_sharding(data_sharding))
+    logging.info("Replicated sharding spec: %s", sharding.format_sharding(replicated_sharding))
+
+    # Initialize checkpoint manager
+    checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
+        checkpoint_dir,
+        keep_period=config.keep_period,
+        overwrite=False,  # Never overwrite for evaluation
+        resume=True,  # Always resume for evaluation
+        async_timeout_secs=config.checkpoint_async_timeout_secs,
+        async_enable=False,  # No async for evaluation
+    )
+
+    tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
+
+    def init(rng: at.KeyArrayLike) -> training_utils.TrainState:
+        # Initialize the model
+        model = config.model.create(rng)
+        params = nnx.state(model)
+
+        return training_utils.TrainState(
+            step=0,
+            params=params,
+            model_def=nnx.graphdef(model),
+            tx=tx,
+            opt_state=tx.init(params.filter(config.trainable_filter)),
+            ema_decay=config.ema_decay,
+            ema_params=None if config.ema_decay is None else params,
+        )
+
+    train_state_shape = jax.eval_shape(init, init_rng)
+    train_state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
+
+    # Log available checkpoints and determine which to load
+    available_steps = list(checkpoint_manager.all_steps())
+    logging.info(f"Available checkpoints: {available_steps}")
+
+    if config.eval_checkpoint_step is None:
+        latest_step = checkpoint_manager.latest_step()
+        logging.info(f"No checkpoint step specified (--eval_checkpoint_step), using latest: {latest_step}")
+        checkpoint_step_to_load = latest_step
+    else:
+        checkpoint_step_to_load = config.eval_checkpoint_step
+        if checkpoint_step_to_load not in available_steps:
+            raise ValueError(
+                f"Requested checkpoint step {checkpoint_step_to_load} not found. Available steps: {available_steps}"
+            )
+        logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
+
+    # Restore checkpoint using the same helper as training (supports explicit sharding)
+    train_state = _checkpoints.restore_state(
+        checkpoint_manager,
+        train_state_shape,
+        data_loader=None,
+        step=checkpoint_step_to_load,
+        train_state_sharding=train_state_sharding,
+    )
+
+    model = nnx.merge(train_state.model_def, train_state.params)
+
+    return model
 
 
 def create_trained_policy(
