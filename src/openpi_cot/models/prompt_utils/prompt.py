@@ -175,7 +175,7 @@ PI05_PROMPT_FORMAT = PromptFormat(
 
 PI05_NOTIME_PROMPT_FORMAT = PromptFormat(
     name="pi05_notime",
-    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
+    task_module=TaskModule(include_time_horizon=False),
     state_module=StateModule(
         discretization=StateDiscretizationConfig(bins=256, min_dim=7),
         state_prefix_template="State{state_label}: {state}",
