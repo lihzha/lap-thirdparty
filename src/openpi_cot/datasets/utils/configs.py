@@ -525,21 +525,21 @@ OXE_DATASET_CONFIGS = {
         "action_encoding": ActionEncoding.EEF_POS,
     },  # done
     "berkeley_gnm_recon": {
-        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": "image"},
+        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["state", None, None],
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "berkeley_gnm_cory_hall": {
-        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": "image"},
+        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["state", None, None],
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
     "berkeley_gnm_sac_son": {
-        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": "image"},
+        "image_obs_keys": {"primary": "image", "secondary": None, "wrist": None},
         "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
         "state_obs_keys": ["state", None, None],
         "state_encoding": StateEncoding.POS_EULER,
