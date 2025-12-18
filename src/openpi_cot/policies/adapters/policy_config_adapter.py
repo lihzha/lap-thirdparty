@@ -69,12 +69,16 @@ def create_trained_policy(
             *repack_transforms.inputs,
             up_transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
-            transforms.Normalize(norm_stats, normalization_type=getattr(data_config, "action_proprio_normalization_type", "normal")),
+            transforms.Normalize(
+                norm_stats, normalization_type=getattr(data_config, "action_proprio_normalization_type", "normal")
+            ),
             *data_config.model_transforms.inputs,
         ],
         output_transforms=[
             *data_config.model_transforms.outputs,
-            transforms.Unnormalize(norm_stats, normalization_type=getattr(data_config, "action_proprio_normalization_type", "normal")),
+            transforms.Unnormalize(
+                norm_stats, normalization_type=getattr(data_config, "action_proprio_normalization_type", "normal")
+            ),
             *data_config.data_transforms.outputs,
             *repack_transforms.outputs,
         ],

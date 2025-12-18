@@ -27,6 +27,9 @@ import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.training.vis_tools as vis_tools
 
+EMA_VALUE_RTOL = 5e-2
+EMA_VALUE_ATOL = 1e-3
+
 
 def init_logging():
     """Custom logging format for better readability."""
@@ -126,6 +129,68 @@ def init_tpu(config: _config.TrainConfig):
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
     return effective_fsdp_devices
+
+
+def _state_to_pytree(state):
+    if state is None:
+        return None
+    if hasattr(state, "to_pure_dict"):
+        return state.to_pure_dict()
+    return state
+
+
+def _is_numeric_leaf(value) -> bool:
+    return isinstance(value, (jax.Array, np.ndarray)) or np.isscalar(value)
+
+
+def _ensure_params_similarity(
+    params,
+    ema_params,
+    *,
+    value_rtol: float = EMA_VALUE_RTOL,
+    value_atol: float = EMA_VALUE_ATOL,
+) -> None:
+    """Ensure that `params` and `ema_params` are shape/dtype compatible and numerically close."""
+    params_tree = _state_to_pytree(params)
+    ema_tree = _state_to_pytree(ema_params)
+
+    at.check_pytree_equality(
+        expected=params_tree,
+        got=ema_tree,
+        check_shapes=True,
+        check_dtypes=True,
+    )
+
+    params_with_path, _ = jax.tree_util.tree_flatten_with_path(params_tree)
+    ema_leaves, _ = jax.tree_util.tree_flatten(ema_tree)
+
+    for (path, param_leaf), ema_leaf in zip(params_with_path, ema_leaves):
+        if _is_numeric_leaf(param_leaf):
+            param_arr = jnp.asarray(param_leaf)
+            ema_arr = jnp.asarray(ema_leaf)
+
+            if jnp.issubdtype(param_arr.dtype, jnp.bool_):
+                values_equal = bool(jnp.array_equal(param_arr, ema_arr))
+                if not values_equal:
+                    raise ValueError(
+                        f"EMA params mismatch at {jax.tree_util.keystr(path)}: boolean values differ between params "
+                        "and ema_params"
+                    )
+                continue
+
+            are_close = bool(jnp.allclose(param_arr, ema_arr, rtol=value_rtol, atol=value_atol))
+            if not are_close:
+                max_diff = float(jnp.max(jnp.abs(param_arr - ema_arr)))
+                raise ValueError(
+                    f"EMA params mismatch at {jax.tree_util.keystr(path)}: max abs diff {max_diff:.6f} exceeds "
+                    f"rtol={value_rtol} / atol={value_atol}"
+                )
+        elif param_leaf != ema_leaf:
+            raise ValueError(
+                f"EMA params mismatch at {jax.tree_util.keystr(path)}: values differ ({param_leaf!r} vs {ema_leaf!r})"
+            )
+
+    logging.info("Verified EMA parameters match main parameters (rtol=%s, atol=%s)", value_rtol, value_atol)
 
 
 class TokenAccuracyEvaluator:
@@ -239,6 +304,24 @@ class TokenVisualizationEvaluator:
         return info
 
 
+class TrainLossEvaluator:
+    def __init__(self, config: _config.TrainConfig):
+        self.config = config
+
+    @at.typecheck
+    def __call__(
+        self,
+        rng: at.KeyArrayLike,
+        state: training_utils.TrainState,
+        batch: tuple[CoTObservation, _model.Actions],
+    ) -> tuple[jax.Array, dict[str, at.Array]]:
+        model = nnx.merge(state.model_def, state.params)
+        model.eval()
+
+        loss, metrics = model.compute_loss(rng, batch[0], batch[1], train=True, stage_config=None)
+        return loss, metrics
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
@@ -267,8 +350,6 @@ def main(config: _config.TrainConfig):
         async_enable=False,  # No async for evaluation
     )
 
-    # Initialize train state shape and sharding
-
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
 
     def init(rng: at.KeyArrayLike) -> training_utils.TrainState:
@@ -289,17 +370,6 @@ def main(config: _config.TrainConfig):
     train_state_shape = jax.eval_shape(init, init_rng)
     train_state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
-    # Initialize concrete train state with proper sharding for checkpoint restoration
-    logging.info("Initializing train state for checkpoint restoration...")
-    train_state = jax.jit(
-        init,
-        in_shardings=replicated_sharding,
-        out_shardings=train_state_sharding,
-    )(init_rng)
-
-    # Restore checkpoint with explicit sharding for device mismatch handling
-    import orbax.checkpoint as ocp
-
     # Log available checkpoints and determine which to load
     available_steps = list(checkpoint_manager.all_steps())
     logging.info(f"Available checkpoints: {available_steps}")
@@ -316,57 +386,31 @@ def main(config: _config.TrainConfig):
             )
         logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
 
-    with at.disable_typechecking():
-        # Split params for restoration
-        def _split_params(state):
-            """Split params from train state for separate checkpointing."""
-            params = state.params
-            state_without_params = dataclasses.replace(state, params=None)
-            return state_without_params, params
+    # Restore checkpoint using the same helper as training (supports explicit sharding)
+    train_state = _checkpoints.restore_state(
+        checkpoint_manager,
+        train_state_shape,
+        data_loader=None,
+        step=checkpoint_step_to_load,
+        train_state_sharding=train_state_sharding,
+    )
 
-        def _merge_params(state, params_dict):
-            """Merge params back into train state after restoration."""
-            params = params_dict.get("params")
-            return dataclasses.replace(state, params=params)
+    # if train_state.ema_params is not None:
+    #     ema_rtol = EMA_VALUE_RTOL
+    #     if train_state.ema_decay is not None:
+    #         ema_rtol = max(ema_rtol, 1.0 - float(train_state.ema_decay))
+    #     breakpoint()
+    #     _ensure_params_similarity(
+    #         train_state.params,
+    #         train_state.ema_params,
+    #         value_rtol=ema_rtol,
+    #         value_atol=EMA_VALUE_ATOL,
+    #     )
 
-        train_state_without_params, params = _split_params(train_state)
-
-        # Get sharding for restoration
-        train_state_sharding_without_params, params_sharding = _split_params(train_state_sharding)
-
-        # Create restore args with explicit shardings to handle device mismatch
-        restore_args = ocp.args.Composite(
-            train_state=ocp.args.PyTreeRestore(
-                item=train_state_without_params,
-                transforms={},
-                restore_args=ocp.checkpoint_utils.construct_restore_args(
-                    train_state_without_params,
-                    sharding_tree=train_state_sharding_without_params,
-                ),
-            ),
-            params=ocp.args.PyTreeRestore(
-                item={"params": params},
-                transforms={},
-                restore_args=ocp.checkpoint_utils.construct_restore_args(
-                    {"params": params},
-                    sharding_tree={"params": params_sharding},
-                ),
-            ),
-        )
-
-        restored = checkpoint_manager.restore(
-            checkpoint_step_to_load,
-            args=restore_args,
-        )
-
-        train_state = _merge_params(restored["train_state"], restored["params"])
-
-        # # Use EMA params for evaluation if available (they typically perform better)
-        # if train_state.ema_params is not None:
-        #     logging.info("Using EMA params for evaluation")
-        #     train_state = dataclasses.replace(train_state, params=train_state.ema_params)
-        # else:
-        #     logging.info("EMA params not available, using regular params for evaluation")
+    # Use EMA params for evaluation if available (matches training checkpoint layout)
+    if train_state.ema_params is not None:
+        logging.info("Using EMA params for evaluation")
+        train_state = dataclasses.replace(train_state, params=train_state.ema_params)
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
@@ -442,6 +486,23 @@ def main(config: _config.TrainConfig):
             num_eval_batches,
         )
         results.update(viz_results)
+
+    if config.eval_mode == "train_loss":
+        logging.info("Running train loss evaluation...")
+        loss, metrics = evaluate_loss(
+            config,
+            eval_rng,
+            train_state,
+            train_state_sharding,
+            data_loader,
+            mesh,
+            data_sharding,
+            replicated_sharding,
+            num_eval_batches,
+        )
+        results.update({"eval/train_loss/loss": float(loss)})
+        for key, value in metrics.items():
+            results[f"eval/train_loss/{key}"] = float(value)
 
     # Log final results
     logging.info("=" * 80)
@@ -544,12 +605,12 @@ def evaluate_rollout(
     """Evaluate rollout performance (language action prediction accuracy)."""
     evaluator = RolloutEvaluator(config)
     # Note: batch input uses replicated sharding because prepare_eval_batch is called outside JIT
-    peval_step = jax.jit(
-        evaluator,
-        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
-        out_shardings=(replicated_sharding),
-    )
-
+    # peval_step = jax.jit(
+    #     evaluator,
+    #     in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
+    #     out_shardings=(replicated_sharding),
+    # )
+    peval_step = evaluator
     # Get tokenizer for decoding
     tokenizer = data_loader.tokenizer
 
@@ -633,6 +694,49 @@ def evaluate_rollout(
         wandb.log({"eval/rollout/predictions": images_to_log}, step=int(train_state.step))
 
     return results
+
+
+def evaluate_loss(
+    config: _config.TrainConfig,
+    eval_rng: at.KeyArrayLike,
+    train_state: training_utils.TrainState,
+    train_state_sharding,
+    data_loader,
+    mesh,
+    data_sharding,
+    replicated_sharding,
+    num_eval_batches: int,
+) -> dict[str, float]:
+    """Evaluate rollout performance (language action prediction accuracy)."""
+    evaluator = TrainLossEvaluator(config)
+    # Note: batch input uses replicated sharding because prepare_eval_batch is called outside JIT
+    # peval_step = jax.jit(
+    #     evaluator,
+    #     in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
+    #     out_shardings=(replicated_sharding),
+    # )
+    peval_step = evaluator
+    # Get tokenizer for decoding
+
+    data_iter = iter(data_loader)
+    pbar = tqdm.tqdm(
+        range(num_eval_batches),
+        total=num_eval_batches,
+        dynamic_ncols=True,
+        desc="Rollout evaluation",
+        disable=(jax.process_index() != 0),
+    )
+
+    with sharding.set_mesh(mesh):
+        for batch_idx in pbar:
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                logging.info(f"Reached end of dataset at batch {batch_idx}")
+                break
+
+            loss, metrics = peval_step(eval_rng, train_state, batch)
+    return loss, metrics
 
 
 def evaluate_token_visualization(

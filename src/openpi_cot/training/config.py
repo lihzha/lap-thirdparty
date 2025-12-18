@@ -918,7 +918,7 @@ class TrainConfig(upstream_config.TrainConfig):
     # Evaluation fields
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = None
-    eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization"] = "rollout"
+    eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss"] = "rollout"
     # Multi-stage training schedule choice
     training_schedule_choice: TrainingScheduleChoice = dataclasses.field(default_factory=TrainingScheduleChoice)
 
