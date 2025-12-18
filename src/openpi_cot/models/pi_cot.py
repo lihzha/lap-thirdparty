@@ -749,11 +749,9 @@ def _compute_cross_entropy_with_metrics(
     metrics = {}
 
     logp = jax.nn.log_softmax(logits, axis=-1)
-    token_logp = jnp.sum(labels * logp, axis=-1)
-    token_mask_f = token_mask.astype(logits.dtype)
-    token_loss = -token_logp * token_mask_f
-    token_counts = jnp.maximum(jnp.sum(token_mask_f, axis=-1), 1.0)
-    per_sample_loss = jnp.sum(token_loss, axis=-1) / token_counts
+    token_pplx = jnp.sum(labels * logp, axis=-1)
+    # Standard hard target loss
+    per_sample_loss = -jnp.sum(token_pplx * token_mask, axis=-1) / jnp.clip(jnp.sum(token_mask, -1), 1)
 
     # breakpoint()
 
