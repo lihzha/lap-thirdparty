@@ -556,7 +556,7 @@ class SingleCoTDataset:
 
                 if pred_horizon_seconds is not None:
                     # Format horizon with 1 decimal place and strip trailing zeros/dot
-                    time_str = tf.strings.as_string(pred_horizon_seconds, precision=2)
+                    time_str = tf.strings.as_string(pred_horizon_seconds, precision=1)
                     time_str = tf.strings.regex_replace(time_str, r"0+$", "")
                     time_str = tf.strings.regex_replace(time_str, r"\.$", "")
 
