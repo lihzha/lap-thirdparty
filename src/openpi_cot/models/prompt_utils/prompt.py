@@ -33,7 +33,7 @@ class TaskModule:
     Handles cleaning and formatting of task prompts.
     """
 
-    template: str = "Task: {prompt}"
+    template: str = "Task: {prompt}, predict the robot's action in the end-effector frame"
     # Whether to include time horizon instruction when provided
     include_time_horizon: bool = False
     # Template for time horizon instruction
@@ -175,7 +175,7 @@ PI05_NOTIME_PROMPT_FORMAT = PromptFormat(
         include_state_type=False,
     ),
     action_module=ActionModule(prefix="Action: "),
-    separator=", ",
+    separator="; ",
     critical_token_checker=checkers.is_critical_directional,
     direction_token_checker=checkers.is_direction_natural,
 )
