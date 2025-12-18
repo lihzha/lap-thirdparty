@@ -33,7 +33,7 @@ class TaskModule:
     Handles cleaning and formatting of task prompts.
     """
 
-    template: str = "Task: {prompt}, predict the robot's action in the end-effector frame"
+    template: str = "Task: {prompt}, predict the robot's action in the {frame_description} frame"
     # Whether to include time horizon instruction when provided
     include_time_horizon: bool = False
     # Template for time horizon instruction
@@ -41,7 +41,9 @@ class TaskModule:
         "predict the robot's action in the future {time_horizon_seconds} seconds in the end-effector frame"
     )
 
-    def format_task(self, prompt: str, time_horizon_seconds: float | None = None) -> str:
+    def format_task(
+        self, prompt: str, time_horizon_seconds: float | None = None, frame_description: str = "end-effector frame"
+    ) -> str:
         """Format task prompt.
 
         Args:
@@ -56,7 +58,7 @@ class TaskModule:
             cleaned_prompt += ", "
             time_horizon_seconds = round(time_horizon_seconds * 2) / 2.0
             cleaned_prompt += self.time_horizon_template.format(time_horizon_seconds=time_horizon_seconds)
-        return self.template.format(prompt=cleaned_prompt)
+        return self.template.format(prompt=cleaned_prompt, frame_description=frame_description)
 
 
 @dataclasses.dataclass
@@ -116,6 +118,7 @@ class PromptFormat:
         state: np.ndarray | None = None,
         state_type: str | None = None,
         time_horizon_seconds: float | None = None,
+        frame_description: str = "end-effector frame",
     ) -> str:
         """Format the prompt with optional state, state type, and time horizon.
 
@@ -136,7 +139,11 @@ class PromptFormat:
 
         # Add task
         if self.task_module is not None:
-            parts.append(self.task_module.format_task(prompt=prompt, time_horizon_seconds=time_horizon_seconds))
+            parts.append(
+                self.task_module.format_task(
+                    prompt=prompt, time_horizon_seconds=time_horizon_seconds, frame_description=frame_description
+                )
+            )
 
         # Add state if module is present
         if self.state_module is not None:

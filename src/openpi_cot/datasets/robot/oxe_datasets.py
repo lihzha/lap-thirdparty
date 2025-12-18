@@ -106,6 +106,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
                 "is_navigation": tf.fill([traj_len], tf.constant(False)),
+                "has_wrist_image": tf.fill([traj_len], tf.constant(self.has_wrist_image)),
             }
 
             return traj
@@ -258,6 +259,7 @@ class NavigationCoTDataset(SingleOXECoTDataset):
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
                 "is_navigation": tf.fill([traj_len], tf.constant(True)),
+                "has_wrist_image": tf.fill([traj_len], tf.constant(False)),
             }
 
             return traj
@@ -318,6 +320,7 @@ class LiberoCoTDataset(SingleOXECoTDataset):
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
                 "is_navigation": tf.fill([traj_len], tf.constant(False)),
+                "has_wrist_image": tf.fill([traj_len], tf.constant(True)),
             }
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)

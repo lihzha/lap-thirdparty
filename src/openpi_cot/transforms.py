@@ -46,6 +46,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
         # Always tokenize regular reasoning (prompt + language_actions)
         language_actions = data.pop("language_actions", None)  # if None, inference
         dataset_name = data.pop("dataset_name", None)  # if None, inference
+        frame_description = data.pop("frame_description", "end-effector frame")
         if dataset_name is not None:
             tokenized_dataset_name = self.tokenizer._tokenizer.encode(dataset_name)
             pad_id = self.tokenizer._tokenizer.pad_id()
@@ -76,6 +77,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             is_vqa_sample=is_vqa_sample,
             is_prediction_sample=is_prediction_sample,
             time_horizon_seconds=time_horizon_seconds,
+            frame_description=frame_description,
         )
 
         # Combine number_mask and direction_mask for critical tokens

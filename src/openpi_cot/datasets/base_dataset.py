@@ -77,6 +77,7 @@ class SingleCoTDataset:
         self.state_encoding = dataset_kwargs["state_encoding"]
         self.action_encoding = dataset_kwargs["action_encoding"]
         self.is_bimanual = dataset_kwargs.get("is_bimanual", False)
+        self.has_wrist_image = dataset_kwargs["image_obs_keys"]["wrist"] is not None
 
         self.num_parallel_reads = tf.data.AUTOTUNE if num_parallel_reads == -1 else num_parallel_reads
         self.num_parallel_calls = tf.data.AUTOTUNE if num_parallel_calls == -1 else num_parallel_calls
@@ -571,9 +572,7 @@ class SingleCoTDataset:
                                 r"next\s+\d+(\.\d+)?\s+seconds?",
                                 tf.strings.join(["next ", time_str, " seconds"]),
                             ),
-                            lambda: tf.strings.join(
-                                [prediction_prompt, " in the next ", time_str, " seconds"]
-                            ),
+                            lambda: tf.strings.join([prediction_prompt, " in the next ", time_str, " seconds"]),
                         ),
                     )
 

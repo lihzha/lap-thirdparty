@@ -187,10 +187,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         la = data[lang_action_key]
         is_bimanual: bool = data.get("is_bimanual", False)
         is_navigation: bool = data.get("is_navigation", False)
+        has_wrist_image: bool = data["has_wrist_image"]
+        frame_desc = "robot base frame"
 
         # Transform to EEF frame if requested
-        if self.language_action_format.use_eef_frame and initial_state is not None:
+        if self.language_action_format.use_eef_frame and initial_state is not None and has_wrist_image:
             la = transform_actions_to_eef_frame(la, initial_state)
+            frame_desc = "end-effector frame"
         if is_bimanual:
             summed = summarize_bimanual_numeric_actions(
                 la,
@@ -210,7 +213,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 self.language_action_format.get_sum_decimal(),
                 self.language_action_format.include_rotation,
             )
-        return summed
+        return summed, frame_desc
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
@@ -257,7 +260,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data and self.enable_langact_training:
-            inputs["language_actions"] = self._prepare_text(data, "language_actions", initial_state)
+            inputs["language_actions"], inputs["frame_description"] = self._prepare_text(
+                data, "language_actions", initial_state
+            )
             if self.use_rough_scale:
                 inputs["language_actions"] = describe_language_action_scale(inputs["language_actions"])
 
