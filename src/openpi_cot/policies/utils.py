@@ -353,9 +353,9 @@ def describe_language_action_scale(language_action: str) -> str | None:
 
     def _describe_rotation(deg_value: float) -> str:
         if deg_value < 10.0:
-            return "a little"
+            return "slightly"
         if deg_value < 30.0:
-            return "a bit more"
+            return "moderately"
         return "a lot"
 
     if language_action is None:
