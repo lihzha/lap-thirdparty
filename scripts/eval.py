@@ -407,10 +407,10 @@ def main(config: _config.TrainConfig):
     #         value_atol=EMA_VALUE_ATOL,
     #     )
 
-    # Use EMA params for evaluation if available (matches training checkpoint layout)
-    if train_state.ema_params is not None:
-        logging.info("Using EMA params for evaluation")
-        train_state = dataclasses.replace(train_state, params=train_state.ema_params)
+    # # Use EMA params for evaluation if available (matches training checkpoint layout)
+    # if train_state.ema_params is not None:
+    #     logging.info("Using EMA params for evaluation")
+    #     train_state = dataclasses.replace(train_state, params=train_state.ema_params)
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
@@ -605,12 +605,12 @@ def evaluate_rollout(
     """Evaluate rollout performance (language action prediction accuracy)."""
     evaluator = RolloutEvaluator(config)
     # Note: batch input uses replicated sharding because prepare_eval_batch is called outside JIT
-    # peval_step = jax.jit(
-    #     evaluator,
-    #     in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
-    #     out_shardings=(replicated_sharding),
-    # )
-    peval_step = evaluator
+    peval_step = jax.jit(
+        evaluator,
+        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
+        out_shardings=(replicated_sharding),
+    )
+    # peval_step = evaluator
     # Get tokenizer for decoding
     tokenizer = data_loader.tokenizer
 
