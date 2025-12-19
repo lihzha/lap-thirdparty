@@ -83,6 +83,9 @@ class LanguageActionFormat:
                         translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
                         gripper_actions[i] = float(grip)
         else:
+            sentences[0] = sentences[0].replace("slightly", "1.5 cm") \
+                        .replace("moderately", "5 cm") \
+                        .replace("a lot", "10 cm")
             move_pattern = (
                 re.compile(
                     rf"move\s+(right|left|forward|backward|back|up|down)(?:\s+([\-\d\.]+)\s*{self.translation_unit})?",

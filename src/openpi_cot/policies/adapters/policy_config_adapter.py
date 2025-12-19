@@ -19,6 +19,9 @@ import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
 import openpi_cot.transforms as transforms
 
+from flax import traverse_util
+
+
 # Lazy imports to avoid loading TensorFlow (and allocating GPU memory) at import time
 # These will be imported when create_trained_policy() is actually called
 # from openpi_cot.shared.download import maybe_download
@@ -84,15 +87,19 @@ def load_model_from_train_state(config, checkpoint_dir):
         logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
 
     # Restore checkpoint using the same helper as training (supports explicit sharding)
-    train_state = _checkpoints.restore_state(
+    params = _checkpoints.restore_params(
         checkpoint_manager,
         train_state_shape,
-        data_loader=None,
         step=checkpoint_step_to_load,
         train_state_sharding=train_state_sharding,
     )
+    params = params["params"].to_pure_dict()
+    flat_params = traverse_util.flatten_dict(params)
+    if all(kp[-1] == "value" for kp in flat_params): 
+        flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
+    params = traverse_util.unflatten_dict(flat_params)
 
-    model = nnx.merge(train_state.model_def, train_state.params)
+    model = config.model.load(params)
 
     return model
 
@@ -131,7 +138,8 @@ def create_trained_policy(
 
     repack_transforms = repack_transforms or up_transforms.Group()
     checkpoint_dir = maybe_download(str(checkpoint_dir))
-    model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+    model = load_model_from_train_state(train_config, checkpoint_dir)
+    # model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure

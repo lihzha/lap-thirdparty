@@ -416,6 +416,42 @@ def restore_state(
     return _merge_params(restored["train_state"], restored["params"])
 
 
+def restore_params(
+    checkpoint_manager: ocp.CheckpointManager,
+    state: training_utils.TrainState,
+    step: int | None = None,
+    train_state_sharding: training_utils.TrainState | None = None,
+) -> training_utils.TrainState:
+    """Restore training state and dataloader state from checkpoint.
+
+    Args:
+        checkpoint_manager: The checkpoint manager
+        state: Training state template to restore into
+        data_loader: Data loader to restore iterator state
+        step: Specific checkpoint step to restore (None = latest)
+        train_state_sharding: Optional sharding tree to restore with explicit placement (e.g. evaluation)
+
+    Returns:
+        Restored training state
+    """
+    with at.disable_typechecking():
+        # Split params that can be used for inference into a separate item.
+        _, params = _split_params(state)
+     
+        _, params_sharding = _split_params(train_state_sharding)
+        restore_args = ocp.args.Composite(
+            params=ocp.args.PyTreeRestore(
+                item={"params": params},
+                transforms={},
+                restore_args=ocp.checkpoint_utils.construct_restore_args(
+                    {"params": params}, sharding_tree={"params": params_sharding}
+                ),
+            ),
+        )
+        restored = checkpoint_manager.restore(step, args=restore_args)
+
+    return restored["params"]
+
 def load_norm_stats(
     assets_dir: epath.Path | str, asset_id: str
 ) -> dict[str, _normalize_adapter.ExtendedNormStats] | None:

@@ -189,7 +189,7 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
 
     def obs_to_request(self, curr_obs, instruction):
 
-        gripper_position = 1 - curr_obs["gripper_position"]
+        gripper_position = curr_obs["gripper_position"]
 
         request = {
             "observation/exterior_image_1_left": image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
