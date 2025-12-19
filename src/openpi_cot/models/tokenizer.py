@@ -76,6 +76,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
         frame_description: str = "end-effector frame",
+        state_dropout: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
         """Tokenize prompt and reasoning for chain-of-thought model.
 
@@ -113,6 +114,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             state_type,
             time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
             frame_description=frame_description,
+            state_dropout=state_dropout,
         )
 
         # Tokenize
@@ -207,6 +209,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         is_vqa_sample: bool = False,
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
+        state_dropout: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Tokenize prompt, language actions (if any), state, and actions for FAST model.
 
@@ -241,7 +244,11 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
 
         # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
         formatted_prompt = fmt.format_prompt(
-            prompt, state, state_type, time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None
+            prompt,
+            state,
+            state_type,
+            time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
+            state_dropout=state_dropout,
         )
 
         # Tokenize prompt

@@ -29,6 +29,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
     discrete_state_input: bool = False
     dataset_name_pad_len: int = 100
     verbose_mode: bool = False
+    state_dropout: float = 0.0
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -78,6 +79,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
             is_prediction_sample=is_prediction_sample,
             time_horizon_seconds=time_horizon_seconds,
             frame_description=frame_description,
+            state_dropout=self.state_dropout,
         )
 
         # Combine number_mask and direction_mask for critical tokens
@@ -451,6 +453,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
 
     tokenizer: FASTTokenizer
     discrete_state_input: bool = True
+    state_dropout: float = 0.0
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -490,6 +493,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             is_vqa_sample=is_vqa_sample,
             is_prediction_sample=is_prediction_sample,
             time_horizon_seconds=time_horizon_seconds,
+            state_dropout=self.state_dropout,
         )
 
         return {

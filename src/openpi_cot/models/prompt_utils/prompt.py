@@ -1,5 +1,6 @@
 from collections.abc import Callable
 import dataclasses
+import random
 
 import numpy as np
 
@@ -119,6 +120,7 @@ class PromptFormat:
         state_type: str | None = None,
         time_horizon_seconds: float | None = None,
         frame_description: str = "end-effector frame",
+        state_dropout: float = 0.0,
     ) -> str:
         """Format the prompt with optional state, state type, and time horizon.
 
@@ -145,8 +147,12 @@ class PromptFormat:
                 )
             )
 
-        # Add state if module is present
-        if self.state_module is not None:
+        # First determine if dropout applies
+        add_state = True
+        if self.state_module is None or state is None or (state_dropout > 0.0 and random.random() < state_dropout):
+            add_state = False
+
+        if add_state:
             state_str = self.state_module.format_state(state=state, state_type=state_type)
             if state_str:  # Only add if non-empty
                 parts.append(state_str)
