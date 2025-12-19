@@ -239,6 +239,7 @@ class PiCoT(_pi0.Pi0):
             critical_mask=critical_mask,
             number_mask=number_mask,
             direction_mask=direction_mask,
+            raw_labels=observation.tokenized_prompt[:, 1:],
             verbose_mode=verbose_mode,
             return_predictions=return_predictions,
         )
@@ -654,6 +655,7 @@ class PiCoT(_pi0.Pi0):
 def _compute_token_accuracy_metrics(
     predictions: at.Int[at.Array, "b s"],
     labels: at.Int[at.Array, "b s"],
+    per_token_loss: at.Float[at.Array, "b s"],
     token_mask: at.Bool[at.Array, "b s"],
     critical_mask: at.Bool[at.Array, "b s"] | None = None,
     number_mask: at.Bool[at.Array, "b s"] | None = None,
@@ -679,6 +681,8 @@ def _compute_token_accuracy_metrics(
     masked_correct = correct * token_mask
     num_tokens = jnp.maximum(token_mask.sum(), 1.0)
     metrics["token_accuracy"] = masked_correct.sum() / num_tokens
+    metrics["per_token_loss"] = per_token_loss
+    metrics["labels"] = labels
 
     # Critical token accuracy
     if critical_mask is not None:
@@ -719,11 +723,12 @@ def _compute_token_accuracy_metrics(
 
 def _compute_cross_entropy_with_metrics(
     logits: at.Float[at.Array, "b s v"],
-    labels: at.Int[at.Array, "b s"],
+    labels: at.Int[at.Array, "b s v"],
     token_mask: at.Bool[at.Array, "b s"],
     critical_mask: at.Bool[at.Array, "b s"] | None = None,
     number_mask: at.Bool[at.Array, "b s"] | None = None,
     direction_mask: at.Bool[at.Array, "b s"] | None = None,
+    raw_labels: at.Float[at.Array, "b s"] | None = None,
     *,
     verbose_mode: bool = False,
     return_predictions: bool = False,
@@ -760,7 +765,7 @@ def _compute_cross_entropy_with_metrics(
     if return_predictions:
         predictions = jnp.argmax(logits, axis=-1)
         metrics["predictions"] = predictions
-        metrics["labels"] = labels
+        metrics["labels"] = raw_labels
         metrics["token_mask"] = token_mask
 
     # Compute detailed accuracy metrics if verbose_mode is enabled
@@ -772,7 +777,8 @@ def _compute_cross_entropy_with_metrics(
         predictions = metrics.get("predictions", jnp.argmax(logits, axis=-1))
         accuracy_metrics = _compute_token_accuracy_metrics(
             predictions=predictions,
-            labels=labels,
+            labels=raw_labels,
+            per_token_loss=-token_pplx * token_mask,
             token_mask=token_mask,
             critical_mask=critical_mask,
             number_mask=number_mask,
@@ -813,47 +819,47 @@ def _compute_sample_specific_metrics(
     # Average loss for this subset
     metrics[f"{prefix}loss"] = jnp.sum(masked_loss) / num_samples
 
-    if verbose_mode:
-        # Per-sample losses (for dataset-level micro-averaging)
-        metrics[f"{prefix}per_sample_loss"] = masked_loss
+    # if verbose_mode:
+    #     # Per-sample losses (for dataset-level micro-averaging)
+    #     metrics[f"{prefix}per_sample_loss"] = masked_loss
 
-        # Critical token metrics
-        if "per_sample_critical_correct" in lang_metrics:
-            critical_correct = lang_metrics["per_sample_critical_correct"] * sample_mask
-            critical_total = lang_metrics["per_sample_critical_total"] * sample_mask
-            num_critical_tokens = jnp.maximum(jnp.sum(critical_total), 1.0)
+    #     # Critical token metrics
+    #     if "per_sample_critical_correct" in lang_metrics:
+    #         critical_correct = lang_metrics["per_sample_critical_correct"] * sample_mask
+    #         critical_total = lang_metrics["per_sample_critical_total"] * sample_mask
+    #         num_critical_tokens = jnp.maximum(jnp.sum(critical_total), 1.0)
 
-            # Average critical token accuracy
-            metrics[f"{prefix}critical_token_accuracy"] = jnp.sum(critical_correct) / num_critical_tokens
+    #         # Average critical token accuracy
+    #         metrics[f"{prefix}critical_token_accuracy"] = jnp.sum(critical_correct) / num_critical_tokens
 
-            # Per-sample counts (for dataset-level micro-averaging)
-            metrics[f"{prefix}per_sample_critical_correct"] = critical_correct
-            metrics[f"{prefix}per_sample_critical_total"] = critical_total
+    #         # Per-sample counts (for dataset-level micro-averaging)
+    #         metrics[f"{prefix}per_sample_critical_correct"] = critical_correct
+    #         metrics[f"{prefix}per_sample_critical_total"] = critical_total
 
-        # Number token metrics
-        if "per_sample_number_correct" in lang_metrics:
-            number_correct = lang_metrics["per_sample_number_correct"] * sample_mask
-            number_total = lang_metrics["per_sample_number_total"] * sample_mask
-            num_number_tokens = jnp.maximum(jnp.sum(number_total), 1.0)
+    #     # Number token metrics
+    #     if "per_sample_number_correct" in lang_metrics:
+    #         number_correct = lang_metrics["per_sample_number_correct"] * sample_mask
+    #         number_total = lang_metrics["per_sample_number_total"] * sample_mask
+    #         num_number_tokens = jnp.maximum(jnp.sum(number_total), 1.0)
 
-            # Average number token accuracy
-            metrics[f"{prefix}number_token_accuracy"] = jnp.sum(number_correct) / num_number_tokens
+    #         # Average number token accuracy
+    #         metrics[f"{prefix}number_token_accuracy"] = jnp.sum(number_correct) / num_number_tokens
 
-            # Per-sample counts (for dataset-level micro-averaging)
-            metrics[f"{prefix}per_sample_number_correct"] = number_correct
-            metrics[f"{prefix}per_sample_number_total"] = number_total
+    #         # Per-sample counts (for dataset-level micro-averaging)
+    #         metrics[f"{prefix}per_sample_number_correct"] = number_correct
+    #         metrics[f"{prefix}per_sample_number_total"] = number_total
 
-        # Direction token metrics
-        if "per_sample_direction_correct" in lang_metrics:
-            direction_correct = lang_metrics["per_sample_direction_correct"] * sample_mask
-            direction_total = lang_metrics["per_sample_direction_total"] * sample_mask
-            num_direction_tokens = jnp.maximum(jnp.sum(direction_total), 1.0)
+    #     # Direction token metrics
+    #     if "per_sample_direction_correct" in lang_metrics:
+    #         direction_correct = lang_metrics["per_sample_direction_correct"] * sample_mask
+    #         direction_total = lang_metrics["per_sample_direction_total"] * sample_mask
+    #         num_direction_tokens = jnp.maximum(jnp.sum(direction_total), 1.0)
 
-            # Average direction token accuracy
-            metrics[f"{prefix}direction_token_accuracy"] = jnp.sum(direction_correct) / num_direction_tokens
+    #         # Average direction token accuracy
+    #         metrics[f"{prefix}direction_token_accuracy"] = jnp.sum(direction_correct) / num_direction_tokens
 
-            # Per-sample counts (for dataset-level micro-averaging)
-            metrics[f"{prefix}per_sample_direction_correct"] = direction_correct
-            metrics[f"{prefix}per_sample_direction_total"] = direction_total
+    #         # Per-sample counts (for dataset-level micro-averaging)
+    #         metrics[f"{prefix}per_sample_direction_correct"] = direction_correct
+    #         metrics[f"{prefix}per_sample_direction_total"] = direction_total
 
     return metrics

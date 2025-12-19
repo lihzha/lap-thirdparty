@@ -214,22 +214,21 @@ class TokenAccuracyEvaluator:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            per_sample_loss, token_accuracy, critical_token_accuracy = model.compute_loss(
-                rng, observation, actions, train=False
-            )
-            return jnp.mean(per_sample_loss), (per_sample_loss, token_accuracy, critical_token_accuracy)
+            loss, metrics = model.compute_loss(rng, observation, actions, train=False)
+            return loss, metrics
 
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
-        loss, (per_sample_loss, token_accuracy, critical_token_accuracy) = eval_fn(
-            model, eval_rng, observation, actions
-        )
+        loss, metrics = eval_fn(model, eval_rng, observation, actions)
 
         info = {
             "loss": loss,
-            "per_sample_loss": per_sample_loss,
-            "token_accuracy": token_accuracy,
-            "critical_token_accuracy": critical_token_accuracy,
+            "token_accuracy": metrics["token_accuracy"],
+            "critical_token_accuracy": metrics["critical_token_accuracy"],
+            "number_token_accuracy": metrics["number_token_accuracy"],
+            "direction_token_accuracy": metrics["direction_token_accuracy"],
+            "per_token_loss": metrics["per_token_loss"],
+            "labels": metrics["labels"],
         }
         return info
 

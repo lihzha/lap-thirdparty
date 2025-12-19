@@ -217,6 +217,36 @@ class SingleCoTDataset:
 
         self.dataset = self.dataset.filter(_split_filter)
 
+        #  def split_val(self, split_seed):
+        #     self.not_used_fraction = getattr(self.config, "not_used_fraction", 0.85)
+        #     self.split = split
+        #     self.want_val = split == "val"
+        #     self.want_not_used = split == "not_used"
+        #     val_fraction = float(self.val_fraction or 0.0)
+        #     not_used_fraction = float(self.not_used_fraction or 0.0)
+        #     total_fraction = val_fraction + not_used_fraction
+        #     if total_fraction > 1.0:
+        #         raise ValueError("val_fraction + not_used_fraction must be <= 1.0")
+
+        #     def _split_filter(traj):
+        #         salt = tf.strings.as_string(split_seed)
+        #         anchor = traj["trajectory_id"][0]
+        #         key = tf.strings.join([salt, anchor])
+        #         bucket = tf.strings.to_hash_bucket_fast(key, 1000)
+        #         val_thr = tf.cast(int(val_fraction * 1000), tf.int64)
+        #         not_used_thr = tf.cast(int(total_fraction * 1000), tf.int64)
+
+        #         is_val = bucket < val_thr
+        #         is_not_used = tf.logical_and(bucket >= val_thr, bucket < not_used_thr)
+
+        #         if self.want_val:
+        #             return is_val
+        #         if self.want_not_used:
+        #             return is_not_used
+        #         return tf.logical_not(tf.logical_or(is_val, is_not_used))
+
+        self.dataset = self.dataset.filter(_split_filter)
+
     def apply_traj_transforms(
         self,
         action_horizon: int,
