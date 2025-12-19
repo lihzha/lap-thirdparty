@@ -407,9 +407,9 @@ def main(config: _config.TrainConfig):
     #     )
 
     # # Use EMA params for evaluation if available (matches training checkpoint layout)
-    # if train_state.ema_params is not None:
-    #     logging.info("Using EMA params for evaluation")
-    #     train_state = dataclasses.replace(train_state, params=train_state.ema_params)
+    if train_state.ema_params is not None and config.eval_use_ema:
+        logging.info("Using EMA params for evaluation")
+        train_state = dataclasses.replace(train_state, params=train_state.ema_params)
 
     logging.info(f"Loaded checkpoint at step {train_state.step}")
     sharding.log_param_sharding_actual(train_state.params)
@@ -418,7 +418,7 @@ def main(config: _config.TrainConfig):
         config,
         sharding=data_sharding,
         shuffle=True,
-        split="train",
+        split=config.eval_split,
         seed=config.seed,
         max_samples=getattr(config.data, "val_max_samples", None),
     )
