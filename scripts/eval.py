@@ -558,6 +558,7 @@ def evaluate_token_accuracy(
 
             eval_info = peval_step(eval_rng, train_state, batch)
             eval_infos.append(eval_info)
+            breakpoint()
 
             # Log intermediate results
             if (batch_idx + 1) % 10 == 0:
