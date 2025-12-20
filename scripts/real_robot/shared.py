@@ -1,77 +1,26 @@
-import contextlib
 import dataclasses
 import datetime
-import signal
 import time
-
+import cv2
 from moviepy.editor import ImageSequenceClip
 import numpy as np
 from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 from scipy.spatial.transform import Rotation as R
-from scipy.spatial.transform import Slerp
 import tqdm
+import faulthandler
+import sys
+sys.path.append(".")
+from helpers import interpolate_rpy, prevent_keyboard_interrupt
 
-AXIS_PERM = np.array([0, 2, 1])
-AXIS_SIGN = np.array([1, 1, 1])
-# DROID data collection frequency -- we slow down execution to match this frequency
+faulthandler.enable()
+
 DROID_CONTROL_FREQUENCY = 15
-
-
 IMAGE_KEYS = (
     "base_0_rgb",
     "left_wrist_0_rgb",
     # "right_wrist_0_rgb",
 )
-
-
-def interpolate_rpy(curr, delta, steps):
-    """Interpolate roll-pitch-yaw angles using quaternion SLERP.
-
-    This function uses spherical linear interpo lation (SLERP) on quaternions
-    to provide smooth rotation interpolation, avoiding gimbal lock and
-    discontinuities that occur with naive linear interpolation of Euler angles.
-
-    Args:
-        curr: Current RPY angles as array of shape (3,) in radians
-        delta: Change in RPY angles as array of shape (3,) or (n, 3) in radians
-        steps: Number of interpolation steps
-
-    Returns:
-        Array of shape (steps, 3) with interpolated RPY values in radians
-    """
-    curr = np.asarray(curr, dtype=float)
-    delta = np.asarray(delta, dtype=float)
-
-    # Handle both 1D and 2D delta inputs
-    if delta.ndim == 1:
-        # Single delta vector - interpolate from curr to curr + delta
-        target_rpy = curr + delta
-    else:
-        # Multiple deltas - use the first one
-        target_rpy = curr + delta[0] if len(delta) > 0 else curr
-
-    # Convert current and target RPY to rotation objects
-    # RPY convention: rotate around x (roll), then y (pitch), then z (yaw)
-    rot_curr = R.from_euler("xyz", curr, degrees=False)
-    rot_target = R.from_euler("xyz", target_rpy, degrees=False)
-
-    # Create SLERP interpolator
-    key_times = np.array([0, 1])
-    key_rots = R.concatenate([rot_curr, rot_target])
-    slerp = Slerp(key_times, key_rots)
-
-    # Generate interpolation times
-    interp_times = np.linspace(0, 1, steps, endpoint=True)
-
-    # Perform SLERP interpolation
-    interpolated_rots = slerp(interp_times)
-
-    # Convert back to RPY
-    rpy_arr = interpolated_rots.as_euler("xyz", degrees=False)
-
-    return rpy_arr
-
 
 @dataclasses.dataclass
 class Args:
@@ -91,35 +40,8 @@ class Args:
     remote_port: int = (
         8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
-    in_camera_frame: bool = (
-        False  # whether the predicted actions are in camera frame (True) or robot/base frame (False)
-    )
     use_wrist_camera: bool = True  # whether to use the wrist camera image as input to the policy
     run_upstream: bool = False  # whether to run the upstream policy server
-    predict_rotation: bool = False  # whether to use roll-pitch-yaw for orientation representation
-    use_raw: bool = False  # whether to use raw action policy
-
-
-# We are using Ctrl+C to optionally terminate rollouts early -- however, if we press Ctrl+C while the policy server is
-# waiting for a new action chunk, it will raise an exception and the server connection dies.
-# This context manager temporarily prevents Ctrl+C and delays it after the server call is complete.
-@contextlib.contextmanager
-def prevent_keyboard_interrupt():
-    """Temporarily prevent keyboard interrupts by delaying them until after the protected code."""
-    interrupted = False
-    original_handler = signal.getsignal(signal.SIGINT)
-
-    def handler(signum, frame):
-        nonlocal interrupted
-        interrupted = True
-
-    signal.signal(signal.SIGINT, handler)
-    try:
-        yield
-    finally:
-        signal.signal(signal.SIGINT, original_handler)
-        if interrupted:
-            raise KeyboardInterrupt
 
 
 class BaseEvalRunner:
@@ -128,14 +50,13 @@ class BaseEvalRunner:
     def __init__(self, args):
         self.env = self.init_env()
         self.args: Args = args
-        self.cam_to_base_extrinsics_matrix = self.set_extrinsics()
-        self.in_camera_frame = args.in_camera_frame
-        assert self.in_camera_frame == (self.cam_to_base_extrinsics_matrix is not None), (
-            "Must have extrinsics if using camera frame"
-        )
 
     def init_env(self):
-        raise NotImplementedError()
+        from droid.robot_env import RobotEnv
+        return RobotEnv(
+            action_space="cartesian_position",
+            gripper_action_space="position",
+        )
 
     def binarize_gripper(self, action):
         # Binarize gripper action
@@ -146,7 +67,7 @@ class BaseEvalRunner:
             action = np.concatenate([action[:-1], np.zeros((1,))])
         return action
 
-    def _extract_observation(self, obs_dict, *, save_to_disk=False):
+    def _extract_observation(self, obs_dict):
         raise NotImplementedError()
 
     def obs_to_request(self, curr_obs, instruction):
@@ -165,95 +86,37 @@ class BaseEvalRunner:
             request["observation"][IMAGE_KEYS[1]] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
         return request
 
-    def set_extrinsics(self):
-        return None
-
-    def get_action_from_response(self, response, curr_obs, use_quaternions=False, use_velocity=False):
-        """Extract actions from server response, either directly or by parsing reasoning.
-
-        Args:
-            response: Server response dict containing 'actions' and/or 'reasoning'
-
-        Returns:
-            (delta_base, grip_actions) - translation delta and gripper actions
-        """
-        # If server already parsed actions, use them directly
-        assert "actions" in response and response["actions"] is not None
+    def get_action_from_response(self, response, curr_obs, use_quaternions=False):
+        curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
+        curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
         if "reasoning" in response and response["reasoning"] is not None:
             print(response["reasoning"])
-            actions = np.asarray(response["actions"])
-            # Extract translation delta (first 3 dims) and gripper (last dim)
+            actions = np.asarray(response["actions"][0])
             
-            if not use_velocity:
-                delta_base = actions[0, :3]  # Already in meters
-                grip_actions = 1 - actions[0, -1]
-                # grip_actions = actions[0, -1]
-
-                # If in camera frame, transform to robot/base frame
-                if self.in_camera_frame:
-                    R_cb = self.cam_to_base_extrinsics_matrix[:3, :3]
-                    delta_base = R_cb @ delta_base
-
-                # Build absolute target from current state
-                curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
-                curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
-                curr_grip = float(np.asarray(curr_obs["gripper_position"], dtype=float).reshape(-1)[0])
-                next_pos = curr_pos + delta_base
-                next_grip = float(grip_actions)
-                # Linearly interpolate to CHUNK_STEPS actions
-                positions = np.linspace(curr_pos, next_pos, self.CHUNK_STEPS, endpoint=True)
-                if self.args.predict_rotation:
-                    rpy_arr = interpolate_rpy(curr=curr_rpy, delta=actions[0, 3:6], steps=self.CHUNK_STEPS)
-                else:
-                    rpy_arr = np.tile(curr_rpy, (self.CHUNK_STEPS, 1))
-                # grip_vals = np.linspace(curr_grip, next_grip, self.CHUNK_STEPS, endpoint=True).reshape(
-                #     -1, 1
-                # ) # no interpolation for gripper
-                grip_vals = np.full((self.CHUNK_STEPS, 1), next_grip)
-                if use_quaternions:
-                    # Convert RPY to quaternions for action representation
-                    quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
-                    pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
-                else:
-                    pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
+            grip_actions = float(1 - actions[-1])
+            # Linearly interpolate to CHUNK_STEPS actions
+            positions = np.linspace(curr_pos, curr_pos+actions[:3], self.CHUNK_STEPS, endpoint=True)
+            rpy_arr = interpolate_rpy(curr=curr_rpy, delta=actions[3:6], steps=self.CHUNK_STEPS)
+            grip_vals = np.full((self.CHUNK_STEPS, 1), grip_actions)
+            if use_quaternions:
+                # Convert RPY to quaternions for action representation
+                quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
+                pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
             else:
-                delta_base = actions[0, :-1]
-                grip_actions = 1 - actions[0, -1]
-                next_grip = float(grip_actions)
-
-                pos_vel = np.tile(delta_base[:3], (self.CHUNK_STEPS, 1))
-                rot_vel = np.tile(delta_base[3:6], (self.CHUNK_STEPS, 1))
-                grip_vals = np.full((self.CHUNK_STEPS, 1), next_grip)
-
-                if use_quaternions:
-                    # Convert RPY to quaternions for action representation
-                    quat_vel = R.from_euler("xyz", rot_vel, degrees=False).as_quat()  # (x,y,z,w)
-                    pred_action_chunk = np.concatenate([pos_vel, quat_vel, grip_vals], axis=1)
-                else:
-                    pred_action_chunk = np.concatenate([pos_vel, rot_vel, grip_vals], axis=1)
-                
-
-        else:
-            curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
-            curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
+                pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
+        else:        
             pred_action_chunk = response["actions"].copy()
-            print(pred_action_chunk)
             pred_action_chunk[:, :3] += curr_pos
-            if self.args.predict_rotation:
-                rpy_arr = interpolate_rpy(
-                    curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0]
-                )
-                pred_action_chunk[:, 3:6] = rpy_arr
-                print("using predicted rpy")
-            else:
-                pred_action_chunk[:, 3:6] = curr_rpy
+            rpy_arr = interpolate_rpy(
+                curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0]
+            )
+            pred_action_chunk[:, 3:6] = rpy_arr
             pred_action_chunk[:, 6] = 1 - pred_action_chunk[:, 6]  # invert gripper action
             if use_quaternions:
                 quat_arr = R.from_euler("xyz", pred_action_chunk[:, 3:6], degrees=False).as_quat()  # (x,y,z,w)
                 pred_action_chunk = np.concatenate(
                     [pred_action_chunk[:, :3], quat_arr, pred_action_chunk[:, 6:7]], axis=1
                 )
-
         return pred_action_chunk
 
     def run(self):
@@ -275,8 +138,6 @@ class BaseEvalRunner:
                     # Get the current observation
                     curr_obs = self._extract_observation(
                         self.env.get_observation(),
-                        # Save the first observation to disk
-                        save_to_disk=t_step == 0,
                     )
                     if self.args.external_camera is not None:
                         if len(curr_obs[f"{self.args.external_camera}_image"].shape) == 4:
@@ -312,31 +173,32 @@ class BaseEvalRunner:
                         time.sleep(1 / DROID_CONTROL_FREQUENCY - elapsed_time)
                 except KeyboardInterrupt:
                     break
-            video = np.stack(video)
-            wrist_video = np.stack(wrist_video)
+            save_video = input("Save video? (enter y or n) ")
+            if "y" in save_video.lower():
+                video = np.stack(video)
+                wrist_video = np.stack(wrist_video)
 
-            # Ensure both videos have the same width by resizing wrist view to match side view width
-            side_height, side_width = video.shape[1:3]
-            wrist_height, wrist_width = wrist_video.shape[1:3]
+                # Ensure both videos have the same width by resizing wrist view to match side view width
+                side_height, side_width = video.shape[1:3]
+                wrist_height, wrist_width = wrist_video.shape[1:3]
 
-            if wrist_width != side_width:
-                # Resize wrist video to match side view width while maintaining aspect ratio
-                import cv2
+                if wrist_width != side_width:
+                    # Resize wrist video to match side view width while maintaining aspect ratio
 
-                resized_wrist = []
-                aspect_ratio = wrist_width / wrist_height
-                new_height = int(side_width / aspect_ratio)
-                for frame in wrist_video:
-                    resized_frame = cv2.resize(frame, (side_width, new_height))
-                    resized_wrist.append(resized_frame)
-                wrist_video = np.stack(resized_wrist)
+                    resized_wrist = []
+                    aspect_ratio = wrist_width / wrist_height
+                    new_height = int(side_width / aspect_ratio)
+                    for frame in wrist_video:
+                        resized_frame = cv2.resize(frame, (side_width, new_height))
+                        resized_wrist.append(resized_frame)
+                    wrist_video = np.stack(resized_wrist)
 
-            # Concatenate side view and wrist view vertically (wrist below side view)
-            combined_video = np.concatenate([video, wrist_video], axis=1)
+                # Concatenate side view and wrist view vertically (wrist below side view)
+                combined_video = np.concatenate([video, wrist_video], axis=1)
 
-            timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
-            save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
-            ImageSequenceClip(list(combined_video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
+                timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
+                save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
+                ImageSequenceClip(list(combined_video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
             answer = input("Do one more eval? (enter y or n) ")
             if "n" in answer.lower():
                 break
@@ -366,8 +228,6 @@ class BaseEvalRunner:
                     # Get the current observation
                     curr_obs = self._extract_observation(
                         self.env.get_observation(),
-                        # Save the first observation to disk
-                        save_to_disk=t_step == 0,
                     )
                     if self.args.external_camera is not None:
                         video.append(curr_obs[f"{self.args.external_camera}_image"])
@@ -399,31 +259,30 @@ class BaseEvalRunner:
                         time.sleep(1 / DROID_CONTROL_FREQUENCY - elapsed_time)
                 except KeyboardInterrupt:
                     break
-            video = np.stack(video)
-            wrist_video = np.stack(wrist_video)
+            save_video = input("Save video? (enter y or n) ")
+            if "y" in save_video.lower():
+                video = np.stack(video)
+                wrist_video = np.stack(wrist_video)
 
-            # Ensure both videos have the same width by resizing wrist view to match side view width
-            side_height, side_width = video.shape[1:3]
-            wrist_height, wrist_width = wrist_video.shape[1:3]
+                # Ensure both videos have the same width by resizing wrist view to match side view width
+                side_height, side_width = video.shape[1:3]
+                wrist_height, wrist_width = wrist_video.shape[1:3]
 
-            if wrist_width != side_width:
-                # Resize wrist video to match side view width while maintaining aspect ratio
-                import cv2
+                if wrist_width != side_width:
+                    resized_wrist = []
+                    aspect_ratio = wrist_width / wrist_height
+                    new_height = int(side_width / aspect_ratio)
+                    for frame in wrist_video:
+                        resized_frame = cv2.resize(frame, (side_width, new_height))
+                        resized_wrist.append(resized_frame)
+                    wrist_video = np.stack(resized_wrist)
 
-                resized_wrist = []
-                aspect_ratio = wrist_width / wrist_height
-                new_height = int(side_width / aspect_ratio)
-                for frame in wrist_video:
-                    resized_frame = cv2.resize(frame, (side_width, new_height))
-                    resized_wrist.append(resized_frame)
-                wrist_video = np.stack(resized_wrist)
+                # Concatenate side view and wrist view vertically (wrist below side view)
+                combined_video = np.concatenate([video, wrist_video], axis=1)
 
-            # Concatenate side view and wrist view vertically (wrist below side view)
-            combined_video = np.concatenate([video, wrist_video], axis=1)
-
-            timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
-            save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
-            ImageSequenceClip(list(combined_video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
+                timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
+                save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
+                ImageSequenceClip(list(combined_video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
             answer = input("Do one more eval? (enter y or n) ")
             if "n" in answer.lower():
                 break

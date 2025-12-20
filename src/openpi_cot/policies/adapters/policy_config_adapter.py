@@ -13,7 +13,6 @@ from openpi.training import config as _config
 import openpi.transforms as up_transforms
 
 from openpi_cot.policies.adapters.policy_adaptor import CoTPolicy
-
 import openpi_cot.transforms as transforms
 
 
@@ -25,9 +24,11 @@ import openpi_cot.transforms as transforms
 
 def load_model_from_train_state(config, checkpoint_dir):
     from flax import traverse_util
+    from openpi_cot.policies.adapters.checkpoint_utils import (
+        initialize_checkpoint_dir,
+        restore_params,)
 
     from openpi.training import optimizer as _optimizer
-    import openpi_cot.training.checkpoints as _checkpoints
     import openpi_cot.training.mh_sharding as sharding
     import openpi_cot.training.utils as training_utils
     rng = jax.random.key(config.seed)
@@ -42,11 +43,9 @@ def load_model_from_train_state(config, checkpoint_dir):
     logging.info("Replicated sharding spec: %s", sharding.format_sharding(replicated_sharding))
 
     # Initialize checkpoint manager
-    checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
+    checkpoint_manager, _ = initialize_checkpoint_dir(
         checkpoint_dir,
         keep_period=config.keep_period,
-        overwrite=False,  # Never overwrite for evaluation
-        resume=True,  # Always resume for evaluation
         async_timeout_secs=config.checkpoint_async_timeout_secs,
         async_enable=False,  # No async for evaluation
     )
@@ -88,7 +87,7 @@ def load_model_from_train_state(config, checkpoint_dir):
         logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
 
     # Restore checkpoint using the same helper as training (supports explicit sharding)
-    params = _checkpoints.restore_params(
+    params = restore_params(
         checkpoint_manager,
         train_state_shape,
         step=checkpoint_step_to_load,
@@ -139,8 +138,8 @@ def create_trained_policy(
 
     repack_transforms = repack_transforms or up_transforms.Group()
     checkpoint_dir = maybe_download(str(checkpoint_dir))
-    # model = load_model_from_train_state(train_config, checkpoint_dir)
-    model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+    model = load_model_from_train_state(train_config, checkpoint_dir)
+    # model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure

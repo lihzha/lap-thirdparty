@@ -127,6 +127,7 @@ def initialize_checkpoint_dir(
     return mngr, resuming
 
 
+
 def _extract_directory(checkpoint_manager: ocp.CheckpointManager) -> str:
     directory_attr = getattr(checkpoint_manager, "directory", None)
     if directory_attr is None:
