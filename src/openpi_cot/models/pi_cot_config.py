@@ -58,6 +58,7 @@ class PiCoTConfig(_model.BaseModelConfig):
     vqa_loss_weight: float = 0.1
 
     state_dropout: float = 0.0
+    reasoning_mask_prob: float = 0.0
 
     # When True, stops gradients produced by the action expert from flowing back
     # into the VLM expert through cross-attention.

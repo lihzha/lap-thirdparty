@@ -36,8 +36,10 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         ]
         | PromptFormat = "pi05",
         prediction_format: Literal["default", "grouped"] | PromptFormat = "default",
+        reasoning_mask_prob: float = 0.0,
     ):
         # super().__init__(max_len)
+        self.reasoning_mask_prob = reasoning_mask_prob
         path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
@@ -77,7 +79,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         time_horizon_seconds: float | None = None,
         frame_description: str = "end-effector frame",
         state_dropout: float = 0.0,
-        reasoning_mask_prob: float = 0.5,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
         """Tokenize prompt and reasoning for chain-of-thought model.
 
@@ -89,7 +90,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             is_vqa_sample: Whether this is a VQA sample
             is_prediction_sample: Whether this is a prediction sample
             time_horizon_seconds: Optional time horizon for predictions
-            reasoning_mask_prob: Probability of masking each reasoning token (0.0-1.0)
 
         Returns:
             Tuple of (tokens, attn_mask, reasoning_mask, number_mask, direction_mask,
@@ -155,11 +155,11 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             direction_mask = None
             number_mask = None
         else:
-            if not 0.0 <= reasoning_mask_prob <= 1.0:
-                raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {reasoning_mask_prob}")
-            if reasoning_mask_prob > 0.0 and end_idx > start_idx:
+            if not 0.0 <= self.reasoning_mask_prob <= 1.0:
+                raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {self.reasoning_mask_prob}")
+            if self.reasoning_mask_prob > 0.0 and end_idx > start_idx:
                 reasoning_span_len = end_idx - start_idx
-                drop_mask = np.random.rand(reasoning_span_len) < reasoning_mask_prob
+                drop_mask = np.random.rand(reasoning_span_len) < self.reasoning_mask_prob
                 if np.any(drop_mask):
                     drop_indices = np.where(drop_mask)[0] + start_idx
                     reasoning_mask[drop_indices] = False

@@ -227,6 +227,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
+                            reasoning_mask_prob=0,
                         )
                     )
                 ]
@@ -239,6 +240,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
+                            reasoning_mask_prob=model_config.reasoning_mask_prob,
                         ),
                         discrete_state_input=model_config.discrete_state_input,
                         verbose_mode=model_config.verbose_mode,
