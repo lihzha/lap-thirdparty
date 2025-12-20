@@ -393,6 +393,7 @@ class PiCoT(_pi0.Pi0):
                 sample_mask=combined_langact_mask,
                 verbose_mode=effective_verbose_mode,
             )
+            metrics.update(lang_metrics)
 
             if self.enable_vqa_training or self.enable_prediction_training:
                 if vqa_mask is None:
