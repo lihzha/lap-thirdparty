@@ -208,7 +208,10 @@ class PiCoT(_pi0.Pi0):
         pre_logits = pre_logits[:, -targets.shape[1] :]
         logits = self.PaliGemma.llm(pre_logits, method="decode")
 
-        loss_mask = jnp.logical_and(observation.tokenized_langact_mask[:, 1:], observation.tokenized_prompt_mask[:, 1:])
+        loss_mask = jnp.logical_and(
+            observation.tokenized_langact_mask[:, 1:],
+            jnp.logical_and(observation.tokenized_prompt_mask[:, 1:], observation.token_loss_mask[:, 1:]),
+        )
         if sample_mask is not None:
             ex_mask = jnp.asarray(sample_mask)[..., None]
             loss_mask = loss_mask * ex_mask

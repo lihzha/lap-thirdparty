@@ -142,6 +142,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         # Create masks
         attn_mask = np.zeros(self._max_len, dtype=bool)
         reasoning_mask = np.zeros(self._max_len, dtype=bool)
+        token_loss_mask = np.ones(self._max_len, dtype=bool)
 
         # Mark all non-pad positions as valid for attention
         attn_mask[: len(tokens)] = True
@@ -163,8 +164,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
                 drop_mask = np.random.rand(reasoning_span_len) < self.reasoning_mask_prob
                 if np.any(drop_mask):
                     drop_indices = np.where(drop_mask)[0] + start_idx
-                    reasoning_mask[drop_indices] = False
-                    attn_mask[drop_indices] = False
+                    token_loss_mask[drop_indices] = False
             number_mask = np.zeros(self._max_len, dtype=bool)
             direction_mask = np.zeros(self._max_len, dtype=bool)
 
@@ -193,6 +193,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             reasoning_mask,
             number_mask,
             direction_mask,
+            token_loss_mask,
         )
 
     def decode(self, tokens: np.ndarray) -> str:
