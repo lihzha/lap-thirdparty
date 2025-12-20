@@ -220,6 +220,7 @@ class TokenAccuracyEvaluator:
         eval_rng = jax.random.fold_in(rng, state.step)
         observation, actions = batch
         loss, metrics = eval_fn(model, eval_rng, observation, actions)
+        print(metrics.keys())
 
         info = {
             "loss": loss,
