@@ -40,6 +40,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     ):
         # super().__init__(max_len)
         self.reasoning_mask_prob = reasoning_mask_prob
+        logging.info(f"Use reasoning_mask_prob: {self.reasoning_mask_prob}")
         path = download.maybe_download("gs://big_vision/paligemma_tokenizer.model", gs={"token": "anon"})
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
