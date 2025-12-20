@@ -206,12 +206,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 "nearest_10",
                 include_rotation=True,
                 rotation_precision=10,
+                initial_state=initial_state,
             )
         else:
             summed = summarize_numeric_actions(
                 la,
-                self.language_action_format.get_sum_decimal(),
-                self.language_action_format.include_rotation,
+                initial_state=initial_state,
+                sum_decimal=self.language_action_format.get_sum_decimal(),
+                include_rotation=self.language_action_format.include_rotation,
             )
         return summed, frame_desc
 

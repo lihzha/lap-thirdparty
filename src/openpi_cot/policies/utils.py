@@ -225,6 +225,7 @@ def _summarize_compact_numeric_actions(arr_like, include_rotation: bool = False)
 def summarize_numeric_actions(
     arr_like,
     sum_decimal: str,
+    initial_state: np.ndarray,
     include_rotation: bool = False,
     rotation_precision: int = 10,
 ) -> str | None:
@@ -323,11 +324,12 @@ def summarize_numeric_actions(
             elif dyaw_rad < 0 and dyaw != 0:
                 parts.append(f"rotate clockwise {dyaw} degrees")
 
+    g_orig = float(initial_state[6])
     # Final gripper value from last step
     g_last = float(arr[-1, 6])
-    if g_last > 0.5:
+    if g_last > 0.5 and g_orig <= 0.5:
         parts.append("open gripper")
-    else:
+    elif g_last <= 0.5 and g_orig > 0.5:
         parts.append("close gripper")
     # parts.append(f"set gripper to {g_last:.0f}")
     return ", ".join(parts)

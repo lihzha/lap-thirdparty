@@ -77,6 +77,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         time_horizon_seconds: float | None = None,
         frame_description: str = "end-effector frame",
         state_dropout: float = 0.0,
+        reasoning_mask_prob: float = 0.5,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
         """Tokenize prompt and reasoning for chain-of-thought model.
 
@@ -88,6 +89,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             is_vqa_sample: Whether this is a VQA sample
             is_prediction_sample: Whether this is a prediction sample
             time_horizon_seconds: Optional time horizon for predictions
+            reasoning_mask_prob: Probability of masking each reasoning token (0.0-1.0)
 
         Returns:
             Tuple of (tokens, attn_mask, reasoning_mask, number_mask, direction_mask,
@@ -153,6 +155,15 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             direction_mask = None
             number_mask = None
         else:
+            if not 0.0 <= reasoning_mask_prob <= 1.0:
+                raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {reasoning_mask_prob}")
+            if reasoning_mask_prob > 0.0 and end_idx > start_idx:
+                reasoning_span_len = end_idx - start_idx
+                drop_mask = np.random.rand(reasoning_span_len) < reasoning_mask_prob
+                if np.any(drop_mask):
+                    drop_indices = np.where(drop_mask)[0] + start_idx
+                    reasoning_mask[drop_indices] = False
+                    attn_mask[drop_indices] = False
             number_mask = np.zeros(self._max_len, dtype=bool)
             direction_mask = np.zeros(self._max_len, dtype=bool)
 
@@ -161,6 +172,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         if not is_vqa_sample and reasoning is not None:
             for i in range(start_idx, end_idx):
+                if not reasoning_mask[i]:
+                    continue
                 piece = self._tokenizer.id_to_piece(tokens[i])
                 if piece:
                     if is_number(piece):
