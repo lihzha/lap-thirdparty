@@ -1,3 +1,4 @@
+from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 from dataclasses import dataclass
 from dataclasses import field
@@ -5,7 +6,6 @@ import logging
 import pickle
 import re
 import textwrap
-from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 try:
@@ -476,7 +476,9 @@ def create_rollout_visualization(image, gt_text: str, pred_text: str) -> np.ndar
             y += line_height + 4
     else:
         try:
-            from PIL import Image, ImageDraw, ImageFont
+            from PIL import Image
+            from PIL import ImageDraw
+            from PIL import ImageFont
 
             pad_img = Image.fromarray(pad)
             draw = ImageDraw.Draw(pad_img)
@@ -831,6 +833,7 @@ def prepare_eval_batch(batch):
     new_tokenized_prompt_list = []
     new_tokenized_prompt_mask_list = []
     new_tokenized_langact_mask_list = []
+    new_loss_mask_list = []
 
     for i in range(batch_size):
         cut_idx = cut_indices[i]
@@ -838,6 +841,7 @@ def prepare_eval_batch(batch):
         # Cut to the first True index (keep everything before reasoning)
         prompt_cut = obs.tokenized_prompt[i, :cut_idx]
         prompt_mask_cut = obs.tokenized_prompt_mask[i, :cut_idx]
+        loss_mask_cut = obs.token_loss_mask[i, :cut_idx]
         # Since we're removing reasoning, langact_mask should be all False
         langact_mask_cut = jnp.zeros(cut_idx, dtype=jnp.bool_)
 
@@ -847,24 +851,29 @@ def prepare_eval_batch(batch):
             prompt_padded = jnp.concatenate([prompt_cut, jnp.zeros(pad_len, dtype=prompt_cut.dtype)])
             prompt_mask_padded = jnp.concatenate([prompt_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
             langact_mask_padded = jnp.concatenate([langact_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
+            loss_mask_padded = jnp.concatenate([loss_mask_cut, jnp.zeros(pad_len, dtype=loss_mask_cut.dtype)])
         else:
             prompt_padded = prompt_cut
             prompt_mask_padded = prompt_mask_cut
             langact_mask_padded = langact_mask_cut
+            loss_mask_padded = loss_mask_cut
 
         new_tokenized_prompt_list.append(prompt_padded)
         new_tokenized_prompt_mask_list.append(prompt_mask_padded)
         new_tokenized_langact_mask_list.append(langact_mask_padded)
+        new_loss_mask_list.append(loss_mask_padded)
 
     # Stack back into batch
     new_tokenized_prompt = jnp.stack(new_tokenized_prompt_list)
     new_tokenized_prompt_mask = jnp.stack(new_tokenized_prompt_mask_list)
     new_tokenized_langact_mask = jnp.stack(new_tokenized_langact_mask_list) * False
+    new_loss_mask = jnp.stack(new_loss_mask_list)
 
     new_obs = dataclasses.asdict(obs)
     new_obs["tokenized_prompt"] = new_tokenized_prompt
     new_obs["tokenized_prompt_mask"] = new_tokenized_prompt_mask
     new_obs["tokenized_langact_mask"] = new_tokenized_langact_mask
+    new_obs["token_loss_mask"] = new_loss_mask
     new_obs = CoTObservation(**new_obs)
     return (new_obs, actions)
 
