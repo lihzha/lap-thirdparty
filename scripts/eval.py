@@ -580,9 +580,7 @@ def evaluate_token_accuracy(
                     )
                 ),
             )
-            other_token_loss = jnp.sum(eval_info["per_token_loss"] * other_token_mask[:, 1:]) / jnp.sum(
-                other_token_mask[:, 1:]
-            )
+            other_token_loss = jnp.sum(eval_info["per_token_loss"] * other_token_mask) / jnp.sum(other_token_mask)
             number_token_losses.append(number_token_loss)
             direction_token_losses.append(direction_token_loss)
             other_token_losses.append(other_token_loss)
