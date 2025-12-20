@@ -538,7 +538,6 @@ def evaluate_token_accuracy(
     )
 
     data_iter = iter(data_loader)
-    eval_infos = []
 
     pbar = tqdm.tqdm(
         range(num_eval_batches),
@@ -565,18 +564,17 @@ def evaluate_token_accuracy(
                 break
 
             eval_info = peval_step(eval_rng, train_state, batch)
-            eval_infos.append(eval_info)
 
-            number_token_loss = jnp.sum(eval_infos["per_token_loss"] * batch[0].number_token_mask[:, 1:]) / jnp.sum(
+            number_token_loss = jnp.sum(eval_info["per_token_loss"] * batch[0].number_token_mask[:, 1:]) / jnp.sum(
                 batch[0].number_token_mask[:, 1:]
             )
             direction_token_loss = jnp.sum(
-                eval_infos["per_token_loss"] * batch[0].direction_token_mask[:, 1:]
+                eval_info["per_token_loss"] * batch[0].direction_token_mask[:, 1:]
             ) / jnp.sum(batch[0].direction_token_mask[:, 1:])
             other_token_mask = (
                 batch[0].tokenized_langact_mask - batch[0].number_token_mask - batch[0].direction_token_mask
             )[:, 1:]
-            other_token_loss = jnp.sum(eval_infos["per_token_loss"] * other_token_mask[:, 1:]) / jnp.sum(
+            other_token_loss = jnp.sum(eval_info["per_token_loss"] * other_token_mask[:, 1:]) / jnp.sum(
                 other_token_mask[:, 1:]
             )
             number_token_losses.append(number_token_loss)
@@ -589,7 +587,7 @@ def evaluate_token_accuracy(
 
             # # Log intermediate results
             # if (batch_idx + 1) % 10 == 0:
-            #     stacked_infos = common_utils.stack_forest(eval_infos[-10:])
+            #     stacked_infos = common_utils.stack_forest(eval_info[-10:])
             #     reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             #     pbar.set_postfix(
             #         {
@@ -599,7 +597,7 @@ def evaluate_token_accuracy(
             #     )
 
     # # Compute final statistics
-    # stacked_infos = common_utils.stack_forest(eval_infos)
+    # stacked_infos = common_utils.stack_forest(eval_info)
     # final_results = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
 
     # Compute additional statistics
