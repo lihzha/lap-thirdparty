@@ -571,9 +571,15 @@ def evaluate_token_accuracy(
             direction_token_loss = jnp.sum(
                 eval_info["per_token_loss"] * batch[0].direction_token_mask[:, 1:]
             ) / jnp.sum(batch[0].direction_token_mask[:, 1:])
-            other_token_mask = (
-                batch[0].tokenized_langact_mask - batch[0].number_token_mask - batch[0].direction_token_mask
-            )[:, 1:]
+            other_token_mask = jnp.logical_and(
+                batch[0].tokenized_langact_mask[:, 1:],
+                jnp.logical_not(
+                    jnp.logical_or(
+                        batch[0].number_token_mask[:, 1:],
+                        batch[0].direction_token_mask[:, 1:],
+                    )
+                ),
+            )
             other_token_loss = jnp.sum(eval_info["per_token_loss"] * other_token_mask[:, 1:]) / jnp.sum(
                 other_token_mask[:, 1:]
             )
