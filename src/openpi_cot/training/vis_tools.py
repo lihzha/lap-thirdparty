@@ -1,10 +1,11 @@
-from collections.abc import Iterable, Mapping, Sequence
 import dataclasses
 from dataclasses import dataclass
 from dataclasses import field
 import logging
 import pickle
 import re
+import textwrap
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 try:
@@ -405,6 +406,98 @@ def visualize_language_actions(
         visuals.append({"image": combined, "language_action": text, "index": idx})
 
     return visuals
+
+
+def _normalize_image_for_viz(image: np.ndarray | jax.Array) -> np.ndarray:
+    """Convert JAX/NumPy image tensors with varying dtypes/shapes to uint8 RGB."""
+    arr = np.asarray(image)
+    # Remove singleton dimensions that occasionally show up (e.g., [1, H, W, C]).
+    while arr.ndim > 3:
+        arr = arr[0]
+    if arr.ndim == 2:  # grayscale -> RGB
+        arr = np.stack([arr] * 3, axis=-1)
+    if arr.dtype == np.uint8:
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+        return arr
+    arr = arr.astype(np.float32)
+    arr_min = float(np.min(arr)) if arr.size else 0.0
+    arr_max = float(np.max(arr)) if arr.size else 1.0
+    if arr_max <= 1.05 and arr_min >= -0.05:
+        # Already scaled between [0, 1]
+        arr = arr.clip(0.0, 1.0) * 255.0
+    elif arr_max <= 1.05 and arr_min >= -1.05:
+        # Likely in [-1, 1]
+        arr = ((arr + 1.0) * 0.5).clip(0.0, 1.0) * 255.0
+    else:
+        denom = max(arr_max - arr_min, 1e-6)
+        arr = ((arr - arr_min) / denom).clip(0.0, 1.0) * 255.0
+    return arr.astype(np.uint8)
+
+
+def _wrap_lines(text: str, max_chars: int) -> list[str]:
+    if not text:
+        return [""]
+    max_chars = max(1, max_chars)
+    return textwrap.wrap(text, width=max_chars, break_long_words=False, replace_whitespace=True) or [""]
+
+
+def create_rollout_visualization(image, gt_text: str, pred_text: str) -> np.ndarray:
+    """Create a visualization with predicted/ground-truth text under the image."""
+    img = _normalize_image_for_viz(image)
+    h, w = img.shape[:2]
+
+    max_chars = max(24, w // 12)
+    gt_lines = _wrap_lines(f"GT: {gt_text or ''}", max_chars)
+    pred_lines = _wrap_lines(f"Pred: {pred_text or ''}", max_chars)
+    all_lines = gt_lines + [""] + pred_lines
+    line_height = max(18, int(round(h * 0.03)))
+    pad_height = max(60, (len(all_lines) + 1) * (line_height + 4))
+    pad = np.zeros((pad_height, w, 3), dtype=np.uint8)
+
+    if HAS_CV2:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = max(0.4, min(1.2, w / 640.0))
+        thickness = max(1, int(round(scale * 2)))
+        y = line_height
+        for line in all_lines:
+            if not line.strip():
+                y += line_height
+                continue
+            cv2.putText(
+                pad,
+                line,
+                (10, y),
+                font,
+                scale,
+                (255, 255, 255),
+                thickness,
+                cv2.LINE_AA,
+            )
+            y += line_height + 4
+    else:
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+
+            pad_img = Image.fromarray(pad)
+            draw = ImageDraw.Draw(pad_img)
+            try:
+                font = ImageFont.load_default()
+            except Exception:
+                font = None
+            y = line_height
+            for line in all_lines:
+                if not line.strip():
+                    y += line_height
+                    continue
+                draw.text((10, y - line_height // 3), line, fill=(255, 255, 255), font=font)
+                y += line_height + 4
+            pad = np.asarray(pad_img)
+        except Exception:
+            # Leave pad black if PIL is unavailable.
+            pass
+
+    combined = np.concatenate([img, pad], axis=0)
+    return combined
 
 
 @dataclasses.dataclass
@@ -951,88 +1044,25 @@ def eval_step(
     output_tokens: jax.Array,
     tok: PaligemmaCoTTokenizer,
     k_local: int,
-    vis_dataset: bool = False,
 ):
-    l2_cm_values: list[float] = []
     # Always run reasoning sampling across all processes; restrict decoding/logging to process 0.
     # Bound to local batch size to avoid indexing errors
-    if jax.process_index() == 0:
-        _, gt_texts = _decode_reasoning_strings(gt_batch[0], tok)
-        # Decode sampled reasoning tokens
-        ids = _utils.to_local_array(output_tokens)
-        # Derive safe local loop bound across all sources
-        k_decode = int(min(k_local, ids.shape[0], len(gt_texts)))
-        pred_texts: list[str] = []
-        for bi in range(k_decode):
-            seq = ids[bi, :].astype(np.int32)
-            pred_texts.append(tok.decode(seq))
+    _, gt_texts = _decode_reasoning_strings(gt_batch[0], tok)
+    # Decode sampled reasoning tokens
+    ids = _utils.to_local_array(output_tokens)
+    # Derive safe local loop bound across all sources
+    k_decode = int(min(k_local, ids.shape[0], len(gt_texts)))
+    pred_texts: list[str] = []
+    for bi in range(k_decode):
+        seq = ids[bi, :].astype(np.int32)
+        pred_texts.append(tok.decode(seq))
 
-        # Compute L2 metric over parsed movement vectors (in cm)
-        for bi in range(k_decode):
-            logging.info(f"GT text: {gt_texts[bi]}")
-            logging.info(f"Pred text: {pred_texts[bi]}")
-            gt_vec = _parse_language_delta_cm(gt_texts[bi])
-            pred_vec = _parse_language_delta_cm(pred_texts[bi])
-            if pred_vec is None:
-                continue
-        #     l2_cm = float(np.linalg.norm(gt_vec - pred_vec))
-        #     l2_cm_values.append(l2_cm)
+    # # Compute L2 metric over parsed movement vectors (in cm)
+    # for bi in range(k_decode):
+    #     logging.info(f"GT text: {gt_texts[bi]}")
+    #     logging.info(f"Pred text: {pred_texts[bi]}")
 
-        # if not l2_cm_values:
-        #     return None, None
-
-        # if vis_dataset:
-        #     # Prepare images now to compute consistent local count
-        #     first_cam_key = next(iter(gt_batch[0].images))
-        #     imgs = _utils.to_local_array(gt_batch[0].images[first_cam_key])
-        #     imgs_u8 = ((np.asarray(imgs) + 1.0) * 0.5 * 255.0).clip(0, 255).astype(np.uint8)
-        #     to_log: list[np.ndarray] = []
-        #     # Prepare annotated images for a subset
-        #     # Choose a camera to display
-        #     # Optional 3D->2D projection inputs
-        #     cart = gt_batch[0].cartesian_position_window
-        #     intr_all = gt_batch[0].camera_intrinsics
-        #     extr_all = gt_batch[0].camera_extrinsics
-        #     cart_np = _utils.to_local_array(cart)
-        #     intr_np = _utils.to_local_array(intr_all)
-        #     extr_np = _utils.to_local_array(extr_all)
-        #     if cart_np is None or intr_np is None or extr_np is None:
-        #         logging.info("No extrinsics/intrinsics/cartesian position available. Try vis_dataset=True.")
-        #         return None, None
-        #     for bi in range(k_decode):
-        #         vis = imgs_u8[bi]
-        #         H, W = vis.shape[:2]
-        #         if cart_np.shape[1] >= 1:
-        #             # [T,6]
-        #             seq = np.asarray(cart_np[bi])
-        #             if seq.ndim == 2 and seq.shape[-1] >= 3:
-        #                 start_xyz = seq[0, :3]
-        #                 end_xyz = seq[-1, :3]
-        #         ci = np.asarray(intr_np[bi])
-        #         intr = ci[0] if ci.ndim == 2 else ci
-        #         ce = np.asarray(extr_np[bi])
-        #         extr = ce[0] if ce.ndim == 3 else ce
-        #         start_xy = _project_point(start_xyz, extr, intr, (H, W))
-        #         end_true_xy = _project_point(end_xyz, extr, intr, (H, W))
-        #         # Predicted end via language delta
-        #         v_cm = _parse_language_delta_cm(pred_texts[bi])
-        #         if v_cm is None:
-        #             continue
-        #         t_cam = _invert_camera_axis_map(v_cm)
-        #         R_cb = extr[:3, :3]
-        #         t_base = R_cb @ t_cam
-        #         pred_xyz = start_xyz + t_base
-        #         pred_end_xy = _project_point(pred_xyz, extr, intr, (H, W))
-        #         # Draw dots
-        #         vis2 = vis
-        #         vis2 = _draw_dot(vis2, start_xy, (0, 255, 255))  # GT start (yellow)
-        #         vis2 = _draw_dot(vis2, pred_end_xy, (0, 0, 255))  # Pred end (red)
-        #         vis2 = _draw_dot(vis2, end_true_xy, (0, 255, 0))  # GT end (green)
-        #         vis2 = _draw_line(vis2, start_xy, end_true_xy, (0, 255, 0))
-        #         vis2 = _draw_line(vis2, start_xy, pred_end_xy, (0, 0, 255))
-        #         to_log.append(vis2)
-        #     return l2_cm_values, to_log
-    return l2_cm_values, None
+    return gt_texts, pred_texts
 
 
 def vis_batch(batch, tok=None, step=None):

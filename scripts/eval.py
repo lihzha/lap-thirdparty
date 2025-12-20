@@ -8,7 +8,6 @@ import platform
 
 import etils.epath as epath
 import flax.nnx as nnx
-from flax.training import common_utils
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -549,6 +548,14 @@ def evaluate_token_accuracy(
         disable=(jax.process_index() != 0),
     )
 
+    number_token_losses = []
+    direction_token_losses = []
+    other_token_losses = []
+
+    number_token_accuracies = []
+    direction_token_accuracies = []
+    all_token_accuracies = []
+
     with sharding.set_mesh(mesh):
         for batch_idx in pbar:
             try:
@@ -559,36 +566,53 @@ def evaluate_token_accuracy(
 
             eval_info = peval_step(eval_rng, train_state, batch)
             eval_infos.append(eval_info)
-            breakpoint()
 
-            # Log intermediate results
-            if (batch_idx + 1) % 10 == 0:
-                stacked_infos = common_utils.stack_forest(eval_infos[-10:])
-                reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-                pbar.set_postfix(
-                    {
-                        "loss": f"{reduced_info['loss']:.4f}",
-                        "token_acc": f"{reduced_info['token_accuracy']:.4f}",
-                    }
-                )
+            number_token_loss = jnp.sum(eval_infos["per_token_loss"] * batch[0].number_token_mask[:, 1:]) / jnp.sum(
+                batch[0].number_token_mask[:, 1:]
+            )
+            direction_token_loss = jnp.sum(
+                eval_infos["per_token_loss"] * batch[0].direction_token_mask[:, 1:]
+            ) / jnp.sum(batch[0].direction_token_mask[:, 1:])
+            other_token_mask = (
+                batch[0].tokenized_langact_mask - batch[0].number_token_mask - batch[0].direction_token_mask
+            )[:, 1:]
+            other_token_loss = jnp.sum(eval_infos["per_token_loss"] * other_token_mask[:, 1:]) / jnp.sum(
+                other_token_mask[:, 1:]
+            )
+            number_token_losses.append(number_token_loss)
+            direction_token_losses.append(direction_token_loss)
+            other_token_losses.append(other_token_loss)
 
-    # Compute final statistics
-    stacked_infos = common_utils.stack_forest(eval_infos)
-    final_results = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            number_token_accuracies.append(eval_info["number_token_accuracy"])
+            direction_token_accuracies.append(eval_info["direction_token_accuracy"])
+            all_token_accuracies.append(eval_info["token_accuracy"])
+
+            # # Log intermediate results
+            # if (batch_idx + 1) % 10 == 0:
+            #     stacked_infos = common_utils.stack_forest(eval_infos[-10:])
+            #     reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+            #     pbar.set_postfix(
+            #         {
+            #             "loss": f"{reduced_info['loss']:.4f}",
+            #             "token_acc": f"{reduced_info['token_accuracy']:.4f}",
+            #         }
+            #     )
+
+    # # Compute final statistics
+    # stacked_infos = common_utils.stack_forest(eval_infos)
+    # final_results = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
 
     # Compute additional statistics
-    token_accuracies = jax.device_get(stacked_infos["token_accuracy"])
-    losses = jax.device_get(stacked_infos["loss"])
+    # token_accuracies = jax.device_get(stacked_infos["token_accuracy"])
+    # losses = jax.device_get(stacked_infos["loss"])
 
     return {
-        "eval/token_accuracy/mean": float(final_results["token_accuracy"]),
-        "eval/token_accuracy/loss": float(final_results["loss"]),
-        "eval/token_accuracy/std": float(jnp.std(token_accuracies)),
-        "eval/token_accuracy/loss_std": float(jnp.std(losses)),
-        "eval/token_accuracy/min": float(jnp.min(token_accuracies)),
-        "eval/token_accuracy/max": float(jnp.max(token_accuracies)),
-        "eval/num_batches_evaluated": len(eval_infos),
-        "eval/checkpoint_step": int(train_state.step),
+        "eval/number_token_loss": float(jnp.mean(jnp.array(number_token_losses))),
+        "eval/direction_token_loss": float(jnp.mean(jnp.array(direction_token_losses))),
+        "eval/other_token_loss": float(jnp.mean(jnp.array(other_token_losses))),
+        "eval/number_token_accuracy": float(jnp.mean(jnp.array(number_token_accuracies))),
+        "eval/direction_token_accuracy": float(jnp.mean(jnp.array(direction_token_accuracies))),
+        "eval/token_accuracy": float(jnp.mean(jnp.array(all_token_accuracies))),
     }
 
 
@@ -602,6 +626,7 @@ def evaluate_rollout(
     data_sharding,
     replicated_sharding,
     num_eval_batches: int,
+    max_logged_imgs: int = 100,
 ) -> dict[str, float]:
     """Evaluate rollout performance (language action prediction accuracy)."""
     evaluator = RolloutEvaluator(config)
@@ -616,10 +641,8 @@ def evaluate_rollout(
     tokenizer = data_loader.tokenizer
 
     data_iter = iter(data_loader)
-    l2_cm_values_all = []
     images_to_log = []
-    num_images_logged = 0
-    max_images_to_log = 64
+    num_logged_imgs = 0
 
     pbar = tqdm.tqdm(
         range(num_eval_batches),
@@ -648,53 +671,29 @@ def evaluate_rollout(
             # Process results on host
             if jax.process_index() == 0:
                 k_local = min(config.batch_size, batch[0].state.shape[0])
-                l2_cm_values, to_log = vis_tools.eval_step(batch, output_tokens, tokenizer, k_local)
+                gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens, tokenizer, k_local)
 
-                if l2_cm_values:
-                    l2_cm_values_all.extend(l2_cm_values)
+                imgs_to_log = eval_batch.observation.images["base_0_rgb"][:k_local]
 
-                # Collect images for logging
-                if to_log and num_images_logged < max_images_to_log:
-                    for img in to_log:
-                        if num_images_logged >= max_images_to_log:
-                            break
-                        images_to_log.append(wandb.Image(img))
-                        num_images_logged += 1
+                for i in range(k_local):
+                    gt_text = gt_texts[i]
+                    pred_text = pred_texts[i]
+                    img = imgs_to_log[i]
 
-            # Update progress bar
-            if l2_cm_values_all and (batch_idx + 1) % 10 == 0:
-                recent_l2 = l2_cm_values_all[-min(100, len(l2_cm_values_all)) :]
-                pbar.set_postfix(
-                    {
-                        "mean_l2_cm": f"{np.mean(recent_l2):.2f}",
-                        "n_samples": len(l2_cm_values_all),
-                    }
-                )
-
-    # Compute final statistics
-    if not l2_cm_values_all:
-        logging.warning("No valid rollout samples were evaluated!")
-        return {
-            "eval/rollout/mean_l2_cm": float("nan"),
-            "eval/rollout/std_l2_cm": float("nan"),
-            "eval/rollout/num_samples": 0,
-        }
-
-    l2_array = np.array(l2_cm_values_all)
-    results = {
-        "eval/rollout/mean_l2_cm": float(np.mean(l2_array)),
-        "eval/rollout/std_l2_cm": float(np.std(l2_array)),
-        "eval/rollout/median_l2_cm": float(np.median(l2_array)),
-        "eval/rollout/min_l2_cm": float(np.min(l2_array)),
-        "eval/rollout/max_l2_cm": float(np.max(l2_array)),
-        "eval/rollout/num_samples": len(l2_cm_values_all),
-    }
+                    img_to_log = vis_tools.create_rollout_visualization(
+                        img,
+                        gt_text,
+                        pred_text,
+                    )
+                    images_to_log.append(wandb.Image(img_to_log))
+                    num_logged_imgs += 1
+            if num_logged_imgs >= max_logged_imgs:
+                break
 
     # Log images to wandb
     if images_to_log and jax.process_index() == 0 and config.wandb_enabled:
-        wandb.log({"eval/rollout/predictions": images_to_log}, step=int(train_state.step))
-
-    return results
+        wandb.log({"eval/rollout": images_to_log}, step=int(train_state.step))
+    return images_to_log
 
 
 def evaluate_loss(
