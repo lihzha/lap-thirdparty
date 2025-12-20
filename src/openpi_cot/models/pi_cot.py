@@ -247,17 +247,8 @@ class PiCoT(_pi0.Pi0):
         metrics = {loss_name: jnp.mean(per_sample_loss)}
 
         if return_predictions or verbose_mode:
-            metric_rename_map = {
-                "token_accuracy": "token_accuracy",
-                "critical_token_accuracy": "critical_token_accuracy",
-                "number_token_accuracy": "number_token_accuracy",
-                "direction_token_accuracy": "direction_token_accuracy",
-            }
             for key, value in raw_metrics.items():
-                if key in ["predictions", "labels", "token_mask"]:
-                    metrics[key] = value
-                else:
-                    metrics[metric_rename_map.get(key, key)] = value
+                metrics[key] = value
 
         return per_sample_loss, metrics
 
