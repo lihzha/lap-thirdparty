@@ -675,7 +675,7 @@ def evaluate_rollout(
                 k_local = min(config.batch_size, batch[0].state.shape[0])
                 gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens, tokenizer, k_local)
 
-                imgs_to_log = eval_batch.observation.images["base_0_rgb"][:k_local]
+                imgs_to_log = eval_batch[0].images["base_0_rgb"][:k_local]
 
                 for i in range(k_local):
                     gt_text = gt_texts[i]
