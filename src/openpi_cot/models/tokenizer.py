@@ -159,6 +159,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             if not 0.0 <= self.reasoning_mask_prob <= 1.0:
                 raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {self.reasoning_mask_prob}")
             if self.reasoning_mask_prob > 0.0 and end_idx > start_idx:
+                logging.info(f"Applying reasoning mask dropout with prob {self.reasoning_mask_prob}")
                 reasoning_span_len = end_idx - start_idx
                 drop_mask = np.random.rand(reasoning_span_len) < self.reasoning_mask_prob
                 if np.any(drop_mask):
