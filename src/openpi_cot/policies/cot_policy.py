@@ -44,7 +44,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     enable_langact_training: bool = True
     filter_all_1s_actions: bool = False
     use_rough_scale: bool = False
-    filter_lagre_actions: bool = False
+    filter_large_actions: bool = False
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -277,7 +277,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     self.language_action_format.get_sum_decimal(),
                     self.language_action_format.include_rotation,
                 )
-                if self.filter_lagre_actions:
+                if self.filter_large_actions:
                     has_large_action = False
                     if isinstance(inputs["language_actions"], str):
                         values = re.findall(r"[-+]?\d+(?:\.\d+)?", inputs["language_actions"])
