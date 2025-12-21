@@ -1063,6 +1063,24 @@ _CONFIGS = [
             dataset_type="combined",
         ),
     ),
+    TrainConfig(
+        name="paligemma_boundsq99_ori",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=10,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+            prompt_format="pi05_notime_ori",
+        ),
+        data=RLDSCoTDataConfig(
+            action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+        ),
+    ),
     *create_multi_device_configs(
         base_name="pi05_libero_finetune",
         devices=["v6", "v6europe", "v4", "local", "v5"],

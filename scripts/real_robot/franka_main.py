@@ -21,10 +21,10 @@ class FrankaEvalRunner(BaseEvalRunner):
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
         gripper_position = np.array([robot_state["gripper_position"]])
+        print("Gripper position:", gripper_position)
         # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         gripper_position = binarize_gripper_actions_np(gripper_position)
 
-        print("Gripper position:", gripper_position)
 
         right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
         wrist_image = image_observations["1"][::-1, ::-1, ::-1] # rotate 180
@@ -59,13 +59,13 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
         # In addition to image observations, also capture the proprioceptive state
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
+        print("Gripper position:", gripper_position)
         gripper_position = np.array([robot_state["gripper_position"]])
         gripper_position = binarize_gripper_actions_np(gripper_position)
 
-        print("Gripper position:", gripper_position)
 
         right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
-        wrist_image = image_observations["1"][..., ::-1]
+        wrist_image = image_observations["1"][:, :, ::-1]
 
         return {
             "right_image": right_image,

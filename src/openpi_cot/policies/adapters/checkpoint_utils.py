@@ -68,21 +68,53 @@ def restore_params(
     """
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.
-        _, params = _split_params(state)
-     
-        _, params_sharding = _split_params(train_state_sharding)
-        restore_args = ocp.args.Composite(
-            params=ocp.args.PyTreeRestore(
-                item={"params": params},
-                transforms={},
-                restore_args=ocp.checkpoint_utils.construct_restore_args(
-                    {"params": params}, sharding_tree={"params": params_sharding}
+        train_state, params = _split_params(state)
+        if train_state_sharding is not None:
+            train_state_sharding_without_params, params_sharding = _split_params(train_state_sharding)
+            restore_args = ocp.args.Composite(
+                train_state=ocp.args.PyTreeRestore(
+                    item=train_state,
+                    transforms={},
+                    restore_args=ocp.checkpoint_utils.construct_restore_args(
+                        train_state, sharding_tree=train_state_sharding_without_params
+                    ),
                 ),
-            ),
-        )
-        restored = checkpoint_manager.restore(step, args=restore_args)
+                params=ocp.args.PyTreeRestore(
+                    item={"params": params},
+                    transforms={},
+                    restore_args=ocp.checkpoint_utils.construct_restore_args(
+                        {"params": params}, sharding_tree={"params": params_sharding}
+                    ),
+                ),
+            )
+            restored = checkpoint_manager.restore(step, args=restore_args)
+        else:
+            restored = checkpoint_manager.restore(
+                step,
+                items={
+                    "train_state": train_state,
+                    "params": {"params": params},
+                },
+            )
+        return restored["train_state"].params
 
-    return restored["params"]
+    # with at.disable_typechecking():
+    #     # Split params that can be used for inference into a separate item.
+    #     _, params = _split_params(state)
+     
+    #     _, params_sharding = _split_params(train_state_sharding)
+    #     restore_args = ocp.args.Composite(
+    #         params=ocp.args.PyTreeRestore(
+    #             item={"params": params},
+    #             transforms={},
+    #             restore_args=ocp.checkpoint_utils.construct_restore_args(
+    #                 {"params": params}, sharding_tree={"params": params_sharding}
+    #             ),
+    #         ),
+    #     )
+    #     restored = checkpoint_manager.restore(step, args=restore_args)
+
+    # return restored["params"]
 
 def _split_params(
     state: training_utils.TrainState,
