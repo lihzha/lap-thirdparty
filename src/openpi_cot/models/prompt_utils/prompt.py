@@ -34,7 +34,7 @@ class TaskModule:
     Handles cleaning and formatting of task prompts.
     """
 
-    template: str = "Task: {prompt}, predict the robot's action in the {frame_description} frame"
+    template: str = "Task: {prompt}, predict the robot's action in the {frame_description}"
     # Whether to include time horizon instruction when provided
     include_time_horizon: bool = False
     # Template for time horizon instruction
