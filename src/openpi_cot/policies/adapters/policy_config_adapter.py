@@ -93,8 +93,7 @@ def load_model_from_train_state(config, checkpoint_dir):
         step=checkpoint_step_to_load,
         train_state_sharding=train_state_sharding,
     )
-    breakpoint()
-    params = params["params"].to_pure_dict()
+    params = params.to_pure_dict()
     flat_params = traverse_util.flatten_dict(params)
     if all(kp[-1] == "value" for kp in flat_params): 
         flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
