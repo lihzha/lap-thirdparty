@@ -588,9 +588,10 @@ class PiCoT(_pi0.Pi0):
         prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
         prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
         pre_logits, kv_cache = self.PaliGemma.llm(
-            [prefix_token_embeddings] if not self.enable_action_training else [prefix_token_embeddings, None],
+            [prefix_token_embeddings, None] if self.enable_action_training else [prefix_token_embeddings],
             mask=prefix_attn_mask,
             positions=prefix_positions,
+            adarms_cond=[None, None] if self.enable_action_training else [None],
             deterministic=self.deterministic,
         )
 
@@ -599,7 +600,7 @@ class PiCoT(_pi0.Pi0):
         output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps), dtype=jnp.int32)
 
         def step(carry):
-            rng, last_logit, output_tokens, cache, _, step = carry
+            rng, last_logit, output_tokens, cache, eos_mask, step = carry
 
             rng, rng_step = jax.random.split(rng)
             token = jax.lax.cond(
@@ -612,9 +613,10 @@ class PiCoT(_pi0.Pi0):
                 output_tokens, jnp.broadcast_to(step, (token.shape[0], 1)), token
             )
 
-            # Check for early stopping --> stop if all batch elements have EOS token
-            has_eos = jnp.any(token == self.EOS_TOKEN, axis=-1)
-            all_eos = jnp.all(has_eos)
+            # Track EOS per batch element; stop when all sequences have seen EOS.
+            eos_token = jnp.squeeze(token, axis=-1)
+            eos_mask = eos_mask | (eos_token == self.EOS_TOKEN)
+            all_eos = jnp.all(eos_mask)
 
             # Decode one step using only expert 0.
             token_embedding = self.PaliGemma.llm(token, method="embed")
@@ -624,23 +626,24 @@ class PiCoT(_pi0.Pi0):
                 jnp.arange(cache_size)[None, None, :] < (prefill_size + step + 1),
             )
             last_prelogit, kv_cache = self.PaliGemma.llm(
-                [token_embedding] if not self.enable_action_training else [token_embedding, None],
+                [token_embedding, None] if self.enable_action_training else [token_embedding],
                 mask=mask,
                 positions=positions,
                 kv_cache=cache,
+                adarms_cond=[None, None] if self.enable_action_training else [None],
                 deterministic=self.deterministic,
             )
             last_logit = self.PaliGemma.llm(last_prelogit[0], method="decode")
 
-            return rng, last_logit, output_tokens, kv_cache, all_eos, step + 1
+            return rng, last_logit, output_tokens, kv_cache, eos_mask, step + 1
 
         def cond(carry):
-            _, _, _, _, all_eos, step = carry
-            return (~all_eos) & (step < max_decoding_steps)
+            _, _, _, _, eos_mask, step = carry
+            return (~jnp.all(eos_mask)) & (step < max_decoding_steps)
 
         # Use lax.while_loop so we can jit the full decoding loop.
         _, _, output_tokens, _, _, _ = jax.lax.while_loop(
-            cond, step, (rng, last_logit, output_tokens, kv_cache, False, 0)
+            cond, step, (rng, last_logit, output_tokens, kv_cache, jnp.zeros((last_logit.shape[0],), dtype=bool), 0)
         )
         return output_tokens
 
