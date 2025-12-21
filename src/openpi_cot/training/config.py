@@ -184,6 +184,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     language_action_format_name: str = "verbose_eef_with_rotation"
     random_time_horizon: bool = False
     filter_all_1s_actions: bool = False
+    filter_large_actions: bool = False
     use_rough_scale: bool = False
 
     # Prediction training parameters
@@ -370,6 +371,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     action_encoding=base_cfg.action_encoding,
                     language_action_format=base_cfg.language_action_format_name,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
+                    filter_large_actions=base_cfg.filter_large_actions,
                     use_rough_scale=base_cfg.use_rough_scale,
                     enable_langact_training=model_config.enable_langact_training,
                 )

@@ -1,4 +1,5 @@
 import dataclasses
+import re
 
 import numpy as np
 from openpi import transforms as upstream_transforms
@@ -43,6 +44,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     enable_langact_training: bool = True
     filter_all_1s_actions: bool = False
     use_rough_scale: bool = False
+    filter_lagre_actions: bool = False
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -275,6 +277,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     self.language_action_format.get_sum_decimal(),
                     self.language_action_format.include_rotation,
                 )
+                if self.filter_lagre_actions:
+                    has_large_action = False
+                    if isinstance(inputs["language_actions"], str):
+                        values = re.findall(r"[-+]?\d+(?:\.\d+)?", inputs["language_actions"])
+                        has_large_action = any(abs(float(val)) >= 10.0 for val in values)
+                else:
+                    has_large_action = False
 
                 # Check if all movements are exactly 1 cm (if filter is enabled)
                 is_all_1s = False
@@ -286,7 +295,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     )
 
                 # Filter out samples that are idle OR all 1s (if enabled)
-                inputs["sample_mask"] = not (is_idle or is_all_1s)
+                inputs["sample_mask"] = (not has_large_action) or not (is_idle or is_all_1s)
             else:
                 inputs["sample_mask"] = True
         else:
