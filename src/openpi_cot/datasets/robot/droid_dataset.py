@@ -179,9 +179,18 @@ class DroidCoTDataset(SingleCoTDataset):
             file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
             return tf.strings.regex_full_match(file_path, ".*success.*")
 
+        def _has_instruction(traj):
+            instr_bytes = self.instr_table.lookup(traj["trajectory_id"][0])
+            # Check both that it's not empty and has reasonable length for a serialized tensor
+            return tf.logical_and(
+                tf.not_equal(instr_bytes, tf.constant(b"", dtype=tf.string)),
+                tf.greater(tf.strings.length(instr_bytes), 10),  # Minimum length for valid serialized tensor
+            )
+
         # Filter out any unsuccessful trajectories -- we use the file name to check this
         # Prefer cheap regex path filter first, then id/lang checks
         self.dataset = self.dataset.filter(_path_ok)
+        self.dataset = self.dataset.filter(_has_instruction)
 
     def apply_traj_transforms(
         self,
