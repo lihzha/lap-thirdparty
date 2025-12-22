@@ -1,4 +1,5 @@
 import dataclasses
+import random
 import re
 
 import numpy as np
@@ -193,7 +194,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         frame_desc = "robot base frame"
 
         # Transform to EEF frame if requested
-        if self.language_action_format.use_eef_frame and initial_state is not None and has_wrist_image:
+        if (
+            self.language_action_format.use_eef_frame
+            and initial_state is not None
+            and has_wrist_image
+            and random.random() < 0.9
+        ):
             la = transform_actions_to_eef_frame(la, initial_state)
             frame_desc = "end-effector frame"
         if is_bimanual:
