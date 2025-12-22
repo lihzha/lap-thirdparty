@@ -969,7 +969,7 @@ _CONFIGS = [
     # Combined dataset configs for v4, v6, v6europe
     *create_multi_device_configs(
         base_name="pi_combined_cot",
-        devices=["v6", "v6europe", "v4", "local"],
+        devices=["v6", "v6europe", "v4", "local", "v5"],
         model=build_picot_model(),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
