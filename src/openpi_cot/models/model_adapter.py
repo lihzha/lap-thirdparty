@@ -95,6 +95,7 @@ def preprocess_observation(
     image_resolution: tuple[int, int] = _model.IMAGE_RESOLUTION,
     aug_wrist_image: bool = True,
     vqa_mask: at.Bool[jax.Array, "*b"] | None = None,
+    aggresive_aug: bool = False,
 ) -> CoTObservation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
@@ -102,6 +103,17 @@ def preprocess_observation(
 
     # if not set(image_keys).issubset(observation.images):
     #     raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
+
+    if aggresive_aug:
+        return preprocess_observation_aggressive(
+            rng,
+            observation,
+            train=train,
+            image_keys=image_keys,
+            image_resolution=image_resolution,
+            aug_wrist_image=aug_wrist_image,
+            vqa_mask=vqa_mask,
+        )
 
     batch_shape = observation.state.shape[:-1]
 
@@ -151,6 +163,119 @@ def preprocess_observation(
 
             # Back to [-1, 1]
             image = image * 2.0 - 1.0
+
+        out_images[key] = image
+
+    # obtain mask
+    out_masks = {}
+    for key in out_images:
+        if key not in observation.image_masks:
+            # do not mask by default
+            out_masks[key] = jnp.ones(batch_shape, dtype=jnp.bool_)
+        else:
+            out_masks[key] = jnp.asarray(observation.image_masks[key])
+
+    return CoTObservation(
+        images=out_images,
+        image_masks=out_masks,
+        state=observation.state,
+        tokenized_prompt=observation.tokenized_prompt,
+        tokenized_prompt_mask=observation.tokenized_prompt_mask,
+        token_ar_mask=observation.token_ar_mask,
+        token_loss_mask=observation.token_loss_mask,
+        tokenized_langact_mask=getattr(observation, "tokenized_langact_mask", None),
+        critical_token_mask=getattr(observation, "critical_token_mask", None),
+        number_token_mask=getattr(observation, "number_token_mask", None),
+        direction_token_mask=getattr(observation, "direction_token_mask", None),
+        sample_mask=getattr(observation, "sample_mask", None),
+        tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
+        is_vqa_sample=getattr(observation, "is_vqa_sample", None),
+        is_prediction_sample=getattr(observation, "is_prediction_sample", None),
+    )
+
+
+def preprocess_observation_aggressive(
+    rng,
+    observation: CoTObservation,
+    *,
+    train: bool = False,
+    image_keys=IMAGE_KEYS,
+    image_resolution: tuple[int, int] = (224, 224),
+    aug_wrist_image: bool = True,
+    vqa_mask=None,
+) -> CoTObservation:
+    """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
+    filling in a default image mask (if necessary).
+    """
+
+    # if not set(image_keys).issubset(observation.images):
+    #     raise ValueError(f"images dict missing keys: expected {image_keys}, got {list(observation.images)}")
+
+    batch_shape = observation.state.shape[:-1]
+
+    out_images = {}
+    for key in image_keys:
+        image = observation.images[key]
+
+        b, h, w, c = image.shape
+        if train:
+            if "wrist" in key and aug_wrist_image:
+                image = image / 2.0 + 0.5
+                transforms = [
+                    augmax.RandomCrop(int(w * 0.9), int(h * 0.65)),
+                    augmax.Resize(w, h),
+                    augmax.Rotate((-10, 10)),
+                    augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                ]
+                sub_rngs = jax.random.split(rng, b)
+                image_aug = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
+                # Skip augmentation for VQA samples if vqa_mask is provided
+                image = (
+                    jnp.where(vqa_mask[:, None, None, None], image, image_aug) if vqa_mask is not None else image_aug
+                )
+
+                # Back to [-1, 1]
+                image = image * 2.0 - 1.0
+                if (h, w) != image_resolution:
+                    # Process each frame
+                    image = image_tools.resize_with_pad(image, *image_resolution)
+
+            else:
+                # Resize if needed (before augmentation)
+                if (h, w) != image_resolution:
+                    # Process each frame
+                    image = image_tools.resize_with_pad(image, *image_resolution)
+
+                # Augmentation: apply to each frame independently
+                # Flatten: [b*t, h, w, c]
+                h_new, w_new = image_resolution
+
+                # Convert to [0, 1]
+                image = image / 2.0 + 0.5
+
+                # Build transforms
+                transforms = [
+                    augmax.RandomCrop(int(w_new * 0.9), int(h_new * 0.99)),
+                    augmax.Resize(w_new, h_new),
+                    augmax.Rotate((-5, 5)),
+                    augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                ]
+
+                # Apply augmentation
+                sub_rngs = jax.random.split(rng, b)
+                image_aug = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
+
+                # Skip augmentation for VQA samples if vqa_mask is provided
+                image = (
+                    jnp.where(vqa_mask[:, None, None, None], image, image_aug) if vqa_mask is not None else image_aug
+                )
+
+                # Back to [-1, 1]
+                image = image * 2.0 - 1.0
+        # Resize if needed (before augmentation)
+        elif (h, w) != image_resolution:
+            # Process each frame
+            image = image_tools.resize_with_pad(image, *image_resolution)
 
         out_images[key] = image
 
