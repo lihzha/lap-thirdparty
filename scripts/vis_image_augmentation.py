@@ -45,10 +45,13 @@ def preprocess_observation(
         if train:
             if "wrist" in key and aug_wrist_image:
                 image = image / 2.0 + 0.5
+                rng, crop_rng = jax.random.split(rng)
+                crop_h_frac = jax.random.uniform(crop_rng, (), minval=0.65, maxval=0.9)
                 transforms = [
-                    augmax.RandomCrop(int(w * 0.9), int(h * 0.6)),
+                    augmax.RandomCrop(int(w * 0.9), int(h * crop_h_frac)),
                     augmax.Resize(w, h),
-                    augmax.Rotate((-15, 15)),
+                    augmax.Rotate((-10, 10)),
+                    augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
                 ]
                 sub_rngs = jax.random.split(rng, b)
                 image_aug = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
@@ -78,12 +81,11 @@ def preprocess_observation(
 
                 # Build transforms
                 transforms = [
-                    augmax.RandomCrop(int(w_new * 0.95), int(h_new * 0.95)),
+                    augmax.RandomCrop(int(w_new * 0.9), int(h_new * 0.99)),
                     augmax.Resize(w_new, h_new),
                     augmax.Rotate((-5, 5)),
+                    augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
                 ]
-                # transforms += [augmax.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.5)]
-                transforms += [augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)]
 
                 # Apply augmentation
                 sub_rngs = jax.random.split(rng, b)
@@ -186,7 +188,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    for i in range(10):
+    for i in range(100):
         image_u8 = _load_rgb(args.input)
         image = _to_model_range(image_u8)[None, ...]
 
