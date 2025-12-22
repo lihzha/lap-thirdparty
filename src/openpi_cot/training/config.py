@@ -182,10 +182,10 @@ class CoTDataConfig(upstream_config.DataConfig):
 
     # Language action format
     language_action_format_name: str = "verbose_eef_with_rotation"
-    random_time_horizon: bool = False
     filter_all_1s_actions: bool = False
     filter_large_actions: bool = False
     use_rough_scale: bool = False
+    horizon_seconds: list[float] = dataclasses.field(default_factory=lambda: [1.0])
 
     # Prediction training parameters
     max_prediction_horizon: int = 30
