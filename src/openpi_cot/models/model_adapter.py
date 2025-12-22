@@ -221,8 +221,10 @@ def preprocess_observation_aggressive(
         if train:
             if "wrist" in key and aug_wrist_image:
                 image = image / 2.0 + 0.5
+                rng, crop_rng = jax.random.split(rng)
+                crop_h_frac = jax.random.uniform(crop_rng, (), minval=0.65, maxval=0.9)
                 transforms = [
-                    augmax.RandomCrop(int(w * 0.9), int(h * 0.65)),
+                    augmax.RandomCrop(int(w * 0.9), int(h * crop_h_frac)),
                     augmax.Resize(w, h),
                     augmax.Rotate((-10, 10)),
                     augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
