@@ -221,16 +221,26 @@ def preprocess_observation_aggressive(
         if train:
             if "wrist" in key and aug_wrist_image:
                 image = image / 2.0 + 0.5
-                rng, crop_rng = jax.random.split(rng)
-                crop_h_frac = jax.random.uniform(crop_rng, (), minval=0.65, maxval=0.9)
-                transforms = [
-                    augmax.RandomCrop(int(w * 0.9), int(h * crop_h_frac)),
-                    augmax.Resize(w, h),
-                    augmax.Rotate((-10, 10)),
-                    augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                rng, crop_rng, aug_rng = jax.random.split(rng, 3)
+                crop_fracs = (0.65, 0.7, 0.75, 0.8, 0.85, 0.9)
+                crop_heights = [int(h * frac) for frac in crop_fracs]
+                crop_idx = jax.random.randint(crop_rng, (), 0, len(crop_heights))
+                sub_rngs = jax.random.split(aug_rng, b)
+                chains = [
+                    augmax.Chain(
+                        augmax.RandomCrop(int(w * 0.9), crop_h),
+                        augmax.Resize(w, h),
+                        augmax.Rotate((-10, 10)),
+                        augmax.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                    )
+                    for crop_h in crop_heights
                 ]
-                sub_rngs = jax.random.split(rng, b)
-                image_aug = jax.vmap(augmax.Chain(*transforms))(sub_rngs, image)
+                image_aug = jax.lax.switch(
+                    crop_idx,
+                    [lambda rngs, imgs, ch=ch: jax.vmap(ch)(rngs, imgs) for ch in chains],
+                    sub_rngs,
+                    image,
+                )
                 # Skip augmentation for VQA samples if vqa_mask is provided
                 image = (
                     jnp.where(vqa_mask[:, None, None, None], image, image_aug) if vqa_mask is not None else image_aug
