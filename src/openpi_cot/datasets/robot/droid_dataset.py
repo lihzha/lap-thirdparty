@@ -65,6 +65,37 @@ class DroidCoTDataset(SingleCoTDataset):
 
         return filter_table
 
+    def build_instr_table(self, metadata_path):
+        # ---------------------------------------------------------------------
+        # 6. Language-instruction table (merged; episode_id → serialized [K])
+        # ---------------------------------------------------------------------
+        _instr_keys_py = []
+        _instr_vals_ser = []
+        with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.droid_language_annotations_file}", "r") as fp:
+            language_annotations = json.load(fp)
+        _instr_keys_py = list(language_annotations.keys())
+        for _eid in _instr_keys_py:
+            _v = language_annotations[_eid]
+            _arr = [
+                _v.get("language_instruction1", ""),
+                _v.get("language_instruction2", ""),
+                _v.get("language_instruction3", ""),
+            ]
+            _arr = [s for s in _arr if len(s) > 0]
+            if len(_arr) == 0:
+                _instr_vals_ser.append(b"")
+            else:
+                _instr_vals_ser.append(tf.io.serialize_tensor(tf.constant(_arr, dtype=tf.string)).numpy())
+        _instr_keys = tf.constant(_instr_keys_py, dtype=tf.string)
+        _instr_vals = tf.constant(_instr_vals_ser, dtype=tf.string)
+        _instr_default = tf.constant(b"", dtype=tf.string)
+        instr_table = tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(_instr_keys, _instr_vals),
+            default_value=_instr_default,
+        )
+        print_memory_usage("After building instr_table")
+        return instr_table
+
     def get_traj_identifier(self):
         def _get_traj_identifier(traj):
             episode_id = self._episode_id_from_traj(traj, self.ep_table)
@@ -263,6 +294,7 @@ class DroidCoTDataset(SingleCoTDataset):
         if hash_tables is not None:
             self.ep_table = hash_tables.get("ep_table")
             self.filter_table = hash_tables.get("filter_table")
+            self.instr_table = hash_tables.get("instr_table")
 
         else:
             if self.spec.lang_action_dir_name in config.language_action_dir:
@@ -278,10 +310,12 @@ class DroidCoTDataset(SingleCoTDataset):
 
             self.ep_table = self.build_lookup_table(metadata_path)
             self.filter_table = self.build_filter_table(metadata_path)
+            self.instr_table = self.build_instr_table(metadata_path)
             if standalone:
                 self.hash_tables = {
                     "ep_table": self.ep_table,
                     "filter_table": self.filter_table,
+                    "instr_table": self.instr_table,
                 }
 
         super().__init__(

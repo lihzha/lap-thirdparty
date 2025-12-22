@@ -122,6 +122,7 @@ class OXECoTDatasets:
                 self.hash_tables = {
                     "ep_table": ds.ep_table,
                     "filter_table": ds.filter_table,
+                    "instr_table": ds.instr_table,
                 }
                 has_robot_dataset = True
             elif dataset_name == "dobbe":
