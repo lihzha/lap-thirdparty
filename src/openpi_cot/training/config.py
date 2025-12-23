@@ -923,7 +923,7 @@ class TrainConfig(upstream_config.TrainConfig):
     checkpoint_fallback_to_sync: bool = True
     # Evaluation fields
     eval_checkpoint_step: int | None = None
-    num_eval_batches: int | None = None
+    num_eval_batches: int | None = 50
     eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss"] = "rollout"
     eval_use_ema: bool = False
     eval_split: Literal["val", "train"] = "val"
