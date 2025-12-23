@@ -1,6 +1,9 @@
 import dataclasses
 import datetime
+import faulthandler
+import sys
 import time
+
 import cv2
 from moviepy.editor import ImageSequenceClip
 import numpy as np
@@ -8,10 +11,10 @@ from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 from scipy.spatial.transform import Rotation as R
 import tqdm
-import faulthandler
-import sys
+
 sys.path.append(".")
-from helpers import interpolate_rpy, prevent_keyboard_interrupt
+from helpers import interpolate_rpy
+from helpers import prevent_keyboard_interrupt
 
 faulthandler.enable()
 
@@ -21,6 +24,7 @@ IMAGE_KEYS = (
     "left_wrist_0_rgb",
     # "right_wrist_0_rgb",
 )
+
 
 @dataclasses.dataclass
 class Args:
@@ -53,6 +57,7 @@ class BaseEvalRunner:
 
     def init_env(self):
         from droid.robot_env import RobotEnv
+
         return RobotEnv(
             action_space="cartesian_position",
             gripper_action_space="position",
@@ -92,24 +97,22 @@ class BaseEvalRunner:
         if "reasoning" in response and response["reasoning"] is not None:
             print(response["reasoning"])
             actions = np.asarray(response["actions"][0])
-            
-            grip_actions = float(1 - actions[-1])
+            grip_actions = curr_obs["gripper_position"] if len(actions) == 6 else float(1 - actions[-1])
             # Linearly interpolate to CHUNK_STEPS actions
-            positions = np.linspace(curr_pos, curr_pos+actions[:3], self.CHUNK_STEPS, endpoint=True)
+            positions = np.linspace(curr_pos, curr_pos + actions[:3], self.CHUNK_STEPS, endpoint=True)
             rpy_arr = interpolate_rpy(curr=curr_rpy, delta=actions[3:6], steps=self.CHUNK_STEPS)
             grip_vals = np.full((self.CHUNK_STEPS, 1), grip_actions)
+            grip_vals[: self.CHUNK_STEPS - 1] = curr_obs["gripper_position"]
             if use_quaternions:
                 # Convert RPY to quaternions for action representation
                 quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
                 pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
             else:
                 pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
-        else:        
+        else:
             pred_action_chunk = response["actions"].copy()
             pred_action_chunk[:, :3] += curr_pos
-            rpy_arr = interpolate_rpy(
-                curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0]
-            )
+            rpy_arr = interpolate_rpy(curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0])
             pred_action_chunk[:, 3:6] = rpy_arr
             pred_action_chunk[:, 6] = 1 - pred_action_chunk[:, 6]  # invert gripper action
             if use_quaternions:
@@ -146,7 +149,11 @@ class BaseEvalRunner:
                             video.append(curr_obs[f"{self.args.external_camera}_image"])
                     else:
                         video.append(curr_obs["image"][0] if len(curr_obs["image"].shape) == 4 else curr_obs["image"])
-                    wrist_video.append(curr_obs["wrist_image"][0].copy() if len(curr_obs["wrist_image"].shape) == 4 else curr_obs["wrist_image"].copy())
+                    wrist_video.append(
+                        curr_obs["wrist_image"][0].copy()
+                        if len(curr_obs["wrist_image"].shape) == 4
+                        else curr_obs["wrist_image"].copy()
+                    )
                     # Predict a new chunk if needed
                     if pred_action_chunk is None or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0

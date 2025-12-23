@@ -349,17 +349,25 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # If we don't have actions from the model, use the parsed actions
         # Shape: (num_steps, 7) -> [dx, dy, dz, droll, dpitch, dyaw, gripper]
-        parsed_actions = np.concatenate(
-            [
-                translations,  # (num_steps, 3)
-                rotations,  # (num_steps, 3) - rotation deltas in radians
-                gripper_actions[:, None],  # (num_steps, 1)
-            ],
-            axis=1,
-        )
+        if gripper_actions:
+            parsed_actions = np.concatenate(
+                [
+                    translations,  # (num_steps, 3)
+                    rotations,  # (num_steps, 3) - rotation deltas in radians
+                    gripper_actions[:, None],  # (num_steps, 1)
+                ],
+                axis=1,
+            )
+        else:
+            parsed_actions = np.concatenate(
+                [
+                    translations,  # (num_steps, 3)
+                    rotations,  # (num_steps, 3) - rotation deltas in radians
+                ],
+                axis=1,
+            )
 
         # Store parsed actions separately for inspection
-        data["parsed_actions"] = parsed_actions
         print(reasoning, parsed_actions)
 
         return {"actions": parsed_actions, "reasoning": reasoning}

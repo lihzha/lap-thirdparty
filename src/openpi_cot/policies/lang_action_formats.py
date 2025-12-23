@@ -49,7 +49,7 @@ class LanguageActionFormat:
         *,
         in_camera_frame: bool = False,
         initial_state: np.ndarray | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
         """Parse language action(s) into translation/rotation deltas and gripper actions."""
         sentences = [reasoning] if isinstance(reasoning, str) else list(reasoning)
 
@@ -57,6 +57,7 @@ class LanguageActionFormat:
         translations = np.zeros((num_steps, 3), dtype=float)
         rotations = np.zeros((num_steps, 3), dtype=float)  # [roll, pitch, yaw] in radians
         gripper_actions = np.zeros((num_steps,), dtype=float)
+        have_gripper_action = True
 
         if self.use_schema_format and self.style == "compact":
             if self.include_rotation:
@@ -83,9 +84,9 @@ class LanguageActionFormat:
                         translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
                         gripper_actions[i] = float(grip)
         else:
-            sentences[0] = sentences[0].replace("slightly", "1.5 cm") \
-                        .replace("moderately", "5 cm") \
-                        .replace("a lot", "10 cm")
+            sentences[0] = (
+                sentences[0].replace("slightly", "1.5 cm").replace("moderately", "5 cm").replace("a lot", "10 cm")
+            )
             move_pattern = (
                 re.compile(
                     rf"move\s+(right|left|forward|backward|back|up|down)(?:\s+([\-\d\.]+)\s*{self.translation_unit})?",
@@ -168,6 +169,7 @@ class LanguageActionFormat:
                     gripper_actions[i] = float(grip_match.group(1))
                 else:
                     gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
+                    have_gripper_action = False
 
         if self.use_eef_frame and initial_state is not None:
             actions = np.concatenate([translations, rotations, gripper_actions[:, None]], axis=1)
@@ -176,7 +178,7 @@ class LanguageActionFormat:
             rotations = actions[:, 3:6]
             gripper_actions = actions[:, 6]
 
-        return translations, rotations, gripper_actions
+        return translations, rotations, gripper_actions if have_gripper_action else None
 
 
 # Predefined language action formats

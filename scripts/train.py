@@ -30,6 +30,7 @@ from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
+from openpi_cot.training.eval_helpers import eval_checkpoint
 import openpi_cot.training.log_util as log_util
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
@@ -620,6 +621,16 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
+            eval_checkpoint(
+                train_state,
+                config,
+                mesh,
+                data_sharding,
+                replicated_sharding,
+                data_loader,
+                jax.random.fold_in(train_rng, train_state.step),
+                train_state_sharding,
+            )
             checkpoint_manager = _checkpoints.save_state(
                 checkpoint_manager,
                 train_state,
