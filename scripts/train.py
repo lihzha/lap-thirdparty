@@ -509,6 +509,17 @@ def main(config: _config.TrainConfig):
     dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
     dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
+    eval_checkpoint(
+        train_state,
+        config,
+        mesh,
+        data_sharding,
+        replicated_sharding,
+        val_data_loader,
+        jax.random.fold_in(train_rng, train_state.step),
+        train_state_sharding,
+    )
+
     for step in pbar:
         # Profiling: Time training step
         # train_start = time.perf_counter()
@@ -627,7 +638,7 @@ def main(config: _config.TrainConfig):
                 mesh,
                 data_sharding,
                 replicated_sharding,
-                data_loader,
+                val_data_loader,
                 jax.random.fold_in(train_rng, train_state.step),
                 train_state_sharding,
             )
