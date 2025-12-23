@@ -119,37 +119,33 @@ def eval_checkpoint(
 
     results = {}
 
-    # Token accuracy evaluation
-    if config.eval_mode in ["token_accuracy", "both"]:
-        logging.info("Running token accuracy evaluation...")
-        token_results = evaluate_token_accuracy(
-            config,
-            eval_rng,
-            train_state,
-            train_state_sharding,
-            data_loader,
-            mesh,
-            data_sharding,
-            replicated_sharding,
-            num_eval_batches,
-        )
-        results.update(token_results)
+    logging.info("Running token accuracy evaluation...")
+    token_results = evaluate_token_accuracy(
+        config,
+        eval_rng,
+        train_state,
+        train_state_sharding,
+        data_loader,
+        mesh,
+        data_sharding,
+        replicated_sharding,
+        num_eval_batches,
+    )
+    results.update(token_results)
 
-    # Rollout evaluation
-    if config.eval_mode in ["rollout", "both"]:
-        logging.info("Running rollout evaluation...")
-        rollout_results = evaluate_rollout(
-            config,
-            eval_rng,
-            train_state,
-            train_state_sharding,
-            data_loader,
-            mesh,
-            data_sharding,
-            replicated_sharding,
-            num_eval_batches,
-        )
-        results.update(rollout_results)
+    logging.info("Running rollout evaluation...")
+    rollout_results = evaluate_rollout(
+        config,
+        eval_rng,
+        train_state,
+        train_state_sharding,
+        data_loader,
+        mesh,
+        data_sharding,
+        replicated_sharding,
+        num_eval_batches,
+    )
+    results.update(rollout_results)
 
     logging.info("=" * 80)
     logging.info("EVALUATION RESULTS")
@@ -215,9 +211,7 @@ def evaluate_token_accuracy(
             per_token_loss = jnp.asarray(training_utils.to_local_array(eval_info["per_token_loss"]))
             number_mask = jnp.asarray(training_utils.to_local_array(batch[0].number_token_mask))[:, 1:]
             direction_mask = jnp.asarray(training_utils.to_local_array(batch[0].direction_token_mask))[:, 1:]
-            tokenized_langact_mask = jnp.asarray(
-                training_utils.to_local_array(batch[0].tokenized_langact_mask)
-            )[:, 1:]
+            tokenized_langact_mask = jnp.asarray(training_utils.to_local_array(batch[0].tokenized_langact_mask))[:, 1:]
 
             def _masked_mean(mask):
                 mask_sum = jnp.sum(mask)
@@ -239,7 +233,9 @@ def evaluate_token_accuracy(
             direction_token_losses.append(direction_token_loss)
             other_token_losses.append(other_token_loss)
 
-            number_token_accuracies.append(jnp.asarray(training_utils.to_local_array(eval_info["number_token_accuracy"])))
+            number_token_accuracies.append(
+                jnp.asarray(training_utils.to_local_array(eval_info["number_token_accuracy"]))
+            )
             direction_token_accuracies.append(
                 jnp.asarray(training_utils.to_local_array(eval_info["direction_token_accuracy"]))
             )
@@ -306,13 +302,13 @@ def evaluate_rollout(
 
             # Run rollout evaluation
             output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
-            # Bring sharded outputs to the host before decoding/logging.
-            output_tokens = training_utils.to_local_array(output_tokens)
 
             # Process results on host
             if jax.process_index() == 0:
+                # Bring sharded outputs to the host before decoding/logging.
+                output_tokens_local = training_utils.to_local_array(output_tokens)
                 k_local = min(config.batch_size, batch[0].state.shape[0])
-                gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens, tokenizer, k_local)
+                gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
 
                 base_img = eval_batch[0].images.get("base_0_rgb")
                 if base_img is None:
