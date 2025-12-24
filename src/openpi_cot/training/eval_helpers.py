@@ -40,7 +40,7 @@ class TokenAccuracyEvaluator:
             observation: CoTObservation,
             actions: _model.Actions,
         ):
-            loss, metrics = model.compute_loss(rng, observation, actions, train=False)
+            loss, metrics = model.compute_loss(rng, observation, actions, train=False, verbose_mode=True)
             return loss, metrics
 
         eval_rng = jax.random.fold_in(rng, state.step)
