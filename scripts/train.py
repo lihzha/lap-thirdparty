@@ -434,6 +434,19 @@ def main(config: _config.TrainConfig):
         donate_argnums=(1,),
     )
 
+    eval_data_loader = _data_loader.create_data_loader(
+        replace(
+            config,
+            data=replace(config.model, verbose_mode=True),
+        ),
+        sharding=data_sharding,
+        shuffle=False,
+        split="val",
+        seed=config.seed,
+        max_samples=getattr(config.data, "val_max_samples", None),
+        persistent_iterator=False,
+    )
+
     if config.use_validation:
         hash_tables_cache = data_loader.dataset.hash_tables
 
@@ -638,7 +651,7 @@ def main(config: _config.TrainConfig):
                 mesh,
                 data_sharding,
                 replicated_sharding,
-                val_data_loader,
+                eval_data_loader,
                 jax.random.fold_in(train_rng, train_state.step),
                 train_state_sharding,
             )
