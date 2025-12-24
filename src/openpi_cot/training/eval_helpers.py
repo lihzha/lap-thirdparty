@@ -267,11 +267,11 @@ def evaluate_rollout(
 ) -> dict[str, float]:
     """Evaluate rollout performance (language action prediction accuracy)."""
     evaluator = RolloutEvaluator(config)
-    # Note: batch input uses replicated sharding because prepare_eval_batch is called outside JIT
+    # Use data sharding so each host only supplies its local batch shard.
     peval_step = jax.jit(
         evaluator,
-        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
-        out_shardings=(replicated_sharding),
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(data_sharding),
     )
     # peval_step = evaluator
     # Get tokenizer for decoding
@@ -289,6 +289,36 @@ def evaluate_rollout(
         disable=(jax.process_index() != 0),
     )
 
+    def _process_local_shard(batch, shard_spec):
+        def put(x):
+            if not (hasattr(x, "shape") and x.shape):
+                return x
+            if hasattr(x, "dtype") and (x.dtype == np.object_ or getattr(x.dtype, "kind", None) in ("U", "S")):
+                return x
+            if isinstance(shard_spec, jax.sharding.NamedSharding):
+                return jax.make_array_from_process_local_data(shard_spec, np.asarray(x))
+            return jax.device_put(x, shard_spec)
+
+        return jax.tree_util.tree_map(put, batch)
+
+    def _global_max_cut_idx(tokenized_langact_mask):
+        mask_local = np.asarray(training_utils.to_local_array(tokenized_langact_mask))
+        if mask_local.ndim < 2:
+            local_max = int(mask_local.shape[-1]) if mask_local.ndim == 1 else 0
+        else:
+            local_max = 0
+            for row in mask_local:
+                true_idx = np.where(row)[0]
+                if true_idx.size > 0:
+                    local_max = max(local_max, int(true_idx[0]))
+                else:
+                    local_max = max(local_max, int(row.shape[0]))
+        local_max_arr = np.array([local_max], dtype=np.int32)
+        if jax.process_count() > 1:
+            gathered = mh.process_allgather(local_max_arr, tiled=False)
+            return int(np.max(np.asarray(gathered)))
+        return int(local_max)
+
     with sharding.set_mesh(mesh):
         for batch_idx in pbar:
             try:
@@ -297,31 +327,13 @@ def evaluate_rollout(
                 logging.info(f"Reached end of dataset at batch {batch_idx}")
                 break
 
-            # Prepare eval batch (remove language actions) and replicate for JIT
-            langact_mask_local = training_utils.to_local_array(batch[0].tokenized_langact_mask)
-            if langact_mask_local is None:
-                logging.warning("Missing tokenized_langact_mask; skipping rollout batch %s", batch_idx)
-                continue
-            langact_mask_local = np.asarray(langact_mask_local)
-            if langact_mask_local.size == 0:
-                logging.warning("Empty tokenized_langact_mask; skipping rollout batch %s", batch_idx)
-                continue
-            seq_len = int(langact_mask_local.shape[1])
-            has_true = np.any(langact_mask_local, axis=1)
-            first_true = np.argmax(langact_mask_local, axis=1)
-            cut_indices = np.where(has_true, first_true, seq_len)
-            local_max_cut = int(np.max(cut_indices)) if cut_indices.size > 0 else 0
-            if jax.process_count() > 1:
-                gathered = mh.process_allgather(np.array([local_max_cut], dtype=np.int32), tiled=False)
-                global_max_cut = int(np.max(np.asarray(gathered)))
-            else:
-                global_max_cut = local_max_cut
-            eval_batch = vis_tools.prepare_eval_batch(batch, global_max_cut_idx=global_max_cut)
-            # Replicate the batch to match expected sharding
-            eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
+            # Prepare eval batch (remove language actions) with a global pad length.
+            global_max_cut_idx = _global_max_cut_idx(batch[0].tokenized_langact_mask)
+            eval_batch = vis_tools.prepare_eval_batch(batch, global_max_cut_idx=global_max_cut_idx)
+            eval_batch_sharded = _process_local_shard(eval_batch, data_sharding)
 
             # Run rollout evaluation
-            output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
+            output_tokens = peval_step(eval_rng, train_state, eval_batch_sharded)
 
             # Process results on host
             if jax.process_index() == 0:
