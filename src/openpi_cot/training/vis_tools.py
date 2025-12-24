@@ -835,10 +835,6 @@ def prepare_eval_batch(batch, *, global_max_cut_idx: int | None = None):
     new_tokenized_prompt_list = []
     new_tokenized_prompt_mask_list = []
     new_tokenized_langact_mask_list = []
-    new_loss_mask_list = []
-    new_critical_token_mask_list = []
-    new_number_token_mask_list = []
-    new_direction_token_mask_list = []
 
     for i in range(batch_size):
         cut_idx = cut_indices[i]
@@ -846,12 +842,8 @@ def prepare_eval_batch(batch, *, global_max_cut_idx: int | None = None):
         # Cut to the first True index (keep everything before reasoning)
         prompt_cut = obs.tokenized_prompt[i, :cut_idx]
         prompt_mask_cut = obs.tokenized_prompt_mask[i, :cut_idx]
-        loss_mask_cut = obs.token_loss_mask[i, :cut_idx]
         # Since we're removing reasoning, langact_mask should be all False
         langact_mask_cut = jnp.zeros(cut_idx, dtype=jnp.bool_)
-        critical_token_mask_cut = jnp.zeros(cut_idx, dtype=jnp.bool_)
-        number_token_mask_cut = jnp.zeros(cut_idx, dtype=jnp.bool_)
-        direction_token_mask_cut = jnp.zeros(cut_idx, dtype=jnp.bool_)
 
         # Right-pad to max_cut_idx
         pad_len = max_cut_idx - cut_idx
@@ -859,46 +851,28 @@ def prepare_eval_batch(batch, *, global_max_cut_idx: int | None = None):
             prompt_padded = jnp.concatenate([prompt_cut, jnp.zeros(pad_len, dtype=prompt_cut.dtype)])
             prompt_mask_padded = jnp.concatenate([prompt_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
             langact_mask_padded = jnp.concatenate([langact_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
-            loss_mask_padded = jnp.concatenate([loss_mask_cut, jnp.zeros(pad_len, dtype=loss_mask_cut.dtype)])
-            critical_token_mask_padded = jnp.concatenate([critical_token_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
-            number_token_mask_padded = jnp.concatenate([number_token_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)])
-            direction_token_mask_padded = jnp.concatenate(
-                [direction_token_mask_cut, jnp.zeros(pad_len, dtype=jnp.bool_)]
-            )
         else:
             prompt_padded = prompt_cut
             prompt_mask_padded = prompt_mask_cut
             langact_mask_padded = langact_mask_cut
-            loss_mask_padded = loss_mask_cut
-            critical_token_mask_padded = critical_token_mask_cut
-            number_token_mask_padded = number_token_mask_cut
-            direction_token_mask_padded = direction_token_mask_cut
 
         new_tokenized_prompt_list.append(prompt_padded)
         new_tokenized_prompt_mask_list.append(prompt_mask_padded)
         new_tokenized_langact_mask_list.append(langact_mask_padded)
-        new_loss_mask_list.append(loss_mask_padded)
-        new_critical_token_mask_list.append(critical_token_mask_padded)
-        new_number_token_mask_list.append(number_token_mask_padded)
-        new_direction_token_mask_list.append(direction_token_mask_padded)
 
     # Stack back into batch
     new_tokenized_prompt = jnp.stack(new_tokenized_prompt_list)
     new_tokenized_prompt_mask = jnp.stack(new_tokenized_prompt_mask_list)
     new_tokenized_langact_mask = jnp.stack(new_tokenized_langact_mask_list) * False
-    new_loss_mask = jnp.stack(new_loss_mask_list)
-    new_critical_token_mask = jnp.stack(new_critical_token_mask_list)
-    new_number_token_mask = jnp.stack(new_number_token_mask_list)
-    new_direction_token_mask = jnp.stack(new_direction_token_mask_list)
 
     new_obs = dataclasses.asdict(obs)
     new_obs["tokenized_prompt"] = new_tokenized_prompt
     new_obs["tokenized_prompt_mask"] = new_tokenized_prompt_mask
     new_obs["tokenized_langact_mask"] = new_tokenized_langact_mask
-    new_obs["token_loss_mask"] = new_loss_mask
-    new_obs["critical_token_mask"] = new_critical_token_mask
-    new_obs["number_token_mask"] = new_number_token_mask
-    new_obs["direction_token_mask"] = new_direction_token_mask
+    new_obs["token_loss_mask"] = None
+    new_obs["critical_token_mask"] = None
+    new_obs["number_token_mask"] = None
+    new_obs["direction_token_mask"] = None
     new_obs = CoTObservation(**new_obs)
     return (new_obs, actions)
 
