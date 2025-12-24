@@ -6,7 +6,9 @@ import math
 
 import flax.nnx as nnx
 import jax
+from jax.experimental import multihost_utils as mh
 import jax.numpy as jnp
+import numpy as np
 from openpi.models import model as _model
 import openpi.shared.array_typing as at
 import tqdm_loggable.auto as tqdm
@@ -296,7 +298,25 @@ def evaluate_rollout(
                 break
 
             # Prepare eval batch (remove language actions) and replicate for JIT
-            eval_batch = vis_tools.prepare_eval_batch(batch)
+            langact_mask_local = training_utils.to_local_array(batch[0].tokenized_langact_mask)
+            if langact_mask_local is None:
+                logging.warning("Missing tokenized_langact_mask; skipping rollout batch %s", batch_idx)
+                continue
+            langact_mask_local = np.asarray(langact_mask_local)
+            if langact_mask_local.size == 0:
+                logging.warning("Empty tokenized_langact_mask; skipping rollout batch %s", batch_idx)
+                continue
+            seq_len = int(langact_mask_local.shape[1])
+            has_true = np.any(langact_mask_local, axis=1)
+            first_true = np.argmax(langact_mask_local, axis=1)
+            cut_indices = np.where(has_true, first_true, seq_len)
+            local_max_cut = int(np.max(cut_indices)) if cut_indices.size > 0 else 0
+            if jax.process_count() > 1:
+                gathered = mh.process_allgather(np.array([local_max_cut], dtype=np.int32), tiled=False)
+                global_max_cut = int(np.max(np.asarray(gathered)))
+            else:
+                global_max_cut = local_max_cut
+            eval_batch = vis_tools.prepare_eval_batch(batch, global_max_cut_idx=global_max_cut)
             # Replicate the batch to match expected sharding
             eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
 

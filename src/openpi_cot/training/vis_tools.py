@@ -805,7 +805,7 @@ def log_hard_examples_payload(payload: dict[str, Any]) -> None:
     _log_entries(selected, step=step, quantile_threshold=quantile_threshold, total_samples=total_samples)
 
 
-def prepare_eval_batch(batch):
+def prepare_eval_batch(batch, *, global_max_cut_idx: int | None = None):
     # Process the batch to remove reasoning and update masks
     obs, actions = batch
 
@@ -828,6 +828,8 @@ def prepare_eval_batch(batch):
 
     # Find the maximum cut index (longest sequence after cutting)
     max_cut_idx = max(cut_indices)
+    if global_max_cut_idx is not None:
+        max_cut_idx = max(max_cut_idx, int(global_max_cut_idx))
 
     # Cut and pad each sample
     new_tokenized_prompt_list = []
