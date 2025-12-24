@@ -528,7 +528,7 @@ def main(config: _config.TrainConfig):
         mesh,
         data_sharding,
         replicated_sharding,
-        val_data_loader,
+        eval_data_loader,
         jax.random.fold_in(train_rng, train_state.step),
         train_state_sharding,
     )
