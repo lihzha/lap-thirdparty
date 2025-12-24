@@ -331,8 +331,7 @@ def evaluate_rollout(
                 break
 
             # Prepare eval batch (remove language actions) with a global pad length.
-            global_max_cut_idx = _global_max_cut_idx(batch[0].tokenized_langact_mask)
-            eval_batch = vis_tools.prepare_eval_batch(batch, global_max_cut_idx=global_max_cut_idx)
+            eval_batch = vis_tools.prepare_eval_batch(batch)
             eval_batch_sharded = _process_local_shard(eval_batch, data_sharding)
 
             # Run rollout evaluation
