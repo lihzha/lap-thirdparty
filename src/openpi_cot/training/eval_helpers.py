@@ -293,10 +293,13 @@ def evaluate_rollout(
         def put(x):
             if not (hasattr(x, "shape") and x.shape):
                 return x
+            if isinstance(x, jax.Array) and getattr(x, "sharding", None) == shard_spec:
+                return x
             if hasattr(x, "dtype") and (x.dtype == np.object_ or getattr(x.dtype, "kind", None) in ("U", "S")):
                 return x
             if isinstance(shard_spec, jax.sharding.NamedSharding):
-                return jax.make_array_from_process_local_data(shard_spec, np.asarray(x))
+                local = training_utils.to_local_array(x)
+                return jax.make_array_from_process_local_data(shard_spec, np.asarray(local))
             return jax.device_put(x, shard_spec)
 
         return jax.tree_util.tree_map(put, batch)
