@@ -437,7 +437,7 @@ def main(config: _config.TrainConfig):
     eval_data_loader = _data_loader.create_data_loader(
         replace(
             config,
-            data=replace(config.model, verbose_mode=True),
+            model=replace(config.model, verbose_mode=True),
         ),
         sharding=data_sharding,
         shuffle=False,
