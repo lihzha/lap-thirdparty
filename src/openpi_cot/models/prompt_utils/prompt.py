@@ -193,6 +193,16 @@ PI05_NOTIME_PROMPT_FORMAT = PromptFormat(
     direction_token_checker=checkers.is_direction_natural,
 )
 
+PI05_NOTIME_NOSTATE_PROMPT_FORMAT = PromptFormat(
+    name="pi05_notime_nostate",
+    task_module=TaskModule(include_time_horizon=False),
+    state_module=None,
+    action_module=ActionModule(prefix="Action: "),
+    separator="; ",
+    critical_token_checker=checkers.is_critical_directional,
+    direction_token_checker=checkers.is_direction_natural,
+)
+
 PI05_NOTIME_ORI_PROMPT_FORMAT = PromptFormat(
     name="pi05_notime_ori",
     task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
@@ -357,6 +367,7 @@ PROMPT_FORMAT_REGISTRY = {
     "grouped_state": GROUPED_STATE_PROMPT_FORMAT,
     "grouped_state_verbose": GROUPED_STATE_PREFIX_PROMPT_FORMAT,
     "no_state": NO_STATE_FORMAT,
+    "pi05_notime_nostate": PI05_NOTIME_NOSTATE_PROMPT_FORMAT,
 }
 
 PREDICTION_PROMPT_FORMAT_REGISTRY = {

@@ -34,6 +34,7 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             "no_state",
             "pi05_notime",
             "pi05_notime_ori",
+            "pi05_notime_nostate",
         ]
         | PromptFormat = "pi05",
         prediction_format: Literal["default", "grouped"] | PromptFormat = "default",
