@@ -119,20 +119,6 @@ def eval_checkpoint(
 
     results = {}
 
-    logging.info("Running token accuracy evaluation...")
-    token_results = evaluate_token_accuracy(
-        config,
-        eval_rng,
-        train_state,
-        train_state_sharding,
-        data_loader,
-        mesh,
-        data_sharding,
-        replicated_sharding,
-        num_eval_batches,
-    )
-    results.update(token_results)
-
     logging.info("Running rollout evaluation...")
     rollout_results = evaluate_rollout(
         config,
@@ -146,6 +132,20 @@ def eval_checkpoint(
         num_eval_batches,
     )
     results.update(rollout_results)
+
+    logging.info("Running token accuracy evaluation...")
+    token_results = evaluate_token_accuracy(
+        config,
+        eval_rng,
+        train_state,
+        train_state_sharding,
+        data_loader,
+        mesh,
+        data_sharding,
+        replicated_sharding,
+        num_eval_batches,
+    )
+    results.update(token_results)
 
     logging.info("=" * 80)
     logging.info("EVALUATION RESULTS")
