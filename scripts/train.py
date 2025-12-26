@@ -404,16 +404,16 @@ def main(config: _config.TrainConfig):
         persistent_iterator=False,
     )
 
-    eval_checkpoint(
-        train_state,
-        config,
-        mesh,
-        data_sharding,
-        replicated_sharding,
-        eval_data_loader,
-        jax.random.fold_in(train_rng, train_state.step),
-        train_state_sharding,
-    )
+    # eval_checkpoint(
+    #     train_state,
+    #     config,
+    #     mesh,
+    #     data_sharding,
+    #     replicated_sharding,
+    #     eval_data_loader,
+    #     jax.random.fold_in(train_rng, train_state.step),
+    #     train_state_sharding,
+    # )
 
     data_loader: _data_loader.CoTRLDSDataLoader = _data_loader.create_data_loader(
         config,

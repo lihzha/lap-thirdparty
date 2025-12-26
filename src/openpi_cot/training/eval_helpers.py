@@ -335,7 +335,4 @@ def evaluate_rollout(
             if num_logged_imgs >= max_logged_imgs:
                 break
 
-    # Log images to wandb
-    if images_to_log and jax.process_index() == 0 and config.wandb_enabled:
-        wandb.log({"eval/rollout": images_to_log}, step=int(train_state.step))
-    return images_to_log
+    return {"eval/rollout": images_to_log}
