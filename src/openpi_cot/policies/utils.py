@@ -228,6 +228,7 @@ def summarize_numeric_actions(
     initial_state: np.ndarray,
     include_rotation: bool = False,
     rotation_precision: int = 10,
+    stateless_gripper: bool = False,
 ) -> str | None:
     """Convert numeric delta EE actions ([..., 7]) into a language string.
 
@@ -327,9 +328,15 @@ def summarize_numeric_actions(
     g_orig = float(initial_state[6])
     # Final gripper value from last step
     g_last = float(arr[-1, 6])
-    if g_last > 0.5 and g_orig <= 0.5:
+    if stateless_gripper:
+        to_check_open = g_last > 0.5 and g_orig <= 0.5
+        to_check_close = g_last <= 0.5 and g_orig > 0.5
+    else:
+        to_check_open = g_last >= 0.5
+        to_check_close = g_last < 0.5
+    if to_check_open:
         parts.append("open gripper")
-    elif g_last <= 0.5 and g_orig > 0.5:
+    elif to_check_close:
         parts.append("close gripper")
     # parts.append(f"set gripper to {g_last:.0f}")
     return ", ".join(parts)

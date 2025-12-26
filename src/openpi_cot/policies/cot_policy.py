@@ -46,6 +46,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     filter_all_1s_actions: bool = False
     use_rough_scale: bool = False
     filter_large_actions: bool = False
+    stateless_gripper: bool = False
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -215,6 +216,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 include_rotation=True,
                 rotation_precision=10,
                 initial_state=initial_state,
+                stateless_gripper=True,
             )
         else:
             summed = summarize_numeric_actions(
@@ -222,6 +224,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 initial_state=initial_state,
                 sum_decimal=self.language_action_format.get_sum_decimal(),
                 include_rotation=self.language_action_format.include_rotation,
+                stateless_gripper=self.stateless_gripper,
             )
         return summed, frame_desc
 

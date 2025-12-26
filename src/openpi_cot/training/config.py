@@ -183,6 +183,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     # Language action format
     language_action_format_name: str = "verbose_eef_with_rotation"
     filter_all_1s_actions: bool = False
+    stateless_gripper: bool = False
     filter_large_actions: bool = False
     use_rough_scale: bool = False
     horizon_seconds: list[float] = dataclasses.field(default_factory=lambda: [1.0])
@@ -371,6 +372,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     action_encoding=base_cfg.action_encoding,
                     language_action_format=base_cfg.language_action_format_name,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
+                    stateless_gripper=base_cfg.stateless_gripper,
                     filter_large_actions=base_cfg.filter_large_actions,
                     use_rough_scale=base_cfg.use_rough_scale,
                     enable_langact_training=model_config.enable_langact_training,
