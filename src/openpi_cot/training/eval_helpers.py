@@ -332,8 +332,8 @@ def evaluate_rollout(
                 )
                 images_to_log.append(wandb.Image(img_to_log))
                 num_logged_imgs += 1
-        if num_logged_imgs >= max_logged_imgs:
-            break
+            if num_logged_imgs >= max_logged_imgs:
+                break
 
     # Log images to wandb
     if images_to_log and jax.process_index() == 0 and config.wandb_enabled:
