@@ -268,8 +268,8 @@ def evaluate_rollout(
     # Use data sharding so each host only supplies its local batch shard.
     peval_step = jax.jit(
         evaluator,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-        out_shardings=(data_sharding),
+        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
+        out_shardings=(replicated_sharding),
     )
     # peval_step = evaluator
     # Get tokenizer for decoding
