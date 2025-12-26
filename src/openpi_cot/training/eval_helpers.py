@@ -6,9 +6,7 @@ import math
 
 import flax.nnx as nnx
 import jax
-from jax.experimental import multihost_utils as mh
 import jax.numpy as jnp
-import numpy as np
 from openpi.models import model as _model
 import openpi.shared.array_typing as at
 import tqdm_loggable.auto as tqdm
@@ -121,19 +119,19 @@ def eval_checkpoint(
 
     results = {}
 
-    # logging.info("Running rollout evaluation...")
-    # rollout_results = evaluate_rollout(
-    #     config,
-    #     eval_rng,
-    #     train_state,
-    #     train_state_sharding,
-    #     data_loader,
-    #     mesh,
-    #     data_sharding,
-    #     replicated_sharding,
-    #     num_eval_batches,
-    # )
-    # results.update(rollout_results)
+    logging.info("Running rollout evaluation...")
+    rollout_results = evaluate_rollout(
+        config,
+        eval_rng,
+        train_state,
+        train_state_sharding,
+        data_loader,
+        mesh,
+        data_sharding,
+        replicated_sharding,
+        num_eval_batches,
+    )
+    results.update(rollout_results)
 
     logging.info("Running token accuracy evaluation...")
     token_results = evaluate_token_accuracy(
@@ -289,39 +287,6 @@ def evaluate_rollout(
         disable=(jax.process_index() != 0),
     )
 
-    def _process_local_shard(batch, shard_spec):
-        def put(x):
-            if not (hasattr(x, "shape") and x.shape):
-                return x
-            if isinstance(x, jax.Array) and getattr(x, "sharding", None) == shard_spec:
-                return x
-            if hasattr(x, "dtype") and (x.dtype == np.object_ or getattr(x.dtype, "kind", None) in ("U", "S")):
-                return x
-            if isinstance(shard_spec, jax.sharding.NamedSharding):
-                local = training_utils.to_local_array(x)
-                return jax.make_array_from_process_local_data(shard_spec, np.asarray(local))
-            return jax.device_put(x, shard_spec)
-
-        return jax.tree_util.tree_map(put, batch)
-
-    def _global_max_cut_idx(tokenized_langact_mask):
-        mask_local = np.asarray(training_utils.to_local_array(tokenized_langact_mask))
-        if mask_local.ndim < 2:
-            local_max = int(mask_local.shape[-1]) if mask_local.ndim == 1 else 0
-        else:
-            local_max = 0
-            for row in mask_local:
-                true_idx = np.where(row)[0]
-                if true_idx.size > 0:
-                    local_max = max(local_max, int(true_idx[0]))
-                else:
-                    local_max = max(local_max, int(row.shape[0]))
-        local_max_arr = np.array([local_max], dtype=np.int32)
-        if jax.process_count() > 1:
-            gathered = mh.process_allgather(local_max_arr, tiled=False)
-            return int(np.max(np.asarray(gathered)))
-        return int(local_max)
-
     with sharding.set_mesh(mesh):
         for batch_idx in pbar:
             try:
@@ -330,12 +295,13 @@ def evaluate_rollout(
                 logging.info(f"Reached end of dataset at batch {batch_idx}")
                 break
 
-            # Prepare eval batch (remove language actions) with a global pad length.
+            # Prepare eval batch (remove language actions) and replicate for JIT
             eval_batch = vis_tools.prepare_eval_batch(batch)
-            eval_batch_sharded = _process_local_shard(eval_batch, data_sharding)
+            # Replicate the batch to match expected sharding
+            eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
 
             # Run rollout evaluation
-            output_tokens = peval_step(eval_rng, train_state, eval_batch_sharded)
+            output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
 
             # Process results on host
             if jax.process_index() == 0:
@@ -344,7 +310,7 @@ def evaluate_rollout(
                 k_local = min(config.batch_size, batch[0].state.shape[0])
                 gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
 
-                base_img = eval_batch[0].images.get("base_0_rgb")
+                base_img = training_utils.to_local_array(eval_batch_replicated[0].images.get("base_0_rgb"))
                 if base_img is None:
                     continue
                 imgs_local = training_utils.to_local_array(base_img)
