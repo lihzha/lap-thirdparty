@@ -328,7 +328,7 @@ def summarize_numeric_actions(
     g_orig = float(initial_state[6])
     # Final gripper value from last step
     g_last = float(arr[-1, 6])
-    if stateless_gripper:
+    if not stateless_gripper:
         to_check_open = g_last > 0.5 and g_orig <= 0.5
         to_check_close = g_last <= 0.5 and g_orig > 0.5
     else:
