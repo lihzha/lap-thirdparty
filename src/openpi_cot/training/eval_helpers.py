@@ -304,36 +304,36 @@ def evaluate_rollout(
             output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
 
             # Process results on host
-            if jax.process_index() == 0:
-                # Bring sharded outputs to the host before decoding/logging.
-                output_tokens_local = output_tokens
-                k_local = min(config.batch_size, batch[0].state.shape[0])
-                gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
+            # if jax.process_index() == 0:
+            # Bring sharded outputs to the host before decoding/logging.
+            output_tokens_local = training_utils.to_local_array(output_tokens)
+            k_local = min(config.batch_size, batch[0].state.shape[0])
+            gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
 
-                base_img = eval_batch_replicated[0].images.get("base_0_rgb")
-                if base_img is None:
-                    continue
-                imgs_local = base_img
-                num_available = imgs_local.shape[0]
-                num_entries = min(k_local, len(gt_texts), len(pred_texts), num_available)
-                if num_entries == 0:
-                    continue
-                imgs_to_log = imgs_local[:num_entries]
+            base_img = training_utils.to_local_array(eval_batch_replicated[0].images.get("base_0_rgb"))
+            if base_img is None:
+                continue
+            imgs_local = training_utils.to_local_array(base_img)
+            num_available = imgs_local.shape[0]
+            num_entries = min(k_local, len(gt_texts), len(pred_texts), num_available)
+            if num_entries == 0:
+                continue
+            imgs_to_log = imgs_local[:num_entries]
 
-                for i in range(num_entries):
-                    gt_text = gt_texts[i]
-                    pred_text = pred_texts[i]
-                    img = imgs_to_log[i]
+            for i in range(num_entries):
+                gt_text = gt_texts[i]
+                pred_text = pred_texts[i]
+                img = imgs_to_log[i]
 
-                    img_to_log = vis_tools.create_rollout_visualization(
-                        img,
-                        gt_text,
-                        pred_text,
-                    )
-                    images_to_log.append(wandb.Image(img_to_log))
-                    num_logged_imgs += 1
-            if num_logged_imgs >= max_logged_imgs:
-                break
+                img_to_log = vis_tools.create_rollout_visualization(
+                    img,
+                    gt_text,
+                    pred_text,
+                )
+                images_to_log.append(wandb.Image(img_to_log))
+                num_logged_imgs += 1
+        if num_logged_imgs >= max_logged_imgs:
+            break
 
     # Log images to wandb
     if images_to_log and jax.process_index() == 0 and config.wandb_enabled:
