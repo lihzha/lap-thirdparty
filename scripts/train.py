@@ -391,30 +391,6 @@ def main(config: _config.TrainConfig):
     sharding.log_param_sharding_planned(train_state_sharding)
     sharding.log_param_sharding_actual(train_state.params)
 
-    eval_data_loader = _data_loader.create_data_loader(
-        replace(
-            config,
-            model=replace(config.model, verbose_mode=True, enable_langact_training=False),
-        ),
-        sharding=data_sharding,
-        shuffle=False,
-        split="val",
-        seed=config.seed,
-        max_samples=getattr(config.data, "val_max_samples", None),
-        persistent_iterator=False,
-    )
-
-    eval_checkpoint(
-        train_state,
-        config,
-        mesh,
-        data_sharding,
-        replicated_sharding,
-        eval_data_loader,
-        jax.random.fold_in(train_rng, train_state.step),
-        train_state_sharding,
-    )
-
     data_loader: _data_loader.CoTRLDSDataLoader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
@@ -449,6 +425,30 @@ def main(config: _config.TrainConfig):
 
     # Get start step after restoring checkpoint (if resuming)
     start_step = int(train_state.step)
+
+    eval_data_loader = _data_loader.create_data_loader(
+        replace(
+            config,
+            model=replace(config.model, verbose_mode=True, enable_langact_training=False),
+        ),
+        sharding=data_sharding,
+        shuffle=False,
+        split="val",
+        seed=config.seed,
+        max_samples=getattr(config.data, "val_max_samples", None),
+        persistent_iterator=False,
+    )
+
+    eval_checkpoint(
+        train_state,
+        config,
+        mesh,
+        data_sharding,
+        replicated_sharding,
+        eval_data_loader,
+        jax.random.fold_in(train_rng, train_state.step),
+        train_state_sharding,
+    )
 
     train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
