@@ -84,9 +84,7 @@ class RolloutEvaluator:
         observation, _ = batch
 
         # Sample language action tokens
-        output_tokens = model.sample_tokens(rng, observation)
-
-        return output_tokens
+        return model.sample_tokens(rng, observation)
 
 
 def eval_checkpoint(
@@ -296,12 +294,12 @@ def evaluate_rollout(
                 break
 
             # Prepare eval batch (remove language actions) and replicate for JIT
-            eval_batch = vis_tools.prepare_eval_batch(batch)
+            # eval_batch = vis_tools.prepare_eval_batch(batch)
             # Replicate the batch to match expected sharding
-            eval_batch_replicated = jax.device_put(eval_batch, data_sharding)
+            eval_batch_sharded = jax.device_put(batch, data_sharding)
 
             # Run rollout evaluation
-            output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
+            output_tokens = peval_step(eval_rng, train_state, eval_batch_sharded)
 
             # Process results on host
             # if jax.process_index() == 0:
