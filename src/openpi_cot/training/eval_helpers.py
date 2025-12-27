@@ -306,7 +306,8 @@ def evaluate_rollout(
             # Process results on host
             # if jax.process_index() == 0:
             # Bring sharded outputs to the host before decoding/logging.
-            output_tokens_local = training_utils.to_local_array(output_tokens)
+            # output_tokens_local = training_utils.to_local_array(output_tokens)
+            output_tokens_local = output_tokens
             k_local = min(config.batch_size, batch[0].state.shape[0])
             gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
 
