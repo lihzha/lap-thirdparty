@@ -375,7 +375,7 @@ class Attention(nn.Module):
         q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
         token_owner = None
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[1] is not None:
             # Track which expert owns each token position so we can stop gradients for cross-expert attention into expert 0.
             token_owner = []
             for i, x in enumerate(xs):
@@ -405,7 +405,7 @@ class Attention(nn.Module):
                 f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
             )
 
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[1] is not None:
             # Stop gradients when non-zero experts attend to expert 0 (expert 0 -> others is already masked).
             q_owner = token_owner[:, None, None, :, None]  # B,1,1,T,1
             k_owner = token_owner[:, None, None, None, :]  # B,1,1,1,S
@@ -418,7 +418,7 @@ class Attention(nn.Module):
 
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
 
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[1] is not None:
             # Detach values from expert 0 when consumed by other experts.
             probs_cross = probs * cross_to_expert0.astype(probs.dtype)
             probs_self = probs - probs_cross
