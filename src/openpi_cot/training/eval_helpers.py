@@ -268,8 +268,8 @@ def evaluate_rollout(
     # Use data sharding so each host only supplies its local batch shard.
     peval_step = jax.jit(
         evaluator,
-        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
-        out_shardings=(replicated_sharding),
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(data_sharding),
     )
     # peval_step = evaluator
     # Get tokenizer for decoding
@@ -298,7 +298,7 @@ def evaluate_rollout(
             # Prepare eval batch (remove language actions) and replicate for JIT
             eval_batch = vis_tools.prepare_eval_batch(batch)
             # Replicate the batch to match expected sharding
-            eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
+            eval_batch_replicated = jax.device_put(eval_batch, data_sharding)
 
             # Run rollout evaluation
             output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
@@ -307,14 +307,14 @@ def evaluate_rollout(
             # if jax.process_index() == 0:
             # Bring sharded outputs to the host before decoding/logging.
             # output_tokens_local = training_utils.to_local_array(output_tokens)
-            output_tokens_local = output_tokens
+            output_tokens_local = training_utils.to_local_array(output_tokens)
             k_local = min(config.batch_size, batch[0].state.shape[0])
             gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
 
-            base_img = eval_batch_replicated[0].images.get("base_0_rgb")
+            base_img = training_utils.to_local_array(eval_batch_replicated[0].images.get("base_0_rgb"))
             if base_img is None:
                 continue
-            imgs_local = base_img
+            imgs_local = training_utils.to_local_array(base_img)
             num_available = imgs_local.shape[0]
             num_entries = min(k_local, len(gt_texts), len(pred_texts), num_available)
             if num_entries == 0:

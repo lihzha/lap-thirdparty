@@ -283,9 +283,9 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
 
     Returns one decoded string per example. If reasoning fields are absent, returns [].
     """
-    tokens = obs.tokenized_prompt
-    rmask = obs.tokenized_prompt_mask
-    langact_mask = obs.tokenized_langact_mask
+    tokens = _utils.to_local_array(obs.tokenized_prompt)
+    rmask = _utils.to_local_array(obs.tokenized_prompt_mask)
+    langact_mask = _utils.to_local_array(obs.tokenized_langact_mask)
     texts: list[str] = []
     lang_acts: list[str] = []
     for i in range(tokens.shape[0]):
@@ -1057,7 +1057,7 @@ def eval_step(
     # Bound to local batch size to avoid indexing errors
     _, gt_texts = _decode_reasoning_strings(gt_batch[0], tok)
     # Decode sampled reasoning tokens
-    ids = output_tokens
+    ids = _utils.to_local_array(output_tokens)
     # Derive safe local loop bound across all sources
     k_decode = int(min(k_local, ids.shape[0], len(gt_texts)))
     pred_texts: list[str] = []
