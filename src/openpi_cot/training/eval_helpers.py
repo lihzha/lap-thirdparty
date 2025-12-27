@@ -155,7 +155,7 @@ def eval_checkpoint(
     # Log to wandb
     if jax.process_index() == 0 and config.wandb_enabled:
         wandb.log(results, step=int(train_state.step))
-        wandb.summary.update(results)
+        # wandb.summary.update(results)
 
     return results
 
