@@ -1114,7 +1114,7 @@ _CONFIGS = [
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
         ),
-        data_config_class=LiberoFinetuneDataConfig,
+        data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
             "repo_id": "libero",
             "asset_id": "libero",
