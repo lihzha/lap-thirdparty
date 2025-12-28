@@ -291,9 +291,12 @@ def _decode_reasoning_strings(obs: CoTObservation, tokenizer) -> list[str]:
     for i in range(tokens.shape[0]):
         sel = tokens[i][rmask[i].astype(bool)]
         text = tokenizer.decode(sel.astype(np.int32))
-        lang_act = tokens[i][langact_mask[i].astype(bool)]
-        lang_act = tokenizer.decode(lang_act.astype(np.int32))
-        lang_acts.append(lang_act)
+        if langact_mask is None:
+            lang_acts.append("")
+        else:
+            lang_act = tokens[i][langact_mask[i].astype(bool)]
+            lang_act = tokenizer.decode(lang_act.astype(np.int32))
+            lang_acts.append(lang_act)
         texts.append(text)
     return texts, lang_acts
 
