@@ -17,168 +17,118 @@ class LanguageActionFormat:
 
     name: str
     # Style of formatting
-    style: Literal["verbose", "compact", "directional_only"] = "verbose"
+    style: Literal["verbose", "compact"] = "verbose"
     # For verbose style: decimal places for numeric values
     decimal_places: int = 0
     # Whether to include rotation components in descriptions
     include_rotation: bool = False
     # Optional units for translation (cm, m, mm)
     translation_unit: str = "cm"
-    # Optional units for rotation (deg, rad)
-    rotation_unit: str = "deg"
-    # For compact style: use schema-based format like <+03 +05 -08 1>
-    use_schema_format: bool = False
     # Whether to represent actions in end effector's frame (relative to first timestep)
     use_eef_frame: bool = False
-    # Coordinate frame axis permutation and sign (for camera frame decoding)
-    axis_perm: tuple[int, int, int] = (0, 2, 1)
-    axis_sign: tuple[int, int, int] = (1, 1, 1)
 
     def get_sum_decimal(self) -> str:
         """Convert to legacy sum_decimal format for backward compatibility."""
         if self.style == "compact":
             return "compact"
-        if self.style == "directional_only":
-            return "no_number"
-        # verbose
         return f"{self.decimal_places}f"
 
     def parse_language_to_deltas(
         self,
         reasoning: str | list[str],
         *,
-        in_camera_frame: bool = False,
         initial_state: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
         """Parse language action(s) into translation/rotation deltas and gripper actions."""
-        sentences = [reasoning] if isinstance(reasoning, str) else list(reasoning)
+        movement = np.zeros(6, dtype=float)  # [dx, dy, dz, droll, dpitch, dyaw]
+        gripper_action = None
 
-        num_steps = len(sentences)
-        translations = np.zeros((num_steps, 3), dtype=float)
-        rotations = np.zeros((num_steps, 3), dtype=float)  # [roll, pitch, yaw] in radians
-        gripper_actions = np.zeros((num_steps,), dtype=float)
-        have_gripper_action = True
-
-        if self.use_schema_format and self.style == "compact":
+        if self.style == "compact":
             if self.include_rotation:
                 pattern = re.compile(
                     r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>"
                 )
-                for i, sentence in enumerate(sentences):
-                    match = pattern.search(sentence)
-                    if match:
-                        dx, dy, dz, droll, dpitch, dyaw, grip = match.groups()
-                        translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
-                        rotations[i] = [
-                            int(droll) * np.pi / 180.0,
-                            int(dpitch) * np.pi / 180.0,
-                            int(dyaw) * np.pi / 180.0,
-                        ]
-                        gripper_actions[i] = float(grip)
-            else:
-                pattern = re.compile(r"<([+\-]\d+)\s+([+\-]\d+)\s+([+\-]\d+)\s+(\d)>")
-                for i, sentence in enumerate(sentences):
-                    match = pattern.search(sentence)
-                    if match:
-                        dx, dy, dz, grip = match.groups()
-                        translations[i] = [int(dx) / 100.0, int(dy) / 100.0, int(dz) / 100.0]
-                        gripper_actions[i] = float(grip)
+                match = pattern.search(reasoning)
+                if match:
+                    groups = match.groups()
+                    dx, dy, dz = groups[0], groups[1], groups[2]
+                    movement[:3] = np.array([dx, dy, dz], dtype=float) / 100.0
+                    if self.include_rotation:
+                        droll, dpitch, dyaw = groups[3], groups[4], groups[5]
+                        movement[3:6] = (
+                            np.array([droll, dpitch, dyaw], dtype=float) * np.pi / 180.0
+                        )
+
+                    gripper_action = float(groups[-1])
         else:
-            sentences[0] = (
-                sentences[0].replace("slightly", "1.5 cm").replace("moderately", "5 cm").replace("a lot", "10 cm")
-            )
-            move_pattern = (
-                re.compile(
+            reasoning = reasoning.replace("slightly", "1.5 cm").replace("moderately", "5 cm").replace("a lot", "10 cm")
+            move_pattern = re.compile(
                     rf"move\s+(right|left|forward|backward|back|up|down)(?:\s+([\-\d\.]+)\s*{self.translation_unit})?",
                     re.IGNORECASE,
                 )
-                if self.style == "directional_only"
-                else re.compile(
-                    rf"move\s+(right|left|forward|backward|back|up|down)\s+([\-\d\.]+)\s*{self.translation_unit}",
+
+            dx_cm = dy_cm = dz_cm = 0.0
+            for match in move_pattern.finditer(reasoning):
+                direction = match.group(1).lower()
+                value = float(match.group(2))
+                if direction == "forward":
+                    dx_cm += value
+                elif direction in ("backward", "back"):
+                    dx_cm -= value
+                elif direction == "left":
+                    dy_cm += value
+                elif direction == "right":
+                    dy_cm -= value
+                elif direction == "up":
+                    dz_cm += value
+                elif direction == "down":
+                    dz_cm -= value
+
+            movement[:3] = np.array([dx_cm, dy_cm, dz_cm], dtype=float) / 100.0
+
+            if self.include_rotation:
+                rotation_pattern = re.compile(
+                    r"(tilt left|tilt right|tilt up|tilt down|tilt back|tilt forward|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
                     re.IGNORECASE,
                 )
-            )
-            rotation_pattern = re.compile(
-                r"(tilt left|tilt right|tilt up|tilt down|tilt back|tilt forward|rotate clockwise|rotate counterclockwise)\s+([\d.]+)\s*degrees",
-                re.IGNORECASE,
-            )
+                droll_deg = dpitch_deg = dyaw_deg = 0.0
+                for match in rotation_pattern.finditer(reasoning):
+                    rotation_type = match.group(1).lower()
+                    value = float(match.group(2))
 
-            for i, sentence in enumerate(sentences):
-                dx_cm = dy_cm = dz_cm = 0.0
-                for match in move_pattern.finditer(sentence):
-                    direction = match.group(1).lower()
-                    value = float(match.group(2)) if match.group(2) is not None else 2.0
-                    if direction == "forward":
-                        dx_cm += value
-                    elif direction in ("backward", "back"):
-                        dx_cm -= value
-                    elif direction == "left":
-                        dy_cm += value
-                    elif direction == "right":
-                        dy_cm -= value
-                    elif direction == "up":
-                        dz_cm += value
-                    elif direction == "down":
-                        dz_cm -= value
+                    if rotation_type == "tilt left":
+                        droll_deg += value
+                    elif rotation_type == "tilt right":
+                        droll_deg -= value
+                    elif rotation_type in {"tilt down", "tilt back"}:
+                        dpitch_deg += value
+                    elif rotation_type in {"tilt up", "tilt forward"}:
+                        dpitch_deg -= value
+                    elif rotation_type == "rotate counterclockwise":
+                        dyaw_deg += value
+                    elif rotation_type == "rotate clockwise":
+                        dyaw_deg -= value
 
-                v_m = np.array([dx_cm, dy_cm, dz_cm], dtype=float) / 100.0
+                movement[3:6] = [
+                    droll_deg * np.pi / 180.0,
+                    dpitch_deg * np.pi / 180.0,
+                    dyaw_deg * np.pi / 180.0,
+                ]
 
-                if in_camera_frame:
-                    t_cam = np.zeros(3, dtype=float)
-                    axis_perm = np.array(self.axis_perm)
-                    axis_sign = np.array(self.axis_sign, dtype=float)
-                    sign_safe = np.where(axis_sign == 0, 1.0, axis_sign)
-                    t_mapped = v_m / sign_safe
-                    t_cam[axis_perm] = t_mapped
-                    translations[i] = t_cam
-                else:
-                    translations[i] = v_m
+            grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
+            grip_match = grip_pattern.search(reasoning)
+            if "open gripper" in reasoning.lower():
+                gripper_action = 1.0
+            elif "close gripper" in reasoning.lower():
+                gripper_action = 0.0
+            elif grip_match:
+                gripper_action = float(grip_match.group(1))
 
-                if self.include_rotation:
-                    droll_deg = dpitch_deg = dyaw_deg = 0.0
-                    for match in rotation_pattern.finditer(sentence):
-                        rotation_type = match.group(1).lower()
-                        value = float(match.group(2))
-
-                        if rotation_type == "tilt left":
-                            droll_deg += value
-                        elif rotation_type == "tilt right":
-                            droll_deg -= value
-                        elif rotation_type in {"tilt down", "tilt back"}:
-                            dpitch_deg += value
-                        elif rotation_type in {"tilt up", "tilt forward"}:
-                            dpitch_deg -= value
-                        elif rotation_type == "rotate counterclockwise":
-                            dyaw_deg += value
-                        elif rotation_type == "rotate clockwise":
-                            dyaw_deg -= value
-
-                    rotations[i] = [
-                        droll_deg * np.pi / 180.0,
-                        dpitch_deg * np.pi / 180.0,
-                        dyaw_deg * np.pi / 180.0,
-                    ]
-
-                grip_pattern = re.compile(r"set\s+gripper\s+to\s+([\-+]?\d+\.?\d*)", re.IGNORECASE)
-                grip_match = grip_pattern.search(sentence)
-                if "open gripper" in sentence.lower():
-                    gripper_actions[i] = 1.0
-                elif "close gripper" in sentence.lower():
-                    gripper_actions[i] = 0.0
-                elif grip_match:
-                    gripper_actions[i] = float(grip_match.group(1))
-                else:
-                    gripper_actions[i] = gripper_actions[i - 1] if i > 0 else 0.0
-                    have_gripper_action = False
 
         if self.use_eef_frame and initial_state is not None:
-            actions = np.concatenate([translations, rotations, gripper_actions[:, None]], axis=1)
-            actions = transform_actions_from_eef_frame(actions, initial_state)
-            translations = actions[:, :3]
-            rotations = actions[:, 3:6]
-            gripper_actions = actions[:, 6]
+            movement = transform_actions_from_eef_frame(movement, initial_state)[0]
 
-        return translations, rotations, gripper_actions if have_gripper_action else None
+        return movement, gripper_action
 
 
 # Predefined language action formats
@@ -208,7 +158,6 @@ COMPACT_FORMAT = LanguageActionFormat(
     style="compact",
     decimal_places=0,
     include_rotation=False,
-    use_schema_format=True,
 )
 
 COMPACT_WITH_ROTATION_FORMAT = LanguageActionFormat(
@@ -216,15 +165,8 @@ COMPACT_WITH_ROTATION_FORMAT = LanguageActionFormat(
     style="compact",
     decimal_places=0,
     include_rotation=True,
-    use_schema_format=True,
 )
 
-DIRECTIONAL_ONLY_FORMAT = LanguageActionFormat(
-    name="directional_only",
-    style="directional_only",
-    decimal_places=0,
-    include_rotation=False,
-)
 
 EEF_FORMAT = LanguageActionFormat(
     name="verbose_eef", style="verbose", decimal_places=0, include_rotation=False, use_eef_frame=True
@@ -239,7 +181,6 @@ COMPACT_BIMANUAL_FORMAT = LanguageActionFormat(
     style="compact",
     decimal_places=0,
     include_rotation=False,
-    use_schema_format=True,
 )
 
 COMPACT_BIMANUAL_WITH_ROTATION_FORMAT = LanguageActionFormat(
@@ -247,7 +188,6 @@ COMPACT_BIMANUAL_WITH_ROTATION_FORMAT = LanguageActionFormat(
     style="compact",
     decimal_places=0,
     include_rotation=True,
-    use_schema_format=True,
 )
 
 LANGUAGE_ACTION_FORMAT_REGISTRY = {
@@ -258,7 +198,6 @@ LANGUAGE_ACTION_FORMAT_REGISTRY = {
         PRECISION_FORMAT,
         COMPACT_FORMAT,
         COMPACT_WITH_ROTATION_FORMAT,
-        DIRECTIONAL_ONLY_FORMAT,
         EEF_FORMAT,
         EEF_WITH_ROTATION_FORMAT,
         COMPACT_BIMANUAL_FORMAT,

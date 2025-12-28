@@ -346,31 +346,23 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
             initial_state = np.asarray(data["state"])
 
         # Parse reasoning to translation deltas, rotation deltas, and gripper actions
-        translations, rotations, gripper_actions = self.language_action_format.parse_language_to_deltas(
-            reasoning, in_camera_frame=self.in_camera_frame, initial_state=initial_state
+        movement, gripper_action = self.language_action_format.parse_language_to_deltas(
+            reasoning, initial_state=initial_state
         )
 
         # If we don't have actions from the model, use the parsed actions
         # Shape: (num_steps, 7) -> [dx, dy, dz, droll, dpitch, dyaw, gripper]
-        if gripper_actions:
+        if gripper_action is not None:
             parsed_actions = np.concatenate(
                 [
-                    translations,  # (num_steps, 3)
-                    rotations,  # (num_steps, 3) - rotation deltas in radians
-                    gripper_actions[:, None],  # (num_steps, 1)
+                    movement,
+                    [gripper_action], 
                 ],
-                axis=1,
             )
         else:
-            parsed_actions = np.concatenate(
-                [
-                    translations,  # (num_steps, 3)
-                    rotations,  # (num_steps, 3) - rotation deltas in radians
-                ],
-                axis=1,
-            )
+            parsed_actions = movement
 
         # Store parsed actions separately for inspection
-        print(reasoning, parsed_actions)
+        print(reasoning, gripper_action)
 
         return {"actions": parsed_actions, "reasoning": reasoning}

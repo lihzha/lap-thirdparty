@@ -1035,10 +1035,11 @@ _CONFIGS = [
             action_horizon=10,
             max_token_len=180,
             pi05=True,
+            action_dim=32,
             discrete_state_input=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime",
+            prompt_format="pi05_notime_ori",
         ),
         data=RLDSCoTDataConfig(
             action_proprio_normalization_type=NormalizationType.BOUNDS,

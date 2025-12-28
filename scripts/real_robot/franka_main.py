@@ -21,7 +21,7 @@ class FrankaEvalRunner(BaseEvalRunner):
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
         gripper_position = np.array([robot_state["gripper_position"]])
-        print("Gripper position:", gripper_position)
+        # print("Gripper position:", gripper_position)
         # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         gripper_position = binarize_gripper_actions_np(gripper_position)
 

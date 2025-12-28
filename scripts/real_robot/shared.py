@@ -49,7 +49,7 @@ class Args:
 
 
 class BaseEvalRunner:
-    CHUNK_STEPS = 5
+    CHUNK_STEPS = 3
 
     def __init__(self, args):
         self.env = self.init_env()
@@ -95,14 +95,15 @@ class BaseEvalRunner:
         curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
         curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
         if "reasoning" in response and response["reasoning"] is not None:
-            print(response["reasoning"])
-            actions = np.asarray(response["actions"][0])
-            grip_actions = curr_obs["gripper_position"] if len(actions) == 6 else float(1 - actions[-1])
+            action = np.asarray(response["actions"])
+            grip_action = 1- curr_obs["gripper_position"] if len(action) == 6 else float(1 - action[-1])
+            print(grip_action)
+            
             # Linearly interpolate to CHUNK_STEPS actions
-            positions = np.linspace(curr_pos, curr_pos + actions[:3], self.CHUNK_STEPS, endpoint=True)
-            rpy_arr = interpolate_rpy(curr=curr_rpy, delta=actions[3:6], steps=self.CHUNK_STEPS)
-            grip_vals = np.full((self.CHUNK_STEPS, 1), grip_actions)
-            grip_vals[: self.CHUNK_STEPS - 1] = curr_obs["gripper_position"]
+            positions = np.linspace(curr_pos, curr_pos + action[:3], self.CHUNK_STEPS, endpoint=True)
+            rpy_arr = interpolate_rpy(curr=curr_rpy, delta=action[3:6], steps=self.CHUNK_STEPS)
+            grip_vals = np.full((self.CHUNK_STEPS, 1), grip_action)
+            # grip_vals[: self.CHUNK_STEPS // 2] = 1 - curr_obs["gripper_position"]
             if use_quaternions:
                 # Convert RPY to quaternions for action representation
                 quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
@@ -128,7 +129,8 @@ class BaseEvalRunner:
         while True:
             instruction = input("Enter instruction: ")
             # Prepare to save video of rollout
-            bar = tqdm.tqdm(range(self.args.max_timesteps))
+            # bar = tqdm.tqdm(range(self.args.max_timesteps))
+            bar = range(self.args.max_timesteps)
             print("Running rollout... press Ctrl+C to stop early.")
             # Maintain a small open-loop action chunk predicted from the latest policy call
             actions_from_chunk_completed = 0
@@ -155,9 +157,9 @@ class BaseEvalRunner:
                         else curr_obs["wrist_image"].copy()
                     )
                     # Predict a new chunk if needed
-                    if pred_action_chunk is None or actions_from_chunk_completed >= self.args.open_loop_horizon:
+                    if pred_action_chunk is None or actions_from_chunk_completed >= self.CHUNK_STEPS:
                         actions_from_chunk_completed = 0
-                        print("running inference again....*****")
+                        # print("running inference again....*****")
                         request_data = self.obs_to_request(curr_obs, instruction)
                         # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                         # Ctrl+C will be handled after the server call is complete
@@ -168,7 +170,7 @@ class BaseEvalRunner:
                             pred_action_chunk = self.get_action_from_response(response, curr_obs)
 
                             et = time.time()
-                            print(f"Time taken for inference: {et - st}")
+                            # print(f"Time taken for inference: {et - st}")
                     # Select current action to execute from chunk
                     action = pred_action_chunk[actions_from_chunk_completed]
                     action = self.binarize_gripper(action)
@@ -222,7 +224,8 @@ class BaseEvalRunner:
         while True:
             instruction = input("Enter instruction: ")
             # Prepare to save video of rollout
-            bar = tqdm.tqdm(range(self.args.max_timesteps))
+            # bar = tqdm.tqdm(range(self.args.max_timesteps))
+            bar = range(self.args.max_timesteps)
             print("Running rollout... press Ctrl+C to stop early.")
             # Maintain a small open-loop action chunk predicted from the latest policy call
             actions_from_chunk_completed = 0
@@ -244,7 +247,7 @@ class BaseEvalRunner:
                     # Predict a new chunk if needed
                     if actions_from_chunk_completed == 0 or actions_from_chunk_completed >= self.args.open_loop_horizon:
                         actions_from_chunk_completed = 0
-                        print("running inference again....*****")
+                        # print("running inference again....*****")
                         request_data = self.obs_to_request(curr_obs, instruction)
                         # Wrap the server call in a context manager to prevent Ctrl+C from interrupting it
                         # Ctrl+C will be handled after the server call is complete
@@ -253,7 +256,7 @@ class BaseEvalRunner:
                             st = time.time()
                             pred_action_chunk = policy_client.infer(request_data)["actions"]
                             et = time.time()
-                            print(f"Time taken for inference: {et - st}")
+                            # print(f"Time taken for inference: {et - st}")
                     # Select current action to execute from chunk
                     action = pred_action_chunk[actions_from_chunk_completed]
                     action = self.binarize_gripper(action)
