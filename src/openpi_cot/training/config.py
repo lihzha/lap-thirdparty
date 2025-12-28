@@ -1110,7 +1110,7 @@ _CONFIGS = [
             pi05=True,
             discrete_state_input=True,
             enable_action_training=True,
-            enable_langact_training=False,
+            enable_langact_training=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
         ),
