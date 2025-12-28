@@ -202,7 +202,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             and random.random() < 0.9
         ):
             la = transform_actions_to_eef_frame(la, initial_state)
-            breakpoint()
             frame_desc = "end-effector frame"
         if is_bimanual:
             summed = summarize_bimanual_numeric_actions(
