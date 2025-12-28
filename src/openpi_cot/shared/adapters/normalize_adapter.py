@@ -34,7 +34,9 @@ def deserialize_json(data: str) -> dict[str, ExtendedNormStats]:
     """Deserialize the running statistics from a JSON string."""
     # TODO: hard-coded for eef control mode
     raw_norm_stats = json.loads(data)
-    raw_norm_stats["norm_stats"] = {k.replace("state_eef_pose", "state"): v for k, v in raw_norm_stats["norm_stats"].items()}
+    raw_norm_stats["norm_stats"] = {
+        k.replace("state_eef_pose", "state"): v for k, v in raw_norm_stats["norm_stats"].items()
+    }
 
     return _NormStatsDict(**raw_norm_stats).norm_stats
 
@@ -344,7 +346,7 @@ def get_dataset_statistics(
             if len(zero_state_dims) > 0:
                 logging.warning(f"    ⚠️  {len(zero_state_dims)} state dims have std=0: {zero_state_dims.tolist()}")
 
-        print(f"Writing stats to: {output_dir}")
+        logging.info(f"Writing stats to: {output_dir}")
         save(output_dir, norm_stats)
 
     return norm_stats

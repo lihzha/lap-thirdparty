@@ -426,29 +426,30 @@ def main(config: _config.TrainConfig):
     # Get start step after restoring checkpoint (if resuming)
     start_step = int(train_state.step)
 
-    eval_data_loader = _data_loader.create_data_loader(
-        replace(
-            config,
-            model=replace(config.model, verbose_mode=True),
-        ),
-        sharding=data_sharding,
-        shuffle=False,
-        split="val",
-        seed=config.seed,
-        max_samples=getattr(config.data, "val_max_samples", None),
-        persistent_iterator=False,
-    )
+    if config.model.enable_langact_training:
+        eval_data_loader = _data_loader.create_data_loader(
+            replace(
+                config,
+                model=replace(config.model, verbose_mode=True),
+            ),
+            sharding=data_sharding,
+            shuffle=False,
+            split="val",
+            seed=config.seed,
+            max_samples=getattr(config.data, "val_max_samples", None),
+            persistent_iterator=False,
+        )
 
-    eval_checkpoint(
-        train_state,
-        config,
-        mesh,
-        data_sharding,
-        replicated_sharding,
-        eval_data_loader,
-        jax.random.fold_in(train_rng, train_state.step),
-        train_state_sharding,
-    )
+        eval_checkpoint(
+            train_state,
+            config,
+            mesh,
+            data_sharding,
+            replicated_sharding,
+            eval_data_loader,
+            jax.random.fold_in(train_rng, train_state.step),
+            train_state_sharding,
+        )
 
     train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
@@ -645,16 +646,17 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
-            eval_checkpoint(
-                train_state,
-                config,
-                mesh,
-                data_sharding,
-                replicated_sharding,
-                eval_data_loader,
-                jax.random.fold_in(train_rng, train_state.step),
-                train_state_sharding,
-            )
+            if config.model.enable_langact_training:
+                eval_checkpoint(
+                    train_state,
+                    config,
+                    mesh,
+                    data_sharding,
+                    replicated_sharding,
+                    eval_data_loader,
+                    jax.random.fold_in(train_rng, train_state.step),
+                    train_state_sharding,
+                )
             checkpoint_manager = _checkpoints.save_state(
                 checkpoint_manager,
                 train_state,
