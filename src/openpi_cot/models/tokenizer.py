@@ -307,6 +307,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             np.asarray(tokens),
             np.asarray(token_mask),
             np.asarray(ar_mask),
+            np.asarray(loss_mask),
         )
 
     def _act_tokens_to_paligemma_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
