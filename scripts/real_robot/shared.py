@@ -46,6 +46,8 @@ class Args:
     )
     use_wrist_camera: bool = True  # whether to use the wrist camera image as input to the policy
     run_upstream: bool = False  # whether to run the upstream policy server
+    right_image_encoding: str = "raw"  # choose from ["raw", "tf_jpeg"]
+    wrist_image_encoding: str = "raw"  # choose from ["raw", "tf_jpeg"]
 
 
 class BaseEvalRunner:

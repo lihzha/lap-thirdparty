@@ -317,9 +317,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 class CoTOutputs(upstream_transforms.DataTransformFn):
     # Optional decoding schema for parsing language actions to numeric actions
     language_action_format: LanguageActionFormat | str | None = None
-    # Whether decoded actions should be in camera frame
-    in_camera_frame: bool = False
-    # Interpolatation steps
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -352,17 +349,9 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # If we don't have actions from the model, use the parsed actions
         # Shape: (num_steps, 7) -> [dx, dy, dz, droll, dpitch, dyaw, gripper]
-        if gripper_action is not None:
-            parsed_actions = np.concatenate(
-                [
-                    movement,
-                    [gripper_action],
-                ],
-            )
-        else:
-            parsed_actions = movement
+        single_action = np.concatenate([movement, [gripper_action]]) if gripper_action is not None else movement
 
         # Store parsed actions separately for inspection
         print(reasoning, gripper_action)
 
-        return {"actions": parsed_actions, "reasoning": reasoning}
+        return {"actions": single_action, "reasoning": reasoning}

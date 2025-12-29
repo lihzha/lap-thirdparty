@@ -17,63 +17,14 @@ from openpi_client import websocket_client_policy as _websocket_client_policy
 from PIL import Image
 from PIL import ImageDraw
 from PIL import ImageFont
+from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Slerp
+import tensorflow as tf
 import tqdm
 import tyro
 
 LIBERO_DUMMY_ACTION = [0.0] * 6 + [-1.0]
 LIBERO_ENV_RESOLUTION = 256  # resolution used to render training data
-
-
-def _draw_text_on_image(img: np.ndarray, text: str, font_size: int = 12) -> np.ndarray:
-    """Draw text on image with word wrapping."""
-    if text is None:
-        return img
-
-    # Convert numpy array to PIL Image
-    pil_img = Image.fromarray(img)
-    draw = ImageDraw.Draw(pil_img)
-
-    # Try to load a font, fall back to default if not available
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
-    except Exception:
-        font = ImageFont.load_default()
-
-    # Word wrap text to fit image width
-    max_width = img.shape[1] - 10  # 5px margin on each side
-    words = text.split()
-    lines = []
-    current_line = []
-
-    for word in words:
-        test_line = " ".join(current_line + [word])
-        bbox = draw.textbbox((0, 0), test_line, font=font)
-        if bbox[2] - bbox[0] <= max_width:
-            current_line.append(word)
-        elif current_line:
-            lines.append(" ".join(current_line))
-            current_line = [word]
-        else:
-            # Single word is too long, add it anyway
-            lines.append(word)
-    if current_line:
-        lines.append(" ".join(current_line))
-
-    # Draw black rectangle background for text
-    if lines:
-        # Calculate text height
-        line_height = font_size + 4
-        text_height = len(lines) * line_height + 10
-        draw.rectangle([(0, 0), (img.shape[1], text_height)], fill=(0, 0, 0, 180))
-
-        # Draw text
-        y_offset = 5
-        for line in lines:
-            draw.text((5, y_offset), line, fill=(255, 255, 255), font=font)
-            y_offset += line_height
-
-    # Convert back to numpy array
-    return np.array(pil_img)
 
 
 class PolicyType(str, enum.Enum):
@@ -156,6 +107,8 @@ def eval_libero(args: Args) -> None:
     else:
         raise ValueError(f"Unknown task suite: {args.task_suite_name}")
 
+    max_steps = 50
+
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
 
     # Start evaluation
@@ -186,7 +139,6 @@ def eval_libero(args: Args) -> None:
             t = 0
             replay_images = []
             wrist_replay_images = []
-            current_reasoning = None
             episode_start_time = datetime.datetime.now()
 
             logging.info(f"Starting episode {task_episodes + 1}...")
@@ -195,102 +147,24 @@ def eval_libero(args: Args) -> None:
                     # IMPORTANT: Do nothing for the first few timesteps because the simulator drops objects
                     # and we need to wait for them to fall
                     if t < args.num_steps_wait:
-                        obs, reward, done, info = env.step(LIBERO_DUMMY_ACTION)
+                        obs, _, done, _ = env.step(LIBERO_DUMMY_ACTION)
                         t += 1
                         continue
 
-                    # Get preprocessed image
-                    # IMPORTANT: rotate 180 degrees to match train preprocessing
-                    if args.policy_type == PolicyType.PI05:
-                        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-                        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-                    else:
-                        img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-                        wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
-                    img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(img, args.resize_size, args.resize_size)
-                    )
-                    wrist_img = image_tools.convert_to_uint8(
-                        image_tools.resize_with_pad(wrist_img, args.resize_size, args.resize_size)
-                    )
+                    img, wrist_img = get_images_from_obs(obs, args.resize_size)
 
                     if not action_plan:
-                        # Finished executing previous action chunk -- compute new chunk
-                        # Prepare observations dict
-                        if args.policy_type == PolicyType.COT:
-                            eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-                            eef_euler = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
-                            gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-                            # gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
-                            gripper_state = gripper_qpos[-1:]
-                            state = np.concatenate((eef_pos, eef_euler, gripper_state)).astype(np.float32, copy=False)
-                            element = {
-                                "observation": {
-                                    "base_0_rgb": img,
-                                    "left_wrist_0_rgb": wrist_img,
-                                    "state": state,
-                                },
-                                "prompt": str(task_description),
-                            }
-                            print(state)
-                        elif args.policy_type == PolicyType.FT:
-                            eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-                            eef_axisangle = _quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
-                            gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-                            gripper_state = gripper_qpos[-1:]
-                            state = np.concatenate((eef_pos, eef_axisangle, gripper_state)).astype(
-                                np.float32, copy=False
-                            )
-                            element = {
-                                "observation/image": img,
-                                "observation/wrist_image": wrist_img,
-                                "observation/state": state,
-                                "prompt": str(task_description),
-                            }
-                        elif args.policy_type == PolicyType.PI05:
-                            # PI05 expects DROID-style observation keys
-                            joint_pos = obs.get("robot0_joint_pos")
-                            if joint_pos is None:
-                                joint_pos = obs.get("joint_pos")
-                            if joint_pos is None:
-                                raise KeyError("Observation missing joint positions for PI05 policy.")
-                            joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
-                            if joint_pos.size > 7:
-                                joint_pos = joint_pos[:7]
-                            gripper_qpos = obs.get("robot0_gripper_qpos")
-                            if gripper_qpos is None:
-                                gripper_qpos = obs.get("gripper_qpos")
-                            if gripper_qpos is None:
-                                raise KeyError("Observation missing gripper position for PI05 policy.")
-                            gripper_pos = float(np.mean(np.asarray(gripper_qpos, dtype=np.float32)))
-                            element = {
-                                "observation/exterior_image_1_left": img,
-                                "observation/wrist_image_left": wrist_img,
-                                "observation/joint_position": joint_pos,
-                                "observation/gripper_position": np.array([gripper_pos], dtype=np.float32),
-                                "prompt": str(task_description),
-                            }
-
                         # Query model to get action
-                        response = client.infer(element)
-                        if "actions" not in response:
-                            raise KeyError("Policy response missing 'actions' field")
-                        if "reasoning" in response:
-                            current_reasoning = response["reasoning"]
-                            print("Policy reasoning:", current_reasoning)
+                        request = obs_to_request(obs, args.policy_type, img, wrist_img, task_description)
+                        response = client.infer(request)
+                        single_action_or_chunk = np.asarray(response["actions"], dtype=np.float32)
+                        if single_action_or_chunk.ndim == 1:
+                            assert args.policy_type == PolicyType.COT
+                            action_chunk = get_action_from_response(
+                                args.replan_steps, response, request["observation"]["state"]
+                            )
                         else:
-                            current_reasoning = None
-                        action_chunk = np.asarray(response["actions"], dtype=np.float32)
-                        if action_chunk.ndim == 1:
-                            action_chunk = action_chunk[None, ...]
-                        if action_chunk.ndim != 2:
-                            raise ValueError(f"Expected action chunk with shape (T, D), got {action_chunk.shape}")
-                        if args.policy_type == PolicyType.COT and "reasoning" in response:
-                            logging.debug("Policy reasoning: %s", response["reasoning"])
-                        # if args.policy_type == PolicyType.PI05:
-                        # PI05 droid outputs are typically 8-D (7 joints + gripper). Env expects 7.
-                        # if action_chunk.shape[1] > 7:
-                        #     action_chunk = action_chunk[:, :7]
+                            action_chunk = single_action_or_chunk
                         assert len(action_chunk) >= args.replan_steps, (
                             f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
                         )
@@ -298,8 +172,8 @@ def eval_libero(args: Args) -> None:
 
                     # Save preprocessed image for replay video
                     # Draw reasoning on image if available
-                    if current_reasoning is not None:
-                        img_with_text = _draw_text_on_image(img, current_reasoning)
+                    if "reasoning" in response and response["reasoning"] is not None:
+                        img_with_text = _draw_text_on_image(img, response["reasoning"])
                         replay_images.append(img_with_text)
                     else:
                         replay_images.append(img)
@@ -308,7 +182,7 @@ def eval_libero(args: Args) -> None:
                     action = action_plan.popleft()
 
                     # Execute action in environment
-                    obs, reward, done, info = env.step(action.tolist())
+                    obs, _, done, _ = env.step(action.tolist())
                     if done:
                         task_successes += 1
                         total_successes += 1
@@ -408,6 +282,83 @@ def _get_libero_env(task, resolution, seed, controller="OSC_POSE"):
     return env, task_description
 
 
+def get_images_from_obs(obs, resize_size):
+    # IMPORTANT: rotate 180 degrees to match train preprocessing
+    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+    img = image_tools.convert_to_uint8(image_tools.resize_with_pad(img, resize_size, resize_size))
+    wrist_img = image_tools.convert_to_uint8(image_tools.resize_with_pad(wrist_img, resize_size, resize_size))
+    right_tensor = tf.convert_to_tensor(img)
+    if right_tensor.dtype != tf.uint8:
+        right_tensor = tf.image.convert_image_dtype(right_tensor, tf.uint8, saturate=True)
+    img = tf.io.decode_jpeg(tf.io.encode_jpeg(right_tensor, quality=95), channels=3).numpy()
+    wrist_tensor = tf.convert_to_tensor(wrist_img)
+    if wrist_tensor.dtype != tf.uint8:
+        wrist_tensor = tf.image.convert_image_dtype(wrist_tensor, tf.uint8, saturate=True)
+    wrist_img = tf.io.decode_jpeg(tf.io.encode_jpeg(wrist_tensor, quality=95), channels=3).numpy()
+
+    return img, wrist_img
+
+
+def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_description: str):
+    # Prepare observations dict
+    if policy_type == PolicyType.COT:
+        eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
+        eef_euler = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
+        gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
+        # gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
+        gripper_state = gripper_qpos[-1:]
+        state = np.concatenate((eef_pos, eef_euler, gripper_state)).astype(np.float32, copy=False)
+        element = {
+            "observation": {
+                "base_0_rgb": img,
+                "left_wrist_0_rgb": wrist_img,
+                "state": state,
+            },
+            "prompt": str(task_description),
+        }
+
+    elif policy_type == PolicyType.FT:
+        eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
+        eef_axisangle = _quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
+        gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
+        gripper_state = gripper_qpos[-1:]
+        state = np.concatenate((eef_pos, eef_axisangle, gripper_state)).astype(np.float32, copy=False)
+        element = {
+            "observation/image": img,
+            "observation/wrist_image": wrist_img,
+            "observation/state": state,
+            "prompt": str(task_description),
+        }
+
+    elif policy_type == PolicyType.PI05:
+        # PI05 expects DROID-style observation keys
+        joint_pos = obs.get("robot0_joint_pos")
+        if joint_pos is None:
+            joint_pos = obs.get("joint_pos")
+        if joint_pos is None:
+            raise KeyError("Observation missing joint positions for PI05 policy.")
+        joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)
+        if joint_pos.size > 7:
+            joint_pos = joint_pos[:7]
+        gripper_qpos = obs.get("robot0_gripper_qpos")
+        if gripper_qpos is None:
+            gripper_qpos = obs.get("gripper_qpos")
+        if gripper_qpos is None:
+            raise KeyError("Observation missing gripper position for PI05 policy.")
+        gripper_pos = float(np.mean(np.asarray(gripper_qpos, dtype=np.float32)))
+        element = {
+            "observation/exterior_image_1_left": img,
+            "observation/wrist_image_left": wrist_img,
+            "observation/joint_position": joint_pos,
+            "observation/gripper_position": np.array([gripper_pos], dtype=np.float32),
+            "prompt": str(task_description),
+        }
+    else:
+        raise ValueError(f"Unknown policy type: {policy_type}")
+    return element
+
+
 def _quat2axisangle(quat):
     """
     Copied from robosuite: https://github.com/ARISE-Initiative/robosuite/blob/eafb81f54ffc104f905ee48a16bb15f059176ad3/robosuite/utils/transform_utils.py#L490C1-L512C55
@@ -436,33 +387,127 @@ def _quat2axisangle(quat):
 
 
 def _quat2euler(quat):
+    "Extrinsics xyz euler angles from quaternion."
     q = np.asarray(quat, dtype=np.float64)
     if q.shape != (4,):
         raise ValueError("quat must be shape (4,), ordered as [x, y, z, w]")
+    return R.from_quat(q).as_euler("xyz", degrees=False)
 
-    # Normalize quaternion to guard against numerical drift
-    norm = np.linalg.norm(q)
-    if norm == 0.0:
-        return np.zeros(3, dtype=np.float64)
-    x, y, z, w = q / norm
 
-    sinr_cosp = 2.0 * (w * x + y * z)
-    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
+def _draw_text_on_image(img: np.ndarray, text: str, font_size: int = 12) -> np.ndarray:
+    """Draw text on image with word wrapping."""
+    if text is None:
+        return img
 
-    sinp = 2.0 * (w * y - z * x)
-    if sinp >= 1.0:
-        pitch = math.pi / 2.0
-    elif sinp <= -1.0:
-        pitch = -math.pi / 2.0
+    # Convert numpy array to PIL Image
+    pil_img = Image.fromarray(img)
+    draw = ImageDraw.Draw(pil_img)
+
+    # Try to load a font, fall back to default if not available
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+    except Exception:
+        font = ImageFont.load_default()
+
+    # Word wrap text to fit image width
+    max_width = img.shape[1] - 10  # 5px margin on each side
+    words = text.split()
+    lines = []
+    current_line = []
+
+    for word in words:
+        test_line = " ".join(current_line + [word])
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            current_line.append(word)
+        elif current_line:
+            lines.append(" ".join(current_line))
+            current_line = [word]
+        else:
+            # Single word is too long, add it anyway
+            lines.append(word)
+    if current_line:
+        lines.append(" ".join(current_line))
+
+    # Draw black rectangle background for text
+    if lines:
+        # Calculate text height
+        line_height = font_size + 4
+        text_height = len(lines) * line_height + 10
+        draw.rectangle([(0, 0), (img.shape[1], text_height)], fill=(0, 0, 0, 180))
+
+        # Draw text
+        y_offset = 5
+        for line in lines:
+            draw.text((5, y_offset), line, fill=(255, 255, 255), font=font)
+            y_offset += line_height
+
+    # Convert back to numpy array
+    return np.array(pil_img)
+
+
+def get_action_from_response(replan_steps, response, state):
+    curr_pos = np.asarray(state[:3], dtype=float)
+    curr_rpy = np.asarray(state[3:6], dtype=float)
+
+    action = np.asarray(response["actions"])
+    grip_action = action[-1]
+    print(grip_action)
+
+    # Linearly interpolate to replan_steps actions
+    positions = np.linspace(curr_pos, curr_pos + action[:3], replan_steps, endpoint=True)
+    rpy_arr = interpolate_rpy(curr=curr_rpy, delta=action[3:6], steps=replan_steps)
+    grip_vals = np.full((replan_steps, 1), grip_action)
+    # grip_vals[: self.replan_steps // 2] = 1 - curr_obs["gripper_position"]
+    return np.concatenate([positions, rpy_arr, grip_vals], axis=1)
+
+
+def interpolate_rpy(curr, delta, steps):
+    """Interpolate roll-pitch-yaw angles using quaternion SLERP.
+
+    This function uses spherical linear interpo lation (SLERP) on quaternions
+    to provide smooth rotation interpolation, avoiding gimbal lock and
+    discontinuities that occur with naive linear interpolation of Euler angles.
+
+    Args:
+        curr: Current RPY angles as array of shape (3,) in radians
+        delta: Change in RPY angles as array of shape (3,) or (n, 3) in radians
+        steps: Number of interpolation steps
+
+    Returns:
+        Array of shape (steps, 3) with interpolated RPY values in radians
+    """
+    curr = np.asarray(curr, dtype=float)
+    delta = np.asarray(delta, dtype=float)
+
+    # Handle both 1D and 2D delta inputs
+    if delta.ndim == 1:
+        # Single delta vector - interpolate from curr to curr + delta
+        target_rpy = curr + delta
     else:
-        pitch = math.asin(sinp)
+        # Multiple deltas - use the first one
+        target_rpy = curr + delta[0] if len(delta) > 0 else curr
 
-    siny_cosp = 2.0 * (w * z + x * y)
-    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
+    # Convert current and target RPY to rotation objects
+    # RPY convention: rotate around x (roll), then y (pitch), then z (yaw)
+    rot_curr = R.from_euler("xyz", curr, degrees=False)
+    rot_target = R.from_euler("xyz", target_rpy, degrees=False)
 
-    return np.array([roll, pitch, yaw], dtype=np.float64)
+    # Create SLERP interpolator
+    key_times = np.array([0, 1])
+    key_rots = R.concatenate([rot_curr, rot_target])
+    slerp = Slerp(key_times, key_rots)
+
+    # Generate interpolation times
+    interp_times = np.linspace(0, 1, steps, endpoint=True)
+
+    # Perform SLERP interpolation
+    interpolated_rots = slerp(interp_times)
+
+    # Convert back to RPY
+    rpy_arr = interpolated_rots.as_euler("xyz", degrees=False)
+
+    return rpy_arr
 
 
 if __name__ == "__main__":

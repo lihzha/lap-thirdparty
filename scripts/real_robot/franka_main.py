@@ -1,5 +1,6 @@
 # ruff: noqa
 import numpy as np
+import tensorflow as tf
 import tyro
 from scipy.spatial.transform import Rotation as R
 import sys
@@ -28,6 +29,22 @@ class FrankaEvalRunner(BaseEvalRunner):
 
         right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
         wrist_image = image_observations["1"][::-1, ::-1, ::-1] # rotate 180
+
+        if self.args.right_image_encoding == "tf_jpeg":
+            right_tensor = tf.convert_to_tensor(right_image)
+            if right_tensor.dtype != tf.uint8:
+                right_tensor = tf.image.convert_image_dtype(right_tensor, tf.uint8, saturate=True)
+            right_image = tf.io.decode_jpeg(tf.io.encode_jpeg(right_tensor, quality=95), channels=3).numpy()
+        else:
+            right_image = right_image
+
+        if self.args.wrist_image_encoding == "tf_jpeg":
+            wrist_tensor = tf.convert_to_tensor(wrist_image)
+            if wrist_tensor.dtype != tf.uint8:
+                wrist_tensor = tf.image.convert_image_dtype(wrist_tensor, tf.uint8, saturate=True)
+            wrist_image = tf.io.decode_jpeg(tf.io.encode_jpeg(wrist_tensor, quality=95), channels=3).numpy()
+        else:
+            wrist_image = wrist_image
 
 
         return {
@@ -66,6 +83,22 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
 
         right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
         wrist_image = image_observations["1"][:, :, ::-1]
+
+        if self.args.right_image_encoding == "tf_jpeg":
+            right_tensor = tf.convert_to_tensor(right_image)
+            if right_tensor.dtype != tf.uint8:
+                right_tensor = tf.image.convert_image_dtype(right_tensor, tf.uint8, saturate=True)
+            right_image = tf.io.decode_jpeg(tf.io.encode_jpeg(right_tensor, quality=95), channels=3).numpy()
+        else:
+            right_image = right_image
+
+        if self.args.wrist_image_encoding == "tf_jpeg":
+            wrist_tensor = tf.convert_to_tensor(wrist_image)
+            if wrist_tensor.dtype != tf.uint8:
+                wrist_tensor = tf.image.convert_image_dtype(wrist_tensor, tf.uint8, saturate=True)
+            wrist_image = tf.io.decode_jpeg(tf.io.encode_jpeg(wrist_tensor, quality=95), channels=3).numpy()
+        else:
+            wrist_image = wrist_image
 
         return {
             "right_image": right_image,

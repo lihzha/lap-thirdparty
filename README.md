@@ -36,6 +36,8 @@ Since the DROID control laptop does not have a powerful GPU, we will start a rem
 uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi_droid_cot_local --policy.dir=<YOUR_POLICY_DIR>
 ```
 
+Note, you need to make sure normalization type, prompt format matches.
+
 ### Step 2: Run the DROID robot
 
 1. Make sure you have the most recent version of the DROID package installed on both the DROID control laptop and the NUC.

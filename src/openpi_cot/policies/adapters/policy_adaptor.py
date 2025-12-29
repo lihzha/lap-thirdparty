@@ -25,6 +25,7 @@ class CoTPolicy:
     def infer_reasoning(self, obs: dict) -> dict:
         # Make a copy since transformations may modify the inputs in place.
         inputs = jax.tree.map(lambda x: x, obs)
+        raw_state = inputs["observation"]["state"].copy()
         inputs = self._base._input_transform(inputs)  # noqa: SLF001
         # Make a batch and convert to jax.Array.
         inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
@@ -33,7 +34,7 @@ class CoTPolicy:
         start_time = time.monotonic()
         tokens = self._sample_tokens(sample_rng_or_pytorch_device, CoTObservation.from_dict(inputs))
         outputs = {
-            "state": inputs["state"],
+            "state": raw_state,
             "actions": jnp.zeros((1, 1, 7)),  # TODO
             "tokens": tokens,
         }
