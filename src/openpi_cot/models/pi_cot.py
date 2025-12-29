@@ -509,7 +509,7 @@ class PiCoT(_pi0.Pi0):
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
-        _, kv_cache, _ = self.PaliGemma.llm(
+        _, kv_cache = self.PaliGemma.llm(
             [prefix_tokens, None],
             mask=prefix_attn_mask,
             positions=positions,
@@ -539,7 +539,7 @@ class PiCoT(_pi0.Pi0):
             # `positions` is shape (b, suffix_len) indicating the positions of the suffix tokens
             positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
 
-            _, _, gemma_out = self.PaliGemma.llm(
+            gemma_out, _ = self.PaliGemma.llm(
                 [None, suffix_tokens],
                 mask=full_attn_mask,
                 positions=positions,
@@ -547,7 +547,8 @@ class PiCoT(_pi0.Pi0):
                 adarms_cond=[None, adarms_cond],
                 deterministic=self.deterministic,
             )
-            suffix_out = gemma_out["encoded"][1]
+            suffix_out = gemma_out[1]
+            assert gemma_out[0] is None
             v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
             return x_t + dt * v_t, time + dt

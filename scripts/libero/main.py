@@ -225,11 +225,14 @@ def eval_libero(args: Args) -> None:
                             gripper_state = gripper_qpos[-1:]
                             state = np.concatenate((eef_pos, eef_euler, gripper_state)).astype(np.float32, copy=False)
                             element = {
-                                "observation/image": img,
-                                "observation/wrist_image": wrist_img,
-                                "observation/state": state,
+                                "observation": {
+                                    "base_0_rgb": img,
+                                    "left_wrist_0_rgb": wrist_img,
+                                    "state": state,
+                                },
                                 "prompt": str(task_description),
                             }
+                            print(state)
                         elif args.policy_type == PolicyType.FT:
                             eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
                             eef_axisangle = _quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
@@ -312,8 +315,6 @@ def eval_libero(args: Args) -> None:
                         break
                     t += 1
 
-                    break
-
                 except Exception as e:
                     logging.error(f"Caught exception: {e}")
                     break
@@ -356,8 +357,6 @@ def eval_libero(args: Args) -> None:
             logging.info(f"# episodes completed so far: {total_episodes}")
             logging.info(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)")
 
-            break
-
         # Record per-task results
         task_success_rate = float(task_successes) / float(task_episodes) if task_episodes > 0 else 0.0
         task_result = {
@@ -372,8 +371,6 @@ def eval_libero(args: Args) -> None:
         # Log final results
         logging.info(f"Current task success rate: {task_success_rate}")
         logging.info(f"Current total success rate: {float(total_successes) / float(total_episodes)}")
-
-        break
 
     # Calculate and save final summary
     overall_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0.0

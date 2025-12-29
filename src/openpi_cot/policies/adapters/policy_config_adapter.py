@@ -15,7 +15,6 @@ import openpi.transforms as up_transforms
 from openpi_cot.policies.adapters.policy_adaptor import CoTPolicy
 import openpi_cot.transforms as transforms
 
-
 # Lazy imports to avoid loading TensorFlow (and allocating GPU memory) at import time
 # These will be imported when create_trained_policy() is actually called
 # from openpi_cot.shared.download import maybe_download
@@ -24,13 +23,13 @@ import openpi_cot.transforms as transforms
 
 def load_model_from_train_state(config, checkpoint_dir):
     from flax import traverse_util
-    from openpi_cot.policies.adapters.checkpoint_utils import (
-        initialize_checkpoint_dir,
-        restore_params,)
-
     from openpi.training import optimizer as _optimizer
+
+    from openpi_cot.policies.adapters.checkpoint_utils import initialize_checkpoint_dir
+    from openpi_cot.policies.adapters.checkpoint_utils import restore_params
     import openpi_cot.training.mh_sharding as sharding
     import openpi_cot.training.utils as training_utils
+
     rng = jax.random.key(config.seed)
     eval_rng, init_rng = jax.random.split(rng)
     mesh = sharding.make_mesh(1)
@@ -95,7 +94,7 @@ def load_model_from_train_state(config, checkpoint_dir):
     )
     params = params.to_pure_dict()
     flat_params = traverse_util.flatten_dict(params)
-    if all(kp[-1] == "value" for kp in flat_params): 
+    if all(kp[-1] == "value" for kp in flat_params):
         flat_params = {kp[:-1]: v for kp, v in flat_params.items()}
     params = traverse_util.unflatten_dict(flat_params)
 
@@ -138,8 +137,8 @@ def create_trained_policy(
 
     repack_transforms = repack_transforms or up_transforms.Group()
     checkpoint_dir = maybe_download(str(checkpoint_dir))
-    model = load_model_from_train_state(train_config, checkpoint_dir)
-    # model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+    # model = load_model_from_train_state(train_config, checkpoint_dir)
+    model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure

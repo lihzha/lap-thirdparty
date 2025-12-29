@@ -46,7 +46,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     filter_all_1s_actions: bool = False
     use_rough_scale: bool = False
     filter_large_actions: bool = False
-    stateless_gripper: bool = False
+    stateless_gripper: bool = True
+    random_base_frame: bool = True
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -194,13 +195,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         has_wrist_image: bool = data["has_wrist_image"]
         frame_desc = "robot base frame"
 
+        cond = self.language_action_format.use_eef_frame and initial_state is not None
+        if self.random_base_frame:
+            cond = cond and has_wrist_image and random.random() < 0.9
+
         # Transform to EEF frame if requested
-        if (
-            self.language_action_format.use_eef_frame
-            and initial_state is not None
-            and has_wrist_image
-            and random.random() < 0.9
-        ):
+        if cond:
             la = transform_actions_to_eef_frame(la, initial_state)
             frame_desc = "end-effector frame"
         if is_bimanual:
@@ -356,7 +356,7 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
             parsed_actions = np.concatenate(
                 [
                     movement,
-                    [gripper_action], 
+                    [gripper_action],
                 ],
             )
         else:

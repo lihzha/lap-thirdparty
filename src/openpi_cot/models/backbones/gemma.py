@@ -391,9 +391,14 @@ class Attention(nn.Module):
         # should still be half-precision here (if input was half-precision)
         assert q.dtype == k.dtype == v.dtype == dtype
 
-        if kv_cache is not None:
+        if kv_cache is not None:  # inferencee time
             idx, cache_k, cache_v = kv_cache
-            idx, k, v = _update_cache(k, v, idx, cache_k, cache_v)
+            if xs[0] is not None:
+                idx, k, v = _update_cache(k, v, idx, cache_k, cache_v)
+            else:
+                idx += k.shape[1]
+                k = jnp.concatenate([cache_k, k], axis=1)
+                v = jnp.concatenate([cache_v, v], axis=1)
         else:
             idx, k, v = _init_cache(k, v, attn_mask.shape[-1])
 

@@ -183,8 +183,9 @@ class CoTDataConfig(upstream_config.DataConfig):
     # Language action format
     language_action_format_name: str = "verbose_eef_with_rotation"
     filter_all_1s_actions: bool = False
-    stateless_gripper: bool = False
+    stateless_gripper: bool = True
     filter_large_actions: bool = False
+    random_base_frame: bool = True
     use_rough_scale: bool = False
     horizon_seconds: list[float] = dataclasses.field(default_factory=lambda: [1.0])
 
@@ -373,6 +374,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     language_action_format=base_cfg.language_action_format_name,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
                     stateless_gripper=base_cfg.stateless_gripper,
+                    random_base_frame=base_cfg.random_base_frame,
                     filter_large_actions=base_cfg.filter_large_actions,
                     use_rough_scale=base_cfg.use_rough_scale,
                     enable_langact_training=model_config.enable_langact_training,
@@ -1114,6 +1116,8 @@ _CONFIGS = [
             enable_langact_training=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
+            prompt_format="pi05_notime",
+            stop_action_to_vlm_grad=False,
         ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
@@ -1122,7 +1126,8 @@ _CONFIGS = [
             "dataset_type": "combined",
             "data_mix": "libero_finetune",
             "shuffle_buffer_size": 400_000,
-            "language_action_format_name": "default",
+            "language_action_format_name": "verbose_eef_with_rotation",
+            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         fsdp_devices=1,
