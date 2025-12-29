@@ -12,7 +12,6 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.utils.data_utils import _R_from_euler_xyz
-from openpi_cot.datasets.utils.data_utils import euler_diff
 from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
 from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
 from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
@@ -297,40 +296,40 @@ class SingleCoTDataset:
 
         def chunk_actions(traj):
             """Splits episode into action chunks with proper zero-padding."""
-            # traj_len = tf.shape(traj[action_key])[0]
-
-            # # Use unified gather function with proper zero-padding
-            # traj[action_key] = gather_with_padding(
-            #     data=traj[action_key],
-            #     sequence_length=traj_len,
-            #     window_size=action_horizon,
-            # )
-            # # Ensure static shape is preserved: [T, action_horizon, action_dim]
-            # traj[action_key].set_shape([None, action_horizon, self.action_dim])
-
             traj_len = tf.shape(traj[action_key])[0]
 
             # Use unified gather function with proper zero-padding
             traj[action_key] = gather_with_padding(
-                data=tf.concat([traj["observation"]["state"][:, :6], traj[action_key][:, 6:7]], axis=-1),
+                data=traj[action_key],
                 sequence_length=traj_len,
-                window_size=action_horizon + 1,
+                window_size=action_horizon,
             )
-
-            traj[action_key] = tf.concat(
-                (
-                    traj[action_key][:, 1:, :3] - traj[action_key][:, 0:1, :3],
-                    euler_diff(
-                        traj[action_key][:, 1:, 3:6],
-                        traj[action_key][:, 0:1, 3:6],
-                    ),
-                    traj[action_key][:, :-1, 6:7],
-                ),
-                axis=-1,
-            )
-
             # Ensure static shape is preserved: [T, action_horizon, action_dim]
             traj[action_key].set_shape([None, action_horizon, self.action_dim])
+
+            # traj_len = tf.shape(traj[action_key])[0]
+
+            # # Use unified gather function with proper zero-padding
+            # traj[action_key] = gather_with_padding(
+            #     data=tf.concat([traj["observation"]["state"][:, :6], traj[action_key][:, 6:7]], axis=-1),
+            #     sequence_length=traj_len,
+            #     window_size=action_horizon + 1,
+            # )
+
+            # traj[action_key] = tf.concat(
+            #     (
+            #         traj[action_key][:, 1:, :3] - traj[action_key][:, 0:1, :3],
+            #         euler_diff(
+            #             traj[action_key][:, 1:, 3:6],
+            #             traj[action_key][:, 0:1, 3:6],
+            #         ),
+            #         traj[action_key][:, :-1, 6:7],
+            #     ),
+            #     axis=-1,
+            # )
+
+            # # Ensure static shape is preserved: [T, action_horizon, action_dim]
+            # traj[action_key].set_shape([None, action_horizon, self.action_dim])
 
             return traj
 
