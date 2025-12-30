@@ -542,7 +542,7 @@ def main(config: _config.TrainConfig):
         prompt_texts = _decode_prompt_strings(obs, tok)
         caption_texts = _decode_captions(obs, tok)
 
-        start_imgs = _safe_device_get(obs.images["base_0_rgb"][:, 0])
+        start_imgs = _safe_device_get(obs.images["base_0_rgb"])
         is_vqa_samples = _safe_device_get(obs.is_vqa_sample)
 
         B = start_imgs.shape[0]
