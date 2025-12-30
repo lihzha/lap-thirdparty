@@ -199,6 +199,39 @@ def axis_angle_to_r6(axis_angle: tf.Tensor) -> tf.Tensor:
     return r6
 
 
+def axis_angle_to_extrinsic_xyz_euler(axis_angle: tf.Tensor) -> tf.Tensor:
+    """
+    Converts axis-angle representation to extrinsic XYZ Euler angles.
+
+    Args:
+        axis_angle: Axis-angle tensor of shape (..., 3) where the magnitude is the angle
+                    and the direction is the axis
+
+    Returns:
+        Euler angles of shape (..., 3) in extrinsic XYZ order.
+    """
+    import tensorflow_graphics.geometry.transformation as tft
+
+    angle = tf.norm(axis_angle, axis=-1, keepdims=True)
+    safe_angle = tf.where(angle < 1e-8, tf.ones_like(angle), angle)
+    axis = axis_angle / safe_angle
+    axis = tf.where(angle < 1e-8, tf.constant([1.0, 0.0, 0.0], dtype=axis.dtype), axis)
+
+    rotation_matrix = tft.rotation_matrix_3d.from_axis_angle(axis, angle)
+
+    r20 = rotation_matrix[..., 2, 0]
+    r21 = rotation_matrix[..., 2, 1]
+    r22 = rotation_matrix[..., 2, 2]
+    r10 = rotation_matrix[..., 1, 0]
+    r00 = rotation_matrix[..., 0, 0]
+
+    pitch = tf.asin(tf.clip_by_value(-r20, -1.0, 1.0))
+    roll = tf.atan2(r21, r22)
+    yaw = tf.atan2(r10, r00)
+
+    return tf.stack([roll, pitch, yaw], axis=-1)
+
+
 # === Bridge-V2 =>> Dataset-Specific Transform ===
 def rescale_bridge_action(action: tf.Tensor) -> tf.Tensor:
     """
@@ -1556,10 +1589,9 @@ def libero_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     #     axis=1,
     # )
 
-    trajectory["observation"]["state"] = tf.concat(
-        [trajectory["observation"]["state"][:, :6], trajectory["observation"]["state"][:, -1:]],
-        axis=1,
-    )
+    state = trajectory["observation"]["state"]
+    euler_xyz = axis_angle_to_extrinsic_xyz_euler(state[:, 3:6])
+    trajectory["observation"]["state"] = tf.concat([state[:, :3], euler_xyz, state[:, -1:]], axis=1)
 
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
     trajectory["action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)

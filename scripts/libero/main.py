@@ -107,7 +107,7 @@ def eval_libero(args: Args) -> None:
     else:
         raise ValueError(f"Unknown task suite: {args.task_suite_name}")
 
-    max_steps = 50
+    # max_steps = 50
 
     client = _websocket_client_policy.WebsocketClientPolicy(args.host, args.port)
 

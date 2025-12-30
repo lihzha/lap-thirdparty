@@ -1151,6 +1151,7 @@ _CONFIGS = [
             action_expert_variant="gemma_300m",
             prompt_format="pi05_notime",
             stop_action_to_vlm_grad=False,
+            # action_dim=32,
         ),
         data_config_class=LiberoFinetuneDataConfig,
         data_config_kwargs={
