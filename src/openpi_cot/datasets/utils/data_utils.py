@@ -385,7 +385,9 @@ def euler_to_rot6d(euler_angles: tf.Tensor) -> tf.Tensor:
         (..., 6) tensor of 6D rotation representation
     """
     R = _R_from_euler_xyz(euler_angles)
-    rot6d = tf.reshape(R[..., :2], shape=(*R.shape[:-2], 6))
+    # Use dynamic shape to avoid None dimensions inside tf.function.
+    leading_shape = tf.shape(R)[:-2]
+    rot6d = tf.reshape(R[..., :2], tf.concat([leading_shape, [6]], axis=0))
     return rot6d
 
 
