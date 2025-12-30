@@ -347,7 +347,8 @@ def _rot_z(a):
 
 def _R_from_euler_xyz(rpy: tf.Tensor) -> tf.Tensor:
     """Convert extrinsic XYZ Euler angles to a rotation matrix (R = Rz @ Ry @ Rx)."""
-    roll, pitch, yaw = tf.unstack(rpy, axis=-1)
+    # Explicit num avoids shape inference issues when the last dim is unknown.
+    roll, pitch, yaw = tf.unstack(rpy, num=3, axis=-1)
 
     cr, sr = tf.cos(roll), tf.sin(roll)
     cp, sp = tf.cos(pitch), tf.sin(pitch)
