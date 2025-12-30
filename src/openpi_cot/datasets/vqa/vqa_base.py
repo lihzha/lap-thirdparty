@@ -86,6 +86,7 @@ class BaseVQADataset(SingleCoTDataset):
         self.use_wrist_image = False  # VQA has no wrist images
         self.standalone = standalone
         self.action_horizon = action_horizon
+        self.want_full_determinism = config.want_full_determinism
 
         # VQA-specific settings (shared across all VQA datasets)
         self.control_frequency = 1  # Single frame, no temporal control
