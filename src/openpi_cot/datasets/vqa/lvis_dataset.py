@@ -57,7 +57,7 @@ class Lvis(BaseVQADataset):
     annotations with category labels.
     """
 
-    def __init__(self, *args, directional: bool = True, direction_slope: float = 2.0, **kwargs):
+    def __init__(self, *args, directional: bool = False, direction_slope: float = 2.0, **kwargs):
         self.directional = directional
         self.direction_slope = direction_slope
         super().__init__(*args, **kwargs)
