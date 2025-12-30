@@ -1,23 +1,47 @@
 OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
+    "oxe_pi_magic_soup": [
+        # ("droid", 2.0),
+        # ("aloha", 0.4),
+        # ("bridge_v2_oxe", 0.1),
+        ("fmb", 0.071),
+        # ("kuka", 0.05),
+        # ("taco_play", 2.000),
+        # ("furniture_bench_dataset_converted_externally_to_rlds", 0.024),
+        # ("toto", 0.020),
+        # ("austin_sirius_dataset_converted_externally_to_rlds", 0.017),
+        # ("berkeley_autolab_ur5", 0.012),
+        # ("viola", 0.009),
+        # ("nyu_franka_play_dataset_converted_externally_to_rlds", 0.008),
+        # ("berkeley_fanuc_manipulation", 0.007),
+        # ("jaco_play", 0.004),
+        # ("berkeley_cable_routing", 0.002),
+        # ("cmu_stretch", 0.002),
+        # # New
+        # ("fractal20220817_data", 0.05),
+        ("bc_z", 0.05),
+        ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),
+        ("ucsd_kitchen_dataset_converted_externally_to_rlds", 2.0),
+        ("roboturk", 2.0),
+    ],
     "oxe_magic_soup": [
         # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
-        ("bc_z", 1.0),
+        ("bc_z", 0.05),
         ("droid", 2.0),
         ("fractal20220817_data", 1.0),
         ("bridge_v2_oxe", 1.0),
-        ("taco_play", 1.0),
+        ("taco_play", 2.0),
         (
             "jaco_play",
             1.0,
         ),  # gripper state and action still seems incorrect. Action sometimes should be 1 but is 0. State seems random. Ignore for now.
-        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.05),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
         # (
         #     "cmu_stretch",
         #     2.0,
         # ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
-        ("fmb", 0.5),
+        ("fmb", 0.05),
         # ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
         # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
@@ -48,23 +72,23 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     ],
     "oxe_magic_soup_vqa": [
         # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
-        ("bc_z", 1.0),
+        ("bc_z", 0.05),
         ("droid", 2.0),
         ("fractal20220817_data", 1.0),
         ("bridge_v2_oxe", 1.0),
-        ("taco_play", 1.0),
+        ("taco_play", 2.0),
         (
             "jaco_play",
             1.0,
         ),  # gripper state and action still seems incorrect. Action sometimes should be 1 but is 0. State seems random. Ignore for now.
-        ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
+        ("furniture_bench_dataset_converted_externally_to_rlds", 0.05),
         ("utaustin_mutex", 1.0),
         ("berkeley_fanuc_manipulation", 2.0),  # not sure quaternion is xyzw or wxyz
         # (
         #     "cmu_stretch",
         #     2.0,
         # ),  # almost all movements are "move up". gripper actions always zero, use gripper state as action.
-        ("fmb", 0.5),
+        ("fmb", 0.05),
         # ("dobbe", 0.2),  # question
         ("berkeley_autolab_ur5", 1.0),
         # ("dlr_edan_shared_control_converted_externally_to_rlds", 1.0),  # has empty language instructions, euler is zxy
@@ -74,6 +98,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
+        ("molmoact_dataset", 1.0),
         ("molmoact_dataset", 1.0),
         ("coco_captions", 1.0),  # 10% COCO caption samples
         ("vqa", 0.1),  # 10% vqa samples
