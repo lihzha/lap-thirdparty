@@ -1190,6 +1190,8 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
 
 def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    from openpi_cot.datasets.utils.data_utils import coordinate_transform_bcz
+
     trajectory["action"] = tf.concat(
         (
             trajectory["action"]["future/xyz_residual"][:, :3],
@@ -1203,15 +1205,15 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     present_euler = axis_angle_to_extrinsic_xyz_euler(trajectory["observation"]["present/axis_angle"][:, :3])
     trajectory["observation"]["state"] = tf.concat(
         (
-            # coordinate_transform_bcz(
-            tf.concat(
-                (
-                    trajectory["observation"]["present/xyz"][:, :3],
-                    present_euler,
+            coordinate_transform_bcz(
+                tf.concat(
+                    (
+                        trajectory["observation"]["present/xyz"][:, :3],
+                        present_euler,
+                    ),
+                    axis=-1,
                 ),
-                axis=-1,
             ),
-            # ),
             tf.clip_by_value(
                 invert_gripper_actions(trajectory["observation"]["present/sensed_close"])[:, :1] / 0.8, 0, 1
             ),  # max seems to be 0.8
@@ -1220,17 +1222,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
 
     # Compute movement actions with zero-padding (no truncation)
-    # Note: BC-Z uses coordinate_transform_bcz after computing movement actions
-    movement_actions = compute_padded_movement_actions(
-        tf.concat(
-            (
-                trajectory["observation"]["present/xyz"][:, :3],
-                present_euler,
-            ),
-            axis=-1,
-        )
-    )
-    # movement_actions = coordinate_transform_bcz(movement_actions_raw)
+    movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
     trajectory["language_action"] = tf.concat([movement_actions, trajectory["action"][:, -1:]], axis=1)
     trajectory["action"] = tf.concat(
         [
