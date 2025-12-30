@@ -333,7 +333,6 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     x0, y0, x1, y1 = area
     x0 = max(0, x0)
     y0 = max(0, y0)
-    breakpoint()
     x1 = min(img.shape[1], x1)
     y1 = min(img.shape[0], y1)
 
