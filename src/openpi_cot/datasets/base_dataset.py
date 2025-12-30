@@ -412,7 +412,8 @@ class SingleCoTDataset:
             deltas = tf.random.stateless_uniform(
                 [traj_len],
                 seed=seed_pair,
-                minval=1,  # At least 1 step into future
+                # minval=1,  # At least 1 step into future
+                minval=max_horizon_clamped,
                 maxval=max_horizon_clamped + 1,
                 dtype=tf.int32,
             )
