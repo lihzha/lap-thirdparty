@@ -1202,13 +1202,14 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
     trajectory["language_instruction"] = trajectory["observation"]["natural_language_instruction"]
 
+    present_euler = axis_angle_to_extrinsic_xyz_euler(trajectory["observation"]["present/axis_angle"][:, :3])
     trajectory["observation"]["state"] = tf.concat(
         (
             coordinate_transform_bcz(
                 tf.concat(
                     (
                         trajectory["observation"]["present/xyz"][:, :3],
-                        trajectory["observation"]["present/axis_angle"][:, :3],
+                        present_euler,
                     ),
                     axis=-1,
                 ),
@@ -1226,7 +1227,7 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         tf.concat(
             (
                 trajectory["observation"]["present/xyz"][:, :3],
-                trajectory["observation"]["present/axis_angle"][:, :3],
+                present_euler,
             ),
             axis=-1,
         )
