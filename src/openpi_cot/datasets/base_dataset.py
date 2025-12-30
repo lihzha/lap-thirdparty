@@ -315,7 +315,10 @@ class SingleCoTDataset:
             # Pad actions to action_dim (only if not already padded)
             action_last_dim = tf.shape(traj[action_key])[-1]
             pad_amount_action = tf.maximum(0, self.action_dim - action_last_dim)
-            traj[action_key] = tf.pad(traj[action_key], [[0, 0, 0], [0, 0, pad_amount_action]])
+            traj[action_key] = tf.pad(
+                traj[action_key],
+                [[0, 0], [0, 0], [0, pad_amount_action]],
+            )
             # Ensure static shape is preserved
             traj[action_key].set_shape([None, action_horizon, self.action_dim])
 
