@@ -106,7 +106,7 @@ class SingleCoTDataset:
             self.dataset = self.build_dataset(self.builder)
             self.get_traj_identifier()
             self.apply_restructure()
-            self.apply_action_chunk(action_horizon, action_key="actions")
+            self.apply_traj_transforms(action_horizon=action_horizon)
 
             # Compute and save statistics
             cached_stats = get_dataset_statistics(
@@ -128,7 +128,6 @@ class SingleCoTDataset:
         self.apply_traj_filters(action_key="action")
         self.split_val(split_seed=seed)
         self.apply_restructure()
-        self.apply_action_chunk(action_horizon, action_key="actions")
 
         # If state encoding is NONE, ensure state stats are properly padded
         if self.state_encoding == StateEncoding.NONE:
@@ -137,10 +136,10 @@ class SingleCoTDataset:
             # If cached stats have empty state arrays, pad them to action_dim
             if len(self.dataset_statistics["state"].mean) == 0:
                 self.dataset_statistics["state"] = ExtendedNormStats(
-                    mean=np.zeros(self.action_dim, dtype=np.float32),
-                    std=np.ones(self.action_dim, dtype=np.float32),
-                    q01=np.zeros(self.action_dim, dtype=np.float32),
-                    q99=np.zeros(self.action_dim, dtype=np.float32),
+                    mean=np.zeros(self.state_dim, dtype=np.float32),
+                    std=np.ones(self.state_dim, dtype=np.float32),
+                    q01=np.zeros(self.state_dim, dtype=np.float32),
+                    q99=np.zeros(self.state_dim, dtype=np.float32),
                     num_transitions=self.dataset_statistics["state"].num_transitions,
                     num_trajectories=self.dataset_statistics["state"].num_trajectories,
                 )
@@ -255,7 +254,35 @@ class SingleCoTDataset:
 
         self.dataset = self.dataset.filter(_split_filter)
 
-    def apply_action_chunk(self, action_horizon, action_key="actions"):
+    def apply_traj_transforms(
+        self,
+        action_horizon,
+        action_key: str = "actions",
+        state_key: str = "state",
+    ):
+        """
+        Compare to original transforms, we omit the following:
+        - skip_unlabeled
+        - max_action
+        - max_proprio
+        - goal_relabeling
+        - drop_goal_or_instruction
+        - subsample_length
+        """
+
+        def state_euler_to_rot6d(traj):
+            traj["observation"][state_key] = tf.concat(
+                [
+                    traj["observation"][state_key][:, :3],
+                    euler_to_rot6d(traj["observation"][state_key][:, 3:6]),
+                    traj["observation"][state_key][:, 6:],
+                ],
+                axis=-1,
+            )
+            return traj
+
+        self.dataset = self.dataset.traj_map(state_euler_to_rot6d, self.num_parallel_calls)
+
         def chunk_actions(traj):
             """Splits episode into action chunks with proper zero-padding."""
             # traj_len = tf.shape(traj[action_key])[0]
@@ -296,35 +323,6 @@ class SingleCoTDataset:
             return traj
 
         self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
-
-    def apply_traj_transforms(
-        self,
-        action_horizon,
-        action_key: str = "actions",
-        state_key: str = "state",
-    ):
-        """
-        Compare to original transforms, we omit the following:
-        - skip_unlabeled
-        - max_action
-        - max_proprio
-        - goal_relabeling
-        - drop_goal_or_instruction
-        - subsample_length
-        """
-
-        def state_euler_to_rot6d(traj):
-            traj["observation"][state_key] = tf.concat(
-                [
-                    traj["observation"][state_key][:, :3],
-                    euler_to_rot6d(traj["observation"][state_key][:, 3:6]),
-                    traj["observation"][state_key][:, 6:],
-                ],
-                axis=-1,
-            )
-            return traj
-
-        self.dataset = self.dataset.traj_map(state_euler_to_rot6d, self.num_parallel_calls)
 
         def pad_action_state(traj):
             # Pad actions to action_dim (only if not already padded)

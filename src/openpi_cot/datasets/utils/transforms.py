@@ -1734,13 +1734,13 @@ def libero_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     state = trajectory["observation"]["state"]
     euler_xyz = axis_angle_to_extrinsic_xyz_euler(state[:, 3:6])
-    trajectory["observation"]["state"] = tf.concat([state[:, :3], euler_xyz, state[:, -1:]], axis=1)
+    trajectory["observation"]["state"] = tf.concat([state[:, :3], euler_xyz, state[:, -2:-1]], axis=1)
 
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
     trajectory["language_action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
     trajectory["action"] = tf.concat(
         [
-            trajectory["observation"]["state"][:, :6],
+            trajectory["action"][:, -1:],
             gripper_action,
         ],
         axis=1,
