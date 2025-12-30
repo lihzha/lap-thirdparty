@@ -154,7 +154,7 @@ class DroidCoTDataset(SingleCoTDataset):
                 "prompt": instruction,
                 "trajectory_id": traj["trajectory_id"],
                 "traj_metadata": traj["traj_metadata"],
-                "raw_action": tf.cast(actions, tf.float32),
+                "language_action": tf.cast(traj["language_action"], tf.float32),
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # DROID is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
@@ -190,7 +190,7 @@ class DroidCoTDataset(SingleCoTDataset):
         self.dataset = self.dataset.map(remove_passes_filter)
 
         def _remove_raw_action(frame):
-            frame.pop("raw_action")
+            frame.pop("language_action")
             return frame
 
         self.dataset = self.dataset.map(_remove_raw_action)

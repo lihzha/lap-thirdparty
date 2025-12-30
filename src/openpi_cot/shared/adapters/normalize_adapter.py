@@ -118,9 +118,9 @@ def get_dataset_statistics(
 
     actions, proprios, num_transitions, num_trajectories = [], [], 0, 0
     for traj in tqdm(dataset.iterator(), total=cardinality):
-        actions.append(traj[action_key])
+        actions.append(traj[action_key].reshape(-1, traj[action_key].shape[-1]))
         proprios.append(traj["observation"][state_key])
-        num_transitions += traj[action_key].shape[0]
+        num_transitions += traj[action_key].reshape(-1, traj[action_key].shape[-1]).shape[0]
         num_trajectories += 1
 
     actions, proprios = np.concatenate(actions), np.concatenate(proprios)

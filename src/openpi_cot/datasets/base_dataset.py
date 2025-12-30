@@ -12,6 +12,7 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.utils.data_utils import _R_from_euler_xyz
+from openpi_cot.datasets.utils.data_utils import euler_diff
 from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
 from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
 from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
@@ -101,6 +102,7 @@ class SingleCoTDataset:
             self.dataset = self.build_dataset(self.builder)
             self.get_traj_identifier()
             self.apply_restructure()
+            self.apply_action_chunk(action_horizon, action_key="actions")
 
             # Compute and save statistics
             cached_stats = get_dataset_statistics(
@@ -122,6 +124,7 @@ class SingleCoTDataset:
         self.apply_traj_filters(action_key="action")
         self.split_val(split_seed=seed)
         self.apply_restructure()
+        self.apply_action_chunk(action_horizon, action_key="actions")
 
         # If state encoding is NONE, ensure state stats are properly padded
         if self.state_encoding == StateEncoding.NONE:
@@ -138,9 +141,7 @@ class SingleCoTDataset:
                     num_trajectories=self.dataset_statistics["state"].num_trajectories,
                 )
 
-        self.apply_traj_transforms(
-            action_horizon=action_horizon,
-        )
+        self.apply_traj_transforms(action_horizon=action_horizon)
 
         self.apply_repack_transforms()
 
@@ -250,9 +251,51 @@ class SingleCoTDataset:
 
         self.dataset = self.dataset.filter(_split_filter)
 
+    def apply_action_chunk(self, action_horizon, action_key="actions"):
+        def chunk_actions(traj):
+            """Splits episode into action chunks with proper zero-padding."""
+            # traj_len = tf.shape(traj[action_key])[0]
+
+            # # Use unified gather function with proper zero-padding
+            # traj[action_key] = gather_with_padding(
+            #     data=traj[action_key],
+            #     sequence_length=traj_len,
+            #     window_size=action_horizon,
+            # )
+            # # Ensure static shape is preserved: [T, action_horizon, action_dim]
+            # traj[action_key].set_shape([None, action_horizon, self.action_dim])
+
+            traj_len = tf.shape(traj[action_key])[0]
+
+            # Use unified gather function with proper zero-padding
+            traj[action_key] = gather_with_padding(
+                data=tf.concat([traj["observation"]["state"][:, :6], traj[action_key][:, 6:7]], axis=-1),
+                sequence_length=traj_len,
+                window_size=action_horizon + 1,
+            )
+
+            traj[action_key] = tf.concat(
+                (
+                    traj[action_key][:, 1:, :3] - traj[action_key][:, 0:1, :3],
+                    euler_diff(
+                        traj[action_key][:, 1:, 3:6],
+                        traj[action_key][:, 0:1, 3:6],
+                    ),
+                    traj[action_key][:, :-1, 6:7],
+                ),
+                axis=-1,
+            )
+
+            # Ensure static shape is preserved: [T, action_horizon, action_dim]
+            traj[action_key].set_shape([None, action_horizon, self.action_dim])
+
+            return traj
+
+        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
+
     def apply_traj_transforms(
         self,
-        action_horizon: int,
+        action_horizon,
         summation_steps: int = 30,
         action_key: str = "actions",
         state_key: str = "state",
@@ -273,7 +316,7 @@ class SingleCoTDataset:
             pad_amount_action = tf.maximum(0, self.action_dim - action_last_dim)
             traj[action_key] = tf.pad(traj[action_key], [[0, 0], [0, pad_amount_action]])
             # Ensure static shape is preserved
-            traj[action_key].set_shape([None, self.action_dim])
+            traj[action_key].set_shape([None, action_horizon, self.action_dim])
 
             # Pad state to action_dim (only if not already padded)
             state_last_dim = tf.shape(traj["observation"][state_key])[-1]
@@ -297,47 +340,6 @@ class SingleCoTDataset:
             return traj
 
         self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
-
-        def chunk_actions(traj):
-            """Splits episode into action chunks with proper zero-padding."""
-            traj_len = tf.shape(traj[action_key])[0]
-
-            # Use unified gather function with proper zero-padding
-            traj[action_key] = gather_with_padding(
-                data=traj[action_key],
-                sequence_length=traj_len,
-                window_size=action_horizon,
-            )
-            # Ensure static shape is preserved: [T, action_horizon, action_dim]
-            traj[action_key].set_shape([None, action_horizon, self.action_dim])
-
-            # traj_len = tf.shape(traj[action_key])[0]
-
-            # # Use unified gather function with proper zero-padding
-            # traj[action_key] = gather_with_padding(
-            #     data=tf.concat([traj["observation"]["state"][:, :6], traj[action_key][:, 6:7]], axis=-1),
-            #     sequence_length=traj_len,
-            #     window_size=action_horizon + 1,
-            # )
-
-            # traj[action_key] = tf.concat(
-            #     (
-            #         traj[action_key][:, 1:, :3] - traj[action_key][:, 0:1, :3],
-            #         euler_diff(
-            #             traj[action_key][:, 1:, 3:6],
-            #             traj[action_key][:, 0:1, 3:6],
-            #         ),
-            #         traj[action_key][:, :-1, 6:7],
-            #     ),
-            #     axis=-1,
-            # )
-
-            # # Ensure static shape is preserved: [T, action_horizon, action_dim]
-            # traj[action_key].set_shape([None, action_horizon, self.action_dim])
-
-            return traj
-
-        self.dataset = self.dataset.traj_map(chunk_actions, self.num_parallel_calls)
 
         def group_language_actions(traj):
             """Compute per-timestep summed language actions over variable horizons."""
@@ -366,14 +368,14 @@ class SingleCoTDataset:
 
             max_window = tf.reduce_max(horizon_steps)
             actions_window = gather_with_padding(
-                data=traj["raw_action"],
+                data=traj["language_action"],
                 sequence_length=traj_len,
                 window_size=max_window,
                 per_timestep_windows=chosen_steps,
             )  # [T, max_window, A]
 
             traj["language_actions"] = sum_actions(actions_window, valid_lengths)
-            traj["language_actions"].set_shape([None, traj["raw_action"].shape[-1]])
+            traj["language_actions"].set_shape([None, traj["language_action"].shape[-1]])
 
             # Record the actual (clipped) horizon in seconds for downstream prompting
             actual_horizon_seconds = tf.cast(valid_lengths, tf.float32) / control_freq
@@ -387,7 +389,7 @@ class SingleCoTDataset:
         def add_prediction_pairs(traj):
             """Add prediction frame pairs and corresponding language actions.
 
-            Derives prediction language actions from raw_action (same as language_actions),
+            Derives prediction language actions from language_action (same as language_actions),
             padded to summation_steps for consistency.
             """
             if not self.enable_prediction_training:
@@ -443,14 +445,14 @@ class SingleCoTDataset:
             # Use unified gather function with per-timestep windows
             # This handles variable deltas efficiently in a batched 2D operation
             actions_window = gather_with_padding(
-                data=traj["raw_action"],
+                data=traj["language_action"],
                 sequence_length=traj_len,
                 window_size=summation_steps,  # Maximum window size
                 per_timestep_windows=deltas_clamped,  # Variable window per timestep
             )  # [T, summation_steps, A]
 
             prediction_lang_actions = sum_actions(actions_window, deltas_clamped)  # [T, action_dim]
-            prediction_lang_actions.set_shape([None, traj["raw_action"].shape[-1]])
+            prediction_lang_actions.set_shape([None, traj["language_action"].shape[-1]])
 
             traj["prediction_language_actions"] = prediction_lang_actions
             traj["prediction_delta"] = deltas

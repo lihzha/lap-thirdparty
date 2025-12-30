@@ -99,9 +99,9 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "observation": new_obs,
                 "language_instruction": traj["language_instruction"],
                 "actions": tf.cast(traj["action"], tf.float32),
+                "language_action": tf.cast(traj["language_action"], tf.float32),
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": traj["trajectory_id"],
-                "raw_action": tf.cast(traj["action"], tf.float32),
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
@@ -170,7 +170,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
             # traj.pop("trajectory_id")
             traj["prompt"] = traj["language_instruction"]
             traj.pop("language_instruction")
-            traj.pop("raw_action")
+            traj.pop("language_action")
             return traj
 
         self.dataset = self.dataset.traj_map(_pop_and_rename_keys, self.num_parallel_calls)
@@ -254,7 +254,7 @@ class NavigationCoTDataset(SingleOXECoTDataset):
                 "actions": tf.cast(traj["action"], tf.float32),
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": traj["trajectory_id"],
-                "raw_action": tf.cast(traj["action"], tf.float32),
+                "language_action": tf.cast(traj["language_action"], tf.float32),
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],
@@ -315,7 +315,7 @@ class LiberoCoTDataset(SingleOXECoTDataset):
                 "actions": actions,
                 "dataset_name": tf.repeat(self.dataset_name, traj_len),
                 "trajectory_id": traj["trajectory_id"],  # Preserve existing trajectory_id
-                "raw_action": actions,
+                "language_action": traj["language_action"],
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # LIBERO is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
                 "raw_state": new_obs["state"],

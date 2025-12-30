@@ -329,7 +329,14 @@ def bridge_v2_oxe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["EEF_state"])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["EEF_state"],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -408,7 +415,14 @@ def rt1_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["eef_state"])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["eef_state"],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -445,7 +459,14 @@ def kuka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, gripper_action_abs[:, None]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, gripper_action_abs[:, None]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            gripper_action_abs[:, None],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -500,7 +521,14 @@ def taco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state_eef"])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state_eef"][:, :6],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -534,7 +562,14 @@ def jaco_play_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state_eef"])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state_eef"][:, :6],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -627,7 +662,14 @@ def viola_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            gripper_action,
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -664,7 +706,14 @@ def berkeley_autolab_ur5_dataset_transform(trajectory: dict[str, Any]) -> dict[s
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -791,8 +840,15 @@ def austin_buds_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+        ],
+        axis=1,
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -886,8 +942,15 @@ def droid_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(cartesian)
 
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         [padded_movement_actions, tf.clip_by_value(gripper_actions[:, -1:], 0, 1)],
+        axis=1,
+    )
+    trajectory["action"] = tf.concat(
+        [
+            cartesian,
+            tf.clip_by_value(gripper_actions[:, -1:], 0, 1),
+        ],
         axis=1,
     )
 
@@ -913,8 +976,15 @@ def furniture_bench_dataset_transform(trajectory: dict[str, Any]) -> dict[str, A
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))],
+        axis=1,
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+        ],
         axis=1,
     )
 
@@ -990,8 +1060,15 @@ def austin_sailor_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+        ],
+        axis=1,
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -1061,8 +1138,15 @@ def austin_sirius_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+        ],
+        axis=1,
     )
 
     # Randomly pad empty language instructions with fallback text
@@ -1148,7 +1232,14 @@ def bc_z_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         )
     )
     movement_actions = coordinate_transform_bcz(movement_actions_raw)
-    trajectory["action"] = tf.concat([movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -1275,7 +1366,14 @@ def dlr_edan_shared_control_dataset_transform(trajectory: dict[str, Any]) -> dic
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -1349,13 +1447,20 @@ def utaustin_mutex_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
 
 def molmoact_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         (
             trajectory["action"][:, :-1],
             invert_gripper_actions(trajectory["action"][:, -1:]),
@@ -1369,6 +1474,13 @@ def molmoact_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
         ),
         axis=-1,
     )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(trajectory["action"][:, -1:]),
+        ],
+        axis=1,
+    )
     return trajectory
 
 
@@ -1379,7 +1491,7 @@ def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
     # trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, 6:7]
 
     # dataset does not store gripper actions, so use gripper state info, invert so +1 = open, 0 = close
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         (
             trajectory["action"],
             invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]),
@@ -1395,6 +1507,14 @@ def berkeley_fanuc_dataset_transform(trajectory: dict[str, Any]) -> dict[str, An
             tf.clip_by_value(invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]), 0, 1),
         ),
         axis=-1,
+    )
+
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(trajectory["observation"]["state"][:, 6:7]),
+        ],
+        axis=1,
     )
 
     return trajectory
@@ -1453,7 +1573,16 @@ def cmu_stretch_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["eef_state"])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["observation"]["gripper_state"]], axis=1)
+    trajectory["language_action"] = tf.concat(
+        [padded_movement_actions, trajectory["observation"]["gripper_state"]], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["eef_state"][:, :6],
+            trajectory["observation"]["gripper_state"],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -1472,7 +1601,16 @@ def gnm_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["action"] = tf.cast(trajectory["action"], tf.float32)
 
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, tf.zeros_like(trajectory["action"][:, :1])], axis=1)
+    trajectory["language_action"] = tf.concat(
+        [padded_movement_actions, tf.zeros_like(trajectory["action"][:, :1])], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            tf.zeros_like(trajectory["action"][:, :1]),
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -1492,8 +1630,15 @@ def fmb_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["proprio"][:, :6])
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         [padded_movement_actions, invert_gripper_actions(trajectory["action"][:, -1:])], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["proprio"][:, :6],
+            invert_gripper_actions(trajectory["action"][:, -1:]),
+        ],
+        axis=1,
     )
 
     return trajectory
@@ -1515,7 +1660,14 @@ def dobbe_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     # Compute movement actions with zero-padding (no truncation)
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["proprio"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, trajectory["action"][:, -1:]], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["proprio"][:, :6],
+            trajectory["action"][:, -1:],
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -1594,7 +1746,14 @@ def libero_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["observation"]["state"] = tf.concat([state[:, :3], euler_xyz, state[:, -1:]], axis=1)
 
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
+    trajectory["language_action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            gripper_action,
+        ],
+        axis=1,
+    )
 
     return trajectory
 
@@ -1712,8 +1871,15 @@ def franka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     )
 
     padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["action"] = tf.concat(
+    trajectory["language_action"] = tf.concat(
         [padded_movement_actions, invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1))], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+        ],
+        axis=1,
     )
 
     return trajectory
