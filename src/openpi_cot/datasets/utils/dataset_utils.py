@@ -75,6 +75,44 @@ def gather_with_padding(
     return gathered
 
 
+def gather_with_last_value_padding(
+    data: tf.Tensor,
+    sequence_length: tf.Tensor,
+    window_size: int | tf.Tensor,
+    per_timestep_windows: tf.Tensor | None = None,
+) -> tf.Tensor:
+    """Gather sliding windows repeating the last valid value (no zero-padding).
+
+    Args:
+        data: Source tensor to gather from, shape [T, ...] where T is sequence length
+        sequence_length: Scalar tensor, length of the sequence
+        window_size: Scalar or tensor, size of the window to gather. If per_timestep_windows
+                    is provided, this should be the maximum window size.
+        per_timestep_windows: Optional [T] tensor specifying variable window size per timestep.
+                             If None, uses fixed window_size for all timesteps.
+
+    Returns:
+        Gathered windows with shape [T, window_size, ...], padded by repeating
+        the last valid value.
+    """
+    if isinstance(window_size, int):
+        window_size_tensor = tf.constant(window_size, dtype=tf.int32)
+    else:
+        window_size_tensor = tf.cast(window_size, tf.int32)
+
+    base = tf.broadcast_to(tf.range(window_size_tensor)[None], [sequence_length, window_size_tensor])
+    offsets = tf.broadcast_to(tf.range(sequence_length)[:, None], [sequence_length, window_size_tensor])
+
+    if per_timestep_windows is not None:
+        max_base = tf.expand_dims(per_timestep_windows - 1, -1)
+        base = tf.minimum(base, max_base)
+
+    indices = base + offsets  # [T, window_size]
+    clamped_indices = tf.minimum(indices, sequence_length - 1)
+
+    return tf.gather(data, clamped_indices)
+
+
 def dataset_size(ds: tf.data.Dataset) -> int:
     """Helper: try cardinality; fall back to counting if UNKNOWN/INFINITE."""
     c = ds.cardinality().numpy()  # returns int64 or negative sentinel

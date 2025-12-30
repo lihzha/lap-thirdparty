@@ -14,6 +14,7 @@ import tensorflow_datasets as tfds
 from openpi_cot.datasets.utils.data_utils import _R_from_euler_xyz
 from openpi_cot.datasets.utils.data_utils import euler_diff
 from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
+from openpi_cot.datasets.utils.dataset_utils import gather_with_last_value_padding
 from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
 from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
 from openpi_cot.datasets.utils.helpers import NormalizationType
@@ -268,7 +269,7 @@ class SingleCoTDataset:
             traj_len = tf.shape(traj[action_key])[0]
 
             # Use unified gather function with proper zero-padding
-            traj[action_key] = gather_with_padding(
+            traj[action_key] = gather_with_last_value_padding(
                 data=traj[action_key],
                 sequence_length=traj_len,
                 window_size=action_horizon + 1,
@@ -314,7 +315,7 @@ class SingleCoTDataset:
             # Pad actions to action_dim (only if not already padded)
             action_last_dim = tf.shape(traj[action_key])[-1]
             pad_amount_action = tf.maximum(0, self.action_dim - action_last_dim)
-            traj[action_key] = tf.pad(traj[action_key], [[0, 0], [0, pad_amount_action]])
+            traj[action_key] = tf.pad(traj[action_key], [[0, 0, 0], [0, 0, pad_amount_action]])
             # Ensure static shape is preserved
             traj[action_key].set_shape([None, action_horizon, self.action_dim])
 
