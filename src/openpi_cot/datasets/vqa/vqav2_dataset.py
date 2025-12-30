@@ -1,9 +1,9 @@
 """VQAv2 dataset implementation for VQA training."""
 
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
-from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 
 class Vqav2(BaseVQADataset):
@@ -19,52 +19,8 @@ class Vqav2(BaseVQADataset):
         Note: This assumes the vqav2.py file has been registered with TFDS
         and the dataset builder is named 'vqa'.
         """
-        import tensorflow_datasets as tfds
 
         return tfds.builder("vqa", data_dir=data_dir)
-
-    def build_dataset(self, builder, split: str):
-        """Build TensorFlow dataset from TFDS builder.
-
-        Args:
-            builder: TFDS dataset builder
-            split: One of "train", "val", "validation", "test", "test-dev"
-        """
-        import tensorflow_datasets as tfds
-
-        # Map our split names to VQAv2 split names
-        # VQAv2 has: train, validation, test, test-dev
-        if split in ["train", "val"]:
-            # We'll use train split and manually split for val
-            tfds_split = "train"
-        elif split == "validation":
-            tfds_split = "validation"
-        elif split == "test":
-            tfds_split = "test"
-        elif split == "test-dev":
-            tfds_split = "test-dev"
-        else:
-            tfds_split = "train"
-
-        opts = tf.data.Options()
-        opts.experimental_deterministic = bool(self.want_val)
-        opts.experimental_optimization.map_parallelization = True
-        opts.experimental_optimization.parallel_batch = True
-        opts.experimental_optimization.map_fusion = True
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=self.seed,
-            options=opts,
-        )
-
-        ds = builder.as_dataset(
-            split=tfds_split,
-            shuffle_files=not self.want_val,
-            read_config=read_config,
-        )
-
-        ds = ensure_dldataset(ds, is_flattened=True)
-        return ds
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""

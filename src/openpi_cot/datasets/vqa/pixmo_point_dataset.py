@@ -1,9 +1,9 @@
 """PixmoPoint dataset implementation for VQA training."""
 
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
-from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # Maximum number of points to include in the answer
 MAX_POINTS = 20
@@ -83,38 +83,8 @@ class PixmoPoint(BaseVQADataset):
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
         """Build TFDS builder for PixmoPoint."""
-        import tensorflow_datasets as tfds
 
-        _ = ds_name  # Unused but required by base class signature
         return tfds.builder("pixmo_point", data_dir=data_dir)
-
-    def build_dataset(self, builder, split: str):
-        """Build TensorFlow dataset from TFDS builder."""
-        import tensorflow_datasets as tfds
-
-        _ = split  # Unused but required by base class signature
-        opts = tf.data.Options()
-        opts.experimental_deterministic = bool(self.want_val)
-        opts.experimental_optimization.map_parallelization = True
-        opts.experimental_optimization.parallel_batch = True
-        opts.experimental_optimization.map_fusion = True
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=self.seed,
-            options=opts,
-        )
-
-        # Skip automatic image decoding to avoid JPEG warnings/errors
-        # We'll handle encoding in extract_and_encode_image
-        ds = builder.as_dataset(
-            split="train",  # PixmoPoint only has train split, we'll manually split for val
-            shuffle_files=not self.want_val,
-            read_config=read_config,
-            decoders={"image": tfds.decode.SkipDecoding()},
-        )
-
-        ds = ensure_dldataset(ds, is_flattened=True)
-        return ds
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""
@@ -122,8 +92,7 @@ class PixmoPoint(BaseVQADataset):
 
     def get_num_transitions(self) -> int:
         """Return approximate number of PixmoPoint samples."""
-        # TODO: Update with actual count when known
-        return 1651357  # Placeholder
+        return 1702160
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from PixmoPoint image SHA256, label, and count.

@@ -1,9 +1,9 @@
 """LVIS dataset implementation for VQA training."""
 
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
-from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # LVIS prompts to randomly sample from - split into prefix and suffix for category insertion
 LVIS_PROMPT_PARTS = [
@@ -64,33 +64,7 @@ class Lvis(BaseVQADataset):
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
         """Build TFDS builder for LVIS."""
-        import tensorflow_datasets as tfds
-
         return tfds.builder("lvis:1.0.0", data_dir=data_dir)
-
-    def build_dataset(self, builder, split: str):
-        """Build TensorFlow dataset from TFDS builder."""
-        import tensorflow_datasets as tfds
-
-        opts = tf.data.Options()
-        opts.experimental_deterministic = bool(self.want_val)
-        opts.experimental_optimization.map_parallelization = True
-        opts.experimental_optimization.parallel_batch = True
-        opts.experimental_optimization.map_fusion = True
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=self.seed,
-            options=opts,
-        )
-
-        ds = builder.as_dataset(
-            split="train",  # LVIS train split, we'll manually split for val
-            shuffle_files=not self.want_val,
-            read_config=read_config,
-        )
-
-        ds = ensure_dldataset(ds, is_flattened=True)
-        return ds
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""

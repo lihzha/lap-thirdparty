@@ -22,7 +22,8 @@ from openpi_cot.datasets.utils.mixtures import OXE_NAMED_MIXTURES
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.coco_caption_dataset import CocoCaption
 from openpi_cot.datasets.vqa.lvis_dataset import Lvis
-from openpi_cot.datasets.vqa.paco_dataset import Paco
+from openpi_cot.datasets.vqa.paco_dataset import PacoEgo4d
+from openpi_cot.datasets.vqa.paco_dataset import PacoLvis
 from openpi_cot.datasets.vqa.pixmo_cap_dataset import PixmoCap
 from openpi_cot.datasets.vqa.pixmo_point_dataset import PixmoPoint
 from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_NAMES
@@ -168,8 +169,13 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
-            elif dataset_name == "paco":
-                ds = Paco(
+            elif dataset_name == "paco_lvis":
+                ds = PacoLvis(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "paco_ego4d":
+                ds = PacoEgo4d(
                     dataset_name=dataset_name,
                     **kwargs,
                 )

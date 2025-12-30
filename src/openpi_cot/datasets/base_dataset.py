@@ -175,7 +175,7 @@ class SingleCoTDataset:
             ds_name = "lvis:1.0.0"
         return tfds.builder(ds_name, data_dir=data_dir)
 
-    def build_dataset(self, builder):
+    def get_dataset_ops(self):
         opts = tf.data.Options()
         # Always use deterministic operations for reproducibility
         # File interleaving will be deterministic but still provide good mixing
@@ -193,6 +193,10 @@ class SingleCoTDataset:
         opts.experimental_optimization.parallel_batch = True
         opts.experimental_warm_start = True
         opts.experimental_threading.private_threadpool_size = int(max(16, psutil.cpu_count(logical=True)))
+        return opts
+
+    def build_dataset(self, builder):
+        want_full_determinism = self.want_full_determinism or self.want_val
         dataset = dl.DLataset.from_rlds(
             builder,
             split="all",
@@ -201,7 +205,7 @@ class SingleCoTDataset:
         )
         dataset = dataset.shard(jax.process_count(), jax.process_index())
         # Repeat early to increase interleaving across files/episodes
-        dataset = dataset.with_options(opts)
+        dataset = dataset.with_options(self.get_dataset_ops())
         return dataset
 
     def split_val(self, split_seed):

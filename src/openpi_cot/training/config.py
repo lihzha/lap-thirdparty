@@ -207,7 +207,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     want_full_determinism: bool = False
 
     ### OXE fields (used when dataset_type == "oxe" or "combined")
-    data_mix: str | None = "oxe_pi_magic_soup_with_other_states_with_bimanual"
+    data_mix: str | None = "oxe_magic_soup"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -981,7 +981,7 @@ _CONFIGS = [
             "asset_id": "combined",
             "dataset_type": "combined",
             "droid_dataset_name": "droid",
-            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "data_mix": "oxe_magic_soup",
             "shuffle_buffer_size": 400_000,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(
@@ -1010,7 +1010,7 @@ _CONFIGS = [
             "asset_id": "combined",
             "dataset_type": "combined",
             "droid_dataset_name": "droid",
-            "data_mix": "oxe_pi_magic_soup_with_other_states_with_bimanual",
+            "data_mix": "oxe_magic_soup",
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },

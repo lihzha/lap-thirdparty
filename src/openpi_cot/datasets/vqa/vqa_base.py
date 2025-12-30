@@ -3,8 +3,10 @@
 from typing import TYPE_CHECKING, ClassVar
 
 from dlimp import DLataset
+import jax
 import numpy as np
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.base_dataset import SingleCoTDataset
 from openpi_cot.datasets.utils.helpers import ActionEncoding
@@ -169,8 +171,25 @@ class BaseVQADataset(SingleCoTDataset):
         raise NotImplementedError("Subclass must implement build_dataset_builder")
 
     def build_dataset(self, builder, split: str):
-        """Build TensorFlow dataset from TFDS builder. Must be implemented by subclass."""
-        raise NotImplementedError("Subclass must implement build_dataset")
+        """Build TensorFlow dataset from TFDS builder."""
+        want_full_determinism = self.want_full_determinism or self.want_val
+
+        read_config = tfds.ReadConfig(
+            shuffle_seed=self.seed,
+        )
+
+        ds = builder.as_dataset(
+            split="train",
+            shuffle_files=bool(not want_full_determinism),
+            read_config=read_config,
+        )
+        ds = ensure_dldataset(ds, is_flattened=True)
+
+        dataset = ds.shard(jax.process_count(), jax.process_index())
+        # Repeat early to increase interleaving across files/episodes
+        dataset = dataset.with_options(self.get_dataset_ops())
+
+        return ds
 
     def get_dataset_name(self) -> str:
         """Get the dataset name for metadata. Must be implemented by subclass."""

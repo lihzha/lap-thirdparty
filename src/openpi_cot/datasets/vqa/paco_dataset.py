@@ -1,11 +1,10 @@
-"""LVIS dataset implementation for VQA training."""
+"""PACO dataset implementation for VQA training."""
 
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
-from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
-# LVIS prompts to randomly sample from - split into prefix and suffix for category insertion
 PACO_PROMPT_PARTS = [
     ("Show me where the ", " is in the image using a bounding box."),
     ("Draw a bounding box around the ", " in the image."),
@@ -48,7 +47,7 @@ DIRECTION_PROMPT_PARTS = [
 ]
 
 
-class Paco(BaseVQADataset):
+class PacoLvis(BaseVQADataset):
     """PACO dataset for vision-language training.
 
     This dataset loads PACO images with object annotations and formats them to be
@@ -62,42 +61,14 @@ class Paco(BaseVQADataset):
         super().__init__(*args, **kwargs)
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
-        """Build TFDS builder for LVIS."""
-        import tensorflow_datasets as tfds
-
-        return tfds.builder("paco:1.0.0", data_dir=data_dir)
-
-    def build_dataset(self, builder, split: str):
-        """Build TensorFlow dataset from TFDS builder."""
-        import tensorflow_datasets as tfds
-
-        opts = tf.data.Options()
-        opts.experimental_deterministic = bool(self.want_val)
-        opts.experimental_optimization.map_parallelization = True
-        opts.experimental_optimization.parallel_batch = True
-        opts.experimental_optimization.map_fusion = True
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=self.seed,
-            options=opts,
-        )
-
-        ds = builder.as_dataset(
-            split="train",  # LVIS train split, we'll manually split for val
-            shuffle_files=not self.want_val,
-            read_config=read_config,
-        )
-
-        ds = ensure_dldataset(ds, is_flattened=True)
-        return ds
+        return tfds.builder("paco_lvis:1.0.0", data_dir=data_dir)
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""
-        return "lvis"
+        return "paco_lvis"
 
     def get_num_transitions(self) -> int:
-        """Return approximate number of LVIS samples."""
-        return 1231766  # Approximate number of LVIS train images
+        return 612188
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from PACO image ID and annotation.
@@ -280,3 +251,15 @@ class Paco(BaseVQADataset):
         image = example["image"]
         # LVIS images are not pre-encoded, so encode them
         return tf.io.encode_jpeg(image, quality=95)
+
+
+class PacoEgo4d(PacoLvis):
+    def build_dataset_builder(self, ds_name: str, data_dir: str):
+        return tfds.builder("paco_ego4d:1.0.0", data_dir=data_dir)
+
+    def get_dataset_name(self) -> str:
+        """Return dataset name for metadata."""
+        return "paco_ego4d"
+
+    def get_num_transitions(self) -> int:
+        return 116356

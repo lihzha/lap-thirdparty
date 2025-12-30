@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script to visualize all datasets in oxe_pi_magic_soup_with_other_states_with_bimanual mixture
+# Script to visualize all datasets in oxe_magic_soup mixture
 # Usage: ./scripts/visualize_all_datasets.sh
 
 # Define all datasets from the mixture (in order as they appear)

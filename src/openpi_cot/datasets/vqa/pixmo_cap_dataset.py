@@ -1,9 +1,9 @@
 """PixmoCap dataset implementation for VQA training."""
 
 import tensorflow as tf
+import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
-from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 # PixmoCap prompts to randomly sample from
 PIXMO_CAP_PROMPTS = tf.constant(
@@ -51,33 +51,8 @@ class PixmoCap(BaseVQADataset):
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
         """Build TFDS builder for PixmoCap."""
-        import tensorflow_datasets as tfds
 
         return tfds.builder("pixmo_cap", data_dir=data_dir)
-
-    def build_dataset(self, builder, split: str):
-        """Build TensorFlow dataset from TFDS builder."""
-        import tensorflow_datasets as tfds
-
-        opts = tf.data.Options()
-        opts.experimental_deterministic = bool(self.want_val)
-        opts.experimental_optimization.map_parallelization = True
-        opts.experimental_optimization.parallel_batch = True
-        opts.experimental_optimization.map_fusion = True
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=self.seed,
-            options=opts,
-        )
-
-        ds = builder.as_dataset(
-            split="train",  # Using train split, we'll manually split for val
-            shuffle_files=not self.want_val,
-            read_config=read_config,
-        )
-
-        ds = ensure_dldataset(ds, is_flattened=True)
-        return ds
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""
@@ -85,7 +60,7 @@ class PixmoCap(BaseVQADataset):
 
     def get_num_transitions(self) -> int:
         """Return approximate number of PixmoCap samples."""
-        return 601664  # Approximate, adjust based on actual dataset size
+        return 601664
 
     def create_trajectory_id(self, example: dict) -> tf.Tensor:
         """Create trajectory ID from PixmoCap image filename and caption.
