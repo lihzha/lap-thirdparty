@@ -325,18 +325,18 @@ def summarize_numeric_actions(
             elif dyaw_rad < 0 and dyaw != 0:
                 parts.append(f"rotate clockwise {dyaw} degrees")
 
-    g_orig = float(initial_state[6])
     # Final gripper value from last step
     g_last = float(arr[-1, 6])
     if not stateless_gripper:
-        to_check_open = g_last > 0.5 and g_orig <= 0.5
-        to_check_close = g_last <= 0.5 and g_orig > 0.5
+        g_orig = float(initial_state[6])
+        should_open = g_last > 0.5 and g_orig <= 0.5
+        should_close = g_last <= 0.5 and g_orig > 0.5
     else:
-        to_check_open = g_last >= 0.5
-        to_check_close = g_last < 0.5
-    if to_check_open:
+        should_open = g_last >= 0.5
+        should_close = g_last < 0.5
+    if should_open:
         parts.append("open gripper")
-    elif to_check_close:
+    elif should_close:
         parts.append("close gripper")
     # parts.append(f"set gripper to {g_last:.0f}")
     return ", ".join(parts)

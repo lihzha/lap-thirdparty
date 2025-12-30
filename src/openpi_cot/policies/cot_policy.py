@@ -233,9 +233,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # stores as float32 (C,H,W), gets skipped for policy inference
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         # Extract initial state for EEF frame transformation
-        initial_state = None
-        if self.language_action_format.use_eef_frame and "raw_state" in data:
-            initial_state = np.asarray(data["raw_state"])
+        initial_state = np.asarray(data["raw_state"])
 
         inputs = self._prepare_inputs(data)
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)

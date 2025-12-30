@@ -118,10 +118,10 @@ def get_dataset_statistics(
 
     actions, proprios, num_transitions, num_trajectories = [], [], 0, 0
     for traj in tqdm(dataset.iterator(), total=cardinality):
-        action_horizon = traj[action_key].shape[1]
-        actions.append(traj[action_key].reshape(-1, traj[action_key].shape[-1]))
+        actions_flat = traj[action_key].reshape(-1, traj[action_key].shape[-1])
+        actions.append(actions_flat)
         proprios.append(traj["observation"][state_key])
-        num_transitions += traj[action_key].reshape(-1, traj[action_key].shape[-1]).shape[0]
+        num_transitions += actions_flat.shape[0]
         num_trajectories += 1
 
     actions, proprios = np.concatenate(actions), np.concatenate(proprios)
@@ -317,14 +317,14 @@ def get_dataset_statistics(
             q99=np.asarray(a_q99, dtype=np.float32),
             min=np.asarray(a_min, dtype=np.float32),
             max=np.asarray(a_max, dtype=np.float32),
-            num_transitions=int(a_n / action_horizon),
+            num_transitions=int(a_n),
             num_trajectories=int(traj_n),
         ),
     }
 
     if jax.process_index() == 0:
         logging.info("Dataset statistics computed:")
-        logging.info(f"  Total transitions: {a_n / action_horizon}, trajectories: {traj_n}")
+        logging.info(f"  Total transitions: {a_n}, trajectories: {traj_n}")
         logging.info(f"  Actions ({len(a_mean)} dims):")
         logging.info(f"    min: {a_min}")
         logging.info(f"    max: {a_max}")
