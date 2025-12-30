@@ -269,7 +269,7 @@ class SingleCoTDataset:
 
             # Use unified gather function with proper zero-padding
             traj[action_key] = gather_with_padding(
-                data=traj["action"],
+                data=traj[action_key],
                 sequence_length=traj_len,
                 window_size=action_horizon + 1,
             )
