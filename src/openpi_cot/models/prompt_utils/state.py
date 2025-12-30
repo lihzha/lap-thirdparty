@@ -113,7 +113,7 @@ class StateDiscretizationConfig:
     """Configuration for discretizing state vectors into text."""
 
     bins: int = 256
-    min_dim: int = 7  # Minimum number of dimensions to include (avoid over-trimming)
+    min_dim: int = 10  # Minimum number of dimensions to include (avoid over-trimming)
     range_min: float = -1.0
     range_max: float = 1.0
     template: StateTemplate | GroupedStateTemplate | None = None  # If None, uses default space-separated format

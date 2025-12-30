@@ -22,6 +22,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
         config: "CoTDataConfig",
         action_horizon: int = 16,
         action_dim: int = 32,
+        state_dim: int = 10,
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         action_proprio_normalization_type: NormalizationType = NormalizationType.NORMAL,
@@ -53,6 +54,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
             enable_prediction_training=enable_prediction_training,
             pred_prob=pred_prob,
             primary_pred_prob=primary_pred_prob,
+            state_dim=state_dim,
         )
 
     def apply_restructure(self):

@@ -223,32 +223,6 @@ class DroidCoTDataset(SingleCoTDataset):
         self.dataset = self.dataset.filter(_path_ok)
         self.dataset = self.dataset.filter(_has_instruction)
 
-    def apply_traj_transforms(
-        self,
-        action_horizon: int,
-        action_key: str = "actions",
-        state_key: str = "state",
-    ):
-        """Apply trajectory transforms and ensure raw_state is padded to match final state dimension."""
-        # Call parent's implementation which handles padding and other transforms
-        super().apply_traj_transforms(
-            action_horizon=action_horizon,
-            action_key=action_key,
-            state_key=state_key,
-        )
-
-        # Ensure raw_state has the same dimension as the final padded state
-        def pad_raw_state(traj):
-            state_dim = tf.shape(traj["observation"][state_key])[-1]
-            raw_state_dim = tf.shape(traj["raw_state"])[-1]
-            pad_amount = tf.maximum(0, state_dim - raw_state_dim)
-            traj["raw_state"] = tf.pad(traj["raw_state"], [[0, 0], [0, pad_amount]])
-            # Preserve static shape
-            traj["raw_state"].set_shape([None, self.action_dim])
-            return traj
-
-        self.dataset = self.dataset.traj_map(pad_raw_state, self.num_parallel_calls)
-
     def apply_repack_transforms(self):
         super().apply_repack_transforms()
 
@@ -267,6 +241,7 @@ class DroidCoTDataset(SingleCoTDataset):
         config: "CoTDataConfig",
         action_horizon: int = 16,
         action_dim: int = 32,
+        state_dim: int = 10,
         # Reduce this if you are running out of memory, but careful -- below ~100k shuffling is not sufficiently random.
         num_parallel_reads: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
         num_parallel_calls: int = -1,  # -1 == tf.data.AUTOTUNE -- hack to not import tf at top level
@@ -334,4 +309,5 @@ class DroidCoTDataset(SingleCoTDataset):
             enable_prediction_training=enable_prediction_training,
             pred_prob=pred_prob,
             primary_pred_prob=primary_pred_prob,
+            state_dim=state_dim,
         )

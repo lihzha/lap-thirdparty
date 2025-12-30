@@ -169,7 +169,7 @@ PI05_PROMPT_FORMAT = PromptFormat(
     name="pi05",
     task_module=TaskModule(template="Task: {prompt}", include_time_horizon=True),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7),
+        discretization=StateDiscretizationConfig(bins=256),
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
@@ -183,11 +183,11 @@ PI05_NOTIME_PROMPT_FORMAT = PromptFormat(
     name="pi05_notime",
     task_module=TaskModule(include_time_horizon=False),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7),
+        discretization=StateDiscretizationConfig(bins=256),
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
-    action_module=ActionModule(prefix="Action: "),
+    action_module=ActionModule(prefix="Answer: "),
     separator="; ",
     critical_token_checker=checkers.is_critical_directional,
     direction_token_checker=checkers.is_direction_natural,
@@ -197,7 +197,7 @@ PI05_NOTIME_NOSTATE_PROMPT_FORMAT = PromptFormat(
     name="pi05_notime_nostate",
     task_module=TaskModule(include_time_horizon=False),
     state_module=None,
-    action_module=ActionModule(prefix="Action: "),
+    action_module=ActionModule(prefix="Answer: "),
     separator="; ",
     critical_token_checker=checkers.is_critical_directional,
     direction_token_checker=checkers.is_direction_natural,
@@ -207,7 +207,7 @@ PI05_NOTIME_ORI_PROMPT_FORMAT = PromptFormat(
     name="pi05_notime_ori",
     task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7),
+        discretization=StateDiscretizationConfig(bins=256),
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
@@ -236,7 +236,7 @@ COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
     prefix_module=PrefixModule("Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up."),
     task_module=TaskModule(template="Task: {prompt}"),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7),
+        discretization=StateDiscretizationConfig(bins=256),
         state_prefix_template="State{state_label}: {state}",
         include_state_type=True,
     ),
@@ -251,7 +251,7 @@ SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     prefix_module=PrefixModule("Schema: <dx dy dz g>; units cm; +x fwd, +y left, +z up; g∈{0=close,1=open}"),
     task_module=TaskModule(template="Task: {prompt}"),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7),
+        discretization=StateDiscretizationConfig(bins=256),
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
@@ -266,7 +266,7 @@ GROUPED_STATE_PROMPT_FORMAT = PromptFormat(
     prefix_module=PrefixModule("Your Robot control coordinate system: +x=forward, +y=left, +z=up."),
     task_module=TaskModule(template="Task: {prompt}"),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
+        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
@@ -282,7 +282,7 @@ GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
     prefix_module=PrefixModule("Predict what is the action that the robot should take"),
     task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
+        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
         state_prefix_template=". Robot current state{state_label}: {state}",
         include_state_type=False,
     ),
@@ -311,7 +311,7 @@ UNIFIED_PROMPT_FORMAT = PromptFormat(
         include_time_horizon=False,
     ),
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
+        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
         state_prefix_template="Robot current state{state_label}: {state}",
         include_state_type=False,
     ),
@@ -325,21 +325,26 @@ UNIFIED_PROMPT_FORMAT = PromptFormat(
 GROUPED_PREDICTION_PROMPT_FORMAT = PromptFormat(
     name="grouped_prediction",
     state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, min_dim=7, template=GROUPED_STATE_TEMPLATE),
+        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
         state_prefix_template="Robot current state{state_label}: {state}. Robot state is represented in the robot base frame, not in the camera's frame.",
         include_state_type=False,
     ),
     task_module=TaskModule(template="{prompt}"),
-    separator=" ",
+    separator="; ",
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
 )
 
 DEFAULT_PREDICTION_PROMPT_FORMAT = PromptFormat(
     name="default_prediction",
-    state_module=None,
-    task_module=TaskModule(template="{prompt}"),
-    separator=" ",
+    state_module=StateModule(
+        discretization=StateDiscretizationConfig(bins=256),
+        state_prefix_template="State{state_label}: {state}",
+        include_state_type=False,
+    ),
+    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
+    separator=";",
+    action_module=ActionModule(prefix="Answer: "),
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
 )

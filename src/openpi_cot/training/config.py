@@ -1149,9 +1149,9 @@ _CONFIGS = [
             enable_langact_training=False,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime",
+            prompt_format="pi05_notime_ori",
             stop_action_to_vlm_grad=False,
-            # action_dim=32,
+            action_dim=32,
         ),
         data_config_class=LiberoFinetuneDataConfig,
         data_config_kwargs={

@@ -64,6 +64,34 @@ def _format_numeric(val: float, sum_decimal: str) -> str:
     return f"{val:.{decimals}f}"
 
 
+def rot6d_to_rotmat(rot6d: np.ndarray) -> np.ndarray:
+    """
+    Convert 6D rotation representation to rotation matrix.
+    Args:
+        rot6d: (..., 6) array
+    Returns:
+        (..., 3, 3) rotation matrix
+    """
+    rot6d = np.asarray(rot6d)
+    a1 = rot6d[..., 0:3]
+    a2 = rot6d[..., 3:6]
+
+    # Normalize first vector
+    b1 = a1 / np.linalg.norm(a1, axis=-1, keepdims=True)
+
+    # Make second vector orthogonal to first
+    dot = np.sum(b1 * a2, axis=-1, keepdims=True)
+    a2_ortho = a2 - dot * b1
+    b2 = a2_ortho / np.linalg.norm(a2_ortho, axis=-1, keepdims=True)
+
+    # Third via right-hand rule
+    b3 = np.cross(b1, b2, axis=-1)
+
+    # Stack as rotation matrix
+    R = np.stack([b1, b2, b3], axis=-1)
+    return R
+
+
 def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarray) -> np.ndarray:
     """Transform actions from base frame to end effector frame.
 
@@ -85,11 +113,13 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     transformed_actions = actions.copy()
 
     # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
-    euler = initial_state[3:6]
-    initial_rotation = R.from_euler("xyz", euler)
+    # euler = initial_state[3:6]
+    # initial_rotation = R.from_euler("xyz", euler).as_matrix()
+    rot6d = initial_state[3:9]
+    initial_rotation = rot6d_to_rotmat(rot6d)
 
     # Get rotation matrix: base -> EEF
-    R_base_to_eef = initial_rotation.as_matrix().T  # Transpose to get EEF <- base
+    R_base_to_eef = initial_rotation.T  # Transpose to get EEF <- base
 
     delta_pos_base = actions[:3]
     delta_pos_eef = R_base_to_eef @ delta_pos_base
@@ -146,6 +176,8 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     # Assume euler angle format: [x, y, z, roll, pitch, yaw, ...]
     euler = initial_state[3:6]
     initial_rotation = R.from_euler("xyz", euler)
+    # rot6d = initial_state[3:9]
+    # initial_rotation = rot6d_to_rotmat(rot6d)
 
     # Get rotation matrix: EEF -> base (inverse of base -> EEF)
     R_eef_to_base = initial_rotation.as_matrix()

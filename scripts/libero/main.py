@@ -180,6 +180,7 @@ def eval_libero(args: Args) -> None:
                     wrist_replay_images.append(wrist_img)
 
                     action = action_plan.popleft()
+                    action = np.concatenate([action[:3], _euler2axisangle(action[3:6]), action[6:]])
 
                     # Execute action in environment
                     obs, _, done, _ = env.step(action.tolist())
@@ -284,7 +285,7 @@ def _get_libero_env(task, resolution, seed, controller="OSC_POSE"):
 
 def get_images_from_obs(obs, resize_size):
     # IMPORTANT: rotate 180 degrees to match train preprocessing
-    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+    img = np.ascontiguousarray(obs["agentview_image"][::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
     img = image_tools.convert_to_uint8(image_tools.resize_with_pad(img, resize_size, resize_size))
     wrist_img = image_tools.convert_to_uint8(image_tools.resize_with_pad(wrist_img, resize_size, resize_size))
@@ -320,7 +321,7 @@ def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_descriptio
 
     elif policy_type == PolicyType.FT:
         eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-        eef_axisangle = _quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
+        eef_axisangle = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
         gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
         gripper_state = gripper_qpos[-1:]
         state = np.concatenate((eef_pos, eef_axisangle, gripper_state)).astype(np.float32, copy=False)
@@ -330,6 +331,7 @@ def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_descriptio
             "observation/state": state,
             "prompt": str(task_description),
         }
+        breakpoint()
 
     elif policy_type == PolicyType.PI05:
         # PI05 expects DROID-style observation keys
@@ -384,6 +386,75 @@ def _quat2axisangle(quat):
         return np.zeros(3)
 
     return (quat[:3] * 2.0 * math.acos(quat[3])) / den
+
+
+def _euler2axisangle(euler, seq="xyz"):
+    """
+    Convert Euler angles (radians) to axis-angle exponential coordinates.
+
+    Args:
+        euler: array-like, shape (3,). Euler angles in radians.
+        seq:   str, e.g. "xyz", "zyx" – same semantics as scipy.
+
+    Returns:
+        np.ndarray, shape (3,): axis-angle vector, i.e. axis * angle (radians).
+    """
+    euler = np.asarray(euler, dtype=float)
+    if euler.shape != (3,):
+        raise ValueError("euler must be shape (3,), ordered as [roll, pitch, yaw]")
+
+    if seq != "xyz":
+        rot = R.from_euler(seq, euler, degrees=False)
+        # as_rotvec() returns axis * angle (angle in radians),
+        # which matches your `_quat2axisangle` convention.
+        return rot.as_rotvec()
+
+    roll, pitch, yaw = euler
+    cr, sr = np.cos(roll), np.sin(roll)
+    cp, sp = np.cos(pitch), np.sin(pitch)
+    cy, sy = np.cos(yaw), np.sin(yaw)
+
+    rotation_matrix = np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ],
+        dtype=float,
+    )
+
+    trace = np.trace(rotation_matrix)
+    cos_angle = (trace - 1.0) / 2.0
+    cos_angle = np.clip(cos_angle, -1.0, 1.0)
+    angle = np.arccos(cos_angle)
+
+    if np.isclose(angle, 0.0):
+        return np.zeros(3)
+
+    sin_angle = np.sin(angle)
+    if np.isclose(sin_angle, 0.0):
+        diag = np.diag(rotation_matrix)
+        axis = np.sqrt(np.maximum((diag + 1.0) / 2.0, 0.0))
+        if axis[0] > 1e-8:
+            axis[0] = math.copysign(axis[0], rotation_matrix[2, 1] - rotation_matrix[1, 2])
+        if axis[1] > 1e-8:
+            axis[1] = math.copysign(axis[1], rotation_matrix[0, 2] - rotation_matrix[2, 0])
+        if axis[2] > 1e-8:
+            axis[2] = math.copysign(axis[2], rotation_matrix[1, 0] - rotation_matrix[0, 1])
+        norm = np.linalg.norm(axis)
+        if norm > 0.0:
+            axis = axis / norm
+        return axis * angle
+
+    axis = np.array(
+        [
+            rotation_matrix[2, 1] - rotation_matrix[1, 2],
+            rotation_matrix[0, 2] - rotation_matrix[2, 0],
+            rotation_matrix[1, 0] - rotation_matrix[0, 1],
+        ],
+        dtype=float,
+    ) / (2.0 * sin_angle)
+    return axis * angle
 
 
 def _quat2euler(quat):

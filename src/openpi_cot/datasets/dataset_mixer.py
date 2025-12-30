@@ -44,6 +44,7 @@ class OXECoTDatasets:
         config: "CoTDataConfig",
         data_dir: str,
         action_dim: int = 32,
+        state_dim: int = 10,
         action_horizon: int = 16,
         seed: int = 0,
         split: str = "train",
@@ -114,6 +115,7 @@ class OXECoTDatasets:
                 "enable_prediction_training": enable_prediction_training,
                 "pred_prob": config.pred_prob,
                 "primary_pred_prob": config.primary_pred_prob,
+                "state_dim": state_dim,
             }
             if dataset_name == "droid":
                 ds = DroidCoTDataset(
@@ -444,20 +446,20 @@ class OXECoTDatasets:
                 continue  # Skip if no transitions
 
             # Initialize with action_dim size (all states will be padded to this size)
-            state_weighted_sum = np.zeros(action_dim, dtype=np.float32)
+            state_weighted_sum = np.zeros(self.state_dim, dtype=np.float32)
 
             for dataset_name, stats in state_stats_subset.items():
                 state_n = stats["state"].num_transitions
                 # Pad state mean to action_dim before accumulating
                 state_mean_padded = np.pad(
-                    stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
+                    stats["state"].mean, (0, self.state_dim - len(stats["state"].mean)), mode="constant"
                 )
                 state_weighted_sum += state_mean_padded * state_n
 
             state_global_mean = state_weighted_sum / total_state_n
 
             # Pad global mean to action_dim
-            state_global_mean = np.pad(state_global_mean, (0, action_dim - len(state_global_mean)), mode="constant")
+            state_global_mean = np.pad(state_global_mean, (0, self.state_dim - len(state_global_mean)), mode="constant")
 
             # Compute weighted variance
             state_var_sum = np.zeros_like(state_global_mean)
@@ -467,10 +469,13 @@ class OXECoTDatasets:
 
                 # Pad local stats to action_dim
                 state_local_mean = np.pad(
-                    stats["state"].mean, (0, action_dim - len(stats["state"].mean)), mode="constant"
+                    stats["state"].mean, (0, self.state_dim - len(stats["state"].mean)), mode="constant"
                 )
                 state_local_std = np.pad(
-                    stats["state"].std, (0, action_dim - len(stats["state"].std)), mode="constant", constant_values=0.0
+                    stats["state"].std,
+                    (0, self.state_dim - len(stats["state"].std)),
+                    mode="constant",
+                    constant_values=0.0,
                 )
 
                 # var_i + (mean_i - global_mean)^2
@@ -485,13 +490,19 @@ class OXECoTDatasets:
             # Pad each dataset's quantiles to action_dim first, then compute min/max
             state_q01_padded = [
                 np.pad(
-                    stats["state"].q01, (0, action_dim - len(stats["state"].q01)), mode="constant", constant_values=0
+                    stats["state"].q01,
+                    (0, self.state_dim - len(stats["state"].q01)),
+                    mode="constant",
+                    constant_values=0,
                 )
                 for stats in state_stats_subset.values()
             ]
             state_q99_padded = [
                 np.pad(
-                    stats["state"].q99, (0, action_dim - len(stats["state"].q99)), mode="constant", constant_values=0
+                    stats["state"].q99,
+                    (0, self.state_dim - len(stats["state"].q99)),
+                    mode="constant",
+                    constant_values=0,
                 )
                 for stats in state_stats_subset.values()
             ]
@@ -501,13 +512,19 @@ class OXECoTDatasets:
             # Compute actual global min/max from per-dataset statistics
             state_min_padded = [
                 np.pad(
-                    stats["state"].min, (0, action_dim - len(stats["state"].min)), mode="constant", constant_values=0
+                    stats["state"].min,
+                    (0, self.state_dim - len(stats["state"].min)),
+                    mode="constant",
+                    constant_values=0,
                 )
                 for stats in state_stats_subset.values()
             ]
             state_max_padded = [
                 np.pad(
-                    stats["state"].max, (0, action_dim - len(stats["state"].max)), mode="constant", constant_values=0
+                    stats["state"].max,
+                    (0, self.state_dim - len(stats["state"].max)),
+                    mode="constant",
+                    constant_values=0,
                 )
                 for stats in state_stats_subset.values()
             ]

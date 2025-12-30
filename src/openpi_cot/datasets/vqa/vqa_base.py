@@ -72,6 +72,7 @@ class BaseVQADataset(SingleCoTDataset):
         enable_prediction_training: bool = False,
         pred_prob: float | None = None,
         primary_pred_prob: float | None = None,
+        state_dim: int = 10,
     ):
         # VQA datasets don't have language actions in the traditional sense
 
@@ -81,6 +82,7 @@ class BaseVQADataset(SingleCoTDataset):
         self.want_val = split == "val"
         self.dataset_name = dataset_name
         self.action_dim = action_dim
+        self.state_dim = state_dim
         self.vis_dataset = bool(config.vis_dataset)
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.use_wrist_image = False  # VQA has no wrist images
@@ -141,10 +143,10 @@ class BaseVQADataset(SingleCoTDataset):
                 num_trajectories=0,
             ),
             "state": ExtendedNormStats(
-                mean=np.zeros(self.action_dim, dtype=np.float32),
-                std=np.ones(self.action_dim, dtype=np.float32),
-                q01=np.zeros(self.action_dim, dtype=np.float32),
-                q99=np.zeros(self.action_dim, dtype=np.float32),
+                mean=np.zeros(self.state_dim, dtype=np.float32),
+                std=np.ones(self.state_dim, dtype=np.float32),
+                q01=np.zeros(self.state_dim, dtype=np.float32),
+                q99=np.zeros(self.state_dim, dtype=np.float32),
                 num_transitions=num_transitions,
                 num_trajectories=0,
             ),
@@ -254,7 +256,7 @@ class BaseVQADataset(SingleCoTDataset):
                 self.spec.primary_image_key: image_encoded,
                 self.spec.wrist_image_key: tf.constant("", dtype=tf.string),
                 # self.spec.wrist_image_right_key: tf.constant("", dtype=tf.string),
-                "state": tf.zeros([self.action_dim], dtype=tf.float32),
+                "state": tf.zeros([self.state_dim], dtype=tf.float32),
             }
 
             # Create output matching robot dataset structure (shared)
@@ -269,7 +271,7 @@ class BaseVQADataset(SingleCoTDataset):
                 "is_vqa_sample": tf.constant(True, dtype=tf.bool),
                 "is_prediction_sample": tf.constant(False, dtype=tf.bool),
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
-                "raw_state": tf.zeros([self.action_dim], dtype=tf.float32),
+                "raw_state": tf.zeros([self.state_dim], dtype=tf.float32),
                 "is_navigation": tf.constant(False, dtype=tf.bool),
                 "has_wrist_image": tf.constant(False, dtype=tf.bool),
             }

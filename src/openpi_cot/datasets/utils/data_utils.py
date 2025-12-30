@@ -376,6 +376,19 @@ def _R_from_euler_xyz(rpy: tf.Tensor) -> tf.Tensor:
     )
 
 
+def euler_to_rot6d(euler_angles: tf.Tensor) -> tf.Tensor:
+    """
+    Convert extrinsic XYZ Euler angles to 6D rotation representation.
+    Args:
+        euler_angles: (..., 3) tensor of Euler angles [roll, pitch, yaw] (extrinsic XYZ)
+    Returns:
+        (..., 6) tensor of 6D rotation representation
+    """
+    R = _R_from_euler_xyz(euler_angles)
+    rot6d = tf.reshape(R[..., :2], shape=(*R.shape[:-2], 6))
+    return rot6d
+
+
 @tf.function
 def _euler_xyz_from_R(R, eps=1e-6):
     """

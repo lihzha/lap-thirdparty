@@ -13,6 +13,7 @@ import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.utils.data_utils import _R_from_euler_xyz
 from openpi_cot.datasets.utils.data_utils import euler_diff
+from openpi_cot.datasets.utils.data_utils import euler_to_rot6d
 from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
 from openpi_cot.datasets.utils.dataset_utils import gather_with_last_value_padding
 from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
@@ -50,12 +51,14 @@ class SingleCoTDataset:
         enable_prediction_training: bool = False,
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
+        state_dim: int = 10,
     ):
         self.config = config
         self.seed = seed
         self.want_val = split == "val"
         self.dataset_name = dataset_name
         self.action_dim = action_dim
+        self.state_dim = state_dim
         self.vis_dataset = bool(config.vis_dataset)
         self.action_proprio_normalization_type = action_proprio_normalization_type
         self.use_wrist_image = bool(config.use_wrist_image)
@@ -310,6 +313,19 @@ class SingleCoTDataset:
         - subsample_length
         """
 
+        def state_euler_to_rot6d(traj):
+            traj["observation"][state_key] = tf.concat(
+                [
+                    traj["observation"][state_key][:, :3],
+                    euler_to_rot6d(traj["observation"][state_key][:, 3:6]),
+                    traj["observation"][state_key][:, 6:],
+                ],
+                axis=-1,
+            )
+            return traj
+
+        self.dataset = self.dataset.traj_map(state_euler_to_rot6d, self.num_parallel_calls)
+
         def pad_action_state(traj):
             # Pad actions to action_dim (only if not already padded)
             action_last_dim = tf.shape(traj[action_key])[-1]
@@ -323,23 +339,23 @@ class SingleCoTDataset:
 
             # Pad state to action_dim (only if not already padded)
             state_last_dim = tf.shape(traj["observation"][state_key])[-1]
-            pad_amount_state = tf.maximum(0, self.action_dim - state_last_dim)
+            pad_amount_state = tf.maximum(0, self.state_dim - state_last_dim)
             traj["observation"][state_key] = tf.pad(
                 traj["observation"][state_key],
                 [[0, 0], [0, pad_amount_state]],
             )
             # Ensure static shape is preserved
-            traj["observation"][state_key].set_shape([None, self.action_dim])
+            traj["observation"][state_key].set_shape([None, self.state_dim])
 
             # Pad raw_state to action_dim to match the final state dimension
             raw_state_last_dim = tf.shape(traj["raw_state"])[-1]
-            pad_amount_raw_state = tf.maximum(0, self.action_dim - raw_state_last_dim)
+            pad_amount_raw_state = tf.maximum(0, self.state_dim - raw_state_last_dim)
             traj["raw_state"] = tf.pad(
                 traj["raw_state"],
                 [[0, 0], [0, pad_amount_raw_state]],
             )
             # Ensure static shape is preserved
-            traj["raw_state"].set_shape([None, self.action_dim])
+            traj["raw_state"].set_shape([None, self.state_dim])
             return traj
 
         self.dataset = self.dataset.traj_map(pad_action_state, self.num_parallel_calls)
