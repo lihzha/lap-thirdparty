@@ -269,7 +269,7 @@ class SingleCoTDataset:
 
             # Use unified gather function with proper zero-padding
             traj[action_key] = gather_with_padding(
-                data=tf.concat([traj["observation"]["state"][:, :6], traj[action_key][:, 6:7]], axis=-1),
+                data=traj["action"],
                 sequence_length=traj_len,
                 window_size=action_horizon + 1,
             )
