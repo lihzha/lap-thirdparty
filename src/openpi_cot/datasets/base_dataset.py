@@ -297,7 +297,6 @@ class SingleCoTDataset:
     def apply_traj_transforms(
         self,
         action_horizon,
-        summation_steps: int = 30,
         action_key: str = "actions",
         state_key: str = "state",
     ):
@@ -394,14 +393,14 @@ class SingleCoTDataset:
             """Add prediction frame pairs and corresponding language actions.
 
             Derives prediction language actions from language_action (same as language_actions),
-            padded to summation_steps for consistency.
+            padded to max_horizon for consistency.
             """
             if not self.enable_prediction_training:
                 return traj
             traj_len = tf.shape(traj[action_key])[0]
 
             # Prediction mode: sample future frame deltas uniformly from [1, max_prediction_horizon]
-            max_horizon = getattr(self.config, "max_prediction_horizon", summation_steps)
+            max_horizon = self.config.max_prediction_horizon
             max_horizon_clamped = tf.minimum(max_horizon, traj_len - 1)
             max_horizon_clamped = tf.maximum(max_horizon_clamped, 1)  # Ensure at least 1
 
@@ -445,18 +444,17 @@ class SingleCoTDataset:
             # Numeric case: Use 2D gather with variable-length windows (more efficient than tf.map_fn)
             # Use realized_deltas (not original deltas) to ensure we only gather valid actions
             # that correspond to the actual visual gap between current and future images
-            deltas_clamped = tf.minimum(deltas, summation_steps)
 
             # Use unified gather function with per-timestep windows
             # This handles variable deltas efficiently in a batched 2D operation
             actions_window = gather_with_padding(
                 data=traj["language_action"],
                 sequence_length=traj_len,
-                window_size=summation_steps,  # Maximum window size
-                per_timestep_windows=deltas_clamped,  # Variable window per timestep
-            )  # [T, summation_steps, A]
+                window_size=max_horizon,  # Maximum window size
+                per_timestep_windows=deltas,  # Variable window per timestep
+            )  # [T, max_horizon, A]
 
-            prediction_lang_actions = sum_actions(actions_window, deltas_clamped)  # [T, action_dim]
+            prediction_lang_actions = sum_actions(actions_window, deltas)  # [T, action_dim]
             prediction_lang_actions.set_shape([None, traj["language_action"].shape[-1]])
 
             traj["prediction_language_actions"] = prediction_lang_actions

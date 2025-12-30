@@ -226,7 +226,6 @@ class DroidCoTDataset(SingleCoTDataset):
     def apply_traj_transforms(
         self,
         action_horizon: int,
-        summation_steps: int = 30,
         action_key: str = "actions",
         state_key: str = "state",
     ):
@@ -234,7 +233,6 @@ class DroidCoTDataset(SingleCoTDataset):
         # Call parent's implementation which handles padding and other transforms
         super().apply_traj_transforms(
             action_horizon=action_horizon,
-            summation_steps=summation_steps,
             action_key=action_key,
             state_key=state_key,
         )

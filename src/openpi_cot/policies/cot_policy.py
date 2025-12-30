@@ -245,7 +245,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         inputs["is_vqa_sample"] = is_vqa_sample
 
         inputs["time_horizon_seconds"] = data.get("time_horizon_seconds")
-        breakpoint()
 
         # Special handling for VQA datasets
         if is_vqa_sample:
