@@ -548,7 +548,7 @@ class OXECoTDatasets:
             logging.info("=" * 80)
             logging.info(f"Global State Statistics per Dimension (type: {state_type}):")
             logging.info("-" * 80)
-            for dim_idx in range(action_dim):
+            for dim_idx in range(self.state_dim):
                 logging.info(
                     f"State dim {dim_idx:2d}: "
                     f"min={state_global_min[dim_idx]:9.4f}, "

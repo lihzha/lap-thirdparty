@@ -327,6 +327,16 @@ class LiberoCoTDataset(SingleOXECoTDataset):
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
 
-    # Note: Inheriting get_traj_identifier from parent class (SingleOXECoTDataset)
-    # which uses action-based hashing for robust trajectory identification.
-    # This avoids issues with missing or malformed trajectory metadata.
+    def chunk_actions(self, traj, action_horizon, action_key="actions"):
+        from openpi_cot.datasets.utils.dataset_utils import gather_with_padding
+
+        traj_len = tf.shape(traj[action_key])[0]
+
+        # Use unified gather function with proper zero-padding
+        traj[action_key] = gather_with_padding(
+            data=traj[action_key],
+            sequence_length=traj_len,
+            window_size=action_horizon,
+        )
+        # Ensure static shape is preserved: [T, action_horizon, action_dim]
+        traj[action_key].set_shape([None, action_horizon, self.action_dim])

@@ -1724,27 +1724,28 @@ def libero_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     gripper_action = trajectory["action"][:, -1:]
     gripper_action = invert_gripper_actions(tf.clip_by_value(gripper_action, 0, 1))
 
-    # trajectory["action"] = tf.concat(
-    #     [
-    #         trajectory["action"][:, :6],
-    #         gripper_action,
-    #     ],
-    #     axis=1,
-    # )
-
-    state = trajectory["observation"]["state"]
-    euler_xyz = axis_angle_to_extrinsic_xyz_euler(state[:, 3:6])
-    trajectory["observation"]["state"] = tf.concat([state[:, :3], euler_xyz, state[:, -2:-1]], axis=1)
-
-    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
-    trajectory["language_action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
     trajectory["action"] = tf.concat(
         [
-            trajectory["action"][:, -1:],
+            trajectory["action"][:, :6],
             gripper_action,
         ],
         axis=1,
     )
+
+    state = trajectory["observation"]["state"]
+    euler_xyz = axis_angle_to_extrinsic_xyz_euler(state[:, 3:6])
+    gripper_state = tf.clip_by_value(state[:, -2:-1] / 0.04, 0, 1)
+    trajectory["observation"]["state"] = tf.concat([state[:, :3], euler_xyz, gripper_state], axis=1)
+
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["language_action"] = tf.concat([padded_movement_actions, gripper_action], axis=1)
+    # trajectory["action"] = tf.concat(
+    #     [
+    #         trajectory["action"][:, -1:],
+    #         gripper_action,
+    #     ],
+    #     axis=1,
+    # )
 
     return trajectory
 

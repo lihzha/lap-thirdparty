@@ -181,6 +181,7 @@ def save_state_video(trajectory, output_path="state.mp4", state_key="state", max
     max_abs = float(np.max([np.max(np.abs(s)) for s in states]))
     max_abs = max(max_abs, 1e-6)
     last_series = [float(np.asarray(s).flatten()[-2]) for s in states]
+    print("Last series:", last_series)
     last_max_abs = float(np.max(np.abs(last_series)))
     last_max_abs = max(last_max_abs, 1e-6)
 
