@@ -61,6 +61,7 @@ class OXECoTDatasets:
     ):
         self.hash_tables = hash_tables
         self.batch_size = batch_size
+        self.state_dim = state_dim
 
         # Set global seed for file-level operations (shuffle, interleave)
         # Data-level randomness uses stateless ops with explicit seeds
