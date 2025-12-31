@@ -925,6 +925,7 @@ class TrainConfig(upstream_config.TrainConfig):
     checkpoint_retry_delay_secs: float = 30.0
     checkpoint_retry_backoff: float = 2.0
     checkpoint_fallback_to_sync: bool = True
+    allow_partial_weights: bool = False
     # Evaluation fields
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = 50
@@ -1112,7 +1113,7 @@ _CONFIGS = [
             max_token_len=180,
             pi05=True,
             discrete_state_input=True,
-            enable_action_training=True,
+            enable_action_training=False,
             enable_langact_training=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",

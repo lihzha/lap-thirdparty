@@ -229,12 +229,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         return summed, frame_desc
 
     def __call__(self, data: dict) -> dict:
-        # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
-        # stores as float32 (C,H,W), gets skipped for policy inference
-        # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
-        # Extract initial state for EEF frame transformation
-        initial_state = np.asarray(data["raw_state"])
-
         inputs = self._prepare_inputs(data)
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)
         dataset_name = data.get("dataset_name")
@@ -271,6 +265,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data and self.enable_langact_training:
+            initial_state = np.asarray(data["raw_state"])
+
             inputs["language_actions"], inputs["frame_description"] = self._prepare_text(
                 data, "language_actions", initial_state, dataset_name=dataset_name
             )

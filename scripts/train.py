@@ -160,15 +160,50 @@ def init_tpu(config: _config.TrainConfig):
     return effective_fsdp_devices
 
 
-def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
+def _validate_loaded_params(
+    expected: at.Params, got: at.Params, *, allow_partial: bool
+) -> dict[tuple[str, ...], Any]:
+    flat_expected = traverse_util.flatten_dict(expected)
+    flat_got = {
+        k: v for k, v in traverse_util.flatten_dict(got).items() if not isinstance(v, jax.ShapeDtypeStruct)
+    }
+
+    unexpected = [k for k in flat_got if k not in flat_expected]
+    if unexpected:
+        sample = ", ".join("/".join(k) for k in unexpected[:8])
+        raise ValueError(f"Loaded params contain unexpected keys (sample): {sample}")
+
+    mismatches = []
+    for key, value in flat_got.items():
+        expected_value = flat_expected[key]
+        if hasattr(value, "shape") and hasattr(expected_value, "shape") and value.shape != expected_value.shape:
+            mismatches.append((key, f"shape {value.shape} != {expected_value.shape}"))
+        if hasattr(value, "dtype") and hasattr(expected_value, "dtype") and value.dtype != expected_value.dtype:
+            mismatches.append((key, f"dtype {value.dtype} != {expected_value.dtype}"))
+
+    if mismatches:
+        sample = ", ".join("/".join(k) + f" ({reason})" for k, reason in mismatches[:8])
+        raise ValueError(f"Loaded params do not match expected shapes/dtypes (sample): {sample}")
+
+    missing = set(flat_expected) - set(flat_got)
+    if missing:
+        if not allow_partial:
+            sample = ", ".join("/".join(k) for k in list(missing)[:8])
+            raise ValueError(f"Loaded params missing required keys (sample): {sample}")
+        logging.info("Weight loader missing %d params; using random init for them.", len(missing))
+
+    return flat_got
+
+
+def _load_weights_and_validate(
+    loader: _weight_loaders.WeightLoader, params_shape: at.Params, *, allow_partial: bool
+) -> at.Params:
     """Loads and validates the weights. Returns a loaded subset of the weights."""
     loaded_params = loader.load(params_shape)
-    at.check_pytree_equality(expected=params_shape, got=loaded_params, check_shapes=True, check_dtypes=True)
+    flat_loaded = _validate_loaded_params(params_shape, loaded_params, allow_partial=allow_partial)
 
     # Remove jax.ShapeDtypeStruct from the loaded params. This makes sure that only the loaded params are returned.
-    return traverse_util.unflatten_dict(
-        {k: v for k, v in traverse_util.flatten_dict(loaded_params).items() if not isinstance(v, jax.ShapeDtypeStruct)}
-    )
+    return traverse_util.unflatten_dict(flat_loaded)
 
 
 @at.typecheck
@@ -217,7 +252,11 @@ def init_train_state(
     if resume:
         return train_state_shape, state_sharding
 
-    partial_params = _load_weights_and_validate(config.weight_loader, train_state_shape.params.to_pure_dict())
+    partial_params = _load_weights_and_validate(
+        config.weight_loader,
+        train_state_shape.params.to_pure_dict(),
+        allow_partial=config.allow_partial_weights,
+    )
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
 
     # Initialize the train state and mix in the partial params.

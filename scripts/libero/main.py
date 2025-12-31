@@ -305,11 +305,10 @@ def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_descriptio
     # Prepare observations dict
     if policy_type == PolicyType.COT:
         eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-        eef_euler = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
+        eef_rot6d = _quat2rot6d(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
         gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-        # gripper_state = np.array([float(np.mean(gripper_qpos))], dtype=np.float32)
-        gripper_state = gripper_qpos[-1:]
-        state = np.concatenate((eef_pos, eef_euler, gripper_state)).astype(np.float32, copy=False)
+        gripper_state = np.clip(gripper_qpos[-2:-1] / 0.04, 0, 1)  # normalize to [0, 1]
+        state = np.concatenate((eef_pos, eef_rot6d, gripper_state)).astype(np.float32, copy=False)
         element = {
             "observation": {
                 "base_0_rgb": img,
@@ -481,7 +480,8 @@ def _quat2rot6d(quat):
     if q.shape != (4,):
         raise ValueError("quat must be shape (4,), ordered as [x, y, z, w]")
     rot_matrix = R.from_quat(q).as_matrix()
-    rot6d = rot_matrix[:, :2].flatten()
+    # rot6d = rot_matrix[:, :2].flatten()
+    rot6d = np.concatenate([rot_matrix[:, 0], rot_matrix[:, 1]], axis=0)
     return rot6d
 
 
