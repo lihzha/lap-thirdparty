@@ -318,6 +318,14 @@ class SingleCoTDataset:
                 ],
                 axis=-1,
             )
+            traj["raw_state"] = tf.concat(
+                [
+                    traj["raw_state"][:, :3],
+                    euler_to_rot6d(traj["raw_state"][:, 3:6]),
+                    traj["raw_state"][:, 6:],
+                ],
+                axis=-1,
+            )
             return traj
 
         self.dataset = self.dataset.traj_map(state_euler_to_rot6d, self.num_parallel_calls)
