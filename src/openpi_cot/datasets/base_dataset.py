@@ -613,28 +613,28 @@ class SingleCoTDataset:
             if "prompt" in sample:
                 prediction_prompt = self.prediction_prompt_template
 
-                if pred_horizon_seconds is not None:
-                    # Use shortest round-trip formatting to support any decimal precision.
-                    time_str = tf.strings.as_string(pred_horizon_seconds, shortest=True)
+                # if pred_horizon_seconds is not None:
+                #     # Use shortest round-trip formatting to support any decimal precision.
+                #     time_str = tf.strings.as_string(pred_horizon_seconds, shortest=True)
 
-                    has_placeholder = tf.strings.regex_full_match(prediction_prompt, r".*\{time_seconds\}.*")
-                    has_inline_time = tf.strings.regex_full_match(
-                        prediction_prompt, r".*next\s+\d+(\.\d+)?\s+seconds?.*"
-                    )
+                #     has_placeholder = tf.strings.regex_full_match(prediction_prompt, r".*\{time_seconds\}.*")
+                #     has_inline_time = tf.strings.regex_full_match(
+                #         prediction_prompt, r".*next\s+\d+(\.\d+)?\s+seconds?.*"
+                #     )
 
-                    prediction_prompt = tf.cond(
-                        has_placeholder,
-                        lambda: tf.strings.regex_replace(prediction_prompt, r"\{time_seconds\}", time_str),
-                        lambda: tf.cond(
-                            has_inline_time,
-                            lambda: tf.strings.regex_replace(
-                                prediction_prompt,
-                                r"next\s+\d+(\.\d+)?\s+seconds?",
-                                tf.strings.join(["next ", time_str, " seconds"]),
-                            ),
-                            lambda: tf.strings.join([prediction_prompt, " in the next ", time_str, " seconds"]),
-                        ),
-                    )
+                #     prediction_prompt = tf.cond(
+                #         has_placeholder,
+                #         lambda: tf.strings.regex_replace(prediction_prompt, r"\{time_seconds\}", time_str),
+                #         lambda: tf.cond(
+                #             has_inline_time,
+                #             lambda: tf.strings.regex_replace(
+                #                 prediction_prompt,
+                #                 r"next\s+\d+(\.\d+)?\s+seconds?",
+                #                 tf.strings.join(["next ", time_str, " seconds"]),
+                #             ),
+                #             lambda: tf.strings.join([prediction_prompt, " in the next ", time_str, " seconds"]),
+                #         ),
+                #     )
 
                 sample["prompt"] = tf.cond(
                     is_pred_sample,
