@@ -127,7 +127,6 @@ def initialize_checkpoint_dir(
     return mngr, resuming
 
 
-
 def _extract_directory(checkpoint_manager: ocp.CheckpointManager) -> str:
     directory_attr = getattr(checkpoint_manager, "directory", None)
     if directory_attr is None:
@@ -438,7 +437,7 @@ def restore_params(
     with at.disable_typechecking():
         # Split params that can be used for inference into a separate item.
         _, params = _split_params(state)
-     
+
         _, params_sharding = _split_params(train_state_sharding)
         restore_args = ocp.args.Composite(
             params=ocp.args.PyTreeRestore(
@@ -453,11 +452,12 @@ def restore_params(
 
     return restored["params"]
 
+
 def load_norm_stats(
     assets_dir: epath.Path | str, asset_id: str
 ) -> dict[str, _normalize_adapter.ExtendedNormStats] | None:
     assets_dir = epath.Path(assets_dir)
-    for asset_id in ["droid", "combined"]:
+    for asset_id in ["droid", "combined", "libero"]:
         norm_stats_dir = assets_dir / asset_id
         if norm_stats_dir.exists():
             norm_stats = _normalize_adapter.load(str(norm_stats_dir))

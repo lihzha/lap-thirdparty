@@ -92,7 +92,7 @@ def rot6d_to_rotmat(rot6d: np.ndarray) -> np.ndarray:
     return R
 
 
-def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarray) -> np.ndarray:
+def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarray, dataset_name) -> np.ndarray:
     """Transform actions from base frame to end effector frame.
 
     Args:
@@ -139,6 +139,7 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     except Exception as e:
         import logging
 
+        logging.info(f"Dataset: {dataset_name}")
         logging.info(f"R_base_to_eef: {R_base_to_eef}")
         logging.info(f"initial_state: {initial_state}")
         logging.info(f"initial_rotation: {initial_rotation}")

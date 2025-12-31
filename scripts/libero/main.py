@@ -19,7 +19,6 @@ from PIL import ImageDraw
 from PIL import ImageFont
 from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import Slerp
-import tensorflow as tf
 import tqdm
 import tyro
 
@@ -33,6 +32,7 @@ class PolicyType(str, enum.Enum):
     PI05 = "PI05"
     COT = "COT"
     FT = "FT"
+    PI05_LIBERO = "PI05_LIBERO"
 
 
 @dataclasses.dataclass
@@ -180,7 +180,7 @@ def eval_libero(args: Args) -> None:
                     wrist_replay_images.append(wrist_img)
 
                     action = action_plan.popleft()
-                    action = np.concatenate([action[:3], _euler2axisangle(action[3:6]), action[6:]])
+                    # action = np.concatenate([action[:3], _euler2axisangle(action[3:6]), action[6:]])
 
                     # Execute action in environment
                     obs, _, done, _ = env.step(action.tolist())
@@ -285,18 +285,18 @@ def _get_libero_env(task, resolution, seed, controller="OSC_POSE"):
 
 def get_images_from_obs(obs, resize_size):
     # IMPORTANT: rotate 180 degrees to match train preprocessing
-    img = np.ascontiguousarray(obs["agentview_image"][::-1])
+    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
     img = image_tools.convert_to_uint8(image_tools.resize_with_pad(img, resize_size, resize_size))
     wrist_img = image_tools.convert_to_uint8(image_tools.resize_with_pad(wrist_img, resize_size, resize_size))
-    right_tensor = tf.convert_to_tensor(img)
-    if right_tensor.dtype != tf.uint8:
-        right_tensor = tf.image.convert_image_dtype(right_tensor, tf.uint8, saturate=True)
-    img = tf.io.decode_jpeg(tf.io.encode_jpeg(right_tensor, quality=95), channels=3).numpy()
-    wrist_tensor = tf.convert_to_tensor(wrist_img)
-    if wrist_tensor.dtype != tf.uint8:
-        wrist_tensor = tf.image.convert_image_dtype(wrist_tensor, tf.uint8, saturate=True)
-    wrist_img = tf.io.decode_jpeg(tf.io.encode_jpeg(wrist_tensor, quality=95), channels=3).numpy()
+    # right_tensor = tf.convert_to_tensor(img)
+    # if right_tensor.dtype != tf.uint8:
+    #     right_tensor = tf.image.convert_image_dtype(right_tensor, tf.uint8, saturate=True)
+    # img = tf.io.decode_jpeg(tf.io.encode_jpeg(right_tensor, quality=95), channels=3).numpy()
+    # wrist_tensor = tf.convert_to_tensor(wrist_img)
+    # if wrist_tensor.dtype != tf.uint8:
+    #     wrist_tensor = tf.image.convert_image_dtype(wrist_tensor, tf.uint8, saturate=True)
+    # wrist_img = tf.io.decode_jpeg(tf.io.encode_jpeg(wrist_tensor, quality=95), channels=3).numpy()
 
     return img, wrist_img
 
@@ -321,17 +321,16 @@ def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_descriptio
 
     elif policy_type == PolicyType.FT:
         eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
-        eef_axisangle = _quat2euler(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
+        eef_rot6d = _quat2rot6d(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
         gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
-        gripper_state = gripper_qpos[-1:]
-        state = np.concatenate((eef_pos, eef_axisangle, gripper_state)).astype(np.float32, copy=False)
+        gripper_state = np.clip(gripper_qpos[-2:-1] / 0.04, 0, 1)  # normalize to [0, 1]
+        state = np.concatenate((eef_pos, eef_rot6d, gripper_state)).astype(np.float32, copy=False)
         element = {
             "observation/image": img,
             "observation/wrist_image": wrist_img,
             "observation/state": state,
             "prompt": str(task_description),
         }
-        breakpoint()
 
     elif policy_type == PolicyType.PI05:
         # PI05 expects DROID-style observation keys
@@ -354,6 +353,17 @@ def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_descriptio
             "observation/wrist_image_left": wrist_img,
             "observation/joint_position": joint_pos,
             "observation/gripper_position": np.array([gripper_pos], dtype=np.float32),
+            "prompt": str(task_description),
+        }
+    elif policy_type == PolicyType.PI05_LIBERO:
+        eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
+        eef_axisangle = _quat2axisangle(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
+        gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)
+        state = np.concatenate((eef_pos, eef_axisangle, gripper_qpos)).astype(np.float32, copy=False)
+        element = {
+            "observation/image": img,
+            "observation/wrist_image": wrist_img,
+            "observation/state": state,
             "prompt": str(task_description),
         }
     else:
@@ -463,6 +473,16 @@ def _quat2euler(quat):
     if q.shape != (4,):
         raise ValueError("quat must be shape (4,), ordered as [x, y, z, w]")
     return R.from_quat(q).as_euler("xyz", degrees=False)
+
+
+def _quat2rot6d(quat):
+    "Convert quaternion to 6D rotation representation."
+    q = np.asarray(quat, dtype=np.float64)
+    if q.shape != (4,):
+        raise ValueError("quat must be shape (4,), ordered as [x, y, z, w]")
+    rot_matrix = R.from_quat(q).as_matrix()
+    rot6d = rot_matrix[:, :2].flatten()
+    return rot6d
 
 
 def _draw_text_on_image(img: np.ndarray, text: str, font_size: int = 12) -> np.ndarray:

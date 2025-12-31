@@ -187,7 +187,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         return inputs
 
     def _prepare_text(
-        self, data: dict, lang_action_key: str, initial_state: np.ndarray = None
+        self, data: dict, lang_action_key: str, initial_state: np.ndarray = None, dataset_name=None
     ) -> tuple[dict, float | None]:
         la = data[lang_action_key]
         is_bimanual: bool = data.get("is_bimanual", False)
@@ -201,7 +201,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Transform to EEF frame if requested
         if cond:
-            la = transform_actions_to_eef_frame(la, initial_state)
+            la = transform_actions_to_eef_frame(la, initial_state, dataset_name)
             frame_desc = "end-effector frame"
         if is_bimanual:
             summed = summarize_bimanual_numeric_actions(
@@ -272,7 +272,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # Always prepare regular language actions for reasoning loss.
         if "language_actions" in data and self.enable_langact_training:
             inputs["language_actions"], inputs["frame_description"] = self._prepare_text(
-                data, "language_actions", initial_state
+                data, "language_actions", initial_state, dataset_name=dataset_name
             )
             if self.use_rough_scale:
                 inputs["language_actions"] = describe_language_action_scale(inputs["language_actions"])
