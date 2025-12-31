@@ -289,7 +289,7 @@ class SingleCoTDataset:
         )
 
         # Ensure static shape is preserved: [T, action_horizon, action_dim]
-        traj[action_key].set_shape([None, action_horizon, self.action_dim])
+        # traj[action_key].set_shape([None, action_horizon, self.action_dim])
 
         return traj
 
