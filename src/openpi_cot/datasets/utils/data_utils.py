@@ -388,7 +388,7 @@ def euler_to_rot6d(euler_angles: tf.Tensor) -> tf.Tensor:
     R = _R_from_euler_xyz(euler_angles)
     # Use dynamic shape to avoid None dimensions inside tf.function.
     leading_shape = tf.shape(R)[:-2]
-    rot6d = tf.reshape(R[..., :2, :], tf.concat([leading_shape, [6]], axis=0))
+    rot6d = tf.reshape(R[..., :2], tf.concat([leading_shape, [6]], axis=0))
     return rot6d
 
 

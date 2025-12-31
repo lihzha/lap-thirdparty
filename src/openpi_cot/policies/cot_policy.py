@@ -240,10 +240,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         dataset_name = data.get("dataset_name")
         if isinstance(dataset_name, bytes):
             dataset_name = dataset_name.decode("utf-8")
-        import logging
-
-        logging.info(f"Dataset name: {dataset_name}")
-        logging.info(f"Initial state: {initial_state}")
 
         is_vqa_sample = data.get("is_vqa_sample")
         inputs["is_vqa_sample"] = is_vqa_sample

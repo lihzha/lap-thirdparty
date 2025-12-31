@@ -88,7 +88,7 @@ def rot6d_to_rotmat(rot6d: np.ndarray) -> np.ndarray:
     b3 = np.cross(b1, b2, axis=-1)
 
     # Stack as rotation matrix
-    R = np.stack([b1, b2, b3], axis=-2)
+    R = np.stack([b1, b2, b3], axis=-1)
     return R
 
 
