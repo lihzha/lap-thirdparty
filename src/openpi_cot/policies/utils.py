@@ -139,6 +139,9 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     except Exception as e:
         import logging
 
+        logging.info(f"R_base_to_eef: {R_base_to_eef}")
+        logging.info(f"initial_state: {initial_state}")
+        logging.info(f"initial_rotation: {initial_rotation}")
         logging.info(f"Action: {actions}")
         logging.info(f"R_delta_base: {R_delta_base}")
         logging.info(f"R_delta_eef: {R_delta_eef}")
