@@ -106,7 +106,7 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "trajectory_id": traj["trajectory_id"],
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
-                "raw_state": new_obs["state"],
+                "raw_state": tf.identity(new_obs["state"]),
                 "is_navigation": tf.fill([traj_len], tf.constant(False)),
                 "has_wrist_image": tf.fill([traj_len], tf.constant(self.has_wrist_image)),
             }
@@ -259,7 +259,7 @@ class NavigationCoTDataset(SingleOXECoTDataset):
                 "language_action": tf.cast(traj["language_action"], tf.float32),
                 "is_bimanual": tf.fill([traj_len], tf.constant(self.is_bimanual)),
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
-                "raw_state": new_obs["state"],
+                "raw_state": tf.identity(new_obs["state"]),
                 "is_navigation": tf.fill([traj_len], tf.constant(True)),
                 "has_wrist_image": tf.fill([traj_len], tf.constant(False)),
             }
@@ -320,7 +320,7 @@ class LiberoCoTDataset(SingleOXECoTDataset):
                 "language_action": traj["language_action"],
                 "is_bimanual": tf.fill([traj_len], tf.constant(False)),  # LIBERO is single-arm
                 "state_type": tf.fill([traj_len], tf.constant(state_type_str)),
-                "raw_state": new_obs["state"],
+                "raw_state": tf.identity(new_obs["state"]),
                 "is_navigation": tf.fill([traj_len], tf.constant(False)),
                 "has_wrist_image": tf.fill([traj_len], tf.constant(True)),
             }
