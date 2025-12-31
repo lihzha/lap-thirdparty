@@ -340,3 +340,4 @@ class LiberoCoTDataset(SingleOXECoTDataset):
         )
         # Ensure static shape is preserved: [T, action_horizon, action_dim]
         traj[action_key].set_shape([None, action_horizon, 7])
+        return traj
