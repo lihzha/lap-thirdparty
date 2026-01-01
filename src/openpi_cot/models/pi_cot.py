@@ -387,7 +387,6 @@ class PiCoT(_pi0.Pi0):
             positions=combined_positions,
             mask=combined_mask,
             adarms_cond=[None, suffix_inputs["adarms_cond"]] if self.enable_action_training else [None],
-            deterministic=self.deterministic,
         )
 
         metrics = {}
@@ -517,7 +516,6 @@ class PiCoT(_pi0.Pi0):
             mask=prefix_attn_mask,
             positions=positions,
             adarms_cond=[None, None],
-            deterministic=self.deterministic,
         )
 
         def step(carry):
@@ -548,7 +546,6 @@ class PiCoT(_pi0.Pi0):
                 positions=positions,
                 kv_cache=kv_cache,
                 adarms_cond=[None, adarms_cond],
-                deterministic=self.deterministic,
             )
             suffix_out = gemma_out[1]
             assert gemma_out[0] is None
@@ -588,7 +585,6 @@ class PiCoT(_pi0.Pi0):
         prefill_size = prefix_token_embeddings.shape[1]
         prefill_len = jnp.sum(prefix_mask, axis=-1)
         prefix_start = prefill_size - prefill_len
-        cache_size = prefill_size + max_decoding_steps
 
         # First fill KV cache with the prefix; pad attention to the full cache size for flexible expert-0 decoding.
         prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
@@ -598,7 +594,6 @@ class PiCoT(_pi0.Pi0):
             mask=prefix_attn_mask,
             positions=prefix_positions,
             adarms_cond=[None, None] if self.enable_action_training else [None],
-            deterministic=self.deterministic,
         )
 
         # prepare decoding -- final logit decodes the first token
@@ -628,8 +623,9 @@ class PiCoT(_pi0.Pi0):
             token_embedding = self.PaliGemma.llm(token, method="embed")
             positions = prefill_len[:, None] + step + 1
             mask = jnp.logical_and(
-                jnp.arange(cache_size)[None, None, :] >= prefix_start[:, None, None],
-                jnp.arange(cache_size)[None, None, :] < (prefill_size + step + 1),
+                jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
+                jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
+                < (jnp.broadcast_to(prefill_size + step + 1, (prefix_start.shape[0], 1, 1))),
             )
             last_prelogit, kv_cache = self.PaliGemma.llm(
                 [token_embedding, None] if self.enable_action_training else [token_embedding],
@@ -637,7 +633,6 @@ class PiCoT(_pi0.Pi0):
                 positions=positions,
                 kv_cache=cache,
                 adarms_cond=[None, None] if self.enable_action_training else [None],
-                deterministic=self.deterministic,
             )
             last_logit = self.PaliGemma.llm(last_prelogit[0], method="decode")
 
