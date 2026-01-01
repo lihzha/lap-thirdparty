@@ -186,13 +186,13 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     # Try to detect if state contains quaternions (length 7+) or euler angles (length 6+)
 
     # Assume euler angle format: [x, y, z, roll, pitch, yaw, ...]
-    euler = initial_state[3:6]
-    initial_rotation = R.from_euler("xyz", euler)
-    # rot6d = initial_state[3:9]
-    # initial_rotation = rot6d_to_rotmat(rot6d)
+    # euler = initial_state[3:6]
+    # initial_rotation = R.from_euler("xyz", euler)
+    rot6d = initial_state[3:9]
+    initial_rotation = rot6d_to_rotmat(rot6d)
 
     # Get rotation matrix: EEF -> base (inverse of base -> EEF)
-    R_eef_to_base = initial_rotation.as_matrix()
+    R_eef_to_base = initial_rotation
 
     # Transform translation deltas from EEF frame to base frame
     for i in range(len(transformed_actions)):
@@ -207,8 +207,8 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
         if actions.shape[-1] >= 6:
             delta_rot_eef = actions[i, 3:6].copy()  # [roll, pitch, yaw] in radians
             # Apply inverse transformation: y -> -y, z -> -z
-            delta_rot_eef[1] = delta_rot_eef[1]
-            delta_rot_eef[2] = delta_rot_eef[2]
+            delta_rot_eef[1] = -delta_rot_eef[1]
+            delta_rot_eef[2] = -delta_rot_eef[2]
             # Convert euler angles to rotation matrix
             R_delta_eef = R.from_euler("xyz", delta_rot_eef).as_matrix()
             # Transform to base frame: R_delta_base = R_eef_to_base @ R_delta_eef @ R_eef_to_base.T

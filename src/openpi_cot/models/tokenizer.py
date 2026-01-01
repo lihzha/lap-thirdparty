@@ -122,6 +122,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             state_dropout=state_dropout,
         )
 
+        print("Formatted Prompt:", formatted_prompt)
+
         # Tokenize
         pad_id = self._tokenizer.pad_id()
 
@@ -217,120 +219,198 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         self._fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
 
     def tokenize_fast_cot(
-        self,
-        prompt: str,
-        state: np.ndarray,
-        actions: np.ndarray | None = None,
-        state_type: str | None = None,
-        *,
-        is_vqa_sample: bool = False,
-        is_prediction_sample: bool = False,
-        time_horizon_seconds: float | None = None,
-        state_dropout: float = 0.0,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Tokenize prompt, language actions (if any), state, and actions for FAST model.
+        self, prompt: str, state: np.ndarray, actions: np.ndarray | None
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        cleaned_text = prompt.lower().strip().replace("_", " ")
 
-        This method combines CoT-style reasoning with FAST-style action token prediction:
-        - First tokenizes prompt + language actions (optional)
-        - Then appends state and action representations as tokens
-        - Creates appropriate masks for training
+        # Convention: state gets discretized into 256 discrete bins (assumed range after normalization: [-1, 1])
+        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
 
-        Args:
-            prompt: Task description
-            state: Current state vector
-            actions: Action sequence (optional, None during inference)
-            language_actions: Language description of actions (optional)
-            state_type: Type of state representation
-            is_vqa_sample: Whether this is a VQA sample
-            is_prediction_sample: Whether this is a prediction sample
-
-        Returns:
-            (tokens, token_mask, ar_mask, loss_mask)
-            - tokens: Token IDs including prompt, language actions, state, and actions
-            - token_mask: Mask for valid (non-padding) tokens
-            - ar_mask: Autoregressive mask (0=prefix attention, 1=causal)
-            - loss_mask: Mask for tokens that contribute to loss
-        """
-        # Resolve prompt format
-        if is_prediction_sample:
-            fmt = self._prediction_format
-        elif is_vqa_sample:
-            fmt = self._vqa_format
-        else:
-            fmt = self._prompt_format
-
-        # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
-        formatted_prompt = fmt.format_prompt(
-            prompt,
-            state,
-            state_type,
-            time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
-            state_dropout=state_dropout,
-        )
-
-        # Tokenize prompt
-        pad_id = self._tokenizer.pad_id()
-
-        prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+        # Convention: prefix includes prompt and string-representation of state, followed by ';'
+        state_str = " ".join(map(str, discretized_state))
+        prefix = f"Task: {cleaned_text}, State: {state_str};\n"
+        prefix_tokens = self._tokenizer.encode(prefix, add_bos=True)
 
         if actions is not None:
+            # Tokenize actions with FAST tokenizer --> map to last tokens in PaliGemma vocab
             action_tokens = self._fast_tokenizer(actions[None])[0]
             action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
-            postfix_tokens = action_tokens_in_pg.tolist() + self._tokenizer.encode("|", add_eos=True)
+
+            # Convention: postfix contains 'Action:' followed by FAST tokens, followed by '|'
+            postfix_tokens = (
+                self._tokenizer.encode("Action: ")
+                + action_tokens_in_pg.tolist()
+                + self._tokenizer.encode("|", add_eos=True)
+            )
         else:
             postfix_tokens = []
 
+        # Create output token sequence & masks
+        # AR mask is 0 on prefix (bidirectional attention) and 1 on postfix (causal attention to all previous tokens)
         tokens = prefix_tokens + postfix_tokens
         token_mask = [True] * len(tokens)
-        ar_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
-        loss_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
+        ar_mask = [0] * len(prefix_tokens) + [1] * len(postfix_tokens)
+        loss_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)  # Loss on postfix only
 
-        if len(tokens) > self._max_len:
-            logging.warning(
-                f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
-                "Consider increasing the `max_token_len` in your model config."
-            )
+        # Pad tokens to max length
+        tokens_len = len(tokens)
+        if tokens_len < self._max_len:
+            padding = [False] * (self._max_len - tokens_len)
+            tokens = tokens + padding
+            token_mask = token_mask + padding
+            ar_mask = ar_mask + padding
+            loss_mask = loss_mask + padding
+        else:
+            if len(tokens) > self._max_len:
+                logging.warning(
+                    f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+                    "Consider increasing the `max_token_len` in your model config if this happens frequently."
+                )
             tokens = tokens[: self._max_len]
             token_mask = token_mask[: self._max_len]
             ar_mask = ar_mask[: self._max_len]
             loss_mask = loss_mask[: self._max_len]
 
-        # Right pad to max length
-        pad_count = self._max_len - len(tokens)
-        if pad_count > 0:
-            tokens = tokens + [pad_id] * pad_count
-            token_mask = token_mask + [False] * pad_count
-            ar_mask = ar_mask + [False] * pad_count
-            loss_mask = loss_mask + [False] * pad_count
+        return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask, dtype=np.bool_), np.asarray(loss_mask)
 
-        return (
-            np.asarray(tokens),
-            np.asarray(token_mask),
-            np.asarray(ar_mask),
-            np.asarray(loss_mask),
-        )
+    def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
+        # Decode predicted output tokens
+        decoded_tokens = self._tokenizer.decode(tokens.tolist())
+        decoded_tokens = decoded_tokens[0]
+
+        # Extract actions from FAST model outputs
+        if "Action: " not in decoded_tokens:
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+
+        # Extract actions from decoded tokens
+        raw_action_tokens = np.array(self._tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip()))
+        action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
+        return self._fast_tokenizer.decode(
+            [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
+        )[0]
 
     def _act_tokens_to_paligemma_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
         if isinstance(tokens, list):
             tokens = np.array(tokens)
         return self._tokenizer.vocab_size() - 1 - self._fast_skip_tokens - tokens
 
-    def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
-        # Decode predicted output tokens
-        if tokens.ndim > 1:
-            tokens = tokens[0]
-        decoded_tokens = self._tokenizer.decode(tokens.tolist())
+    # def tokenize_fast_cot(
+    #     self,
+    #     prompt: str,
+    #     state: np.ndarray,
+    #     actions: np.ndarray | None = None,
+    #     state_type: str | None = None,
+    #     *,
+    #     is_vqa_sample: bool = False,
+    #     is_prediction_sample: bool = False,
+    #     time_horizon_seconds: float | None = None,
+    #     state_dropout: float = 0.0,
+    # ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    #     """Tokenize prompt, language actions (if any), state, and actions for FAST model.
 
-        # Extract actions from FAST model outputs
-        # if "Action: " not in decoded_tokens:
-        #     return np.zeros((action_horizon, action_dim), dtype=np.float32)
+    #     This method combines CoT-style reasoning with FAST-style action token prediction:
+    #     - First tokenizes prompt + language actions (optional)
+    #     - Then appends state and action representations as tokens
+    #     - Creates appropriate masks for training
 
-        # Extract actions from decoded tokens
-        # raw_action_tokens = np.array(
-        #     self._tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
-        # )
-        raw_action_tokens = np.array(self._tokenizer.encode(decoded_tokens.split("|")[0].strip()))
-        action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
-        return self._fast_tokenizer.decode(
-            [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
-        )[0]
+    #     Args:
+    #         prompt: Task description
+    #         state: Current state vector
+    #         actions: Action sequence (optional, None during inference)
+    #         language_actions: Language description of actions (optional)
+    #         state_type: Type of state representation
+    #         is_vqa_sample: Whether this is a VQA sample
+    #         is_prediction_sample: Whether this is a prediction sample
+
+    #     Returns:
+    #         (tokens, token_mask, ar_mask, loss_mask)
+    #         - tokens: Token IDs including prompt, language actions, state, and actions
+    #         - token_mask: Mask for valid (non-padding) tokens
+    #         - ar_mask: Autoregressive mask (0=prefix attention, 1=causal)
+    #         - loss_mask: Mask for tokens that contribute to loss
+    #     """
+    #     # Resolve prompt format
+    #     if is_prediction_sample:
+    #         fmt = self._prediction_format
+    #     elif is_vqa_sample:
+    #         fmt = self._vqa_format
+    #     else:
+    #         fmt = self._prompt_format
+
+    #     # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
+    #     formatted_prompt = fmt.format_prompt(
+    #         prompt,
+    #         state,
+    #         state_type,
+    #         time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
+    #         state_dropout=state_dropout,
+    #     )
+    #     print(formatted_prompt)
+
+    #     # Tokenize prompt
+    #     pad_id = self._tokenizer.pad_id()
+
+    #     prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
+
+    #     if actions is not None:
+    #         raise ValueError
+    #         action_tokens = self._fast_tokenizer(actions[None])[0]
+    #         action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
+    #         postfix_tokens = action_tokens_in_pg.tolist() + self._tokenizer.encode("|", add_eos=True)
+    #     postfix_tokens = []
+
+    #     tokens = prefix_tokens + postfix_tokens
+    #     token_mask = [True] * len(tokens)
+    #     ar_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
+    #     loss_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
+
+    #     if len(tokens) > self._max_len:
+    #         logging.warning(
+    #             f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+    #             "Consider increasing the `max_token_len` in your model config."
+    #         )
+    #         tokens = tokens[: self._max_len]
+    #         token_mask = token_mask[: self._max_len]
+    #         ar_mask = ar_mask[: self._max_len]
+    #         loss_mask = loss_mask[: self._max_len]
+
+    #     # Right pad to max length
+    #     pad_count = self._max_len - len(tokens)
+    #     if pad_count > 0:
+    #         tokens = tokens + [pad_id] * pad_count
+    #         token_mask = token_mask + [False] * pad_count
+    #         ar_mask = ar_mask + [False] * pad_count
+    #         loss_mask = loss_mask + [False] * pad_count
+
+    #     return (
+    #         np.asarray(tokens),
+    #         np.asarray(token_mask),
+    #         np.asarray(ar_mask),
+    #         np.asarray(loss_mask),
+    #     )
+
+    # def _act_tokens_to_paligemma_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
+    #     if isinstance(tokens, list):
+    #         tokens = np.array(tokens)
+    #     return self._tokenizer.vocab_size() - 1 - self._fast_skip_tokens - tokens
+
+    # def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
+    #     # Decode predicted output tokens
+    #     if tokens.ndim > 1:
+    #         tokens = tokens[0]
+    #     decoded_tokens = self._tokenizer.decode(tokens.tolist())
+
+    #     # Extract actions from FAST model outputs
+    #     # if "Action: " not in decoded_tokens:
+    #     #     return np.zeros((action_horizon, action_dim), dtype=np.float32)
+
+    #     # Extract actions from decoded tokens
+    #     # raw_action_tokens = np.array(
+    #     #     self._tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
+    #     # )
+    #     print(decoded_tokens)
+    #     raw_action_tokens = np.array(self._tokenizer.encode(decoded_tokens.split("|")[0].strip()))
+    #     action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
+    #     return self._fast_tokenizer.decode(
+    #         [action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
+    #     )[0]

@@ -141,10 +141,21 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if self.model_type == ExtendedModelType.PI_FAST:
             image_masks = [np.True_ for _ in image_masks]
 
+        names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+        # We don't mask out padding images for FAST models.
+        images = (base_image, np.zeros_like(base_image), wrist_image)
+        image_masks = (np.True_, np.True_, np.True_)
+
+        # inputs = {
+        #     "state": data["observation"]["state"],
+        #     "image": dict(zip(IMAGE_KEYS, images, strict=True)),
+        #     "image_mask": dict(zip(IMAGE_KEYS, image_masks, strict=True)),
+        # }
+
         inputs = {
             "state": data["observation"]["state"],
-            "image": dict(zip(IMAGE_KEYS, images, strict=True)),
-            "image_mask": dict(zip(IMAGE_KEYS, image_masks, strict=True)),
+            "image": dict(zip(names, images, strict=True)),
+            "image_mask": dict(zip(names, image_masks, strict=True)),
         }
 
         prompt = data.get("prompt")
@@ -229,6 +240,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         return summed, frame_desc
 
     def __call__(self, data: dict) -> dict:
+        # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
+        # stores as float32 (C,H,W), gets skipped for policy inference
+        # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
+        # Extract initial state for EEF frame transformation
+
         inputs = self._prepare_inputs(data)
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)
         dataset_name = data.get("dataset_name")
@@ -324,7 +340,7 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         # Get actions and reasoning from data
 
         if "reasoning" not in data:
-            return {"actions": np.asarray(data["actions"][:, :7]), "reasoning": None}
+            return {"actions": np.asarray(data["actions"][:, :8]), "reasoning": None}
         reasoning = data.get("reasoning")
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
@@ -333,8 +349,8 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
         # Extract initial state for EEF frame transformation
         initial_state = None
-        if self.language_action_format.use_eef_frame and "state" in data:
-            initial_state = np.asarray(data["state"])
+        if self.language_action_format.use_eef_frame and "raw_state" in data:
+            initial_state = np.asarray(data["raw_state"])
 
         # Parse reasoning to translation deltas, rotation deltas, and gripper actions
         movement, gripper_action = self.language_action_format.parse_language_to_deltas(

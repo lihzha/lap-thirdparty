@@ -491,11 +491,11 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             prompt=prompt,
             state=state,
             actions=actions,
-            state_type=state_type,
-            is_vqa_sample=is_vqa_sample,
-            is_prediction_sample=is_prediction_sample,
-            time_horizon_seconds=time_horizon_seconds,
-            state_dropout=self.state_dropout,
+            # state_type=state_type,
+            # is_vqa_sample=is_vqa_sample,
+            # is_prediction_sample=is_prediction_sample,
+            # time_horizon_seconds=time_horizon_seconds,
+            # state_dropout=self.state_dropout,
         )
 
         return {
@@ -518,6 +518,7 @@ class ExtractFASTActions(DataTransformFn):
             return data
         # Model outputs are saved in "actions", but for FAST models they represent tokens.
         tokens = data.pop("tokens")
+        original_actions = data.pop("actions", None)
         actions = self.tokenizer.extract_actions(tokens.astype(np.int32), self.action_horizon, self.action_dim)
         return {
             **data,

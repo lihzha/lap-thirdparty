@@ -55,22 +55,20 @@ class LanguageActionFormat:
                     movement[:3] = np.array([dx, dy, dz], dtype=float) / 100.0
                     if self.include_rotation:
                         droll, dpitch, dyaw = groups[3], groups[4], groups[5]
-                        movement[3:6] = (
-                            np.array([droll, dpitch, dyaw], dtype=float) * np.pi / 180.0
-                        )
+                        movement[3:6] = np.array([droll, dpitch, dyaw], dtype=float) * np.pi / 180.0
 
                     gripper_action = float(groups[-1])
         else:
             reasoning = reasoning.replace("slightly", "1.5 cm").replace("moderately", "5 cm").replace("a lot", "10 cm")
             move_pattern = re.compile(
-                    rf"move\s+(right|left|forward|backward|back|up|down)(?:\s+([\-\d\.]+)\s*{self.translation_unit})?",
-                    re.IGNORECASE,
-                )
+                rf"move\s+(right|left|forward|backward|back|up|down)(?:\s+([\-\d\.]+)\s*{self.translation_unit})?",
+                re.IGNORECASE,
+            )
 
             dx_cm = dy_cm = dz_cm = 0.0
             for match in move_pattern.finditer(reasoning):
                 direction = match.group(1).lower()
-                value = float(match.group(2))
+                value = float(match.group(2)) if match.group(2) is not None else 0.0
                 if direction == "forward":
                     dx_cm += value
                 elif direction in ("backward", "back"):
@@ -123,7 +121,6 @@ class LanguageActionFormat:
                 gripper_action = 0.0
             elif grip_match:
                 gripper_action = float(grip_match.group(1))
-
 
         if self.use_eef_frame and initial_state is not None:
             movement = transform_actions_from_eef_frame(movement, initial_state)[0]

@@ -5,7 +5,6 @@ from typing import Any
 
 import flax.nnx as nnx
 import jax
-import jax.numpy as jnp
 from openpi.models import model as _model
 import openpi.policies.policy as _policy
 import openpi.shared.array_typing as at
@@ -85,6 +84,8 @@ def load_model_from_train_state(config, checkpoint_dir):
             )
         logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
 
+    # checkpoint_step_to_load = 20000
+
     # Restore checkpoint using the same helper as training (supports explicit sharding)
     params = restore_params(
         checkpoint_manager,
@@ -138,7 +139,7 @@ def create_trained_policy(
     repack_transforms = repack_transforms or up_transforms.Group()
     checkpoint_dir = maybe_download(str(checkpoint_dir))
     # model = load_model_from_train_state(train_config, checkpoint_dir)
-    model = train_config.model.load(_model.restore_params(checkpoint_dir / "params", dtype=jnp.bfloat16))
+    model = train_config.model.load(_model.restore_params(checkpoint_dir / "params"))
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     if norm_stats is None:
         # We are loading the norm stats from the checkpoint instead of the config assets dir to make sure

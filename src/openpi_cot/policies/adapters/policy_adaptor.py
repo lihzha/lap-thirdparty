@@ -34,9 +34,10 @@ class CoTPolicy:
         start_time = time.monotonic()
         tokens = self._sample_tokens(sample_rng_or_pytorch_device, CoTObservation.from_dict(inputs))
         outputs = {
-            "state": raw_state,
+            "state": inputs["state"],
             "actions": jnp.zeros((1, 1, 7)),  # TODO
             "tokens": tokens,
+            "raw_state": raw_state,
         }
         # Unbatch and convert to np.ndarray.        # Unbatch and convert to np.ndarray.
         # outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
