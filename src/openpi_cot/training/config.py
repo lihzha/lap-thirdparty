@@ -1161,7 +1161,7 @@ _CONFIGS = [
             "dataset_type": "combined",
             "data_mix": "libero_finetune",
             "shuffle_buffer_size": 400_000,
-            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
+            "action_proprio_normalization_type": NormalizationType.NORMAL,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         fsdp_devices=1,

@@ -29,7 +29,7 @@ class LiberoFinetuneInputs(transforms.DataTransformFn):
         assert self.model_type == ExtendedModelType.PI_COT
         if "observation" in data:
             assert IMAGE_KEYS[0] in data["observation"]
-            base_image = parse_image(data["observation"][IMAGE_KEYS[0]])[:, ::-1]
+            base_image = parse_image(data["observation"][IMAGE_KEYS[0]])
         else:
             assert "observation/image" in data
             base_image = parse_image(data["observation/image"])
@@ -41,7 +41,7 @@ class LiberoFinetuneInputs(transforms.DataTransformFn):
         if "observation" in data:
             for k in IMAGE_KEYS[1:]:
                 if k in data["observation"]:
-                    wrist_image = parse_image(data["observation"][k])[:, ::-1]
+                    wrist_image = parse_image(data["observation"][k])
                     wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
                 else:
                     wrist_image = np.zeros_like(base_image)
@@ -104,7 +104,7 @@ class LiberoFinetuneOutputs(transforms.DataTransformFn):
         actions = np.asarray(data["actions"][:, :7])
         actions = np.array(actions, copy=True)
         # LIBERO gripper action: -1 is open, 1 is close. Our policy: 0 is close, 1 is open
-        print(actions[:, -1])
+        # print(actions[:, -1])
         actions[:, -1:] = 1 - 2 * actions[:, -1:]
         actions[:, -1:] = np.sign(actions[:, -1:])
         # print(actions[:, -1:])

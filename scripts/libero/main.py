@@ -285,7 +285,7 @@ def _get_libero_env(task, resolution, seed, controller="OSC_POSE"):
 
 def get_images_from_obs(obs, resize_size):
     # IMPORTANT: rotate 180 degrees to match train preprocessing
-    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
+    img = np.ascontiguousarray(obs["agentview_image"][::-1])
     wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
     img = image_tools.convert_to_uint8(image_tools.resize_with_pad(img, resize_size, resize_size))
     wrist_img = image_tools.convert_to_uint8(image_tools.resize_with_pad(wrist_img, resize_size, resize_size))

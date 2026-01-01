@@ -27,6 +27,7 @@ We follow this einsum axis naming convention:
 
 from collections.abc import Sequence
 import dataclasses
+import re
 from typing import Literal, TypeAlias
 
 import einops
@@ -109,40 +110,209 @@ def get_config(variant: Variant) -> Config:
     raise ValueError(f"Unknown variant: {variant}")
 
 
+class Einsum(nn.Module):
+    """Einsum layer with LoRA support and explicit parameter dtype.
+
+    This is a unified implementation that combines features from both gemma2 and gemma3.
+    Supports both compact-style and setup-style initialization.
+    """
+
+    # Shape of the weight.
+    shape: tuple[int, ...]
+    # Initialization function for the weight.
+    init_fn: nn.initializers.Initializer = nn.initializers.zeros
+    # If not None, apply LoRA to the weight.
+    lora_config: lora.LoRAConfig | None = None
+    # Parameter dtype (for models that need explicit dtype handling)
+    param_dtype: str | None = None
+    # Weight name (for compatibility with gemma3 style)
+    weight_name: str = "w"
+
+    def setup(self):
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
+        self.w = self.param(self.weight_name, self.init_fn, self.shape, pdtype)
+
+        if config := self.lora_config:
+            # Setup LoRA parameters.
+            shape_a, shape_b = list(self.shape), list(self.shape)
+            shape_a[config.axes[1]] = config.rank
+            shape_b[config.axes[0]] = config.rank
+            self.w_a = self.param("lora_a", config.init_fn, shape_a, pdtype)
+            self.w_b = self.param("lora_b", config.init_fn, shape_b, pdtype)
+
+    def __call__(self, eqn: str, x):
+        dtype = x.dtype  # original dtype, could be half-precision
+        result = jnp.einsum(eqn, x, self.w.astype(dtype))
+
+        if config := self.lora_config:
+            eqn_a, eqn_b = self._make_lora_eqns(eqn)
+            lora_result = jnp.einsum(eqn_a, x, self.w_a.astype(dtype))
+            lora_result = jnp.einsum(eqn_b, lora_result, self.w_b.astype(dtype))
+            result = result + lora_result * config.scaling_value
+
+        return result
+
+    def _make_lora_eqns(self, eqn: str) -> tuple[str, str]:
+        if "L" in eqn:
+            raise ValueError(f"L already in eqn: {eqn}")
+        if not (m := re.match("(.*),(.*)->(.*)", eqn)):
+            raise ValueError(f"Unsupported einsum eqn: {eqn}")
+        lhs, rhs, out = m.groups()
+
+        assert self.lora_config is not None
+        a_label, b_label = (rhs[x] for x in self.lora_config.axes)
+        label = self.lora_config.label
+
+        a_rhs = rhs.replace(b_label, label)
+        a_out = out.replace(b_label, label)
+        eqn_a = f"{lhs},{a_rhs}->{a_out}"
+
+        b_rhs = rhs.replace(a_label, label)
+        eqn_b = f"{a_out},{b_rhs}->{out}"
+
+        return eqn_a, eqn_b
+
+
 @at.typecheck
 class RMSNorm(nn.Module):
+    """RMSNorm with optional adaptive conditioning and explicit parameter dtype.
+
+    Unified implementation supporting both standard and adaptive (AdaRMS) normalization.
+    """
+
+    param_dtype: str | None = None
+
     @nn.compact
     def __call__(self, x, cond):
         dtype = x.dtype  # original dtype, could be half-precision
-        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)  # compute variance in float32
-        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))  # compute normalization in float32
-        if cond is None:
-            # regular RMSNorm
-            scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
-            normed_inputs = normed_inputs * (
-                1 + scale
-            )  # scale by learned parameter in float32 (matches Flax implementation)
-            return normed_inputs.astype(dtype), None  # return in original dtype
+        var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+        normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
 
-        # adaptive RMSNorm
-        modulation = nn.Dense(x.shape[-1] * 3, kernel_init=nn.initializers.zeros, dtype=dtype)(cond)
+        if cond is None:
+            # Standard RMSNorm
+            scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1],), pdtype)
+            scale_dtype = scale.astype(jnp.float32) if self.param_dtype else scale
+            normed_inputs = normed_inputs * (1 + scale_dtype)
+            return normed_inputs.astype(dtype), None
+
+        # Adaptive RMSNorm (AdaRMS) for timestep/conditioning injection
+        modulation = nn.Dense(
+            x.shape[-1] * 3,
+            kernel_init=nn.initializers.zeros,
+            dtype=dtype,
+            param_dtype=pdtype,
+        )(cond)
         scale, shift, gate = jnp.split(modulation[:, None, :], 3, axis=-1)
-        normed_inputs = normed_inputs * (1 + scale) + shift  # scale and shift in float32
+        normed_inputs = normed_inputs * (1 + scale) + shift
         return normed_inputs.astype(dtype), gate
 
 
 @at.typecheck
+class FeedForward(nn.Module):
+    """Feed forward module with LoRA support and explicit parameter dtype.
+
+    Unified implementation based on gemma2's cleaner approach.
+    """
+
+    features: int
+    hidden_dim: int
+    lora_config: lora.LoRAConfig | None = None
+    param_dtype: str | None = None
+
+    def setup(self):
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
+        self.w_gating = self.param(
+            "gating_einsum",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
+            (2, self.features, self.hidden_dim),
+            pdtype,
+        )
+        self.w_linear = self.param(
+            "linear",
+            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1),
+            (self.hidden_dim, self.features),
+            pdtype,
+        )
+        self.w_gating_lora = None
+        self.w_linear_lora = None
+        if self.lora_config:
+            # Setup LoRA parameters.
+            self.w_gating_lora = (
+                self.param(
+                    "gating_einsum_lora_a",
+                    self.lora_config.init_fn,
+                    (2, self.features, self.lora_config.rank),
+                    pdtype,
+                ),
+                self.param(
+                    "gating_einsum_lora_b",
+                    self.lora_config.init_fn,
+                    (2, self.lora_config.rank, self.hidden_dim),
+                    pdtype,
+                ),
+            )
+            self.w_linear_lora = (
+                self.param(
+                    "linear_lora_a",
+                    self.lora_config.init_fn,
+                    (self.hidden_dim, self.lora_config.rank),
+                    pdtype,
+                ),
+                self.param(
+                    "linear_lora_b",
+                    self.lora_config.init_fn,
+                    (self.lora_config.rank, self.features),
+                    pdtype,
+                ),
+            )
+
+    @nn.compact
+    def __call__(self, x):
+        dtype = x.dtype  # original dtype, could be half-precision
+        ff_gate = self._dot(
+            x,
+            self.w_gating[0],
+            None if self.w_gating_lora is None else (self.w_gating_lora[0][0], self.w_gating_lora[1][0]),
+        )
+        gate_value = nn.gelu(ff_gate)
+
+        ff1 = self._dot(
+            x,
+            self.w_gating[1],
+            None if self.w_gating_lora is None else (self.w_gating_lora[0][1], self.w_gating_lora[1][1]),
+        )
+        activations = gate_value * ff1
+
+        outputs = self._dot(activations, self.w_linear, self.w_linear_lora)
+        assert outputs.dtype == dtype
+        return outputs
+
+    def _dot(self, x: at.Array, w: at.Array, lora_weights: tuple[at.Array, at.Array] | None) -> at.Array:
+        base = jnp.dot(x, w.astype(x.dtype))
+        if lora_weights is None:
+            return base
+        return base + jnp.dot(jnp.dot(x, lora_weights[0].astype(x.dtype)), lora_weights[1].astype(x.dtype))
+
+
+@at.typecheck
 class Embedder(nn.Module):
-    """Embedder module."""
+    """Embedder module with optional explicit parameter dtype.
+
+    Supports both standard embedding with default dtype and explicit dtype specification.
+    """
 
     vocab_size: int
     embed_dim: int
+    param_dtype: str | None = None
 
     def setup(self):
+        pdtype = jnp.dtype(self.param_dtype) if self.param_dtype else None
         self.input_embedding_table = self.param(
             "input_embedding",
             nn.initializers.normal(),
             (self.vocab_size, self.embed_dim),
+            pdtype,
         )
 
     def encode(self, x):
@@ -161,8 +331,6 @@ class Attention(nn.Module):
     configs: Sequence[Config]
     stop_action_to_vlm_grad: bool = False
 
-    cache_dtype: str | None = None
-
     @nn.compact
     def __call__(self, xs, positions, attn_mask, kv_cache):
         # all experts must share the same head dim, num heads, and num kv heads for self-attention to work
@@ -177,26 +345,29 @@ class Attention(nn.Module):
             if x is None:
                 continue
             if config.num_kv_heads == config.num_heads:
-                qkv_einsum = lora.Einsum(
+                qkv_einsum = Einsum(
                     shape=(3, config.num_heads, config.width, config.head_dim),
                     name=_name("qkv_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0, 1)),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 qkvs.append(qkv_einsum("BSD,3KDH->3BSKH", x))
             else:
-                q_einsum = lora.Einsum(
+                q_einsum = Einsum(
                     shape=(config.num_heads, config.width, config.head_dim),
                     name=_name("q_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 q = q_einsum("BTD,NDH->BTNH", x)
-                kv_einsum = lora.Einsum(
+                kv_einsum = Einsum(
                     shape=(2, config.num_kv_heads, config.width, config.head_dim),
                     name=_name("kv_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0, 1)),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 k, v = kv_einsum("BSD,2KDH->2BSKH", x)
                 qkvs.append((q, k, v))
@@ -204,7 +375,7 @@ class Attention(nn.Module):
         q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
         token_owner = None
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[1] is not None:
             # Track which expert owns each token position so we can stop gradients for cross-expert attention into expert 0.
             token_owner = []
             for i, x in enumerate(xs):
@@ -239,7 +410,7 @@ class Attention(nn.Module):
                 f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
             )
 
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[1] is not None:
             # Stop gradients when non-zero experts attend to expert 0 (expert 0 -> others is already masked).
             q_owner = token_owner[:, None, None, :, None]  # B,1,1,T,1
             k_owner = token_owner[:, None, None, None, :]  # B,1,1,1,S
@@ -252,7 +423,7 @@ class Attention(nn.Module):
 
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
 
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[1] is not None:
             # Detach values from expert 0 when consumed by other experts.
             probs_cross = probs * cross_to_expert0.astype(probs.dtype)
             probs_self = probs - probs_cross
@@ -268,11 +439,12 @@ class Attention(nn.Module):
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is not None:
                 end = start + x.shape[1]
-                out_einsum = lora.Einsum(
+                out_einsum = Einsum(
                     shape=(config.num_heads, config.head_dim, config.width),
                     name=_name("attn_vec_einsum", i),
                     init_fn=nn.initializers.lecun_normal(in_axis=(-3, -2), out_axis=-1),
                     lora_config=config.lora_configs.get("attn"),
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )
                 out.append(out_einsum("BTNH,NHD->BTD", encoded[:, start:end]))
                 start = end
@@ -283,43 +455,11 @@ class Attention(nn.Module):
 
 
 @at.typecheck
-class FeedForward(nn.Module):
-    """Feed forward module."""
-
-    features: int
-    hidden_dim: int
-
-    @nn.compact
-    def __call__(self, x):
-        dtype = x.dtype  # original dtype, could be half-precision
-        w_gating = self.param(
-            "gating_einsum",
-            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1, batch_axis=(0,)),
-            (2, self.features, self.hidden_dim),
-        ).astype(dtype)
-        ff_gate = jnp.dot(x, w_gating[0])
-        gate_value = nn.gelu(ff_gate)
-
-        ff1 = jnp.dot(x, w_gating[1])
-        activations = gate_value * ff1
-
-        w_linear = self.param(
-            "linear",
-            nn.initializers.lecun_normal(in_axis=-2, out_axis=-1),
-            (self.hidden_dim, self.features),
-        ).astype(dtype)
-        outputs = jnp.dot(activations, w_linear)
-        assert outputs.dtype == dtype
-        return outputs
-
-
-@at.typecheck
 class Block(nn.Module):
     """Transformer block."""
 
     configs: tuple[Config, ...]
     stop_action_to_vlm_grad: bool = False
-    cache_dtype: str | None = None
 
     dropout: float = 0.0
     dropout_bdims: tuple[int, ...] = ()
@@ -329,18 +469,15 @@ class Block(nn.Module):
         xs = sharding.activation_sharding_constraint(xs)
         drop = nn.Dropout(self.dropout, self.dropout_bdims) if self.dropout else lambda x, _: x
 
-        attn = Attention(
-            configs=self.configs,
-            stop_action_to_vlm_grad=self.stop_action_to_vlm_grad,
-            name="attn",
-            cache_dtype=self.cache_dtype,
-        )
+        attn = Attention(configs=self.configs, stop_action_to_vlm_grad=self.stop_action_to_vlm_grad, name="attn")
 
         pre_attn = []
         gates = []
         for i, x in enumerate(xs):
             if x is not None:
-                x, gate = RMSNorm(name=_name("pre_attention_norm", i))(x, adarms_cond[i])  # noqa: PLW2901
+                x, gate = RMSNorm(  # noqa: PLW2901
+                    name=_name("pre_attention_norm", i), param_dtype=getattr(self.configs[i], "param_dtype", "bfloat16")
+                )(x, adarms_cond[i])
             pre_attn.append(x)
             gates.append(gate if x is not None else None)
 
@@ -355,12 +492,15 @@ class Block(nn.Module):
         gates = []
         for i, (x, config) in enumerate(zip(xs, self.configs, strict=True)):
             if x is not None:
-                x, gate = RMSNorm(name=_name("pre_ffw_norm", i))(x, adarms_cond[i])  # noqa: PLW2901
-                x = lora.FeedForward(  # noqa: PLW2901
+                x, gate = RMSNorm(  # noqa: PLW2901
+                    name=_name("pre_ffw_norm", i), param_dtype=getattr(config, "param_dtype", "bfloat16")
+                )(x, adarms_cond[i])
+                x = FeedForward(  # noqa: PLW2901
                     features=config.width,
                     hidden_dim=config.mlp_dim,
                     name=_name("mlp", i),
                     lora_config=config.lora_configs.get("ffn"),
+                    param_dtype=getattr(config, "param_dtype", "bfloat16"),
                 )(x)
             out.append(x)
             gates.append(gate if x is not None else None)
@@ -390,8 +530,6 @@ class Module(nn.Module):
     adarms: bool = False
     stop_action_to_vlm_grad: bool = False
 
-    cache_dtype: str | None = None
-
     def setup(self):
         # all experts must have the same depth
         assert all(config.depth == self.configs[0].depth for config in self.configs)
@@ -399,6 +537,7 @@ class Module(nn.Module):
         self.embedder = Embedder(
             vocab_size=PALIGEMMA_VOCAB_SIZE,
             embed_dim=self.configs[0].width,  # embedder for first expert only
+            param_dtype=getattr(self.configs[0], "param_dtype", "bfloat16"),
             name="embedder",
         )
         block_cls = nn.remat(
@@ -424,9 +563,11 @@ class Module(nn.Module):
             dropout=self.dropout,
             dropout_bdims=self.dropout_bdims,
             stop_action_to_vlm_grad=self.stop_action_to_vlm_grad,
-            cache_dtype=self.cache_dtype,
         )
-        self.final_norms = [RMSNorm(name=_name("final_norm", i)) for i in range(len(self.configs))]
+        self.final_norms = [
+            RMSNorm(name=_name("final_norm", i), param_dtype=getattr(self.configs[i], "param_dtype", "bfloat16"))
+            for i in range(len(self.configs))
+        ]
 
     @at.typecheck
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
@@ -503,31 +644,30 @@ def _name(name, i):
 
 
 def _gated_residual(x, y, gate):
+    """Apply gated residual connection: x + y * gate (or x + y if no gate)."""
     assert (x is None) == (y is None)
     if x is None:
         return None
-    if gate is None:
-        return x + y
-    return x + y * gate
+    dtype = x.dtype
+    result = (x + y) if gate is None else (x + y * gate)
+    return result.astype(dtype)
 
 
-def _init_cache(k, v, cache_size, cache_dtype=None):
+def _init_cache(k, v, cache_size):
     """Initialize KV cache"""
     prefill_len = k.shape[1]
     pad_width = ((0, 0), (0, cache_size - prefill_len), (0, 0), (0, 0))
-    cache_dtype = cache_dtype or k.dtype
-    k_cache = jnp.pad(k.astype(cache_dtype), pad_width)
-    v_cache = jnp.pad(v.astype(cache_dtype), pad_width)
+    k_cache = jnp.pad(k.astype(k.dtype), pad_width)
+    v_cache = jnp.pad(v.astype(k.dtype), pad_width)
     idx = jnp.zeros((k.shape[0],), dtype=jnp.int32) + prefill_len
     return idx, k_cache, v_cache
 
 
-def _update_cache(k, v, idx, k_cache, v_cache, cache_dtype=None):
+def _update_cache(k, v, idx, k_cache, v_cache):
     """Update KV cache with new values"""
     assert k.shape[1] == 1, "Only support kv-cache updates of length 1"
     indices = (0, idx[0], 0, 0)
-    cache_dtype = cache_dtype or k.dtype
-    k_new = jax.lax.dynamic_update_slice(k_cache, k.astype(cache_dtype), indices)
-    v_new = jax.lax.dynamic_update_slice(v_cache, v.astype(cache_dtype), indices)
+    k_new = jax.lax.dynamic_update_slice(k_cache, k, indices)
+    v_new = jax.lax.dynamic_update_slice(v_cache, v, indices)
     idx_new = idx + 1
     return idx_new, k_new, v_new

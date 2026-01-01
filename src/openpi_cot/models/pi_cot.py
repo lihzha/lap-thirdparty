@@ -72,6 +72,7 @@ class PiCoT(_pi0.Pi0):
                     embed_dtype=config.dtype,
                     adarms=config.pi05,
                     stop_action_to_vlm_grad=config.stop_action_to_vlm_grad,
+                    cache_dtype=config.dtype,
                 )
             )
             llm.lazy_init(rngs=rngs, method="init", use_adarms=[False, True] if config.pi05 else [False, False])
@@ -93,7 +94,8 @@ class PiCoT(_pi0.Pi0):
                     configs=[paligemma_config],
                     embed_dtype=config.dtype,
                     adarms=config.pi05,
-                    stop_action_to_vlm_grad=config.stop_action_to_vlm_grad,
+                    stop_action_to_vlm_grad=False,
+                    cache_dtype=config.dtype,
                 )
             )
             llm.lazy_init(rngs=rngs, method="init", use_adarms=[False])
@@ -177,6 +179,7 @@ class PiCoT(_pi0.Pi0):
         time_expanded = time[..., None, None]
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
+
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
         suffix_ar_mask = einops.repeat(suffix_ar_mask, "s -> b s", b=suffix_tokens.shape[0])
         return {
