@@ -4,6 +4,11 @@ from scipy.spatial.transform import Slerp
 import contextlib
 import signal
 
+def euler_to_rot6d(euler_angles: np.ndarray) -> np.ndarray:
+    rot_matrix = R.from_euler("xyz", euler_angles, degrees=False).as_matrix()
+    rot6d = np.concatenate([rot_matrix[:, 0], rot_matrix[:, 1]], axis=0)
+    return rot6d
+
 def binarize_gripper_actions_np(actions: np.ndarray, threshold: float = 0.95) -> np.ndarray:
     """
     Convert continuous gripper actions to binary (0 or 1) using backward propagation logic.

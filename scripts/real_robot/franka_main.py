@@ -8,7 +8,7 @@ from openpi_client import image_tools
 
 sys.path.append(".")
 from shared import BaseEvalRunner, Args
-from helpers import binarize_gripper_actions_np
+from helpers import binarize_gripper_actions_np, euler_to_rot6d
 
 class FrankaEvalRunner(BaseEvalRunner):
 
@@ -21,6 +21,8 @@ class FrankaEvalRunner(BaseEvalRunner):
         # In addition to image observations, also capture the proprioceptive state
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
+        euler = cartesian_position[3:6].copy()
+        cartesian_position = np.concatenate([cartesian_position[:3], euler_to_rot6d(euler)])
         gripper_position = np.array([robot_state["gripper_position"]])
         # print("Gripper position:", gripper_position)
         # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
@@ -51,6 +53,7 @@ class FrankaEvalRunner(BaseEvalRunner):
             "right_image": right_image,
             "wrist_image": wrist_image,
             "cartesian_position": cartesian_position,
+            "euler": euler,
             "gripper_position": np.array(gripper_position),
             "state": np.concatenate([cartesian_position, gripper_position]),
             "joint_position": np.array(robot_state["joint_positions"]),

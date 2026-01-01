@@ -95,12 +95,11 @@ class BaseEvalRunner:
 
     def get_action_from_response(self, response, curr_obs, use_quaternions=False):
         curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
-        curr_rpy = np.asarray(curr_obs["cartesian_position"][3:6], dtype=float)
+        curr_rpy = np.asarray(curr_obs["euler"], dtype=float)
         if "reasoning" in response and response["reasoning"] is not None:
             action = np.asarray(response["actions"])
             grip_action = 1- curr_obs["gripper_position"] if len(action) == 6 else float(1 - action[-1])
             print(grip_action)
-            
             # Linearly interpolate to CHUNK_STEPS actions
             positions = np.linspace(curr_pos, curr_pos + action[:3], self.CHUNK_STEPS, endpoint=True)
             rpy_arr = interpolate_rpy(curr=curr_rpy, delta=action[3:6], steps=self.CHUNK_STEPS)
