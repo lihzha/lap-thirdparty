@@ -141,22 +141,22 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if self.model_type == ExtendedModelType.PI_FAST:
             image_masks = [np.True_ for _ in image_masks]
 
-        names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
-        # We don't mask out padding images for FAST models.
-        images = (base_image, np.zeros_like(base_image), wrist_image)
-        image_masks = (np.True_, np.True_, np.True_)
-
-        # inputs = {
-        #     "state": data["observation"]["state"],
-        #     "image": dict(zip(IMAGE_KEYS, images, strict=True)),
-        #     "image_mask": dict(zip(IMAGE_KEYS, image_masks, strict=True)),
-        # }
+        # names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+        # # We don't mask out padding images for FAST models.
+        # images = (base_image, np.zeros_like(base_image), wrist_image)
+        # image_masks = (np.True_, np.True_, np.True_)
 
         inputs = {
             "state": data["observation"]["state"],
-            "image": dict(zip(names, images, strict=True)),
-            "image_mask": dict(zip(names, image_masks, strict=True)),
+            "image": dict(zip(IMAGE_KEYS, images, strict=True)),
+            "image_mask": dict(zip(IMAGE_KEYS, image_masks, strict=True)),
         }
+
+        # inputs = {
+        #     "state": data["observation"]["state"],
+        #     "image": dict(zip(names, images, strict=True)),
+        #     "image_mask": dict(zip(names, image_masks, strict=True)),
+        # }
 
         prompt = data.get("prompt")
         assert prompt is not None, "Prompt missing from data"
@@ -340,7 +340,7 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         # Get actions and reasoning from data
 
         if "reasoning" not in data:
-            return {"actions": np.asarray(data["actions"][:, :8]), "reasoning": None}
+            return {"actions": np.asarray(data["actions"][:, :7]), "reasoning": None}
         reasoning = data.get("reasoning")
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
