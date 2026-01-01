@@ -205,7 +205,7 @@ PI05_NOTIME_NOSTATE_PROMPT_FORMAT = PromptFormat(
 
 PI05_NOTIME_ORI_PROMPT_FORMAT = PromptFormat(
     name="pi05_notime_ori",
-    task_module=TaskModule(template="Task: {prompt},", include_time_horizon=False),
+    task_module=TaskModule(template="Task: {prompt}, ", include_time_horizon=False),
     state_module=StateModule(
         discretization=StateDiscretizationConfig(bins=256),
         state_prefix_template="State{state_label}: {state};\n",
@@ -217,7 +217,7 @@ PI05_NOTIME_ORI_PROMPT_FORMAT = PromptFormat(
     direction_token_checker=checkers.is_direction_natural,
 )
 
-Pi0 = PromptFormat(
+PI0_PROMPT_FORMAT = PromptFormat(
     name="pi0",
     task_module=TaskModule(template="{prompt}\n", include_time_horizon=False),
     state_module=None,
@@ -227,12 +227,6 @@ Pi0 = PromptFormat(
     direction_token_checker=checkers.is_direction_natural,
 )
 
-PI0_PROMPT_FORMAT = PromptFormat(
-    name="pi0",
-    task_module=TaskModule(template="{prompt}\n"),
-    separator="",
-    direction_token_checker=checkers.is_direction_none,
-)
 
 VQA_PROMPT_FORMAT = PromptFormat(
     name="vqa",

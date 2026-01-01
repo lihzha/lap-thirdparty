@@ -233,7 +233,11 @@ class OXECoTDatasets:
                 save_dir=global_stats_dir,
                 action_dim=action_dim,
             )
-            logging.info("Applying global normalization with stats: %s", global_stats)
+            logging.info(
+                "Applying global normalization with stats with normalization type %s: %s",
+                action_proprio_normalization_type,
+                global_stats,
+            )
 
             # Apply state-type-specific normalization to each dataset BEFORE interleaving
             # This avoids tf.case/tf.cond issues entirely
