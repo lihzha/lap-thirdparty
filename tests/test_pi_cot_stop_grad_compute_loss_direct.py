@@ -10,7 +10,6 @@ import openpi.shared.nnx_utils as nnx_utils
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.pi_cot_config import PiCoTConfig
 
-
 _VLM_FILTER = nnx.All(
     nnx_utils.PathRegex(".*llm.*"),
     nnx.Not(nnx_utils.PathRegex(".*_1.*")),
@@ -19,22 +18,32 @@ _ACTION_EXPERT_FILTER = nnx_utils.PathRegex(".*llm.*_1.*")
 
 
 def _build_observation(config: PiCoTConfig) -> CoTObservation:
-    batch = 1
+    batch = 4
     height, width = _model.IMAGE_RESOLUTION
-    image = jnp.linspace(-1.0, 1.0, num=height * width * 3, dtype=jnp.float32).reshape((batch, height, width, 3))
+    image = jnp.linspace(-1.0, 1.0, num=batch * height * width * 3, dtype=jnp.float32).reshape(
+        (batch, height, width, 3)
+    )
     images = dict.fromkeys(config.image_keys, image)
     image_masks = {key: jnp.ones((batch,), dtype=bool) for key in config.image_keys}
     state = jnp.zeros((batch, config.action_dim), dtype=jnp.float32)
 
     prompt_len = config.max_token_len
+    pad_len = 10
+    promptonly_len = 20
+
     tokenized_prompt = jnp.arange(prompt_len, dtype=jnp.int32)[None, :] + 2
+    tokenized_prompt = jnp.tile(tokenized_prompt, (batch, 1))
     prompt_mask = jnp.ones((batch, prompt_len), dtype=bool)
     tokenized_langact_mask = jnp.ones((batch, prompt_len), dtype=bool)
     token_loss_mask = jnp.ones((batch, prompt_len), dtype=bool)
 
-    prompt_mask = prompt_mask.at[:, -2:].set(False)
-    tokenized_langact_mask = tokenized_langact_mask.at[:, -1:].set(False)
-    token_loss_mask = tokenized_langact_mask
+    prompt_mask = prompt_mask.at[:, -pad_len:].set(False)
+    tokenized_langact_mask = tokenized_langact_mask.at[:, :promptonly_len].set(False)
+    tokenized_langact_mask = tokenized_langact_mask.at[:, -pad_len:].set(False)
+    token_loss_mask = token_loss_mask.at[:, :promptonly_len].set(False)
+    token_loss_mask = token_loss_mask.at[:, -pad_len:].set(False)
+
+    sample_mask = jnp.arange(batch) % 2 == 0
 
     return CoTObservation(
         images=images,
@@ -44,13 +53,14 @@ def _build_observation(config: PiCoTConfig) -> CoTObservation:
         tokenized_prompt_mask=prompt_mask,
         token_loss_mask=token_loss_mask,
         tokenized_langact_mask=tokenized_langact_mask,
+        sample_mask=sample_mask,
     )
 
 
 def _build_actions(config: PiCoTConfig) -> _model.Actions:
-    total = config.action_horizon * config.action_dim
+    total = config.action_horizon * config.action_dim * 4
     actions = jnp.linspace(-0.5, 0.5, num=total, dtype=jnp.float32).reshape(
-        (1, config.action_horizon, config.action_dim)
+        (4, config.action_horizon, config.action_dim)
     )
     return actions
 

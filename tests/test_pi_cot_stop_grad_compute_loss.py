@@ -77,9 +77,9 @@ def compute_loss(
     action_loss, action_metrics = model._compute_action_loss(suffix_out, suffix_inputs["u_t"])
     total_per_sample_loss += action_loss
     metrics.update(action_metrics)
-    final_loss = jnp.mean(total_per_sample_loss)
+    # final_loss = jnp.mean(total_per_sample_loss)
 
-    return final_loss, metrics
+    return jnp.mean(action_loss), jnp.mean(lang_loss)
 
 
 def _build_observation(config: PiCoTConfig) -> CoTObservation:
