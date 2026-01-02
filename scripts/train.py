@@ -182,10 +182,12 @@ def _validate_loaded_params(expected: at.Params, got: at.Params, *, allow_partia
         raise ValueError(f"Loaded params do not match expected shapes/dtypes (sample): {sample}")
 
     missing = set(flat_expected) - set(flat_got)
+    all_missing = ", ".join("/".join(k) for k in list(missing))
+    logging.info(f"Loaded params missing required keys: {all_missing}")
     if missing:
         if not allow_partial:
-            sample = ", ".join("/".join(k) for k in list(missing)[:8])
-            raise ValueError(f"Loaded params missing required keys (sample): {sample}")
+            all_missing = ", ".join("/".join(k) for k in list(missing))
+            raise ValueError(f"Loaded params missing required keys: {all_missing}")
         logging.info("Weight loader missing %d params; using random init for them.", len(missing))
 
     return flat_got
@@ -321,6 +323,7 @@ class TrainingStepRunner:
 
         new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
         if state.ema_decay is not None:
+
             def _apply_ema(s):
                 return dataclasses.replace(
                     s,
