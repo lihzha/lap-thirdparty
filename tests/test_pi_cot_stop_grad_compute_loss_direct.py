@@ -10,9 +10,12 @@ import openpi.shared.nnx_utils as nnx_utils
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.pi_cot_config import PiCoTConfig
 
-_VLM_FILTER = nnx.All(
-    nnx_utils.PathRegex(".*llm.*"),
-    nnx.Not(nnx_utils.PathRegex(".*_1.*")),
+_VLM_FILTER = nnx.Any(
+    nnx.All(
+        nnx_utils.PathRegex(".*llm.*"),
+        nnx.Not(nnx_utils.PathRegex(".*_1.*")),
+    ),
+    nnx_utils.PathRegex(".*img.*"),
 )
 _ACTION_EXPERT_FILTER = nnx_utils.PathRegex(".*llm.*_1.*")
 
@@ -25,7 +28,7 @@ def _build_observation(config: PiCoTConfig) -> CoTObservation:
     )
     images = dict.fromkeys(config.image_keys, image)
     image_masks = {key: jnp.ones((batch,), dtype=bool) for key in config.image_keys}
-    state = jnp.zeros((batch, config.action_dim), dtype=jnp.float32)
+    state = jnp.ones((batch, config.action_dim), dtype=jnp.float32)
 
     prompt_len = config.max_token_len
     pad_len = 10
@@ -74,13 +77,15 @@ def _make_config(
     return PiCoTConfig(
         paligemma_variant="dummy",
         action_expert_variant="dummy",
-        max_token_len=8,
+        max_token_len=100,
         enable_action_training=True,
         enable_langact_training=enable_langact_training,
         enable_prediction_training=False,
         enable_vqa_training=False,
         action_loss_weight=action_loss_weight,
         stop_action_to_vlm_grad=stop_action_to_vlm_grad,
+        pi05=True,
+        discrete_state_input=True,
     )
 
 
@@ -90,7 +95,8 @@ def _grad_norm(grads: nnx.State, filter: nnx.filterlib.Filter) -> jnp.ndarray:
         raise AssertionError("No gradient leaves matched the filter.")
     total = 0.0
     for value in filtered.values():
-        total += jnp.sum(jnp.square(value))
+        leaf = value.value if hasattr(value, "value") else value
+        total += jnp.sum(jnp.square(leaf))
     return jnp.sqrt(total)
 
 
@@ -133,9 +139,47 @@ def test_compute_loss_blocks_action_loss_to_vlm_params():
     grads_stop = _compute_grads(model_stop, jax.random.PRNGKey(1), observation, actions)
     grads_allow = _compute_grads(model_allow, jax.random.PRNGKey(1), observation, actions)
 
-    assert float(_grad_norm(grads_stop, _VLM_FILTER)) < 1e-6
-    assert float(_grad_norm(grads_allow, _VLM_FILTER)) > 1e-6
-    assert float(_grad_norm(grads_stop, _ACTION_EXPERT_FILTER)) > 1e-6
+    # inside test_compute_loss_blocks_action_loss_to_vlm_params
+    prefix_tokens, prefix_mask, prefix_ar_mask = model_allow.embed_prefix(observation)
+    suffix_inputs = model_allow.prepare_suffix(observation, actions, jax.random.PRNGKey(0), jax.random.PRNGKey(1))
+    combined_mask = model_allow._build_combined_attention_mask(
+        prefix_mask,
+        prefix_ar_mask,
+        model_allow._build_prefix_action_mask(prefix_mask, observation),
+        suffix_inputs["suffix_mask"],
+        suffix_inputs["suffix_ar_mask"],
+    )
+    combined_positions = model_allow._build_combined_positions(
+        prefix_mask, model_allow._build_prefix_action_mask(prefix_mask, observation), suffix_inputs["suffix_mask"]
+    )
+
+    def _action_loss_from_prefix(prefix_tokens):
+        pre_logits, _ = model_allow.PaliGemma.llm(
+            embedded=[prefix_tokens, suffix_inputs["suffix_tokens"]],
+            positions=combined_positions,
+            mask=combined_mask,
+            adarms_cond=[None, suffix_inputs["adarms_cond"]],
+        )
+        suffix_out = pre_logits[1]
+        loss, _ = model_allow._compute_action_loss(suffix_out, suffix_inputs["u_t"])
+        return jnp.mean(loss)
+
+    print("grad wrt prefix_tokens:", jnp.linalg.norm(jax.grad(_action_loss_from_prefix)(prefix_tokens)))
+
+    nonzero = {
+        k: float(jnp.linalg.norm(v.value if hasattr(v, "value") else v))
+        for k, v in grads_allow.flat_state().items()
+        if float(jnp.linalg.norm(v.value if hasattr(v, "value") else v)) > 0
+    }
+    print([k for k in nonzero if "llm" in k][:20])
+
+    print(f"Grad norm VLM (stop): {float(_grad_norm(grads_stop, _VLM_FILTER))}")
+    print(f"Grad norm VLM (allow): {float(_grad_norm(grads_allow, _VLM_FILTER))}")
+    print(f"Grad norm Action Expert (stop): {float(_grad_norm(grads_stop, _ACTION_EXPERT_FILTER))}")
+
+    assert float(_grad_norm(grads_stop, _VLM_FILTER)) == 0
+    assert float(_grad_norm(grads_allow, _VLM_FILTER)) > 1e-5
+    assert float(_grad_norm(grads_stop, _ACTION_EXPERT_FILTER)) > 1e-5
 
 
 def test_compute_loss_lang_loss_does_not_reach_action_expert():
@@ -151,8 +195,11 @@ def test_compute_loss_lang_loss_does_not_reach_action_expert():
     model = config.create(jax.random.PRNGKey(0))
     grads = _compute_grads(model, jax.random.PRNGKey(1), observation, actions)
 
-    assert float(_grad_norm(grads, _ACTION_EXPERT_FILTER)) < 1e-6
-    assert float(_grad_norm(grads, _VLM_FILTER)) > 1e-6
+    print(f"Grad norm VLM: {float(_grad_norm(grads, _VLM_FILTER))}")
+    print(f"Grad norm Action Expert: {float(_grad_norm(grads, _ACTION_EXPERT_FILTER))}")
+
+    assert float(_grad_norm(grads, _ACTION_EXPERT_FILTER)) == 0
+    assert float(_grad_norm(grads, _VLM_FILTER)) > 1e-5
 
 
 def test_compute_loss_self_attention_untouched_with_stop_grad():
@@ -168,8 +215,11 @@ def test_compute_loss_self_attention_untouched_with_stop_grad():
     model = config.create(jax.random.PRNGKey(0))
     grads = _compute_grads(model, jax.random.PRNGKey(1), observation, actions)
 
-    assert float(_grad_norm(grads, _VLM_FILTER)) > 1e-6
-    assert float(_grad_norm(grads, _ACTION_EXPERT_FILTER)) > 1e-6
+    print(f"Grad norm VLM: {float(_grad_norm(grads, _VLM_FILTER))}")
+    print(f"Grad norm Action Expert: {float(_grad_norm(grads, _ACTION_EXPERT_FILTER))}")
+
+    assert float(_grad_norm(grads, _VLM_FILTER)) > 1e-5
+    assert float(_grad_norm(grads, _ACTION_EXPERT_FILTER)) > 1e-5
 
 
 if __name__ == "__main__":

@@ -405,17 +405,38 @@ class Attention(nn.Module):
         q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=self.configs[0].num_kv_heads)
         logits = jnp.einsum("BTKGH,BSKH->BKGTS", q, k, preferred_element_type=jnp.float32)
 
+        if self.stop_action_to_vlm_grad and xs[1] is not None:
+            # When non-zero experts attend to expert 0, block grads into expert 0's K/V,
+            # but keep grads into the querying expert (Q) intact.
+            q_owner = token_owner[:, None, None, :, None]  # B,1,1,T,1
+            k_owner = token_owner[:, None, None, None, :]  # B,1,1,1,S
+            cross_to_expert0 = (q_owner != 0) & (k_owner == 0)
+
+            start = 0
+            expert0_len = 0
+            k0 = None
+            for i, x in enumerate(xs):
+                if x is None:
+                    continue
+                seg_len = x.shape[1]
+                if i == 0:
+                    expert0_len = seg_len
+                    k0 = k[:, :expert0_len, ...]
+                    start += seg_len
+                    continue
+                if expert0_len == 0 or k0 is None:
+                    break
+                q_i = q[:, start : start + seg_len, ...]
+                logits0_i = jnp.einsum(
+                    "BTKGH,BSKH->BKGTS", q_i, jax.lax.stop_gradient(k0), preferred_element_type=jnp.float32
+                )
+                logits = logits.at[:, :, :, start : start + seg_len, :expert0_len].set(logits0_i)
+                start += seg_len
+
         if attn_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
             raise ValueError(
                 f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
             )
-
-        if self.stop_action_to_vlm_grad and xs[1] is not None:
-            # Stop gradients when non-zero experts attend to expert 0 (expert 0 -> others is already masked).
-            q_owner = token_owner[:, None, None, :, None]  # B,1,1,T,1
-            k_owner = token_owner[:, None, None, None, :]  # B,1,1,1,S
-            cross_to_expert0 = (q_owner != 0) & (k_owner == 0)
-            logits = jnp.where(cross_to_expert0, jax.lax.stop_gradient(logits), logits)
 
         # big_neg = jnp.finfo(logits.dtype).min
         big_neg = -2.3819763e38  # See gemma/modules.py

@@ -599,8 +599,10 @@ class OXECoTDatasets:
         """Compute number of batches per epoch based on dataset length and batch size."""
         import jax
 
+        num_transitions = next(v.num_transitions for k, v in self.global_statistics.items() if "state" in k)
+
         return int(
-            self.global_statistics["state"].num_transitions
+            num_transitions
             // (self.batch_size * jax.process_count())
             * self.config.val_fraction
             * 0.8  # empirically estimated ratio for filtering

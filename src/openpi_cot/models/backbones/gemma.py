@@ -240,11 +240,19 @@ class Attention(nn.Module):
             )
 
         if self.stop_action_to_vlm_grad:
-            # Stop gradients when non-zero experts attend to expert 0 (expert 0 -> others is already masked).
+            # When non-zero experts attend to expert 0, block grads into expert 0's K/V,
+            # but keep grads into the querying expert (Q) intact.
             q_owner = token_owner[:, None, None, :, None]  # B,1,1,T,1
             k_owner = token_owner[:, None, None, None, :]  # B,1,1,1,S
             cross_to_expert0 = (q_owner != 0) & (k_owner == 0)
-            logits = jnp.where(cross_to_expert0, jax.lax.stop_gradient(logits), logits)
+
+            expert0_len = xs[0].shape[1]
+            k0 = k[:, :expert0_len, ...]
+            q_i = q[:, expert0_len:, ...]
+            logits0_i = jnp.einsum(
+                "BTKGH,BSKH->BKGTS", q_i, jax.lax.stop_gradient(k0), preferred_element_type=jnp.float32
+            )
+            logits = logits.at[:, :, :, expert0_len:, :expert0_len].set(logits0_i)
 
         # big_neg = jnp.finfo(logits.dtype).min
         big_neg = -2.3819763e38  # See gemma/modules.py
