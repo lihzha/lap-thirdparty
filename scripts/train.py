@@ -281,7 +281,7 @@ class TrainingStepRunner:
         rng: at.KeyArrayLike,
         state: training_utils.TrainState,
         batch: tuple[CoTObservation | Observation, _model.Actions],
-        step: int,
+        step: at.Int[at.ArrayLike, ""],
     ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
         model = nnx.merge(state.model_def, state.params)
         model.train()

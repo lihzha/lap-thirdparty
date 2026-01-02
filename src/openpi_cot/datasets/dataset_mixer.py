@@ -585,12 +585,22 @@ class OXECoTDatasets:
         return self.dataset_length
 
     @property
+    def num_batches_per_epoch(self) -> int:
+        """Compute number of batches to iterate over the full dataset for one epoch."""
+        import jax
+
+        per_step = self.batch_size * jax.process_count()
+        if per_step <= 0:
+            return 0
+        return (self.dataset_length + per_step - 1) // per_step
+
+    @property
     def num_val_batches_per_epoch(self) -> int:
         """Compute number of batches per epoch based on dataset length and batch size."""
         import jax
 
         return int(
-            self.global_statistics["actions"].num_transitions
+            self.global_statistics["states"].num_transitions
             // (self.batch_size * jax.process_count())
             * self.config.val_fraction
             * 0.8  # empirically estimated ratio for filtering
