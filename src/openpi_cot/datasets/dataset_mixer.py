@@ -600,7 +600,7 @@ class OXECoTDatasets:
         import jax
 
         return int(
-            self.global_statistics["states"].num_transitions
+            self.global_statistics["state"].num_transitions
             // (self.batch_size * jax.process_count())
             * self.config.val_fraction
             * 0.8  # empirically estimated ratio for filtering
