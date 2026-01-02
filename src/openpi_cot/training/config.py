@@ -916,6 +916,7 @@ class TrainConfig(upstream_config.TrainConfig):
     keep_period: int | None = 10000
     resume: bool = True
     ema_decay: float | None = 0.999
+    ema_start_step: int = 10000
     # New field
     use_validation: bool = True
     val_interval: int = 2000

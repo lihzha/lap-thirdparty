@@ -160,13 +160,9 @@ def init_tpu(config: _config.TrainConfig):
     return effective_fsdp_devices
 
 
-def _validate_loaded_params(
-    expected: at.Params, got: at.Params, *, allow_partial: bool
-) -> dict[tuple[str, ...], Any]:
+def _validate_loaded_params(expected: at.Params, got: at.Params, *, allow_partial: bool) -> dict[tuple[str, ...], Any]:
     flat_expected = traverse_util.flatten_dict(expected)
-    flat_got = {
-        k: v for k, v in traverse_util.flatten_dict(got).items() if not isinstance(v, jax.ShapeDtypeStruct)
-    }
+    flat_got = {k: v for k, v in traverse_util.flatten_dict(got).items() if not isinstance(v, jax.ShapeDtypeStruct)}
 
     unexpected = [k for k in flat_got if k not in flat_expected]
     if unexpected:
@@ -285,6 +281,7 @@ class TrainingStepRunner:
         rng: at.KeyArrayLike,
         state: training_utils.TrainState,
         batch: tuple[CoTObservation | Observation, _model.Actions],
+        step: int,
     ) -> tuple[training_utils.TrainState, dict[str, at.Array]]:
         model = nnx.merge(state.model_def, state.params)
         model.train()
@@ -323,7 +320,7 @@ class TrainingStepRunner:
         grad_norm_f32 = optax.global_norm(jax.tree.map(lambda g: g.astype(jnp.float32), grads))
 
         new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
-        if state.ema_decay is not None:
+        if state.ema_decay is not None and step >= self.config.ema_start_step:
             new_state = dataclasses.replace(
                 new_state,
                 ema_params=jax.tree.map(
@@ -493,7 +490,7 @@ def main(config: _config.TrainConfig):
     train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
         train_runner,
-        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding, None),
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
     )
@@ -577,7 +574,7 @@ def main(config: _config.TrainConfig):
         # Profiling: Time training step
         # train_start = time.perf_counter()
         with sharding.set_mesh(mesh):
-            train_state, info = ptrain_step(train_rng, train_state, batch)
+            train_state, info = ptrain_step(train_rng, train_state, batch, step)
         infos.append(info)
 
         if verbose_mode:
