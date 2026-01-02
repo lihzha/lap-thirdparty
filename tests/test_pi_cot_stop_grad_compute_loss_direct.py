@@ -139,39 +139,15 @@ def test_compute_loss_blocks_action_loss_to_vlm_params():
     grads_stop = _compute_grads(model_stop, jax.random.PRNGKey(1), observation, actions)
     grads_allow = _compute_grads(model_allow, jax.random.PRNGKey(1), observation, actions)
 
-    # inside test_compute_loss_blocks_action_loss_to_vlm_params
-    prefix_tokens, prefix_mask, prefix_ar_mask = model_allow.embed_prefix(observation)
-    suffix_inputs = model_allow.prepare_suffix(observation, actions, jax.random.PRNGKey(0), jax.random.PRNGKey(1))
-    combined_mask = model_allow._build_combined_attention_mask(
-        prefix_mask,
-        prefix_ar_mask,
-        model_allow._build_prefix_action_mask(prefix_mask, observation),
-        suffix_inputs["suffix_mask"],
-        suffix_inputs["suffix_ar_mask"],
-    )
-    combined_positions = model_allow._build_combined_positions(
-        prefix_mask, model_allow._build_prefix_action_mask(prefix_mask, observation), suffix_inputs["suffix_mask"]
-    )
+    prefix_tokens, prefix_mask, _ = model_allow.embed_prefix(observation)
+    prefix_mask_action = model_allow._build_prefix_action_mask(prefix_mask, observation)
+    # text positions are the last prompt_len positions in the prefix
+    prompt_len = observation.tokenized_prompt.shape[1]
+    text_mask_action = prefix_mask_action[:, -prompt_len:]
+    print("text tokens kept:", text_mask_action.sum())
 
-    def _action_loss_from_prefix(prefix_tokens):
-        pre_logits, _ = model_allow.PaliGemma.llm(
-            embedded=[prefix_tokens, suffix_inputs["suffix_tokens"]],
-            positions=combined_positions,
-            mask=combined_mask,
-            adarms_cond=[None, suffix_inputs["adarms_cond"]],
-        )
-        suffix_out = pre_logits[1]
-        loss, _ = model_allow._compute_action_loss(suffix_out, suffix_inputs["u_t"])
-        return jnp.mean(loss)
-
-    print("grad wrt prefix_tokens:", jnp.linalg.norm(jax.grad(_action_loss_from_prefix)(prefix_tokens)))
-
-    nonzero = {
-        k: float(jnp.linalg.norm(v.value if hasattr(v, "value") else v))
-        for k, v in grads_allow.flat_state().items()
-        if float(jnp.linalg.norm(v.value if hasattr(v, "value") else v)) > 0
-    }
-    print([k for k in nonzero if "llm" in k][:20])
+    _IMG_FILTER = nnx_utils.PathRegex(".*img.*")
+    print("grad img:", float(_grad_norm(grads_allow, _IMG_FILTER)))
 
     print(f"Grad norm VLM (stop): {float(_grad_norm(grads_stop, _VLM_FILTER))}")
     print(f"Grad norm VLM (allow): {float(_grad_norm(grads_allow, _VLM_FILTER))}")
