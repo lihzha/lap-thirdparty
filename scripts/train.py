@@ -320,15 +320,18 @@ class TrainingStepRunner:
         grad_norm_f32 = optax.global_norm(jax.tree.map(lambda g: g.astype(jnp.float32), grads))
 
         new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
-        if state.ema_decay is not None and step >= self.config.ema_start_step:
-            new_state = dataclasses.replace(
-                new_state,
-                ema_params=jax.tree.map(
-                    lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
-                    state.ema_params,
-                    new_params,
-                ),
-            )
+        if state.ema_decay is not None:
+            def _apply_ema(s):
+                return dataclasses.replace(
+                    s,
+                    ema_params=jax.tree.map(
+                        lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
+                        s.ema_params,
+                        new_params,
+                    ),
+                )
+
+            new_state = jax.lax.cond(step >= self.config.ema_start_step, _apply_ema, lambda s: s, new_state)
 
         kernel_params = nnx.state(
             model,
