@@ -58,7 +58,79 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             schema = get_language_action_format(self.language_action_format)
             object.__setattr__(self, "language_action_format", schema)
 
-    def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
+    @staticmethod
+    def _decode_text(value, default: str = "") -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
+        if isinstance(value, str):
+            return value
+        return default
+
+    def _dataset_name(self, data: dict) -> str:
+        return self._decode_text(data.get("dataset_name"), default="")
+
+    def _parse_prompt(self, data: dict) -> str:
+        prompt = data.get("prompt")
+        assert prompt is not None, "Prompt missing from data"
+        prompt_str = self._decode_text(prompt, default="")
+        dataset_name = self._dataset_name(data)
+        if "r1_lite" in dataset_name:
+            prompt_str = prompt_str.split("@")[-1]
+        return prompt_str
+
+    @staticmethod
+    def _image_mask(image: np.ndarray) -> np.bool_:
+        return np.False_ if np.all(image == 0.0) else np.True_
+
+    def _collect_images(
+        self,
+        data: dict,
+        base_image: np.ndarray,
+        needs_wrist_rotation: bool,
+        is_prediction_sample: bool,
+        pred_use_primary: bool,
+    ) -> tuple[list[np.ndarray], list[np.bool_]]:
+        images: list[np.ndarray] = []
+        image_masks: list[np.bool_] = []
+
+        def add_image(image: np.ndarray, apply_rotation: bool) -> None:
+            image_mask = self._image_mask(image)
+            if apply_rotation and image_mask:
+                image = np.rot90(image, k=2)
+            images.append(image)
+            image_masks.append(image_mask)
+
+        if not is_prediction_sample:
+            add_image(base_image, apply_rotation=False)
+            for key in IMAGE_KEYS[1:]:
+                if key in data["observation"]:
+                    wrist_image = parse_image(data["observation"][key])
+                    if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(
+                        self.wrist_image_dropout_prob
+                    ):
+                        wrist_image = np.zeros_like(base_image)
+                    add_image(wrist_image, apply_rotation=needs_wrist_rotation)
+                else:
+                    add_image(np.zeros_like(base_image), apply_rotation=False)
+        elif not pred_use_primary:
+            for key in IMAGE_KEYS:
+                if key in data["observation"]:
+                    image = parse_image(data["observation"][key])
+                    add_image(image, apply_rotation=needs_wrist_rotation)
+                else:
+                    add_image(np.zeros_like(base_image), apply_rotation=False)
+        else:
+            add_image(base_image, apply_rotation=False)
+            for key in IMAGE_KEYS[1:]:
+                if key in data["observation"]:
+                    wrist_image = parse_image(data["observation"][key])
+                    add_image(wrist_image, apply_rotation=False)
+                else:
+                    add_image(np.zeros_like(base_image), apply_rotation=False)
+
+        return images, image_masks
+
+    def _prepare_inputs(self, data: dict) -> dict:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST, ModelType.PI0_FAST}
         assert "observation" in data
         assert IMAGE_KEYS[0] in data["observation"]
@@ -66,78 +138,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if base_image is None:
             raise ValueError("Base image missing from observation")
 
-        # Check if current dataset requires wrist rotation
-        dataset_name = (
-            data.get("dataset_name", b"").decode()
-            if isinstance(data.get("dataset_name"), bytes)
-            else data.get("dataset_name", "")
-        )
-
+        dataset_name = self._dataset_name(data)
         needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
         is_prediction_sample = data.get("is_prediction_sample", False)
         pred_use_primary = data.get("pred_use_primary", False)
 
-        images = []
-        image_masks = []
-
-        if not is_prediction_sample:
-            # Training/validation: base image without rotation, wrist images with rotation if needed
-            base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
-            images.append(base_image)
-            image_masks.append(base_image_mask)
-
-            # Process wrist images (may need rotation)
-            for k in IMAGE_KEYS[1:]:
-                if k in data["observation"]:
-                    wrist_image = parse_image(data["observation"][k])
-                    wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
-
-                    # Rotate wrist image by 180 degrees for specific datasets
-                    if needs_wrist_rotation and wrist_image_mask:
-                        wrist_image = np.rot90(wrist_image, k=2)
-                else:
-                    wrist_image = np.zeros_like(base_image)
-                    wrist_image_mask = np.False_
-
-                # Optional dropout: randomly mask out wrist image
-                if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
-                    wrist_image_mask = np.False_
-
-                images.append(wrist_image)
-                image_masks.append(wrist_image_mask)
-        elif not pred_use_primary:
-            # Prediction with secondary camera: both base and wrist images may need rotation
-            for k in IMAGE_KEYS:
-                if k in data["observation"]:
-                    image = parse_image(data["observation"][k])
-                    image_mask = np.False_ if np.all(image == 0.0) else np.True_
-
-                    # Rotate both images by 180 degrees for specific datasets
-                    if needs_wrist_rotation and image_mask:
-                        image = np.rot90(image, k=2)
-                else:
-                    image = np.zeros_like(base_image)
-                    image_mask = np.False_
-
-                images.append(image)
-                image_masks.append(image_mask)
-        else:
-            # Prediction with primary camera: both base and wrist images, no rotation needed
-            base_image_mask = np.False_ if np.all(base_image == 0) else np.True_
-            images.append(base_image)
-            image_masks.append(base_image_mask)
-
-            # Process wrist images (no rotation needed)
-            for k in IMAGE_KEYS[1:]:
-                if k in data["observation"]:
-                    wrist_image = parse_image(data["observation"][k])
-                    wrist_image_mask = np.False_ if np.all(wrist_image == 0.0) else np.True_
-                else:
-                    wrist_image = np.zeros_like(base_image)
-                    wrist_image_mask = np.False_
-
-                images.append(wrist_image)
-                image_masks.append(wrist_image_mask)
+        images, image_masks = self._collect_images(
+            data, base_image, needs_wrist_rotation, is_prediction_sample, pred_use_primary
+        )
 
         if self.model_type == ExtendedModelType.PI_FAST:
             image_masks = [np.True_ for _ in image_masks]
@@ -159,21 +167,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         #     "image_mask": dict(zip(names, image_masks, strict=True)),
         # }
 
-        prompt = data.get("prompt")
-        assert prompt is not None, "Prompt missing from data"
-        if isinstance(prompt, bytes):  # training time
-            prompt_str = prompt.decode("utf-8")
-        elif isinstance(prompt, str):  # inference time
-            prompt_str = prompt
-        else:
-            raise ValueError(f"Prompt is not a string or bytes: {prompt}")
-
-        if "dataset_name" in data and "r1_lite" in data["dataset_name"].decode():
-            prompt_str = prompt_str.split("@")[-1]
-
-        inputs["prompt"] = prompt_str
-        if "dataset_name" in data:
-            inputs["dataset_name"] = data["dataset_name"].decode()
+        inputs["prompt"] = self._parse_prompt(data)
+        if dataset_name:
+            inputs["dataset_name"] = dataset_name
 
         # Extract state_type if available
         # state_type = data.get("state_type")
@@ -198,32 +194,32 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         inputs["is_prediction_sample"] = is_prediction_sample
         return inputs
 
-    def _prepare_text(
+    def _summarize_language_actions(
         self, data: dict, lang_action_key: str, initial_state: np.ndarray = None, dataset_name=None
-    ) -> tuple[dict, float | None]:
-        la = data[lang_action_key]
+    ) -> tuple[str | None, str]:
+        language_actions = data[lang_action_key]
         is_bimanual: bool = data.get("is_bimanual", False)
         is_navigation: bool = data.get("is_navigation", False)
         has_wrist_image: bool = data["has_wrist_image"]
-        frame_desc = "robot base frame"
+        frame_description = "robot base frame"
 
-        cond = self.language_action_format.use_eef_frame and initial_state is not None
+        use_eef_frame = self.language_action_format.use_eef_frame and initial_state is not None
         if self.random_base_frame:
-            cond = cond and has_wrist_image and random.random() < 0.9
+            use_eef_frame = use_eef_frame and has_wrist_image and random.random() < 0.9
 
         # Transform to EEF frame if requested
-        if cond:
-            la = transform_actions_to_eef_frame(la, initial_state, dataset_name)
-            frame_desc = "end-effector frame"
+        if use_eef_frame:
+            language_actions = transform_actions_to_eef_frame(language_actions, initial_state, dataset_name)
+            frame_description = "end-effector frame"
         if is_bimanual:
             summed = summarize_bimanual_numeric_actions(
-                la,
+                language_actions,
                 self.language_action_format.get_sum_decimal(),
                 self.language_action_format.include_rotation,
             )
         elif is_navigation:
             summed = summarize_numeric_actions(
-                la,
+                language_actions,
                 "nearest_10",
                 include_rotation=True,
                 rotation_precision=10,
@@ -232,13 +228,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             )
         else:
             summed = summarize_numeric_actions(
-                la,
+                language_actions,
                 initial_state=initial_state,
                 sum_decimal=self.language_action_format.get_sum_decimal(),
                 include_rotation=self.language_action_format.include_rotation,
                 stateless_gripper=self.stateless_gripper,
             )
-        return summed, frame_desc
+        return summed, frame_description
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
@@ -248,9 +244,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         inputs = self._prepare_inputs(data)
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)
-        dataset_name = data.get("dataset_name")
-        if isinstance(dataset_name, bytes):
-            dataset_name = dataset_name.decode("utf-8")
+        dataset_name = self._dataset_name(data)
 
         is_vqa_sample = data.get("is_vqa_sample")
         inputs["is_vqa_sample"] = is_vqa_sample
@@ -263,8 +257,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             # Caption is a single string, so wrap it in a list for consistency
             if "caption" in data:
                 caption = data["caption"]
-                if isinstance(caption, bytes):
-                    caption = caption.decode("utf-8")
+                caption = self._decode_text(caption, default="")
                 # Store caption as single-element list for consistency
                 inputs["language_actions"] = caption
             else:
@@ -284,7 +277,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if "language_actions" in data and self.enable_langact_training:
             initial_state = np.asarray(data["raw_state"])
 
-            inputs["language_actions"], inputs["frame_description"] = self._prepare_text(
+            inputs["language_actions"], inputs["frame_description"] = self._summarize_language_actions(
                 data, "language_actions", initial_state, dataset_name=dataset_name
             )
             if self.use_rough_scale:
