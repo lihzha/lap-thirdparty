@@ -215,6 +215,11 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         super().__init__(**kwargs)
         self._fast_skip_tokens = 128  # Skip last 128 tokens in PaliGemma vocab since they are special tokens
         self._fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
+        # self._fast_tokenizer = AutoProcessor.from_pretrained(
+        #     "/home/tennyyin/.cache/huggingface/hub/models--physical-intelligence--fast/snapshots/ec4d7aa71691cac0b8bed6942be45684db2110f4",
+        #     trust_remote_code=True,
+        #     local_files_only=True,
+        # )
 
     # def tokenize_fast_cot(
     #     self, prompt: str, state: np.ndarray, actions: np.ndarray | None
@@ -345,6 +350,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
             state_dropout=state_dropout,
         )
+        print(formatted_prompt)
 
         # Tokenize prompt
         pad_id = self._tokenizer.pad_id()

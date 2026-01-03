@@ -9,7 +9,7 @@ from openpi_client import image_tools
 sys.path.append(".")
 from shared import BaseEvalRunner, Args
 from helpers import binarize_gripper_actions_np, euler_to_rot6d
-
+from PIL import Image
 
 def _encode_image_if_needed(image, encoding: str):
     if encoding != "tf_jpeg":
@@ -26,7 +26,7 @@ class FrankaEvalRunner(BaseEvalRunner):
         super().__init__(args)
         self.side_image_name = "right_image"
 
-    def _extract_observation(self, obs_dict):
+    def _extract_observation(self, obs_dict, save_to_disk=False):
         image_observations = obs_dict["image"]
         # In addition to image observations, also capture the proprioceptive state
         robot_state = obs_dict["robot_state"]
@@ -44,6 +44,14 @@ class FrankaEvalRunner(BaseEvalRunner):
         wrist_image = image_observations["1"][::-1, ::-1, ::-1] # rotate 180
         right_image = _encode_image_if_needed(right_image, self.args.right_image_encoding)
         wrist_image = _encode_image_if_needed(wrist_image, self.args.wrist_image_encoding)
+
+        right_image = image_tools.resize_with_pad(right_image, 224, 224)
+        wrist_image = image_tools.resize_with_pad(wrist_image, 224, 224)
+
+        if save_to_disk:
+            combined_image = np.concatenate([right_image, wrist_image], axis=1)
+            combined_image = Image.fromarray(combined_image)
+            combined_image.save("robot_camera_views.png")
 
         return {
             "right_image": right_image,
@@ -70,7 +78,7 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
             gripper_action_space="position",
         )
     
-    def _extract_observation(self, obs_dict):
+    def _extract_observation(self, obs_dict, save_to_disk=False):
         image_observations = obs_dict["image"]
         # In addition to image observations, also capture the proprioceptive state
         robot_state = obs_dict["robot_state"]
@@ -82,6 +90,14 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
         wrist_image = image_observations["1"][:, :, ::-1]
         right_image = _encode_image_if_needed(right_image, self.args.right_image_encoding)
         wrist_image = _encode_image_if_needed(wrist_image, self.args.wrist_image_encoding)
+
+        right_image = image_tools.resize_with_pad(right_image, 224, 224)
+        wrist_image = image_tools.resize_with_pad(wrist_image, 224, 224)
+
+        if save_to_disk:
+            combined_image = np.concatenate([right_image, wrist_image], axis=1)
+            combined_image = Image.fromarray(combined_image)
+            combined_image.save("robot_camera_views.png")
 
         return {
             "right_image": right_image,
@@ -97,14 +113,14 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
     def obs_to_request(self, curr_obs, instruction):
 
         request = {
-            "observation/exterior_image_1_left": image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
+            "observation/exterior_image_1_left": curr_obs[self.side_image_name],
             "observation/cartesian_position": curr_obs["cartesian_position"],
             "observation/gripper_position": curr_obs["gripper_position"],
             "observation/joint_position": curr_obs["joint_position"],
             "prompt": instruction,
         }
         if self.args.use_wrist_camera:
-            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
+            request["observation/wrist_image_left"] =curr_obs["wrist_image"]
         return request
 
 

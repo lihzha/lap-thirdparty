@@ -48,6 +48,7 @@ class Args:
     run_upstream: bool = False  # whether to run the upstream policy server
     right_image_encoding: str = "raw"  # choose from ["raw", "tf_jpeg"]
     wrist_image_encoding: str = "raw"  # choose from ["raw", "tf_jpeg"]
+    delta_chunk: bool = True  # whether the action chunks are delta actions or absolute positions
 
 
 class BaseEvalRunner:
@@ -75,7 +76,7 @@ class BaseEvalRunner:
             action = np.concatenate([action[:-1], np.zeros((1,))])
         return action
 
-    def _extract_observation(self, obs_dict):
+    def _extract_observation(self, obs_dict, save_to_disk=False):
         raise NotImplementedError()
 
     def _record_frames(self, curr_obs, video, wrist_video):
@@ -92,7 +93,7 @@ class BaseEvalRunner:
     def obs_to_request(self, curr_obs, instruction):
         request = {
             "observation": {
-                IMAGE_KEYS[0]: image_tools.resize_with_pad(curr_obs[self.side_image_name], 224, 224),
+                IMAGE_KEYS[0]: curr_obs[self.side_image_name],
                 "cartesian_position": curr_obs["cartesian_position"],
                 "gripper_position": curr_obs["gripper_position"],
                 "joint_position": curr_obs["joint_position"],
@@ -102,7 +103,7 @@ class BaseEvalRunner:
             "batch_size": None,
         }
         if self.args.use_wrist_camera:
-            request["observation"][IMAGE_KEYS[1]] = image_tools.resize_with_pad(curr_obs["wrist_image"], 224, 224)
+            request["observation"][IMAGE_KEYS[1]] = curr_obs["wrist_image"]
         return request
 
     def get_action_from_response(self, response, curr_obs, use_quaternions=False):
@@ -127,9 +128,10 @@ class BaseEvalRunner:
             pred_action_chunk = response["actions"].copy()
             if pred_action_chunk.shape[-1] > 7:
                 return pred_action_chunk  # joint position or velocity
-            pred_action_chunk[:, :3] += curr_pos
-            rpy_arr = interpolate_rpy(curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0])
-            pred_action_chunk[:, 3:6] = rpy_arr
+            if self.args.delta_chunk:
+                pred_action_chunk[:, :3] += curr_pos
+                rpy_arr = add_euler(curr=curr_rpy, delta=pred_action_chunk[:, 3:6])
+                pred_action_chunk[:, 3:6] = rpy_arr
             pred_action_chunk[:, 6] = 1 - pred_action_chunk[:, 6]  # invert gripper action
             if use_quaternions:
                 quat_arr = R.from_euler("xyz", pred_action_chunk[:, 3:6], degrees=False).as_quat()  # (x,y,z,w)
@@ -171,11 +173,12 @@ class BaseEvalRunner:
         chunk_length = refresh_horizon
         video = []
         wrist_video = []
-        for _ in range(self.args.max_timesteps):
+        for t in range(self.args.max_timesteps):
             start_time = time.time()
             try:
                 curr_obs = self._extract_observation(
                     self.env.get_observation(),
+                    save_to_disk=t == 0
                 )
                 self._record_frames(curr_obs, video, wrist_video)
                 if pred_action_chunk is None or actions_from_chunk_completed >= chunk_length:
@@ -184,6 +187,10 @@ class BaseEvalRunner:
                         pred_action_chunk = fetch_action_chunk(curr_obs)
                         chunk_length = min(refresh_horizon, len(pred_action_chunk))
                 action = pred_action_chunk[actions_from_chunk_completed]
+                if not self.args.delta_chunk:
+                    action[:3] += curr_obs["cartesian_position"][:3]
+                    rpy_arr = add_euler(curr=curr_obs["cartesian_position"][3:6], delta=action[3:6])
+                    action[3:6] = rpy_arr
                 action = self.binarize_gripper(action)
                 actions_from_chunk_completed += 1
                 if print_action:
@@ -234,3 +241,19 @@ class BaseEvalRunner:
             return lambda curr_obs: policy_client.infer(self.obs_to_request(curr_obs, instruction))["actions"]
 
         self._run_sessions(make_fetcher, refresh_horizon=self.args.open_loop_horizon, print_action=True)
+    
+def add_euler(curr: np.ndarray, delta: np.ndarray, seq: str = "xyz") -> np.ndarray:
+    """
+    Add Euler-angle delta to a current Euler rotation.
+    Args:
+        curr:  (3,) array for current Euler angles [roll, pitch, yaw]
+        delta: (3,) array for Euler delta
+        seq:   rotation sequence (default: "xyz", extrinsic)
+    Returns:
+        new_euler: (3,) array representing updated Euler angles
+    """
+    r_curr = R.from_euler(seq, curr)
+    r_delta = R.from_euler(seq, delta)
+    # Compose rotations: new = curr * delta
+    r_new = r_curr * r_delta
+    return r_new.as_euler(seq)
