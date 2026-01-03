@@ -350,7 +350,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
             state_dropout=state_dropout,
         )
-        print(formatted_prompt)
 
         # Tokenize prompt
         pad_id = self._tokenizer.pad_id()
