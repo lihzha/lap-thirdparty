@@ -345,7 +345,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
             state_dropout=state_dropout,
         )
-        print(formatted_prompt)
 
         # Tokenize prompt
         pad_id = self._tokenizer.pad_id()
@@ -353,11 +352,11 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         if actions is not None:
-            raise ValueError
             action_tokens = self._fast_tokenizer(actions[None])[0]
             action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
             postfix_tokens = action_tokens_in_pg.tolist() + self._tokenizer.encode("|", add_eos=True)
-        postfix_tokens = []
+        else:
+            postfix_tokens = []
 
         tokens = prefix_tokens + postfix_tokens
         token_mask = [True] * len(tokens)
