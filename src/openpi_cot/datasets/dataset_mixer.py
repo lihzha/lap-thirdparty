@@ -340,7 +340,7 @@ class OXECoTDatasets:
             total_action_n += action_n
             # Pad each dataset's mean to action_dim before accumulating
             action_mean_padded = np.pad(
-                stats["actions"].mean, (0, max(action_dim - len(stats["actions"].mean), 0)), mode="constant"
+                stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode="constant"
             )
             action_weighted_sum += action_mean_padded * action_n
 
@@ -356,13 +356,10 @@ class OXECoTDatasets:
 
             # Pad local stats to action_dim for comparison with global stats
             action_local_mean = np.pad(
-                stats["actions"].mean, (0, max(action_dim - len(stats["actions"].mean), 0)), mode="constant"
+                stats["actions"].mean, (0, action_dim - len(stats["actions"].mean)), mode="constant"
             )
             action_local_std = np.pad(
-                stats["actions"].std,
-                (0, max(action_dim - len(stats["actions"].std), 0)),
-                mode="constant",
-                constant_values=0.0,
+                stats["actions"].std, (0, action_dim - len(stats["actions"].std)), mode="constant", constant_values=0.0
             )
 
             # var_i + (mean_i - global_mean)^2
@@ -377,19 +374,13 @@ class OXECoTDatasets:
         # Pad each dataset's quantiles to action_dim first, then compute min/max
         action_q01_padded = [
             np.pad(
-                stats["actions"].q01,
-                (0, max(action_dim - len(stats["actions"].q01), 0)),
-                mode="constant",
-                constant_values=0,
+                stats["actions"].q01, (0, action_dim - len(stats["actions"].q01)), mode="constant", constant_values=0
             )
             for stats in all_dataset_statistics.values()
         ]
         action_q99_padded = [
             np.pad(
-                stats["actions"].q99,
-                (0, max(action_dim - len(stats["actions"].q99), 0)),
-                mode="constant",
-                constant_values=0,
+                stats["actions"].q99, (0, action_dim - len(stats["actions"].q99)), mode="constant", constant_values=0
             )
             for stats in all_dataset_statistics.values()
         ]
@@ -399,20 +390,14 @@ class OXECoTDatasets:
         # Compute actual global min/max from per-dataset statistics
         action_min_padded = [
             np.pad(
-                stats["actions"].min,
-                (0, max(action_dim - len(stats["actions"].min), 0)),
-                mode="constant",
-                constant_values=0,
+                stats["actions"].min, (0, action_dim - len(stats["actions"].min)), mode="constant", constant_values=0
             )
             for dataset_name, stats in all_dataset_statistics.items()
             if dataset_name not in self.VQA_DATASETS
         ]
         action_max_padded = [
             np.pad(
-                stats["actions"].max,
-                (0, max(action_dim - len(stats["actions"].max), 0)),
-                mode="constant",
-                constant_values=0,
+                stats["actions"].max, (0, action_dim - len(stats["actions"].max)), mode="constant", constant_values=0
             )
             for dataset_name, stats in all_dataset_statistics.items()
             if dataset_name not in self.VQA_DATASETS
