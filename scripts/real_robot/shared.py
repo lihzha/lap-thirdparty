@@ -51,7 +51,7 @@ class Args:
 
 
 class BaseEvalRunner:
-    CHUNK_STEPS = 3
+    CHUNK_STEPS = 8
 
     def __init__(self, args):
         self.env = self.init_env()
@@ -113,6 +113,8 @@ class BaseEvalRunner:
                 pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
         else:
             pred_action_chunk = response["actions"].copy()
+            if pred_action_chunk.shape[-1] > 7:
+                return pred_action_chunk  # joint position or velocity
             pred_action_chunk[:, :3] += curr_pos
             rpy_arr = interpolate_rpy(curr=curr_rpy, delta=pred_action_chunk[:, 3:6], steps=pred_action_chunk.shape[0])
             pred_action_chunk[:, 3:6] = rpy_arr
@@ -174,6 +176,8 @@ class BaseEvalRunner:
                             # print(f"Time taken for inference: {et - st}")
                     # Select current action to execute from chunk
                     action = pred_action_chunk[actions_from_chunk_completed]
+                    # action[:3] = action[:3] + curr_obs["cartesian_position"][:3]
+                    # action[3:6] = add_euler(curr=action[3:6], delta=curr_obs["cartesian_position"][3:6])
                     action = self.binarize_gripper(action)
                     actions_from_chunk_completed += 1
                     self.env.step(action)
@@ -303,3 +307,23 @@ class BaseEvalRunner:
                 if "n" in answer.lower():
                     continue
                 break
+
+def add_euler(curr: np.ndarray, delta: np.ndarray, seq: str = "xyz") -> np.ndarray:
+    """
+    Add Euler-angle delta to a current Euler rotation.
+
+    Args:
+        curr:  (3,) array for current Euler angles [roll, pitch, yaw]
+        delta: (3,) array for Euler delta
+        seq:   rotation sequence (default: "xyz", extrinsic)
+    Returns:
+        new_euler: (3,) array representing updated Euler angles
+    """
+
+    r_curr = R.from_euler(seq, curr)
+    r_delta = R.from_euler(seq, delta)
+
+    # Compose rotations: new = delta * curr
+    r_new = r_delta * r_curr
+
+    return r_new.as_euler(seq)

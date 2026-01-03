@@ -36,12 +36,13 @@ class DroidEvalRunner(BaseEvalRunner):
         # left_image = left_image[..., ::-1]
         right_image = right_image[..., ::-1]
         wrist_image = wrist_image[::-1, ::-1, ::-1]
+        # wrist_image = wrist_image[..., ::-1]
         # In addition to image observations, also capture the proprioceptive state
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
         joint_position = np.array(robot_state["joint_positions"])
         gripper_position = np.array([robot_state["gripper_position"]])
-        gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
+        # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         # Create one combined image to make live viewing easy
         return {
             "right_image": right_image,
@@ -64,9 +65,28 @@ class DroidUpstreamEvalRunner(DroidEvalRunner):
     
     def obs_to_request(self, curr_obs, instruction):
 
+        # request = {
+        #     "observation": {
+        #         "base_0_rgb": image_tools.resize_with_pad(
+        #                 curr_obs[self.side_image_name], 224, 224
+        #             ),
+        #         "cartesian_position": curr_obs["cartesian_position"],
+        #         "gripper_position": curr_obs["gripper_position"],
+        #         "joint_position": curr_obs["joint_position"],
+        #         "state": np.concatenate([
+        #             curr_obs["joint_position"],
+        #             curr_obs["gripper_position"],
+        #         ]),
+        #     },
+        #     "prompt": instruction,
+        # }
+        # if self.args.use_wrist_camera:
+        #     request["observation"]["left_wrist_0_rgb"] = image_tools.resize_with_pad(curr_obs["wrist_image"][::-1, ::-1], 224, 224)
+        # return request
+
         request = {
             "observation/exterior_image_1_left": image_tools.resize_with_pad(
-                    curr_obs[self.side_image_name][0], 224, 224
+                    curr_obs[self.side_image_name], 224, 224
                 ),
             "observation/cartesian_position": curr_obs["cartesian_position"],
             "observation/gripper_position": curr_obs["gripper_position"],
@@ -74,7 +94,7 @@ class DroidUpstreamEvalRunner(DroidEvalRunner):
             "prompt": instruction,
         }
         if self.args.use_wrist_camera:
-            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"][0], 224, 224)
+            request["observation/wrist_image_left"] = image_tools.resize_with_pad(curr_obs["wrist_image"][::-1, ::-1], 224, 224)
         return request
 
 

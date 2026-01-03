@@ -571,7 +571,7 @@ class PiCoT(_pi0.Pi0):
         temperature: float = 0.0,
     ) -> _model.Actions:
         observation = preprocess_observation(
-            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
+            None, observation, train=False, image_keys=list(observation.images.keys()), aug_wrist_image=self.aug_wrist_image
         )
 
         # Embed only the VLM (expert 0) prefix tokens (images + text).

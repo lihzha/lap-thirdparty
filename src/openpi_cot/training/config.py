@@ -37,8 +37,10 @@ from openpi_cot.transforms import ExtractFASTActions
 from openpi_cot.transforms import PadStates
 from openpi_cot.transforms import TokenizeFASTCoTInputs
 from openpi_cot.transforms import TokenizePromptAndReasoning
+import openpi.models.pi0_fast as pi0_fast
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
+UpstreamModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
 
@@ -253,7 +255,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                 ],
                 outputs=outputs,
             )
-        if model_config.model_type == ModelType.PI_FAST:
+        if model_config.model_type in (ModelType.PI_FAST, UpstreamModelType.PI0_FAST):
             return upstream_transforms.Group(
                 inputs=[
                     upstream_transforms.InjectDefaultPrompt(self.default_prompt),
@@ -998,21 +1000,22 @@ _CONFIGS = [
         base_name="pi_combined_fast_cot",
         devices=["v6", "v6europe", "v4", "local", "v5"],
         model=pi_cot_config.PiCoTConfig(
-            # action_dim=8,
-            # action_horizon=10,
-            # max_token_len=250,
-            # pi05=False,
-            # discrete_state_input=False,
-            # use_fast=True,
-            # prompt_format="pi05_notime_nostate",
-            action_dim=7,
-            action_horizon=16,
+            action_dim=8,
+            action_horizon=10,
             max_token_len=250,
-            pi05=True,
-            discrete_state_input=True,
+            pi05=False,
+            discrete_state_input=False,
             use_fast=True,
-            prompt_format="pi05_notime",
+            prompt_format="pi05_notime_nostate",
+            # action_dim=7,
+            # action_horizon=16,
+            # max_token_len=250,
+            # pi05=True,
+            # discrete_state_input=True,
+            # use_fast=True,
+            # prompt_format="pi05_notime",
         ),
+        # model=pi0_fast.Pi0FASTConfig(action_dim=8, action_horizon=10),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
             "repo_id": "combined",

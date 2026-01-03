@@ -4,6 +4,7 @@ import re
 
 import numpy as np
 from openpi import transforms as upstream_transforms
+from openpi.models.model import ModelType
 
 from openpi_cot.datasets.utils.helpers import ActionEncoding
 from openpi_cot.models.model_adapter import IMAGE_KEYS
@@ -58,7 +59,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             object.__setattr__(self, "language_action_format", schema)
 
     def _prepare_inputs(self, data: dict) -> tuple[dict, dict]:
-        assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST}
+        assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST, ModelType.PI0_FAST}
         assert "observation" in data
         assert IMAGE_KEYS[0] in data["observation"]
         base_image = parse_image(data["observation"][IMAGE_KEYS[0]])
@@ -340,7 +341,7 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         # Get actions and reasoning from data
 
         if "reasoning" not in data:
-            return {"actions": np.asarray(data["actions"][:, :7]), "reasoning": None}
+            return {"actions": np.asarray(data["actions"][:, :8]), "reasoning": None}
         reasoning = data.get("reasoning")
 
         # If decoding schema is provided and we have reasoning, parse it to get actions

@@ -229,6 +229,8 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
     #     prefix = f"Task: {cleaned_text}, State: {state_str};\n"
     #     prefix_tokens = self._tokenizer.encode(prefix, add_bos=True)
 
+    #     print(prefix)
+
     #     if actions is not None:
     #         # Tokenize actions with FAST tokenizer --> map to last tokens in PaliGemma vocab
     #         action_tokens = self._fast_tokenizer(actions[None])[0]

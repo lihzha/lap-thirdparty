@@ -504,6 +504,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             "tokenized_prompt_mask": token_mask,
             "tokenized_langact_mask": ar_mask,
             "token_loss_mask": loss_mask,
+            # "token_ar_mask": ar_mask.astype(np.int32),
         }
 
 
