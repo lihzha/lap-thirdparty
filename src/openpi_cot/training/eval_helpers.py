@@ -206,44 +206,51 @@ def evaluate_token_accuracy(
             eval_info = peval_step(eval_rng, train_state, batch)
             # Bring sharded arrays to host memory for local computation.
             per_token_loss = jnp.asarray(training_utils.to_local_array(eval_info["per_token_loss"]))
-            number_mask = jnp.asarray(training_utils.to_local_array(batch[0].number_token_mask))[:, 1:]
-            direction_mask = jnp.asarray(training_utils.to_local_array(batch[0].direction_token_mask))[:, 1:]
-            tokenized_langact_mask = jnp.asarray(training_utils.to_local_array(batch[0].tokenized_langact_mask))[:, 1:]
+            if not config.model.use_fast:
+                number_mask = jnp.asarray(training_utils.to_local_array(batch[0].number_token_mask))[:, 1:]
+                direction_mask = jnp.asarray(training_utils.to_local_array(batch[0].direction_token_mask))[:, 1:]
+                tokenized_langact_mask = jnp.asarray(training_utils.to_local_array(batch[0].tokenized_langact_mask))[
+                    :, 1:
+                ]
 
-            def _masked_mean(mask):
-                mask_sum = jnp.sum(mask)
-                return jnp.sum(per_token_loss * mask) / mask_sum
+                def _masked_mean(mask):
+                    mask_sum = jnp.sum(mask)
+                    return jnp.sum(per_token_loss * mask) / mask_sum
 
-            number_token_loss = _masked_mean(number_mask)
-            direction_token_loss = _masked_mean(direction_mask)
-            other_token_mask = jnp.logical_and(
-                tokenized_langact_mask,
-                jnp.logical_not(
-                    jnp.logical_or(
-                        number_mask,
-                        direction_mask,
-                    )
-                ),
-            )
-            other_token_loss = _masked_mean(other_token_mask)
-            number_token_losses.append(number_token_loss)
-            direction_token_losses.append(direction_token_loss)
-            other_token_losses.append(other_token_loss)
+                number_token_loss = _masked_mean(number_mask)
+                direction_token_loss = _masked_mean(direction_mask)
+                other_token_mask = jnp.logical_and(
+                    tokenized_langact_mask,
+                    jnp.logical_not(
+                        jnp.logical_or(
+                            number_mask,
+                            direction_mask,
+                        )
+                    ),
+                )
+                other_token_loss = _masked_mean(other_token_mask)
+                number_token_losses.append(number_token_loss)
+                direction_token_losses.append(direction_token_loss)
+                other_token_losses.append(other_token_loss)
 
-            number_token_accuracies.append(
-                jnp.asarray(training_utils.to_local_array(eval_info["number_token_accuracy"]))
-            )
-            direction_token_accuracies.append(
-                jnp.asarray(training_utils.to_local_array(eval_info["direction_token_accuracy"]))
-            )
-            all_token_accuracies.append(jnp.asarray(training_utils.to_local_array(eval_info["token_accuracy"])))
+                number_token_accuracies.append(
+                    jnp.asarray(training_utils.to_local_array(eval_info["number_token_accuracy"]))
+                )
+                direction_token_accuracies.append(
+                    jnp.asarray(training_utils.to_local_array(eval_info["direction_token_accuracy"]))
+                )
+                all_token_accuracies.append(jnp.asarray(training_utils.to_local_array(eval_info["token_accuracy"])))
 
+    if not config.model.use_fast:
+        return {
+            "eval/number_token_loss": float(jnp.mean(jnp.array(number_token_losses))),
+            "eval/direction_token_loss": float(jnp.mean(jnp.array(direction_token_losses))),
+            "eval/other_token_loss": float(jnp.mean(jnp.array(other_token_losses))),
+            "eval/number_token_accuracy": float(jnp.mean(jnp.array(number_token_accuracies))),
+            "eval/direction_token_accuracy": float(jnp.mean(jnp.array(direction_token_accuracies))),
+            "eval/token_accuracy": float(jnp.mean(jnp.array(all_token_accuracies))),
+        }
     return {
-        "eval/number_token_loss": float(jnp.mean(jnp.array(number_token_losses))),
-        "eval/direction_token_loss": float(jnp.mean(jnp.array(direction_token_losses))),
-        "eval/other_token_loss": float(jnp.mean(jnp.array(other_token_losses))),
-        "eval/number_token_accuracy": float(jnp.mean(jnp.array(number_token_accuracies))),
-        "eval/direction_token_accuracy": float(jnp.mean(jnp.array(direction_token_accuracies))),
         "eval/token_accuracy": float(jnp.mean(jnp.array(all_token_accuracies))),
     }
 
