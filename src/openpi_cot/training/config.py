@@ -1072,7 +1072,7 @@ _CONFIGS = [
             enable_action_training=False,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime_nostate",
+            prompt_format="pi05_notime",
         ),
         data=RLDSCoTDataConfig(
             action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,

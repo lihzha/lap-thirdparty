@@ -186,10 +186,12 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     # Try to detect if state contains quaternions (length 7+) or euler angles (length 6+)
 
     # Assume euler angle format: [x, y, z, roll, pitch, yaw, ...]
-    # euler = initial_state[3:6]
-    # initial_rotation = R.from_euler("xyz", euler)
-    rot6d = initial_state[3:9]
-    initial_rotation = rot6d_to_rotmat(rot6d)
+    if len(initial_state) == 7:
+        euler = initial_state[3:6]
+        initial_rotation = R.from_euler("xyz", euler).as_matrix()
+    else:
+        rot6d = initial_state[3:9]
+        initial_rotation = rot6d_to_rotmat(rot6d)
 
     # Get rotation matrix: EEF -> base (inverse of base -> EEF)
     R_eef_to_base = initial_rotation

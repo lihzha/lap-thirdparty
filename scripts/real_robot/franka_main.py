@@ -10,6 +10,16 @@ sys.path.append(".")
 from shared import BaseEvalRunner, Args
 from helpers import binarize_gripper_actions_np, euler_to_rot6d
 
+
+def _encode_image_if_needed(image, encoding: str):
+    if encoding != "tf_jpeg":
+        return image
+    tensor = tf.convert_to_tensor(image)
+    if tensor.dtype != tf.uint8:
+        tensor = tf.image.convert_image_dtype(tensor, tf.uint8, saturate=True)
+    return tf.io.decode_jpeg(tf.io.encode_jpeg(tensor, quality=95), channels=3).numpy()
+
+
 class FrankaEvalRunner(BaseEvalRunner):
 
     def __init__(self, args):
@@ -22,6 +32,7 @@ class FrankaEvalRunner(BaseEvalRunner):
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
         euler = cartesian_position[3:6].copy()
+        # cartesian_position = np.concatenate([cartesian_position[:3], euler])
         cartesian_position = np.concatenate([cartesian_position[:3], euler_to_rot6d(euler)])
         gripper_position = np.array([robot_state["gripper_position"]])
         # print("Gripper position:", gripper_position)
@@ -31,23 +42,8 @@ class FrankaEvalRunner(BaseEvalRunner):
 
         right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
         wrist_image = image_observations["1"][::-1, ::-1, ::-1] # rotate 180
-
-        if self.args.right_image_encoding == "tf_jpeg":
-            right_tensor = tf.convert_to_tensor(right_image)
-            if right_tensor.dtype != tf.uint8:
-                right_tensor = tf.image.convert_image_dtype(right_tensor, tf.uint8, saturate=True)
-            right_image = tf.io.decode_jpeg(tf.io.encode_jpeg(right_tensor, quality=95), channels=3).numpy()
-        else:
-            right_image = right_image
-
-        if self.args.wrist_image_encoding == "tf_jpeg":
-            wrist_tensor = tf.convert_to_tensor(wrist_image)
-            if wrist_tensor.dtype != tf.uint8:
-                wrist_tensor = tf.image.convert_image_dtype(wrist_tensor, tf.uint8, saturate=True)
-            wrist_image = tf.io.decode_jpeg(tf.io.encode_jpeg(wrist_tensor, quality=95), channels=3).numpy()
-        else:
-            wrist_image = wrist_image
-
+        right_image = _encode_image_if_needed(right_image, self.args.right_image_encoding)
+        wrist_image = _encode_image_if_needed(wrist_image, self.args.wrist_image_encoding)
 
         return {
             "right_image": right_image,
@@ -79,29 +75,13 @@ class FrankaUpstreamEvalRunner(FrankaEvalRunner):
         # In addition to image observations, also capture the proprioceptive state
         robot_state = obs_dict["robot_state"]
         cartesian_position = np.array(robot_state["cartesian_position"])
-        print("Gripper position:", gripper_position)
         gripper_position = np.array([robot_state["gripper_position"]])
         gripper_position = binarize_gripper_actions_np(gripper_position)
 
-
         right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
         wrist_image = image_observations["1"][:, :, ::-1]
-
-        if self.args.right_image_encoding == "tf_jpeg":
-            right_tensor = tf.convert_to_tensor(right_image)
-            if right_tensor.dtype != tf.uint8:
-                right_tensor = tf.image.convert_image_dtype(right_tensor, tf.uint8, saturate=True)
-            right_image = tf.io.decode_jpeg(tf.io.encode_jpeg(right_tensor, quality=95), channels=3).numpy()
-        else:
-            right_image = right_image
-
-        if self.args.wrist_image_encoding == "tf_jpeg":
-            wrist_tensor = tf.convert_to_tensor(wrist_image)
-            if wrist_tensor.dtype != tf.uint8:
-                wrist_tensor = tf.image.convert_image_dtype(wrist_tensor, tf.uint8, saturate=True)
-            wrist_image = tf.io.decode_jpeg(tf.io.encode_jpeg(wrist_tensor, quality=95), channels=3).numpy()
-        else:
-            wrist_image = wrist_image
+        right_image = _encode_image_if_needed(right_image, self.args.right_image_encoding)
+        wrist_image = _encode_image_if_needed(wrist_image, self.args.wrist_image_encoding)
 
         return {
             "right_image": right_image,
@@ -138,4 +118,3 @@ if __name__ == "__main__":
         print("Running in base frame")
         eval_runner = FrankaEvalRunner(args)
         eval_runner.run()
-    eval_runner = FrankaEvalRunner(args)
