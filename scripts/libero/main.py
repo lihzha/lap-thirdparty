@@ -33,6 +33,7 @@ class PolicyType(str, enum.Enum):
     COT = "COT"
     FT = "FT"
     PI05_LIBERO = "PI05_LIBERO"
+    COT_FT = "COT_FT"
 
 
 @dataclasses.dataclass
@@ -303,7 +304,7 @@ def get_images_from_obs(obs, resize_size):
 
 def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_description: str):
     # Prepare observations dict
-    if policy_type == PolicyType.COT:
+    if policy_type in (PolicyType.COT, PolicyType.COT_FT):
         eef_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
         eef_rot6d = _quat2rot6d(obs["robot0_eef_quat"]).astype(np.float32, copy=False)
         gripper_qpos = np.asarray(obs["robot0_gripper_qpos"], dtype=np.float32)

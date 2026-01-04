@@ -37,7 +37,6 @@ from openpi_cot.transforms import ExtractFASTActions
 from openpi_cot.transforms import PadStates
 from openpi_cot.transforms import TokenizeFASTCoTInputs
 from openpi_cot.transforms import TokenizePromptAndReasoning
-import openpi.models.pi0_fast as pi0_fast
 
 ModelType: TypeAlias = _model_adapter.ExtendedModelType
 UpstreamModelType: TypeAlias = _model.ModelType
@@ -188,6 +187,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     stateless_gripper: bool = True
     filter_large_actions: bool = False
     random_base_frame: bool = True
+    random_mask_prob: float = 0.0
     use_rough_scale: bool = False
     horizon_seconds: list[float] = dataclasses.field(default_factory=lambda: [1.0])
 
@@ -375,6 +375,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     action_encoding=base_cfg.action_encoding,
                     language_action_format=base_cfg.language_action_format_name,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
+                    random_mask_prob=base_cfg.random_mask_prob,
                     stateless_gripper=base_cfg.stateless_gripper,
                     random_base_frame=base_cfg.random_base_frame,
                     filter_large_actions=base_cfg.filter_large_actions,
@@ -1125,7 +1126,7 @@ _CONFIGS = [
             max_token_len=180,
             pi05=True,
             discrete_state_input=True,
-            enable_action_training=False,
+            enable_action_training=True,
             enable_langact_training=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
@@ -1139,7 +1140,7 @@ _CONFIGS = [
             "dataset_type": "combined",
             "data_mix": "libero_finetune",
             "shuffle_buffer_size": 400_000,
-            "language_action_format_name": "verbose_eef_with_rotation",
+            "language_action_format_name": "verbose_with_rotation",
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),

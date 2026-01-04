@@ -49,6 +49,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     filter_large_actions: bool = False
     stateless_gripper: bool = True
     random_base_frame: bool = True
+    random_mask_prob: float = 0.0
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -79,8 +80,12 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         return prompt_str
 
     @staticmethod
-    def _image_mask(image: np.ndarray) -> np.bool_:
-        return np.False_ if np.all(image == 0.0) else np.True_
+    def _image_mask(image: np.ndarray, random_mask_prob: float = 0.0) -> np.bool_:
+        if np.all(image == 0.0):
+            if random_mask_prob > 0.0 and np.random.rand() < random_mask_prob:
+                return np.True_
+            return np.False_
+        return np.True_
 
     def _collect_images(
         self,
@@ -93,8 +98,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         images: list[np.ndarray] = []
         image_masks: list[np.bool_] = []
 
-        def add_image(image: np.ndarray, apply_rotation: bool) -> None:
-            image_mask = self._image_mask(image)
+        def add_image(image: np.ndarray, apply_rotation: bool, random_mask_prob: float = 0.0) -> None:
+            image_mask = self._image_mask(image, random_mask_prob=random_mask_prob)
             if apply_rotation and image_mask:
                 image = np.rot90(image, k=2)
             images.append(image)
@@ -105,13 +110,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             for key in IMAGE_KEYS[1:]:
                 if key in data["observation"]:
                     wrist_image = parse_image(data["observation"][key])
-                    if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(
-                        self.wrist_image_dropout_prob
-                    ):
+                    if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
                         wrist_image = np.zeros_like(base_image)
-                    add_image(wrist_image, apply_rotation=needs_wrist_rotation)
+                    add_image(wrist_image, apply_rotation=needs_wrist_rotation, random_mask_prob=self.random_mask_prob)
                 else:
-                    add_image(np.zeros_like(base_image), apply_rotation=False)
+                    add_image(np.zeros_like(base_image), apply_rotation=False, random_mask_prob=self.random_mask_prob)
         elif not pred_use_primary:
             for key in IMAGE_KEYS:
                 if key in data["observation"]:
