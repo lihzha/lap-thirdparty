@@ -34,7 +34,6 @@ from openpi_cot.shared.download import maybe_download
 import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
 from openpi_cot.transforms import ExtractFASTActions
-from openpi_cot.transforms import PadStates
 from openpi_cot.transforms import TokenizeFASTCoTInputs
 from openpi_cot.transforms import TokenizePromptAndReasoning
 
@@ -270,7 +269,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                         discrete_state_input=model_config.discrete_state_input,
                         state_dropout=model_config.state_dropout,
                     ),
-                    PadStates(model_config.action_dim),
+                    # PadStates(model_config.action_dim),
                 ],
                 outputs=[
                     ExtractFASTActions(
@@ -1009,12 +1008,12 @@ _CONFIGS = [
             # use_fast=True,
             # prompt_format="pi05_notime_nostate",
             action_dim=7,
-            action_horizon=16,
+            action_horizon=10,
             max_token_len=250,
             pi05=True,
             discrete_state_input=True,
             use_fast=True,
-            prompt_format="pi05_notime_ori",
+            prompt_format="pi05_notime",
         ),
         # model=pi0_fast.Pi0FASTConfig(action_dim=8, action_horizon=10),
         data_config_class=RLDSCoTDataConfig,

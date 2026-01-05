@@ -166,6 +166,7 @@ def eval_libero(args: Args) -> None:
                             )
                         else:
                             action_chunk = single_action_or_chunk
+                            action_chunk = invert_and_scale_gripper(single_action_or_chunk)
                         assert len(action_chunk) >= args.replan_steps, (
                             f"We want to replan every {args.replan_steps} steps, but policy only predicts {len(action_chunk)} steps."
                         )
@@ -369,6 +370,12 @@ def obs_to_request(obs, policy_type: PolicyType, img, wrist_img, task_descriptio
     else:
         raise ValueError(f"Unknown policy type: {policy_type}")
     return element
+
+
+def invert_and_scale_gripper(action_chunk):
+    action_chunk[:, -1:] = 1 - 2 * action_chunk[:, -1:]
+    action_chunk[:, -1:] = np.sign(action_chunk[:, -1:])
+    return action_chunk
 
 
 def _quat2axisangle(quat):

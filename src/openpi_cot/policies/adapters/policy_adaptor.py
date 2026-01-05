@@ -35,7 +35,6 @@ class CoTPolicy:
         tokens = self._sample_tokens(sample_rng_or_pytorch_device, CoTObservation.from_dict(inputs))
         outputs = {
             "state": inputs["state"],
-            "actions": jnp.zeros((1, 1, 7)),  # TODO
             "tokens": tokens,
             "raw_state": raw_state,
         }

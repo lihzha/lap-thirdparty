@@ -412,7 +412,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         # raw_action_tokens = np.array(
         #     self._tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
         # )
-        print(decoded_tokens)
         raw_action_tokens = np.array(self._tokenizer.encode(decoded_tokens.split("|")[0].strip()))
         action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
         return self._fast_tokenizer.decode(

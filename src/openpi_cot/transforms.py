@@ -251,7 +251,7 @@ class Unnormalize(DataTransformFn):
             data,
             self.norm_stats,
             unnormalize_fn,
-            strict=True,
+            strict=False,
         )
 
     def _unnormalize(self, x, stats: NormStats):

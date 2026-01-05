@@ -337,7 +337,7 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         # Get actions and reasoning from data
 
         if "reasoning" not in data:
-            return {"actions": np.asarray(data["actions"][:, :8]), "reasoning": None}
+            return {"actions": np.asarray(data["actions"][:, :7]), "reasoning": None}
         reasoning = data.get("reasoning")
 
         # If decoding schema is provided and we have reasoning, parse it to get actions
