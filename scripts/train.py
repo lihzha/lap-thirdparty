@@ -456,9 +456,6 @@ def main(config: _config.TrainConfig):
     sharding.log_batch_sharding(batch)
     # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
     dataloader_restored = False
-
-    breakpoint()
-
     if resuming:
         try:
             train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader=data_loader)
