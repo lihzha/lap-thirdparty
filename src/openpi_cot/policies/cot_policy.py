@@ -212,7 +212,6 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Transform to EEF frame if requested
         if use_eef_frame:
-            breakpoint()
             language_actions = transform_actions_to_eef_frame(language_actions, initial_state, dataset_name)
             frame_description = "end-effector frame"
         if is_bimanual:
