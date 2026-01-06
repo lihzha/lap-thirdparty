@@ -818,7 +818,141 @@ class TrainingScheduleChoice:
             )
         if self.kind is None:
             return None
-        raise ValueError(f"Unknown schedule kind: {self.kind}")
+
+
+@dataclasses.dataclass(frozen=True)
+class EmaStage:
+    """Defines EMA decay for a specific step range."""
+
+    start_step: int
+    end_step: int | None = None  # None means until training ends
+    decay: float | None = None  # None disables EMA updates in this range
+
+    def validate(self):
+        """Validate stage configuration."""
+        if self.start_step < 0:
+            raise ValueError(f"start_step must be >= 0, got {self.start_step}")
+        if self.end_step is not None and self.end_step <= self.start_step:
+            raise ValueError(f"end_step ({self.end_step}) must be > start_step ({self.start_step})")
+        if self.decay is not None and not 0.0 < self.decay < 1.0:
+            raise ValueError(f"decay must be in (0.0, 1.0), got {self.decay}")
+
+
+@dataclasses.dataclass(frozen=True)
+class EmaSchedule:
+    """Manages EMA decay across multiple step ranges."""
+
+    stages: tuple[EmaStage, ...]
+
+    def __post_init__(self):
+        if not self.stages:
+            raise ValueError("EmaSchedule must have at least one stage")
+
+        for stage in self.stages:
+            stage.validate()
+
+        for i in range(len(self.stages) - 1):
+            current_stage = self.stages[i]
+            next_stage = self.stages[i + 1]
+
+            if current_stage.end_step is None:
+                raise ValueError(
+                    f"Stage {i} (starting at {current_stage.start_step}) has end_step=None but is not the last stage"
+                )
+
+            if next_stage.start_step < current_stage.end_step:
+                raise ValueError(
+                    f"Stage {i + 1} (starting at {next_stage.start_step}) overlaps with "
+                    f"stage {i} (ending at {current_stage.end_step})"
+                )
+
+    def get_stage_for_step(self, step: int) -> EmaStage:
+        for stage in self.stages:
+            if stage.start_step <= step:
+                if stage.end_step is None or step < stage.end_step:
+                    return stage
+        raise ValueError(
+            f"No EMA stage covers step {step}. Available stages: {[(s.start_step, s.end_step) for s in self.stages]}"
+        )
+
+    def get_decay_for_step(self, step):
+        """JAX-compatible method to get EMA decay and enable flag for a given step."""
+        import jax.numpy as jnp
+
+        decay = jnp.asarray(0.0, dtype=jnp.float32)
+        enabled = jnp.asarray(False)
+
+        for stage in self.stages:
+            in_range = step >= stage.start_step
+            if stage.end_step is not None:
+                in_range = in_range & (step < stage.end_step)
+            else:
+                in_range = in_range & (step >= stage.start_step)
+
+            stage_decay = 0.0 if stage.decay is None else stage.decay
+            stage_enabled = stage.decay is not None
+            decay = jnp.where(in_range, stage_decay, decay)
+            enabled = jnp.where(in_range, stage_enabled, enabled)
+
+        return decay, enabled
+
+    def has_ema(self) -> bool:
+        return any(stage.decay is not None for stage in self.stages)
+
+    def default_decay(self) -> float | None:
+        for stage in self.stages:
+            if stage.decay is not None:
+                return stage.decay
+        return None
+
+
+@dataclasses.dataclass(frozen=True)
+class EmaScheduleChoice:
+    """Choice of pre-specified EMA schedules.
+
+    Available schedules:
+    - disabled: EMA off
+    - constant: EMA on from step 0 with fixed decay
+    - delayed: EMA off until start_step, then fixed decay
+    - cosine_delayed: EMA off until start_step, then cosine ramp to max decay
+
+    Example:
+        # From command line:
+        python -m openpi_cot.training.train --config pi_droid_cot_v4 \\
+            --ema_schedule_choice.kind delayed \\
+            --ema_schedule_choice.start_step 10000 \\
+            --ema_schedule_choice.decay 0.999
+    """
+
+    kind: Literal["disabled", "constant", "delayed", "cosine_delayed"] = "delayed"
+
+    start_step: int = 10000
+
+    def build(self, *, decay: float | None) -> EmaSchedule | None:
+        if self.kind == "disabled":
+            return None
+
+        if self.kind == "constant":
+            if decay is None:
+                return None
+            return EmaSchedule(stages=(EmaStage(start_step=0, end_step=None, decay=decay),))
+
+        if self.kind == "delayed":
+            if decay is None:
+                return None
+            if self.start_step <= 0:
+                return EmaSchedule(stages=(EmaStage(start_step=0, end_step=None, decay=decay),))
+            return EmaSchedule(
+                stages=(
+                    EmaStage(start_step=0, end_step=self.start_step, decay=None),
+                    EmaStage(start_step=self.start_step, end_step=None, decay=decay),
+                )
+            )
+
+        if self.kind == "cosine_delayed":
+            return None
+
+        raise ValueError(f"Unsupported EMA schedule kind: {self.kind}")
 
 
 def create_multi_device_configs(
@@ -918,7 +1052,7 @@ class TrainConfig(upstream_config.TrainConfig):
     keep_period: int | None = 10000
     resume: bool = True
     ema_decay: float | None = 0.999
-    ema_start_step: int = 10000
+    ema_schedule_choice: EmaScheduleChoice = dataclasses.field(default_factory=EmaScheduleChoice)
     # New field
     use_validation: bool = True
     val_interval: int = 2000
@@ -942,6 +1076,53 @@ class TrainConfig(upstream_config.TrainConfig):
     def training_schedule(self) -> TrainingSchedule:
         """Build training schedule from the choice configuration."""
         return self.training_schedule_choice.build()
+
+    @property
+    def ema_schedule(self) -> EmaSchedule | None:
+        """Build EMA schedule from the choice configuration."""
+        return self.ema_schedule_choice.build(decay=self.ema_decay)
+
+    def get_ema_init(self) -> tuple[float | None, bool]:
+        """Return the initial EMA decay and whether EMA params should be initialized."""
+        if self.ema_schedule_choice.kind == "cosine_delayed":
+            if self.ema_decay is None:
+                return None, False
+            return 0.0, True
+        schedule = self.ema_schedule
+        if schedule is None:
+            return self.ema_decay, self.ema_decay is not None
+        stage0 = schedule.get_stage_for_step(0)
+        return stage0.decay, schedule.has_ema()
+
+    def get_ema_decay_for_step(self, step):
+        """Return EMA decay and enabled flag for a given step (JAX-compatible)."""
+        if self.ema_schedule_choice.kind == "cosine_delayed":
+            import jax.numpy as jnp
+
+            max_decay = self.ema_decay
+            if max_decay is None:
+                return jnp.asarray(0.0, dtype=jnp.float32), jnp.asarray(False)
+            start_step = self.ema_schedule_choice.start_step
+            max_step = self.num_train_steps
+            duration = jnp.maximum(max_step - start_step, 1)
+            progress = (step - start_step) / duration
+            progress = jnp.clip(progress, 0.0, 1.0)
+            decay = max_decay * (1.0 - jnp.cos(jnp.pi * progress)) / 2.0
+            enabled = step >= start_step
+            return decay, enabled
+
+        schedule = self.ema_schedule
+        if schedule is not None:
+            return schedule.get_decay_for_step(step)
+
+        if self.ema_decay is None:
+            import jax.numpy as jnp
+
+            return jnp.asarray(0.0, dtype=jnp.float32), jnp.asarray(False)
+
+        import jax.numpy as jnp
+
+        return jnp.asarray(self.ema_decay, dtype=jnp.float32), jnp.asarray(True)
 
     @property
     @override

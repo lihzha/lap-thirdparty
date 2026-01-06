@@ -213,6 +213,7 @@ def init_train_state(
     resume: bool,
 ) -> tuple[training_utils.TrainState, Any]:
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
+    ema_decay, ema_params_enabled = config.get_ema_init()
 
     def init(rng: at.KeyArrayLike, partial_params: at.Params | None = None) -> training_utils.TrainState:
         rng, model_rng = jax.random.split(rng)
@@ -240,8 +241,8 @@ def init_train_state(
             model_def=nnx.graphdef(model),
             tx=tx,
             opt_state=tx.init(params.filter(config.trainable_filter)),
-            ema_decay=config.ema_decay,
-            ema_params=None if config.ema_decay is None else params,
+            ema_decay=ema_decay,
+            ema_params=None if not ema_params_enabled else params,
         )
 
     train_state_shape = jax.eval_shape(init, init_rng)
@@ -322,19 +323,18 @@ class TrainingStepRunner:
         grad_norm_f32 = optax.global_norm(jax.tree.map(lambda g: g.astype(jnp.float32), grads))
 
         new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
-        if state.ema_decay is not None:
+        ema_decay, ema_enabled = self.config.get_ema_decay_for_step(step)
+        def _apply_ema(s):
+            return dataclasses.replace(
+                s,
+                ema_params=jax.tree.map(
+                    lambda old, new: ema_decay * old + (1 - ema_decay) * new,
+                    s.ema_params,
+                    new_params,
+                ),
+            )
 
-            def _apply_ema(s):
-                return dataclasses.replace(
-                    s,
-                    ema_params=jax.tree.map(
-                        lambda old, new: state.ema_decay * old + (1 - state.ema_decay) * new,
-                        s.ema_params,
-                        new_params,
-                    ),
-                )
-
-            new_state = jax.lax.cond(step >= self.config.ema_start_step, _apply_ema, lambda s: s, new_state)
+        new_state = jax.lax.cond(ema_enabled, _apply_ema, lambda s: s, new_state)
 
         kernel_params = nnx.state(
             model,

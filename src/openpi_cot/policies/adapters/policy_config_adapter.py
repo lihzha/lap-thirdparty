@@ -49,6 +49,7 @@ def load_model_from_train_state(config, checkpoint_dir):
     )
 
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
+    ema_decay, ema_params_enabled = config.get_ema_init()
 
     def init(rng: at.KeyArrayLike) -> training_utils.TrainState:
         # Initialize the model
@@ -61,8 +62,8 @@ def load_model_from_train_state(config, checkpoint_dir):
             model_def=nnx.graphdef(model),
             tx=tx,
             opt_state=tx.init(params.filter(config.trainable_filter)),
-            ema_decay=config.ema_decay,
-            ema_params=None if config.ema_decay is None else params,
+            ema_decay=ema_decay,
+            ema_params=None if not ema_params_enabled else params,
         )
 
     train_state_shape = jax.eval_shape(init, init_rng)
