@@ -10,6 +10,7 @@ from shared import BaseEvalRunner, Args, IMAGE_KEYS
 from kinova_robot_env import RobotEnv
 
 class KinovaEvalRunner(BaseEvalRunner):
+    CHUNK_STEPS = 4
     def __init__(self, args):
         super().__init__(args)
         self.side_image_name = "right_image"
@@ -34,6 +35,7 @@ class KinovaEvalRunner(BaseEvalRunner):
             "gripper_position": obs_dict["gripper_position"],
             "state": obs_dict["state"],
             "joint_position": obs_dict["joint_position"],
+            "euler": obs_dict["euler"],
         }
 
     def obs_to_request(self, curr_obs, instruction):

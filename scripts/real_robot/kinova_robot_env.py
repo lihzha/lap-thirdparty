@@ -79,22 +79,22 @@ class RobotEnv:
         pass
 
     def step(self, action):
-        # rep = {
-        #     "action": {
-        #         "base_pose": self.base_pose,
-        #         "arm_pos": action[:3],
-        #         "arm_quat": to_wxyz(to_kinova(to_quat(action[3:6]))),
-        #         "gripper_pos": action[6:7],
-        #     }
-        # }
-        assert (action.max() <= 1.5) and (action.min() >= -1.5)
         rep = {
             "action": {
                 "base_pose": self.base_pose,
-                "arm_qpos": self.arm_qpos + joint_velocity_to_delta(action[:7]),
-                "gripper_pos": action[7:8],
+                "arm_pos": action[:3],
+                "arm_quat": to_wxyz(to_kinova(to_quat(action[3:6]))),
+                "gripper_pos": action[6:7],
             }
         }
+        # assert (action.max() <= 1.5) and (action.min() >= -1.5)
+        # rep = {
+        #     "action": {
+        #         "base_pose": self.base_pose,
+        #         "arm_qpos": self.arm_qpos + joint_velocity_to_delta(action[:7]),
+        #         "gripper_pos": action[7:8],
+        #     }
+        # }
         self.env.send_pyobj(rep)
 
     def get_observation(self):
@@ -107,12 +107,7 @@ class RobotEnv:
         obs_dict = req["obs"]
         base_image = cv2.imdecode(obs_dict["base_image"], cv2.IMREAD_COLOR)
         wrist_image = cv2.imdecode(obs_dict["wrist_image"], cv2.IMREAD_COLOR)
-        # obs_dict["gripper_pos"] = 1 - obs_dict["gripper_pos"]
-        
-        imageio.imwrite("wrist.png", wrist_image)
-        imageio.imwrite("main.png", base_image)
-    
-        
+        obs_dict["gripper_pos"] = 1 - obs_dict["gripper_pos"]
         
         state = np.concatenate(
             [
@@ -126,8 +121,9 @@ class RobotEnv:
         
         
         return {
-            "cartesian_position": state[:6],
-            "gripper_position": state[6],
+            "euler": quat_to_euler(obs_dict["arm_quat"]),
+            "cartesian_position": state[:9],
+            "gripper_position": state[9],
             "base_pose": obs_dict["base_pose"],
             "base_image": base_image,
             "wrist_image": wrist_image,
