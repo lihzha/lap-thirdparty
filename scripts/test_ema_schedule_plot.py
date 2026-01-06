@@ -43,3 +43,9 @@ def test_plot_delayed_ema_schedule(tmp_path):
     plt.close(fig)
 
     assert output_path.exists()
+
+
+if __name__ == "__main__":
+    import pathlib
+
+    test_plot_delayed_ema_schedule(pathlib.Path("."))

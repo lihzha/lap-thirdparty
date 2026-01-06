@@ -5,7 +5,6 @@ import random
 import numpy as np
 
 import openpi_cot.models.prompt_utils.checkers as checkers
-from openpi_cot.models.prompt_utils.state import GROUPED_STATE_TEMPLATE
 from openpi_cot.models.prompt_utils.state import StateDiscretizationConfig
 from openpi_cot.models.prompt_utils.state import StateModule
 
@@ -228,28 +227,6 @@ PI0_PROMPT_FORMAT = PromptFormat(
 )
 
 
-VQA_PROMPT_FORMAT = PromptFormat(
-    name="vqa",
-    task_module=TaskModule(template="{prompt}"),
-    separator="",
-    direction_token_checker=checkers.is_direction_none,
-)
-
-COORDINATE_SYSTEM_PROMPT_FORMAT = PromptFormat(
-    name="coordinate_system",
-    prefix_module=PrefixModule("Actions are represented as [x,y,z], where +x is forward, +y is left, +z is up."),
-    task_module=TaskModule(template="Task: {prompt}"),
-    state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256),
-        state_prefix_template="State{state_label}: {state}",
-        include_state_type=True,
-    ),
-    action_module=ActionModule(prefix="Action: "),
-    separator=", ",
-    critical_token_checker=checkers.is_critical_schema,
-    direction_token_checker=checkers.is_direction_schema,
-)
-
 SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     name="schema_compact",
     prefix_module=PrefixModule("Schema: <dx dy dz g>; units cm; +x fwd, +y left, +z up; g∈{0=close,1=open}"),
@@ -265,80 +242,6 @@ SCHEMA_COMPACT_PROMPT_FORMAT = PromptFormat(
     direction_token_checker=checkers.is_direction_schema,
 )
 
-GROUPED_STATE_PROMPT_FORMAT = PromptFormat(
-    name="grouped_state",
-    prefix_module=PrefixModule("Your Robot control coordinate system: +x=forward, +y=left, +z=up."),
-    task_module=TaskModule(template="Task: {prompt}"),
-    state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
-        state_prefix_template="State{state_label}: {state}",
-        include_state_type=False,
-    ),
-    action_module=ActionModule(prefix="Action: "),
-    separator=". ",
-    critical_token_checker=checkers.is_critical_schema,
-    direction_token_checker=checkers.is_direction_schema,
-)
-
-
-GROUPED_STATE_PREFIX_PROMPT_FORMAT = PromptFormat(
-    name="grouped_state_verbose",
-    prefix_module=PrefixModule("Predict what is the action that the robot should take"),
-    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
-    state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
-        state_prefix_template=". Robot current state{state_label}: {state}",
-        include_state_type=False,
-    ),
-    action_module=ActionModule(prefix="Represent the action in robot's end effector frame. Action: "),
-    separator=". ",
-    critical_token_checker=checkers.is_critical_schema,
-    direction_token_checker=checkers.is_direction_schema,
-)
-
-NO_STATE_FORMAT = PromptFormat(
-    name="no_state",
-    task_module=TaskModule(
-        template="Task: {prompt}. What actions should the robot take at current step to fulfill the task? Represent the action in the end effector frame."
-    ),
-    state_module=None,
-    action_module=ActionModule(prefix="Action: "),
-    separator=" ",
-    critical_token_checker=checkers.is_critical_directional,
-    direction_token_checker=checkers.is_direction_natural,
-)
-
-UNIFIED_PROMPT_FORMAT = PromptFormat(
-    name="cotrain",
-    task_module=TaskModule(
-        template="Task: {prompt}. What actions should the robot take at current step to fulfill the task? Represent the action in robot's end effector frame",
-        include_time_horizon=False,
-    ),
-    state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
-        state_prefix_template="Robot current state{state_label}: {state}",
-        include_state_type=False,
-    ),
-    action_module=ActionModule(prefix="Answer: "),
-    separator=". ",
-    critical_token_checker=checkers.is_critical_schema,
-    direction_token_checker=checkers.is_direction_schema,
-)
-
-
-GROUPED_PREDICTION_PROMPT_FORMAT = PromptFormat(
-    name="grouped_prediction",
-    state_module=StateModule(
-        discretization=StateDiscretizationConfig(bins=256, template=GROUPED_STATE_TEMPLATE),
-        state_prefix_template="Robot current state{state_label}: {state}. Robot state is represented in the robot base frame, not in the camera's frame.",
-        include_state_type=False,
-    ),
-    task_module=TaskModule(template="{prompt}"),
-    separator="; ",
-    critical_token_checker=checkers.is_critical_schema,
-    direction_token_checker=checkers.is_direction_schema,
-)
-
 DEFAULT_PREDICTION_PROMPT_FORMAT = PromptFormat(
     name="default_prediction",
     state_module=StateModule(
@@ -346,8 +249,11 @@ DEFAULT_PREDICTION_PROMPT_FORMAT = PromptFormat(
         state_prefix_template="State{state_label}: {state}",
         include_state_type=False,
     ),
-    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
-    separator=";",
+    task_module=TaskModule(
+        template="Task: predict the robot's action between two images in the {frame_description}",
+        include_time_horizon=False,
+    ),
+    separator="; ",
     action_module=ActionModule(prefix="Answer: "),
     critical_token_checker=checkers.is_critical_schema,
     direction_token_checker=checkers.is_direction_schema,
@@ -370,16 +276,10 @@ PROMPT_FORMAT_REGISTRY = {
     "pi05_notime": PI05_NOTIME_PROMPT_FORMAT,
     "pi05_notime_ori": PI05_NOTIME_ORI_PROMPT_FORMAT,
     "pi0": PI0_PROMPT_FORMAT,
-    "vqa": VQA_PROMPT_FORMAT,
-    "coordinate_system": COORDINATE_SYSTEM_PROMPT_FORMAT,
     "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
-    "grouped_state": GROUPED_STATE_PROMPT_FORMAT,
-    "grouped_state_verbose": GROUPED_STATE_PREFIX_PROMPT_FORMAT,
-    "no_state": NO_STATE_FORMAT,
     "pi05_notime_nostate": PI05_NOTIME_NOSTATE_PROMPT_FORMAT,
 }
 
 PREDICTION_PROMPT_FORMAT_REGISTRY = {
     "default": DEFAULT_PREDICTION_PROMPT_FORMAT,
-    "grouped": GROUPED_PREDICTION_PROMPT_FORMAT,
 }

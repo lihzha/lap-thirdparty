@@ -192,7 +192,6 @@ class CoTDataConfig(upstream_config.DataConfig):
 
     # Prediction training parameters
     max_prediction_horizon: int = 30
-    prediction_prompt: str = "predict the robot's movement between two images in the end-effector frame"
     pred_prob: float = 0.2  # Probability of converting a frame to prediction sample (after flattening)
     primary_pred_prob: float = 0.5  # Probability of using primary camera (vs wrist) for prediction training
 
