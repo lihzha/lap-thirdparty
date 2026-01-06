@@ -363,8 +363,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         else:
             postfix_tokens = []
 
-        breakpoint()
-
         tokens = prefix_tokens + postfix_tokens
         token_mask = [True] * len(tokens)
         ar_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
