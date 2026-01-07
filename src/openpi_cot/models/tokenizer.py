@@ -121,8 +121,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             frame_description=frame_description,
             state_dropout=state_dropout,
         )
-        
-        print(formatted_prompt)
 
         # Tokenize
         pad_id = self._tokenizer.pad_id()
