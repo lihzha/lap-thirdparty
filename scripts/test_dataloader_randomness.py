@@ -185,8 +185,6 @@ def main(config: _config.TrainConfig):
                 logging.info("First:  %s", first_str)
                 logging.info("Second: %s", second_str)
 
-    breakpoint()
-
     comparisons = [_trees_equal(a, b) for a, b in zip(first_examples, second_examples, strict=True)]
     identical = sum(comparisons)
     logging.info(

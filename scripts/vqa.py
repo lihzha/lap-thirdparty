@@ -120,13 +120,9 @@ def _draw_text_block(img: np.ndarray, text: str, area: tuple[int, int, int, int]
     return np.array(pil_img)
 
 
-def _validate_loaded_params(
-    expected: at.Params, got: at.Params, *, allow_partial: bool
-) -> dict[tuple[str, ...], Any]:
+def _validate_loaded_params(expected: at.Params, got: at.Params, *, allow_partial: bool) -> dict[tuple[str, ...], Any]:
     flat_expected = traverse_util.flatten_dict(expected)
-    flat_got = {
-        k: v for k, v in traverse_util.flatten_dict(got).items() if not isinstance(v, jax.ShapeDtypeStruct)
-    }
+    flat_got = {k: v for k, v in traverse_util.flatten_dict(got).items() if not isinstance(v, jax.ShapeDtypeStruct)}
 
     unexpected = [k for k in flat_got if k not in flat_expected]
     if unexpected:
@@ -444,7 +440,6 @@ def main(args: Args) -> None:
 
         if idx + 1 >= args.droid_max_examples:
             break
-        breakpoint()
 
 
 if __name__ == "__main__":

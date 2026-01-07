@@ -183,8 +183,6 @@ def test_stop_action_to_vlm_grad_with_compute_loss_inputs():
     assert bool(jnp.all(grads_stop["lang_wrt_suffix"] == 0))
     assert bool(jnp.all(grads_allow["lang_wrt_suffix"] == 0))
 
-    breakpoint()
-
     assert float(jnp.linalg.norm(grads_stop["lang_wrt_prefix"])) > 1e-6
     assert float(jnp.linalg.norm(grads_stop["action_wrt_suffix"])) > 1e-6
 

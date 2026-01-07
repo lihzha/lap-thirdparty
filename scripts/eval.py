@@ -399,7 +399,6 @@ def main(config: _config.TrainConfig):
     #     ema_rtol = EMA_VALUE_RTOL
     #     if train_state.ema_decay is not None:
     #         ema_rtol = max(ema_rtol, 1.0 - float(train_state.ema_decay))
-    #     breakpoint()
     #     _ensure_params_similarity(
     #         train_state.params,
     #         train_state.ema_params,

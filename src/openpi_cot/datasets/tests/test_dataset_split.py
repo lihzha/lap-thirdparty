@@ -231,7 +231,6 @@ def test_oxe_identifier_split_preserves_hash_partitioning():
         dataset_name=dataset_name,
         num_traj=num_traj,
     )
-    breakpoint()
 
     val_ids = _collect_traj_ids(val_dataset.dataset)
     train_ids = _collect_traj_ids(train_dataset.dataset)
