@@ -1,6 +1,7 @@
 import dataclasses
 import datetime
 import faulthandler
+import os
 import sys
 import time
 
@@ -50,9 +51,8 @@ class Args:
     wrist_image_encoding: str = "raw"  # choose from ["raw", "tf_jpeg"]
     delta_chunk: bool = True  # whether the action chunks are delta actions or absolute positions
 
-
 class BaseEvalRunner:
-    CHUNK_STEPS = 8
+    CHUNK_STEPS = 6
 
     def __init__(self, args):
         self.env = self.init_env()
@@ -105,13 +105,16 @@ class BaseEvalRunner:
         if self.args.use_wrist_camera:
             request["observation"][IMAGE_KEYS[1]] = curr_obs["wrist_image"]
         return request
+    
+    def process_gripper_action(self, action, curr_obs):
+        return 1- curr_obs["gripper_position"] if len(action) == 6 else 1 - action[..., -1]
 
     def get_action_from_response(self, response, curr_obs, use_quaternions=False):
         curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
         curr_rpy = np.asarray(curr_obs["euler"], dtype=float)
         if "reasoning" in response and response["reasoning"] is not None:
             action = np.asarray(response["actions"])
-            grip_action = 1- curr_obs["gripper_position"] if len(action) == 6 else float(1 - action[-1])
+            grip_action = self.process_gripper_action(action, curr_obs)
             print(grip_action)
             # Linearly interpolate to CHUNK_STEPS actions
             positions = np.linspace(curr_pos, curr_pos + action[:3], self.CHUNK_STEPS, endpoint=True)
@@ -124,6 +127,7 @@ class BaseEvalRunner:
                 pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
             else:
                 pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
+
         else:
             pred_action_chunk = response["actions"].copy()
             if pred_action_chunk.shape[-1] > 7:
@@ -132,7 +136,10 @@ class BaseEvalRunner:
                 pred_action_chunk[:, :3] += curr_pos
                 rpy_arr = add_euler(curr=curr_rpy, delta=pred_action_chunk[:, 3:6])
                 pred_action_chunk[:, 3:6] = rpy_arr
-            pred_action_chunk[:, 6] = 1 - pred_action_chunk[:, 6]  # invert gripper action
+            
+            grip_action = self.process_gripper_action(pred_action_chunk, curr_obs)
+            pred_action_chunk[:, -1] = grip_action
+            print(pred_action_chunk)
             if use_quaternions:
                 quat_arr = R.from_euler("xyz", pred_action_chunk[:, 3:6], degrees=False).as_quat()  # (x,y,z,w)
                 pred_action_chunk = np.concatenate(
@@ -141,31 +148,33 @@ class BaseEvalRunner:
         return pred_action_chunk
 
     def _concat_and_save_video(self, instruction, video, wrist_video):
-        if not video or not wrist_video:
+        assert video is not None, "Side video stream should always be recorded."
+        if not video:
             return
-
         video = np.stack(video)
-        wrist_video = np.stack(wrist_video)
+        combined_video = video
+        if wrist_video:
+            wrist_video = np.stack(wrist_video)
 
-        # Ensure both videos have the same width by resizing wrist view to match side view width
-        _, side_width = video.shape[1:3]
-        wrist_height, wrist_width = wrist_video.shape[1:3]
+            # Ensure both videos have the same width by resizing wrist view to match side view width
+            _, side_width = video.shape[1:3]
+            wrist_height, wrist_width = wrist_video.shape[1:3]
 
-        if wrist_width != side_width:
-            resized_wrist = []
-            aspect_ratio = wrist_width / wrist_height
-            new_height = int(side_width / aspect_ratio)
-            for frame in wrist_video:
-                resized_frame = cv2.resize(frame, (side_width, new_height))
-                resized_wrist.append(resized_frame)
-            wrist_video = np.stack(resized_wrist)
+            if wrist_width != side_width:
+                resized_wrist = []
+                aspect_ratio = wrist_width / wrist_height
+                new_height = int(side_width / aspect_ratio)
+                for frame in wrist_video:
+                    resized_frame = cv2.resize(frame, (side_width, new_height))
+                    resized_wrist.append(resized_frame)
+                wrist_video = np.stack(resized_wrist)
 
-        # Concatenate side view and wrist view vertically (wrist below side view)
-        combined_video = np.concatenate([video, wrist_video], axis=1)
+            # Concatenate side view and wrist view vertically (wrist below side view)
+            combined_video = np.concatenate([video, wrist_video], axis=1)
 
         timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H:%M:%S")
         save_filename = "video_" + instruction.replace(" ", "_") + "_" + timestamp
-        ImageSequenceClip(list(combined_video), fps=10).write_videofile(save_filename + ".mp4", codec="libx264")
+        ImageSequenceClip(list(combined_video), fps=10).write_videofile(save_filename + ".mp4", fps=10, codec="libx264")
 
     def _rollout_once(self, instruction, fetch_action_chunk, refresh_horizon, print_action=False):
         actions_from_chunk_completed = 0
@@ -187,7 +196,7 @@ class BaseEvalRunner:
                         pred_action_chunk = fetch_action_chunk(curr_obs)
                         chunk_length = min(refresh_horizon, len(pred_action_chunk))
                 action = pred_action_chunk[actions_from_chunk_completed]
-                if not self.args.delta_chunk:
+                if not self.args.delta_chunk and action.shape[-1] == 7:
                     action[:3] += curr_obs["cartesian_position"][:3]
                     rpy_arr = add_euler(curr=curr_obs["cartesian_position"][3:6], delta=action[3:6])
                     action[3:6] = rpy_arr
@@ -219,6 +228,9 @@ class BaseEvalRunner:
             self._rollout_once(instruction, make_fetcher(instruction), refresh_horizon, print_action=print_action)
             answer = input("Do one more eval? (enter y or n) ")
             if "n" in answer.lower():
+                if hasattr(self.env, "close"):
+                    self.env.close()
+                    os._exit(0)
                 break
             self._reset_until_confirmed()
 

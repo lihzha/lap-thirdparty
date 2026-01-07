@@ -1277,6 +1277,7 @@ _CONFIGS = [
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
+            
         ),
     ),
     TrainConfig(
@@ -1286,6 +1287,7 @@ _CONFIGS = [
             max_token_len=180,
             pi05=True,
             discrete_state_input=True,
+            enable_action_training=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
             prompt_format="pi05_notime_nostate",
