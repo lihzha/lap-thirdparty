@@ -361,6 +361,13 @@ class PiCoT(_pi0.Pi0):
         vqa_mask = None
         if self.enable_vqa_training and hasattr(observation, "is_vqa_sample") and observation.is_vqa_sample is not None:
             vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool)
+        pred_mask = None
+        if (
+            self.enable_prediction_training
+            and hasattr(observation, "is_prediction_sample")
+            and observation.is_prediction_sample is not None
+        ):
+            pred_mask = jnp.asarray(observation.is_prediction_sample, dtype=bool)
 
         # Preprocess observation (will skip augmentation for VQA samples if vqa_mask is provided)
         observation = preprocess_observation(
@@ -419,16 +426,24 @@ class PiCoT(_pi0.Pi0):
             if self.enable_vqa_training or self.enable_prediction_training:
                 if vqa_mask is None:
                     vqa_mask = jnp.zeros(batch_size, dtype=bool)
-                pred_mask = (
-                    jnp.asarray(observation.is_prediction_sample, dtype=bool)
-                    if self.enable_prediction_training
-                    else jnp.zeros(batch_size, dtype=bool)
-                )
+                if pred_mask is None:
+                    pred_mask = jnp.zeros(batch_size, dtype=bool)
                 lang_mask = jnp.logical_not(jnp.logical_or(vqa_mask, pred_mask))
 
                 vqa_mask = jnp.logical_and(vqa_mask, combined_langact_mask)
                 pred_mask = jnp.logical_and(pred_mask, combined_langact_mask)
                 lang_mask = jnp.logical_and(lang_mask, combined_langact_mask)
+                num_active_samples = jnp.maximum(jnp.sum(combined_langact_mask), 1.0)
+                metrics["active_num_samples"] = jnp.sum(combined_langact_mask)
+                metrics["active_sample_portion"] = metrics["active_num_samples"] / jnp.maximum(
+                    batch_size, 1.0
+                )
+                metrics["vqa_num_samples"] = jnp.sum(vqa_mask)
+                metrics["vqa_sample_portion"] = metrics["vqa_num_samples"] / num_active_samples
+                metrics["pred_num_samples"] = jnp.sum(pred_mask)
+                metrics["pred_sample_portion"] = metrics["pred_num_samples"] / num_active_samples
+                metrics["langact_num_samples"] = jnp.sum(lang_mask)
+                metrics["langact_sample_portion"] = metrics["langact_num_samples"] / num_active_samples
 
                 if self.enable_vqa_training:
                     metrics.update(
@@ -480,7 +495,16 @@ class PiCoT(_pi0.Pi0):
         if self.enable_action_training:
             suffix_out = pre_logits[1]
             action_loss, action_metrics = self._compute_action_loss(suffix_out, suffix_inputs["u_t"])
-            action_per_sample_loss += self.action_loss_weight * action_loss
+            action_sample_mask = jnp.ones(batch_size, dtype=bool)
+            if vqa_mask is not None:
+                action_sample_mask = jnp.logical_and(action_sample_mask, jnp.logical_not(vqa_mask))
+            if pred_mask is not None:
+                action_sample_mask = jnp.logical_and(action_sample_mask, jnp.logical_not(pred_mask))
+            action_sample_mask_f = action_sample_mask.astype(jnp.float32)
+            action_per_sample_loss += self.action_loss_weight * action_loss * action_sample_mask_f
+            action_metrics["action_loss"] = jnp.sum(action_loss * action_sample_mask_f) / jnp.maximum(
+                jnp.sum(action_sample_mask_f), 1.0
+            )
             metrics.update(action_metrics)
 
         # Add main metrics to dict
@@ -491,7 +515,7 @@ class PiCoT(_pi0.Pi0):
         # Compute final loss with correct normalization
         # When samples are masked out, their loss is 0 and shouldn't be counted in denominator
         if self.enable_action_training:
-            action_term = jnp.mean(action_per_sample_loss)
+            action_term = jnp.sum(action_per_sample_loss) / jnp.maximum(jnp.sum(action_sample_mask_f), 1.0)
             if self.enable_langact_training:
                 if observation.sample_mask is not None:
                     num_active_samples = jnp.maximum(jnp.sum(observation.sample_mask), 1.0)

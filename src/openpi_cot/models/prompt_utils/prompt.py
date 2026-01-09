@@ -265,7 +265,7 @@ DEFAULT_VQA_PROMPT_FORMAT = PromptFormat(
     state_module=None,
     task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
     action_module=ActionModule(prefix="Answer: "),
-    separator=". ",
+    separator="; ",
     critical_token_checker=None,
     direction_token_checker=None,
 )
