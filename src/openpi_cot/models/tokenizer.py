@@ -310,6 +310,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
         state_dropout: float = 0.0,
+        clip_action: bool = True,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Tokenize prompt, language actions (if any), state, and actions for FAST model.
 
@@ -357,6 +358,8 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
         if actions is not None:
+            if clip_action:
+                actions = np.clip(actions, -3.0, 3.0)  # Ensure actions are within expected range
             action_tokens = self._fast_tokenizer(actions[None])[0]
             action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
             postfix_tokens = action_tokens_in_pg.tolist() + self._tokenizer.encode("|", add_eos=True)
