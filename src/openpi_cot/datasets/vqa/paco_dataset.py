@@ -182,12 +182,13 @@ class PacoLvis(BaseVQADataset):
         abs_x = tf.abs(x_rel)
         abs_y = tf.abs(y_rel)
 
-        is_forward = y_rel >= k * abs_x
-        is_back = y_rel <= -k * abs_x
+        # Use strict inequalities so tf.case(exclusive=True) doesn't see overlaps on boundaries.
+        is_forward = y_rel > k * abs_x
+        is_back = y_rel < -k * abs_x
         is_right = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
-        is_right = tf.logical_and(is_right, x_rel >= inv_k * abs_y)
+        is_right = tf.logical_and(is_right, x_rel > inv_k * abs_y)
         is_left = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
-        is_left = tf.logical_and(is_left, x_rel <= -inv_k * abs_y)
+        is_left = tf.logical_and(is_left, x_rel < -inv_k * abs_y)
 
         def forward():
             return tf.constant("forward")

@@ -10,7 +10,6 @@ import etils.epath as epath
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
-from jax.experimental import multihost_utils as mh
 import numpy as np
 from openpi.models import model as _model
 import openpi.shared.array_typing as at
@@ -659,24 +658,8 @@ def evaluate_rollout(
                 logging.info(f"Reached end of dataset at batch {batch_idx}")
                 break
 
-            # Compute global max cut idx so all hosts compile with identical shapes.
-            tokenized_langact_mask = training_utils.to_local_array(batch[0].tokenized_langact_mask)
-            if tokenized_langact_mask is not None and getattr(tokenized_langact_mask, "ndim", 0) >= 2:
-                any_true = tokenized_langact_mask.any(axis=1)
-                first_true = np.argmax(tokenized_langact_mask, axis=1)
-                first_true = np.where(any_true, first_true, tokenized_langact_mask.shape[1])
-                local_max_cut_idx = int(first_true.max()) if first_true.size > 0 else 0
-            else:
-                local_max_cut_idx = 0
-
-            try:
-                gathered = mh.process_allgather(np.array([local_max_cut_idx], dtype=np.int32), tiled=False)
-                global_max_cut_idx = int(np.max(np.asarray(gathered)))
-            except Exception:
-                global_max_cut_idx = local_max_cut_idx
-
             # Prepare eval batch (remove language actions) and shard for JIT
-            eval_batch = vis_tools.prepare_eval_batch(batch, global_max_cut_idx=global_max_cut_idx)
+            eval_batch = vis_tools.prepare_eval_batch(batch)
             # Shard the batch to match expected sharding
             eval_batch_sharded = jax.device_put(eval_batch, data_sharding)
 
