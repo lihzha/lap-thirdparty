@@ -91,6 +91,13 @@ DEVICE_CONFIGS = {
         fsdp_devices=8,
         default_batch_size=256,
     ),
+    "v5europe": DeviceConfig(
+        name="v5",
+        rlds_data_dir="gs://v5_europewest4/OXE",
+        checkpoint_base_dir="gs://v5_europewest4/checkpoints",
+        fsdp_devices=8,
+        default_batch_size=256,
+    ),
     "v6": DeviceConfig(
         name="v6",
         rlds_data_dir="gs://v6_east1d/OXE",
@@ -1143,7 +1150,7 @@ _CONFIGS = [
     # Multi-device configs: Generated programmatically for v4, v5, v6, local
     *create_multi_device_configs(
         base_name="pi_droid_cot",
-        devices=["v4", "v5", "v6", "local"],
+        devices=["v4", "v5", "v6", "local", "v5europe"],
         model=build_picot_model(),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
@@ -1157,7 +1164,7 @@ _CONFIGS = [
     # Combined dataset configs for v4, v6, v6europe
     *create_multi_device_configs(
         base_name="pi_combined_cot",
-        devices=["v6", "v6europe", "v4", "local", "v5"],
+        devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
         model=build_picot_model(),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
@@ -1178,7 +1185,7 @@ _CONFIGS = [
     # Combined dataset configs for v4, v6, v6europe
     *create_multi_device_configs(
         base_name="pi_combined_fast_cot",
-        devices=["v6", "v6europe", "v4", "local", "v5"],
+        devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
         model=pi_cot_config.PiCoTConfig(
             # action_dim=8,
             # action_horizon=10,
