@@ -370,19 +370,22 @@ class OXECoTDatasets:
         action_global_var = action_var_sum / total_action_n
         action_global_std = np.sqrt(action_global_var)
 
-        # For quantiles, use conservative bounds (global min/max across all datasets)
+        # For quantiles, use conservative bounds (global min/max across all robot datasets)
         # Pad each dataset's quantiles to action_dim first, then compute min/max
+        # Note: VQA datasets are excluded since they have dummy zero statistics
         action_q01_padded = [
             np.pad(
                 stats["actions"].q01, (0, action_dim - len(stats["actions"].q01)), mode="constant", constant_values=0
             )
-            for stats in all_dataset_statistics.values()
+            for dataset_name, stats in all_dataset_statistics.items()
+            if dataset_name not in self.VQA_DATASETS
         ]
         action_q99_padded = [
             np.pad(
                 stats["actions"].q99, (0, action_dim - len(stats["actions"].q99)), mode="constant", constant_values=0
             )
-            for stats in all_dataset_statistics.values()
+            for dataset_name, stats in all_dataset_statistics.items()
+            if dataset_name not in self.VQA_DATASETS
         ]
         action_q01 = np.min(action_q01_padded, axis=0)
         action_q99 = np.max(action_q99_padded, axis=0)

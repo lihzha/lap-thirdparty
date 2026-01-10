@@ -207,7 +207,7 @@ class Normalize(DataTransformFn):
         q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
         # Scale to [-1, 1] and clip
         scaled = (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
-        scaled = np.clip(scaled, -1.0, 1.0)
+        # scaled = np.clip(scaled, -1.0, 1.0)
         # Zero-out dimensions with zero range
         zeros_mask = np.equal(q01, q99)
         while zeros_mask.ndim < x.ndim:

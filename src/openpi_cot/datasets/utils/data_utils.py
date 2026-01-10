@@ -109,7 +109,7 @@ def normalize_action_and_proprio(
         return (x - mean) / (std + 1e-6)
 
     def bounds(x, _min, _max):
-        return tf.clip_by_value(2 * (x - _min) / (_max - _min + 1e-8) - 1, -1, 1)
+        return 2 * (x - _min) / (_max - _min + 1e-6) - 1
 
     actions_stats = _get_group(norm_stats, "actions")
     state_stats = _get_group(norm_stats, "state")
