@@ -469,7 +469,7 @@ def main(config: _config.TrainConfig):
     # Get start step after restoring checkpoint (if resuming)
     start_step = int(train_state.step)
 
-    if config.model.enable_langact_training and config.use_validation:
+    if config.model.enable_langact_training and config.use_validation and config.use_eval:
         eval_data_loader = _data_loader.create_data_loader(
             replace(
                 config,
@@ -689,7 +689,7 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
-            if config.model.enable_langact_training and config.use_validation:
+            if config.model.enable_langact_training and config.use_validation and config.use_eval:
                 eval_checkpoint(
                     train_state,
                     config,

@@ -1070,6 +1070,7 @@ class TrainConfig(upstream_config.TrainConfig):
     checkpoint_fallback_to_sync: bool = True
     allow_partial_weights: bool = False
     # Evaluation fields
+    use_eval: bool = True
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = 50
     eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss"] = "rollout"
