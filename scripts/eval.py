@@ -628,11 +628,11 @@ def evaluate_rollout(
 ) -> dict[str, float]:
     """Evaluate rollout performance (language action prediction accuracy)."""
     evaluator = RolloutEvaluator(config)
-    # Note: batch input uses replicated sharding because prepare_eval_batch is called outside JIT
+    # Note: batch input uses data sharding because loaders are process-sharded.
     peval_step = jax.jit(
         evaluator,
-        in_shardings=(replicated_sharding, train_state_sharding, replicated_sharding),
-        out_shardings=(replicated_sharding),
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=(data_sharding),
     )
     # peval_step = evaluator
     # Get tokenizer for decoding
@@ -658,18 +658,20 @@ def evaluate_rollout(
                 logging.info(f"Reached end of dataset at batch {batch_idx}")
                 break
 
-            # Prepare eval batch (remove language actions) and replicate for JIT
+            # Prepare eval batch (remove language actions) and shard for JIT
             eval_batch = vis_tools.prepare_eval_batch(batch)
-            # Replicate the batch to match expected sharding
-            eval_batch_replicated = jax.device_put(eval_batch, replicated_sharding)
+            # Shard the batch to match expected sharding
+            eval_batch_sharded = jax.device_put(eval_batch, data_sharding)
 
             # Run rollout evaluation
-            output_tokens = peval_step(eval_rng, train_state, eval_batch_replicated)
+            output_tokens = peval_step(eval_rng, train_state, eval_batch_sharded)
+
+            k_local = min(config.batch_size, batch[0].state.shape[0])
 
             # Process results on host
             if jax.process_index() == 0:
-                k_local = min(config.batch_size, batch[0].state.shape[0])
-                gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens, tokenizer, k_local)
+                output_tokens_local = training_utils.to_local_array(output_tokens)
+                gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
 
                 imgs_to_log = eval_batch[0].images["base_0_rgb"][:k_local]
 
@@ -684,7 +686,7 @@ def evaluate_rollout(
                         pred_text,
                     )
                     images_to_log.append(wandb.Image(img_to_log))
-                    num_logged_imgs += 1
+            num_logged_imgs += k_local
             if num_logged_imgs >= max_logged_imgs:
                 break
 
