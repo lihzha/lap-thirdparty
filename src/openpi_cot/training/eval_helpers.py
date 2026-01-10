@@ -206,6 +206,7 @@ def evaluate_token_accuracy(
             eval_info = peval_step(eval_rng, train_state, batch)
             # Bring sharded arrays to host memory for local computation.
             per_token_loss = jnp.asarray(training_utils.to_local_array(eval_info["per_token_loss"]))
+            all_token_accuracies.append(jnp.asarray(training_utils.to_local_array(eval_info["token_accuracy"])))
             if not config.model.use_fast:
                 number_mask = jnp.asarray(training_utils.to_local_array(batch[0].number_token_mask))[:, 1:]
                 direction_mask = jnp.asarray(training_utils.to_local_array(batch[0].direction_token_mask))[:, 1:]
@@ -239,7 +240,6 @@ def evaluate_token_accuracy(
                 direction_token_accuracies.append(
                     jnp.asarray(training_utils.to_local_array(eval_info["direction_token_accuracy"]))
                 )
-                all_token_accuracies.append(jnp.asarray(training_utils.to_local_array(eval_info["token_accuracy"])))
 
     if not config.model.use_fast:
         return {

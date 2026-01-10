@@ -341,7 +341,10 @@ class CoTRLDSDataLoader:
 
     @property
     def tokenizer(self) -> PaligemmaCoTTokenizer:
-        return self._dataset._transform.transforms[-2].tokenizer
+        for t in self._dataset._transform.transforms:
+            if hasattr(t, "tokenizer"):
+                return t.tokenizer
+        return None  # type: ignore
 
     def get_norm_stats_for_checkpoint(self) -> tuple[dict | None, str]:
         """Get normalization statistics to save with checkpoint.
