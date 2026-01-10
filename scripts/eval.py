@@ -107,7 +107,6 @@ def init_tpu(config: _config.TrainConfig):
     local_devices = getattr(jax, "local_device_count", lambda: 1)()
     global_devices = getattr(jax, "device_count", lambda: local_devices)()
     logging.info(f"Local devices: {local_devices}, Global devices: {global_devices}, Process count: {process_count}")
-    breakpoint()
     if process_count == 1:
         # Choose the largest divisor of available devices not exceeding configured fsdp_devices
         target = min(config.fsdp_devices, local_devices)
