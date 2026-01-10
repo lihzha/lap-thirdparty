@@ -310,7 +310,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         is_prediction_sample: bool = False,
         time_horizon_seconds: float | None = None,
         state_dropout: float = 0.0,
-        clip_action: bool = True,
+        clip_action: bool = False,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Tokenize prompt, language actions (if any), state, and actions for FAST model.
 
