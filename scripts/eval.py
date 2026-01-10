@@ -10,6 +10,7 @@ import etils.epath as epath
 import flax.nnx as nnx
 import jax
 import jax.numpy as jnp
+from jax.experimental import multihost_utils as mh
 import numpy as np
 from openpi.models import model as _model
 import openpi.shared.array_typing as at
@@ -658,20 +659,43 @@ def evaluate_rollout(
                 logging.info(f"Reached end of dataset at batch {batch_idx}")
                 break
 
-            # Prepare eval batch (remove language actions) and shard for JIT
-            eval_batch = vis_tools.prepare_eval_batch(batch)
-            # Shard the batch to match expected sharding
-            eval_batch_sharded = jax.device_put(eval_batch, data_sharding)
+            # Materialize process-local data to avoid non-addressable access in Python.
+            batch_local = jax.tree_util.tree_map(training_utils.to_local_array, batch)
+
+            # Compute a global max cut index so all hosts pad to the same length.
+            langact_mask = batch_local[0].tokenized_langact_mask
+            if langact_mask is None:
+                global_max_cut_idx = None
+            else:
+                local_max = 0
+                for i in range(langact_mask.shape[0]):
+                    true_indices = np.where(langact_mask[i])[0]
+                    cut_idx = int(true_indices[0]) if true_indices.size > 0 else int(langact_mask.shape[1])
+                    local_max = max(local_max, cut_idx)
+                gathered = mh.process_allgather(np.array([local_max], dtype=np.int32))
+                global_max_cut_idx = int(np.max(np.asarray(gathered)))
+
+            # Prepare eval batch (remove language actions) and shard for JIT.
+            eval_batch = vis_tools.prepare_eval_batch(batch_local, global_max_cut_idx=global_max_cut_idx)
+
+            def _to_sharded(x):
+                if not (hasattr(x, "shape") and x.shape):
+                    return x
+                if hasattr(x, "dtype") and (x.dtype == np.object_ or getattr(x.dtype, "kind", None) in ("U", "S")):
+                    return x
+                return jax.make_array_from_process_local_data(data_sharding, x)
+
+            eval_batch_sharded = jax.tree_util.tree_map(_to_sharded, eval_batch)
 
             # Run rollout evaluation
             output_tokens = peval_step(eval_rng, train_state, eval_batch_sharded)
 
-            k_local = min(config.batch_size, batch[0].state.shape[0])
+            k_local = min(config.batch_size, batch_local[0].state.shape[0])
 
             # Process results on host
             if jax.process_index() == 0:
                 output_tokens_local = training_utils.to_local_array(output_tokens)
-                gt_texts, pred_texts = vis_tools.eval_step(batch, output_tokens_local, tokenizer, k_local)
+                gt_texts, pred_texts = vis_tools.eval_step(batch_local, output_tokens_local, tokenizer, k_local)
 
                 imgs_to_log = eval_batch[0].images["base_0_rgb"][:k_local]
 
