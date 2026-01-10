@@ -1,5 +1,4 @@
 import dataclasses
-from dataclasses import replace
 import datetime
 import logging
 import os
@@ -25,16 +24,13 @@ from rail_tpu_utils import prevent_cross_region
 import tqdm_loggable.auto as tqdm
 import wandb
 
-import openpi_cot.datasets.cot_data_loader as _data_loader
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.training.checkpoints as _checkpoints
 import openpi_cot.training.config as _config
-from openpi_cot.training.eval_helpers import eval_checkpoint
 import openpi_cot.training.log_util as log_util
 import openpi_cot.training.mh_sharding as sharding
 import openpi_cot.training.utils as training_utils
-import openpi_cot.training.vis_tools as vis_tools
 import openpi_cot.training.weight_loaders as _weight_loaders
 
 matplotlib.use("Agg")  # Use non-interactive backend for remote environments
@@ -390,7 +386,8 @@ class ValidationStepRunner:
 
 def main(config: _config.TrainConfig):
     init_logging()
-    effective_fsdp_devices = init_tpu(config)
+    # effective_fsdp_devices = init_tpu(config)
+    effective_fsdp_devices = 1
 
     rng = jax.random.key(config.seed)
     train_rng, init_rng = jax.random.split(rng)
@@ -434,65 +431,65 @@ def main(config: _config.TrainConfig):
     sharding.log_param_sharding_planned(train_state_sharding)
     sharding.log_param_sharding_actual(train_state.params)
 
-    data_loader: _data_loader.CoTRLDSDataLoader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=True,
-        # seed=config.seed + start_step,
-        seed=config.seed,
-        persistent_iterator=True,
-    )
+    # data_loader: _data_loader.CoTRLDSDataLoader = _data_loader.create_data_loader(
+    #     config,
+    #     sharding=data_sharding,
+    #     shuffle=True,
+    #     # seed=config.seed + start_step,
+    #     seed=config.seed,
+    #     persistent_iterator=True,
+    # )
     tok = PaligemmaCoTTokenizer(max_len=300)
 
-    # Initialize dataset log tracker for uniform sample logging across datasets
-    dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
+    # # Initialize dataset log tracker for uniform sample logging across datasets
+    # dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
 
-    data_iter = iter(data_loader)
-    log_util.log_mem("Before getting batch")
-    batch = next(data_iter)
-    vis_tools.vis_batch(batch, tok=tok, step=0)
-    log_util.log_mem("After getting batch")
-    logging.info("Successfully initialized dataloader and retrieved first batch")
-    logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
-    sharding.log_batch_sharding(batch)
-    # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
-    dataloader_restored = False
-    if resuming:
-        try:
-            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader=data_loader)
-            dataloader_restored = True
-            logging.info("Successfully restored checkpoint and dataloader state")
-        except Exception as e:
-            logging.error(f"Failed to restore dataloader state: {e}")
-            dataloader_restored = False
+    # data_iter = iter(data_loader)
+    # log_util.log_mem("Before getting batch")
+    # batch = next(data_iter)
+    # vis_tools.vis_batch(batch, tok=tok, step=0)
+    # log_util.log_mem("After getting batch")
+    # logging.info("Successfully initialized dataloader and retrieved first batch")
+    # logging.info(f"Initialized data loader (shapes):\n{training_utils.array_tree_to_info(batch)}")
+    # sharding.log_batch_sharding(batch)
+    # # Restore checkpoint BEFORE creating iterator to ensure dataloader state is restored correctly
+    # dataloader_restored = False
+    # if resuming:
+    #     try:
+    #         train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader=data_loader)
+    #         dataloader_restored = True
+    #         logging.info("Successfully restored checkpoint and dataloader state")
+    #     except Exception as e:
+    #         logging.error(f"Failed to restore dataloader state: {e}")
+    #         dataloader_restored = False
 
-    # Get start step after restoring checkpoint (if resuming)
+    # # Get start step after restoring checkpoint (if resuming)
     start_step = int(train_state.step)
 
-    if config.model.enable_langact_training and config.use_validation:
-        eval_data_loader = _data_loader.create_data_loader(
-            replace(
-                config,
-                model=replace(config.model, verbose_mode=True),
-            ),
-            sharding=data_sharding,
-            shuffle=False,
-            split="val",
-            seed=config.seed,
-            max_samples=getattr(config.data, "val_max_samples", None),
-            persistent_iterator=False,
-        )
+    # if config.model.enable_langact_training and config.use_validation:
+    #     eval_data_loader = _data_loader.create_data_loader(
+    #         replace(
+    #             config,
+    #             model=replace(config.model, verbose_mode=True),
+    #         ),
+    #         sharding=data_sharding,
+    #         shuffle=False,
+    #         split="val",
+    #         seed=config.seed,
+    #         max_samples=getattr(config.data, "val_max_samples", None),
+    #         persistent_iterator=False,
+    #     )
 
-        eval_checkpoint(
-            train_state,
-            config,
-            mesh,
-            data_sharding,
-            replicated_sharding,
-            eval_data_loader,
-            jax.random.fold_in(train_rng, train_state.step),
-            train_state_sharding,
-        )
+    #     eval_checkpoint(
+    #         train_state,
+    #         config,
+    #         mesh,
+    #         data_sharding,
+    #         replicated_sharding,
+    #         eval_data_loader,
+    #         jax.random.fold_in(train_rng, train_state.step),
+    #         train_state_sharding,
+    #     )
 
     train_runner = TrainingStepRunner(config)
     ptrain_step = jax.jit(
@@ -502,66 +499,66 @@ def main(config: _config.TrainConfig):
         donate_argnums=(1,),
     )
 
-    if config.use_validation:
-        hash_tables_cache = data_loader.dataset.hash_tables
+    # if config.use_validation:
+    #     hash_tables_cache = data_loader.dataset.hash_tables
 
-        val_data_loader = _data_loader.create_data_loader(
-            config,
-            sharding=data_sharding,
-            shuffle=False,
-            split="val",
-            seed=config.seed,
-            max_samples=getattr(config.data, "val_max_samples", None),
-            hash_tables=hash_tables_cache,
-            persistent_iterator=False,
-        )
+    #     val_data_loader = _data_loader.create_data_loader(
+    #         config,
+    #         sharding=data_sharding,
+    #         shuffle=False,
+    #         split="val",
+    #         seed=config.seed,
+    #         max_samples=getattr(config.data, "val_max_samples", None),
+    #         hash_tables=hash_tables_cache,
+    #         persistent_iterator=False,
+    #     )
 
-        # franka_val_data_loader = _data_loader.create_data_loader(
-        #     replace(
-        #         config,
-        #         # model=replace(config.model, verbose_mode=True),
-        #         batch_size=128,
-        #         data=replace(config.data, data_mix="franka_dataset", val_fraction=1.0),
-        #     ),
-        #     sharding=data_sharding,
-        #     shuffle=False,
-        #     split="val",
-        #     seed=config.seed,
-        #     max_samples=getattr(config.data, "val_max_samples", None),
-        #     hash_tables=hash_tables_cache,
-        #     persistent_iterator=False,
-        # )
+    #     # franka_val_data_loader = _data_loader.create_data_loader(
+    #     #     replace(
+    #     #         config,
+    #     #         # model=replace(config.model, verbose_mode=True),
+    #     #         batch_size=128,
+    #     #         data=replace(config.data, data_mix="franka_dataset", val_fraction=1.0),
+    #     #     ),
+    #     #     sharding=data_sharding,
+    #     #     shuffle=False,
+    #     #     split="val",
+    #     #     seed=config.seed,
+    #     #     max_samples=getattr(config.data, "val_max_samples", None),
+    #     #     hash_tables=hash_tables_cache,
+    #     #     persistent_iterator=False,
+    #     # )
 
-        num_val_batches = val_data_loader.num_val_batches()
-        logging.info(f"Initial number of validation batches (from loader): {num_val_batches}")
-        # Try to get dataset statistics
-        val_dataset = getattr(val_data_loader, "dataset", None)
-        if val_dataset:
-            if hasattr(val_dataset, "dataset_statistics"):
-                logging.info(f"Validation dataset statistics: {val_dataset.dataset_statistics}")
-            if hasattr(val_dataset, "dataset_length"):
-                logging.info(f"Validation dataset length: {val_dataset.dataset_length}")
-        logging.info("=" * 80)
+    #     num_val_batches = val_data_loader.num_val_batches()
+    #     logging.info(f"Initial number of validation batches (from loader): {num_val_batches}")
+    #     # Try to get dataset statistics
+    #     val_dataset = getattr(val_data_loader, "dataset", None)
+    #     if val_dataset:
+    #         if hasattr(val_dataset, "dataset_statistics"):
+    #             logging.info(f"Validation dataset statistics: {val_dataset.dataset_statistics}")
+    #         if hasattr(val_dataset, "dataset_length"):
+    #             logging.info(f"Validation dataset length: {val_dataset.dataset_length}")
+    #     logging.info("=" * 80)
 
-        # Try to obtain the tokenizer from the transform pipeline for decoding
-        # tok = data_loader.tokenizer
-        val_runner = ValidationStepRunner(config)
-        pval_step = jax.jit(
-            val_runner,
-            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
-            out_shardings=replicated_sharding,
-        )
+    #     # Try to obtain the tokenizer from the transform pipeline for decoding
+    #     # tok = data_loader.tokenizer
+    #     val_runner = ValidationStepRunner(config)
+    #     pval_step = jax.jit(
+    #         val_runner,
+    #         in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+    #         out_shardings=replicated_sharding,
+    #     )
 
-    # Log preemption tracking information to wandb
-    if jax.process_index() == 0:
-        preemption_info = {
-            "preemption/start_timestamp": training_start_timestamp,
-            "preemption/is_resuming": float(resuming),
-            "preemption/start_step": start_step,
-            "preemption/dataloader_restored": float(dataloader_restored),
-        }
-        wandb.log(preemption_info, step=start_step)
-        logging.info(f"Logged preemption tracking info: {preemption_info}")
+    # # Log preemption tracking information to wandb
+    # if jax.process_index() == 0:
+    #     preemption_info = {
+    #         "preemption/start_timestamp": training_start_timestamp,
+    #         "preemption/is_resuming": float(resuming),
+    #         "preemption/start_step": start_step,
+    #         "preemption/dataloader_restored": float(dataloader_restored),
+    #     }
+    #     wandb.log(preemption_info, step=start_step)
+    #     logging.info(f"Logged preemption tracking info: {preemption_info}")
 
     pbar = tqdm.tqdm(
         range(start_step, config.num_train_steps),
@@ -571,11 +568,13 @@ def main(config: _config.TrainConfig):
         # disable=(jax.process_index() != 0),
     )
     infos = []
-    host_batch_cache = vis_tools.HostBatchCache()
-    val_host_batch_cache = vis_tools.HostBatchCache()
-    verbose_mode = config.model.verbose_mode
-    dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
-    dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
+    # host_batch_cache = vis_tools.HostBatchCache()
+    # val_host_batch_cache = vis_tools.HostBatchCache()
+    # verbose_mode = config.model.verbose_mode
+    # dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
+    # dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
+
+    # TODO: Add a dummy batch for testing
 
     for step in pbar:
         # Profiling: Time training step
@@ -584,134 +583,134 @@ def main(config: _config.TrainConfig):
             train_state, info = ptrain_step(train_rng, train_state, batch, step)
         infos.append(info)
 
-        if verbose_mode:
-            # Buffer local dataset info (no multihost gathering at every step)
-            # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
-            log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
+        # if verbose_mode:
+        #     # Buffer local dataset info (no multihost gathering at every step)
+        #     # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
+        #     log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
 
-        if step % config.log_interval == 0:
-            # Use unified logging function for training metrics
-            log_util.process_and_log_metrics(
-                step=step,
-                infos=infos,
-                batch=batch,
-                dataset_stats_tracker=dataset_stats_tracker,
-                dataset_info_buffer=dataset_info_buffer,
-                config=config,
-                host_batch_cache=host_batch_cache,
-                dataset_log_tracker=dataset_log_tracker,
-                tok=tok,
-                prefix="",
-                verbose_mode=verbose_mode,
-            )
-            infos = []
-            # Reset dataset stats tracker to only track the next log_interval window
-            if verbose_mode:
-                dataset_stats_tracker.reset()
-        # Periodic validation
-        if config.use_validation and step % getattr(config, "val_interval", 500) == 0:
-            # Initialize validation dataset trackers
-            val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
-            val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
+        # if step % config.log_interval == 0:
+        #     # Use unified logging function for training metrics
+        #     log_util.process_and_log_metrics(
+        #         step=step,
+        #         infos=infos,
+        #         batch=batch,
+        #         dataset_stats_tracker=dataset_stats_tracker,
+        #         dataset_info_buffer=dataset_info_buffer,
+        #         config=config,
+        #         host_batch_cache=host_batch_cache,
+        #         dataset_log_tracker=dataset_log_tracker,
+        #         tok=tok,
+        #         prefix="",
+        #         verbose_mode=verbose_mode,
+        #     )
+        #     infos = []
+        #     # Reset dataset stats tracker to only track the next log_interval window
+        #     if verbose_mode:
+        #         dataset_stats_tracker.reset()
+        # # Periodic validation
+        # if config.use_validation and step % getattr(config, "val_interval", 500) == 0:
+        #     # Initialize validation dataset trackers
+        #     val_dataset_stats_tracker = log_util.DatasetStatsTracker() if verbose_mode else None
+        #     val_dataset_info_buffer = log_util.LocalDatasetInfoBuffer(tok) if verbose_mode else None
 
-            with sharding.set_mesh(mesh):
-                val_infos = []
-                # Recreate a fresh iterator to ensure the same fixed validation subset each time.
-                val_iter = iter(val_data_loader)
+        #     with sharding.set_mesh(mesh):
+        #         val_infos = []
+        #         # Recreate a fresh iterator to ensure the same fixed validation subset each time.
+        #         val_iter = iter(val_data_loader)
 
-                val_batch = None
+        #         val_batch = None
 
-                # Subsequent validation runs: use progress bar with known batch count
-                val_pbar = tqdm.tqdm(
-                    range(num_val_batches),
-                    initial=0,
-                    total=num_val_batches,
-                    dynamic_ncols=True,
-                    disable=(jax.process_index() != 0),
-                )
-                for _ in val_pbar:
-                    val_batch = next(val_iter)
-                    val_info = pval_step(train_rng, train_state, val_batch)
-                    # val_info_local = jax.device_get(val_info)
-                    # val_infos.append(val_info_local)
-                    val_infos.append(val_info)
-                    if verbose_mode:
-                        log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
-                # Use unified logging function for validation metrics
-                if val_batch:
-                    log_util.process_and_log_metrics(
-                        step=step,
-                        infos=val_infos,
-                        batch=val_batch,  # Use last val_batch for dataset info
-                        dataset_stats_tracker=val_dataset_stats_tracker,
-                        dataset_info_buffer=val_dataset_info_buffer,
-                        config=config,
-                        host_batch_cache=val_host_batch_cache,
-                        dataset_log_tracker=dataset_log_tracker,
-                        tok=tok,
-                        prefix="val_",
-                        verbose_mode=verbose_mode,
-                    )
+        #         # Subsequent validation runs: use progress bar with known batch count
+        #         val_pbar = tqdm.tqdm(
+        #             range(num_val_batches),
+        #             initial=0,
+        #             total=num_val_batches,
+        #             dynamic_ncols=True,
+        #             disable=(jax.process_index() != 0),
+        #         )
+        #         for _ in val_pbar:
+        #             val_batch = next(val_iter)
+        #             val_info = pval_step(train_rng, train_state, val_batch)
+        #             # val_info_local = jax.device_get(val_info)
+        #             # val_infos.append(val_info_local)
+        #             val_infos.append(val_info)
+        #             if verbose_mode:
+        #                 log_util.buffer_dataset_metrics_from_batch(val_dataset_info_buffer, val_batch, val_info)
+        #         # Use unified logging function for validation metrics
+        #         if val_batch:
+        #             log_util.process_and_log_metrics(
+        #                 step=step,
+        #                 infos=val_infos,
+        #                 batch=val_batch,  # Use last val_batch for dataset info
+        #                 dataset_stats_tracker=val_dataset_stats_tracker,
+        #                 dataset_info_buffer=val_dataset_info_buffer,
+        #                 config=config,
+        #                 host_batch_cache=val_host_batch_cache,
+        #                 dataset_log_tracker=dataset_log_tracker,
+        #                 tok=tok,
+        #                 prefix="val_",
+        #                 verbose_mode=verbose_mode,
+        #             )
 
-                # val_infos = []
-                # # Recreate a fresh iterator to ensure the same fixed validation subset each time.
-                # franka_val_iter = iter(franka_val_data_loader)
+        #         # val_infos = []
+        #         # # Recreate a fresh iterator to ensure the same fixed validation subset each time.
+        #         # franka_val_iter = iter(franka_val_data_loader)
 
-                # # Subsequent validation runs: use progress bar with known batch count
-                # val_pbar = tqdm.tqdm(
-                #     range(20),
-                #     initial=0,
-                #     total=20,
-                #     dynamic_ncols=True,
-                #     disable=(jax.process_index() != 0),
-                # )
-                # for _ in val_pbar:
-                #     val_batch = next(franka_val_iter)
-                #     val_info = pval_step(train_rng, train_state, val_batch)
-                #     # val_info_local = jax.device_get(val_info)
-                #     # val_infos.append(val_info_local)
-                #     val_infos.append(val_info)
+        #         # # Subsequent validation runs: use progress bar with known batch count
+        #         # val_pbar = tqdm.tqdm(
+        #         #     range(20),
+        #         #     initial=0,
+        #         #     total=20,
+        #         #     dynamic_ncols=True,
+        #         #     disable=(jax.process_index() != 0),
+        #         # )
+        #         # for _ in val_pbar:
+        #         #     val_batch = next(franka_val_iter)
+        #         #     val_info = pval_step(train_rng, train_state, val_batch)
+        #         #     # val_info_local = jax.device_get(val_info)
+        #         #     # val_infos.append(val_info_local)
+        #         #     val_infos.append(val_info)
 
-                # log_util.process_and_log_metrics(
-                #     step=step,
-                #     infos=val_infos,
-                #     batch=val_batch,  # Use last val_batch for dataset info
-                #     dataset_stats_tracker=val_dataset_stats_tracker,
-                #     dataset_info_buffer=val_dataset_info_buffer,
-                #     config=config,
-                #     host_batch_cache=val_host_batch_cache,
-                #     dataset_log_tracker=dataset_log_tracker,
-                #     tok=tok,
-                #     prefix="franka_val_",
-                #     verbose_mode=False,
-                # )
+        #         # log_util.process_and_log_metrics(
+        #         #     step=step,
+        #         #     infos=val_infos,
+        #         #     batch=val_batch,  # Use last val_batch for dataset info
+        #         #     dataset_stats_tracker=val_dataset_stats_tracker,
+        #         #     dataset_info_buffer=val_dataset_info_buffer,
+        #         #     config=config,
+        #         #     host_batch_cache=val_host_batch_cache,
+        #         #     dataset_log_tracker=dataset_log_tracker,
+        #         #     tok=tok,
+        #         #     prefix="franka_val_",
+        #         #     verbose_mode=False,
+        #         # )
 
-        batch = next(data_iter)
+        # batch = next(data_iter)
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
-            if config.model.enable_langact_training and config.use_validation:
-                eval_checkpoint(
-                    train_state,
-                    config,
-                    mesh,
-                    data_sharding,
-                    replicated_sharding,
-                    eval_data_loader,
-                    jax.random.fold_in(train_rng, train_state.step),
-                    train_state_sharding,
-                )
-            checkpoint_manager = _checkpoints.save_state(
-                checkpoint_manager,
-                train_state,
-                data_loader,
-                step,
-                max_retries=config.checkpoint_max_retries,
-                retry_delay_secs=config.checkpoint_retry_delay_secs,
-                retry_backoff=config.checkpoint_retry_backoff,
-                fallback_to_sync=config.checkpoint_fallback_to_sync,
-                async_timeout_secs=config.checkpoint_async_timeout_secs,
-                keep_period=config.keep_period,
-            )
+        # if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
+        #     if config.model.enable_langact_training and config.use_validation:
+        #         eval_checkpoint(
+        #             train_state,
+        #             config,
+        #             mesh,
+        #             data_sharding,
+        #             replicated_sharding,
+        #             eval_data_loader,
+        #             jax.random.fold_in(train_rng, train_state.step),
+        #             train_state_sharding,
+        #         )
+        #     checkpoint_manager = _checkpoints.save_state(
+        #         checkpoint_manager,
+        #         train_state,
+        #         data_loader,
+        #         step,
+        #         max_retries=config.checkpoint_max_retries,
+        #         retry_delay_secs=config.checkpoint_retry_delay_secs,
+        #         retry_backoff=config.checkpoint_retry_backoff,
+        #         fallback_to_sync=config.checkpoint_fallback_to_sync,
+        #         async_timeout_secs=config.checkpoint_async_timeout_secs,
+        #         keep_period=config.keep_period,
+        #     )
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

@@ -10,9 +10,9 @@ import logging
 import os
 
 import jax
+import matplotlib
 import numpy as np
 import wandb
-import matplotlib
 
 matplotlib.use("Agg")  # Non-interactive backend for headless environments
 import matplotlib.pyplot as plt
@@ -240,7 +240,7 @@ def init_tpu(config: _config.TrainConfig):
     if (
         ("v6" in config.name and config.fsdp_devices > 8)
         or ("v4" in config.name and config.fsdp_devices > 4)
-        or ("v5" in config.name and config.fsdp_devices > 8)
+        or ("v5" in config.name and config.fsdp_devices > 4)
     ):
         jax.distributed.initialize()
     if "local" in config.name:
