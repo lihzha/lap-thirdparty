@@ -98,8 +98,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 1.0),
-        ("molmoact_dataset", 1.0),
+        ("molmoact_dataset", 2.0),
         ("coco_captions", 1.0),  # 10% COCO caption samples
         ("vqa", 0.1),  # 10% vqa samples
         ("lvis", 0.01),
@@ -136,8 +135,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sailor_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 250 trajs
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
-        ("molmoact_dataset", 1.0),
-        ("molmoact_dataset", 1.0),
+        ("molmoact_dataset", 2.0),
         ("coco_captions", 0.75),  # 10% COCO caption samples
         ("vqa", 0.075),  # 10% vqa samples
         ("lvis", 0.0075),

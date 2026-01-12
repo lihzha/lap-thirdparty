@@ -136,10 +136,10 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         reasoning_end = len(tokens)
 
         if len(tokens) > self._max_len:
-            # logging.warning(
-            #     f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
-            #     "Consider increasing the `max_token_len` in your model config if this happens frequently."
-            # )
+            logging.warning(
+                f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+                "Consider increasing the `max_token_len` in your model config if this happens frequently."
+            )
             tokens = tokens[: self._max_len]
             reasoning_end = min(reasoning_end, self._max_len)
 
