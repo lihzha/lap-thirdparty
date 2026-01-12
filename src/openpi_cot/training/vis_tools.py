@@ -1187,3 +1187,49 @@ def vis_batch(batch, tok=None, step=None):
     if wandb_images and jax.process_index() == 0 and step is not None:
         wandb.log(wandb_images, step=step)
         logging.info(f"Logged {len(wandb_images)} image groups to wandb")
+
+
+def vis_augmented_images(
+    augmented_images: dict[str, jax.Array] | None,
+    step: int,
+    prefix: str = "train",
+    num_samples: int = 4,
+) -> None:
+    """Visualize augmented images from training step info.
+
+    Args:
+        augmented_images: Dictionary of augmented image arrays {key: [B, H, W, C]} in [-1, 1] range
+        step: Training step number for wandb logging
+        prefix: Prefix for wandb log keys (e.g., "train" or "val")
+        num_samples: Number of samples to visualize per image key
+    """
+    if augmented_images is None:
+        return
+
+    if jax.process_index() != 0:
+        return
+
+    wandb_images = {}
+    for key, img in augmented_images.items():
+        img = _utils.to_local_array(img)
+        if img is None or img.ndim < 4:
+            continue
+
+        num_to_show = min(img.shape[0], num_samples)
+        sample_images = []
+        for t in range(num_to_show):
+            sample_img = img[t]  # [H, W, C]
+
+            # Convert from [-1, 1] to [0, 255]
+            sample_img = np.asarray(sample_img)
+            sample_img_uint8 = ((sample_img + 1.0) / 2.0 * 255.0).clip(0, 255).astype(np.uint8)
+
+            # Add to wandb images list
+            sample_images.append(wandb.Image(sample_img_uint8, caption=f"{key}_sample{t}"))
+
+        if sample_images:
+            wandb_images[f"{prefix}/augmented_{key}"] = sample_images
+
+    if wandb_images:
+        wandb.log(wandb_images, step=step)
+        logging.info(f"Logged {len(wandb_images)} augmented image groups to wandb at step {step}")

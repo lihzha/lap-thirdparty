@@ -302,7 +302,9 @@ class TrainingStepRunner:
             observation: CoTObservation | Observation,
             actions: _model.Actions,
         ):
-            loss, metrics = model.compute_loss(rng, observation, actions, train=True, stage_config=stage_config)
+            loss, metrics = model.compute_loss(
+                rng, observation, actions, train=True, stage_config=stage_config, return_augmented_images=True
+            )
             return loss, metrics
 
         train_rng = jax.random.fold_in(rng, state.step)
@@ -590,6 +592,11 @@ def main(config: _config.TrainConfig):
             log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
 
         if step % config.log_interval == 0:
+            # Visualize augmented images (after augmentation in compute_loss)
+            augmented_images = info.get("augmented_images", None)
+            if augmented_images is not None:
+                vis_tools.vis_augmented_images(augmented_images, step=step, prefix="train", num_samples=4)
+
             # Use unified logging function for training metrics
             log_util.process_and_log_metrics(
                 step=step,

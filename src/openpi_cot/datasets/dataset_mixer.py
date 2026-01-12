@@ -266,15 +266,21 @@ class OXECoTDatasets:
                 # Apply normalizer to this dataset
                 normalized_datasets.append(ds.map(normalizer, num_parallel_calls=tf.data.AUTOTUNE))
 
+            # Repeat each dataset before interleaving to ensure correct sampling weights
+            # Without .repeat(), exhausted datasets cause incorrect sampling behavior
+            repeated_datasets = [ds.repeat() for ds in normalized_datasets]
+            
             # Interleave the normalized datasets
             self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
-                normalized_datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
+                repeated_datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
             )
             self.global_statistics = global_stats
         else:
             # No global normalization - just interleave the datasets
+            # Repeat each dataset before interleaving to ensure correct sampling weights
+            repeated_datasets = [ds.repeat() for ds in datasets]
             self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
-                datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
+                repeated_datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
             )
             self.global_statistics = None
 

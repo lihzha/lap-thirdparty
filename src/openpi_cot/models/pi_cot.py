@@ -348,6 +348,7 @@ class PiCoT(_pi0.Pi0):
         train: bool = False,
         stage_config: dict | None = None,
         verbose_mode: bool | None = None,
+        return_augmented_images: bool = False,
     ) -> dict[str, at.Array]:
         preprocess_rng, _, noise_rng, time_rng = jax.random.split(rng, 4)
 
@@ -379,6 +380,9 @@ class PiCoT(_pi0.Pi0):
             vqa_mask=vqa_mask,
             aggresive_aug=self.aggresive_aug,
         )
+
+        # Store augmented images for later visualization (if requested)
+        augmented_images = observation.images if return_augmented_images else None
 
         # Build prefix for langact/action losses (first frame + text)
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
@@ -530,6 +534,10 @@ class PiCoT(_pi0.Pi0):
         else:
             # No masking or fallback: use mean over all samples
             final_loss = jnp.mean(total_per_sample_loss)
+
+        # Add augmented images to metrics if requested
+        if augmented_images is not None:
+            metrics["augmented_images"] = augmented_images
 
         return final_loss, metrics
 
