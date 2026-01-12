@@ -584,6 +584,9 @@ def main(config: _config.TrainConfig):
         # train_start = time.perf_counter()
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch, step)
+
+        # Extract augmented_images before appending to infos (to avoid reduction issues)
+        augmented_images = info.pop("augmented_images", None)
         infos.append(info)
 
         if verbose_mode:
@@ -593,7 +596,6 @@ def main(config: _config.TrainConfig):
 
         if step % config.log_interval == 0:
             # Visualize augmented images (after augmentation in compute_loss)
-            augmented_images = info.get("augmented_images", None)
             if augmented_images is not None:
                 vis_tools.vis_augmented_images(augmented_images, step=step, prefix="train", num_samples=4)
 
