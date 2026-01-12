@@ -278,9 +278,9 @@ DEFAULT_VQA_PROMPT_FORMAT = PromptFormat(
 VLA0_PROMPT_FORMAT = PromptFormat(
     name="vla0",
     prefix_module=PrefixModule(
-        "Analyze the input image and predict robot actions for the next 1 timesteps. "
+        "Analyze the input image and predict robot actions for the next 10 timesteps. "
         "Each action has 7 dimensions. Output a single sequence of 7 integers (0-1000 each), "
-        "representing the 1 timesteps sequentially. Provide only space-separated numbers. Nothing else."
+        "representing the 10 timesteps sequentially. Provide only space-separated numbers. Nothing else."
     ),
     task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
     state_module=None,  # VLA-0 doesn't use discretized state in prompt
