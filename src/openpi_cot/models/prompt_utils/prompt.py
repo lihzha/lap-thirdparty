@@ -270,6 +270,42 @@ DEFAULT_VQA_PROMPT_FORMAT = PromptFormat(
     direction_token_checker=None,
 )
 
+# VLA-0 Prompt Formats
+# Reference: "VLA-0: Building State-of-the-Art VLAs with Zero Modification"
+# These formats use discretized integer actions instead of language descriptions
+
+# VLA-0 Single-step (H=1, D=7, B=1000)
+VLA0_PROMPT_FORMAT = PromptFormat(
+    name="vla0",
+    prefix_module=PrefixModule(
+        "Analyze the input image and predict robot actions for the next 1 timesteps. "
+        "Each action has 7 dimensions. Output a single sequence of 7 integers (0-1000 each), "
+        "representing the 1 timesteps sequentially. Provide only space-separated numbers. Nothing else."
+    ),
+    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
+    state_module=None,  # VLA-0 doesn't use discretized state in prompt
+    action_module=ActionModule(prefix=""),  # Output directly after prompt
+    separator="\n",
+    critical_token_checker=checkers.is_number,
+    direction_token_checker=checkers.is_direction_none,
+)
+
+# VLA-0 Chunked (H=10, D=7, B=1000)
+VLA0_CHUNKED_PROMPT_FORMAT = PromptFormat(
+    name="vla0_chunked",
+    prefix_module=PrefixModule(
+        "Analyze the input image and predict robot actions for the next 10 timesteps. "
+        "Each action has 7 dimensions. Output a single sequence of 70 integers (0-1000 each), "
+        "representing the 10 timesteps sequentially. Provide only space-separated numbers. Nothing else."
+    ),
+    task_module=TaskModule(template="Task: {prompt}", include_time_horizon=False),
+    state_module=None,
+    action_module=ActionModule(prefix=""),
+    separator="\n",
+    critical_token_checker=checkers.is_number,
+    direction_token_checker=checkers.is_direction_none,
+)
+
 # Registry for easy lookup
 PROMPT_FORMAT_REGISTRY = {
     "pi05": PI05_PROMPT_FORMAT,
@@ -278,6 +314,8 @@ PROMPT_FORMAT_REGISTRY = {
     "pi0": PI0_PROMPT_FORMAT,
     "schema_compact": SCHEMA_COMPACT_PROMPT_FORMAT,
     "pi05_notime_nostate": PI05_NOTIME_NOSTATE_PROMPT_FORMAT,
+    "vla0": VLA0_PROMPT_FORMAT,
+    "vla0_chunked": VLA0_CHUNKED_PROMPT_FORMAT,
 }
 
 PREDICTION_PROMPT_FORMAT_REGISTRY = {

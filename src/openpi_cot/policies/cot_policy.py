@@ -276,8 +276,24 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if self.language_action_format.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
-        # Always prepare regular language actions for reasoning loss.
-        if "language_actions" in data and self.enable_langact_training:
+        # Handle VLA-0 format: use normalized actions field directly (not language_actions)
+        if self.language_action_format.style == "vla0" and self.enable_langact_training:
+            # VLA-0 uses the normalized actions field directly
+            if "actions" in inputs:
+                # actions are already normalized to [-1, 1] and contain action_horizon timesteps
+                normalized_actions = inputs["actions"]
+                # Use VLA0ActionFormat.summarize_actions() to convert to text
+                inputs["language_actions"] = self.language_action_format.summarize_actions(normalized_actions)
+                inputs["frame_description"] = "normalized"
+            else:
+                inputs["language_actions"] = ""
+                inputs["frame_description"] = "normalized"
+
+            # VLA-0 doesn't filter idle actions - all samples are active
+            inputs["sample_mask"] = True
+
+        # Handle other formats: use language_actions field
+        elif "language_actions" in data and self.enable_langact_training:
             initial_state = np.asarray(data["raw_state"])
 
             inputs["language_actions"], inputs["frame_description"] = self._summarize_language_actions(
@@ -344,6 +360,20 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         assert self.language_action_format is not None
         assert reasoning is not None
 
+        # Handle VLA-0 format: parse to full action array
+        if self.language_action_format.style == "vla0":
+            # VLA-0 format returns full action array [action_horizon, action_dim]
+            from openpi_cot.policies.lang_action_formats import VLA0ActionFormat
+
+            if isinstance(self.language_action_format, VLA0ActionFormat):
+                actions = self.language_action_format.parse_to_full_actions(reasoning)
+                return {"actions": actions, "reasoning": reasoning}
+            # Fallback for generic VLA0-style format
+            movement, gripper_action = self.language_action_format.parse_language_to_deltas(reasoning)
+            single_action = np.concatenate([movement, [gripper_action]]) if gripper_action is not None else movement
+            return {"actions": single_action, "reasoning": reasoning}
+
+        # Handle other formats: parse to movement deltas + gripper
         # Extract initial state for EEF frame transformation
         initial_state = None
         if self.language_action_format.use_eef_frame and "raw_state" in data:

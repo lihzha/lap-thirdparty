@@ -17,7 +17,7 @@ class LanguageActionFormat:
 
     name: str
     # Style of formatting
-    style: Literal["verbose", "compact"] = "verbose"
+    style: Literal["verbose", "compact", "vla0"] = "verbose"
     # For verbose style: decimal places for numeric values
     decimal_places: int = 0
     # Whether to include rotation components in descriptions
@@ -128,6 +128,140 @@ class LanguageActionFormat:
         return movement, gripper_action
 
 
+@dataclasses.dataclass(frozen=True)
+class VLA0ActionFormat(LanguageActionFormat):
+    """VLA-0 style action format: normalized actions as space-separated integers.
+
+    VLA-0 represents actions directly as discretized integers in [0, num_bins] range,
+    serialized as space-separated text. This enables using standard language modeling
+    loss without any architectural modifications.
+
+    Example output: "<523 127 890 512 512 512 500>" for a 7D action
+
+    Reference: "VLA-0: Building State-of-the-Art VLAs with Zero Modification"
+    """
+
+    name: str = "vla0"
+    style: Literal["vla0"] = "vla0"
+    # Number of discretization bins (actions scaled from [-1, 1] to [0, num_bins])
+    num_bins: int = 1000
+    # Number of timesteps to include in output (uses normalized actions field)
+    action_horizon: int = 1
+    # Action dimension (typically 7 for 6DOF + gripper)
+    action_dim: int = 7
+
+    def get_sum_decimal(self) -> str:
+        """VLA0 doesn't use the legacy sum_decimal format."""
+        return "vla0"
+
+    def summarize_actions(self, actions: np.ndarray) -> str:
+        """Convert normalized actions to VLA0 text format.
+
+        Args:
+            actions: Normalized actions in [-1, 1] range.
+                     Shape: [action_horizon, action_dim] or [action_dim]
+
+        Returns:
+            VLA0 format string: "<int1 int2 int3 ...>"
+        """
+        actions = np.asarray(actions, dtype=float)
+        if actions.ndim == 1:
+            actions = actions[None, :]
+
+        # Clip to valid range and scale from [-1, 1] to [0, num_bins]
+        actions = np.clip(actions, -1.0, 1.0)
+        discretized = np.round((actions + 1.0) / 2.0 * self.num_bins).astype(int)
+        discretized = np.clip(discretized, 0, self.num_bins)
+
+        # Flatten and serialize
+        flat = discretized.flatten()
+        return "<" + " ".join(map(str, flat)) + ">"
+
+    def parse_language_to_deltas(
+        self,
+        reasoning: str | list[str],
+        *,
+        initial_state: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, float | None]:
+        """Parse VLA0 text format back to continuous actions.
+
+        Args:
+            reasoning: VLA0 format string like "<523 127 890 512 512 512 500>"
+            initial_state: Not used for VLA0 (actions are absolute, not relative)
+
+        Returns:
+            Tuple of (actions, gripper_action) where actions has shape [action_dim]
+            for single-step or flattened for multi-step
+        """
+        if isinstance(reasoning, list):
+            reasoning = " ".join(reasoning)
+
+        # Extract integers from <...> format
+        match = re.search(r"<([\d\s]+)>", reasoning)
+        if not match:
+            # Return zeros if parsing fails
+            return np.zeros(6, dtype=float), None
+
+        try:
+            ints = [int(x) for x in match.group(1).split()]
+        except ValueError:
+            return np.zeros(6, dtype=float), None
+
+        # Convert back to continuous [-1, 1]
+        continuous = np.array(ints, dtype=float) / self.num_bins * 2.0 - 1.0
+
+        # Reshape to [action_horizon, action_dim]
+        expected_len = self.action_horizon * self.action_dim
+        if len(continuous) < expected_len:
+            # Pad with zeros if not enough values
+            continuous = np.pad(continuous, (0, expected_len - len(continuous)))
+        elif len(continuous) > expected_len:
+            continuous = continuous[:expected_len]
+
+        actions = continuous.reshape(self.action_horizon, self.action_dim)
+
+        # For compatibility with existing interface, return first timestep's movement and gripper
+        # Movement: first 6 dims, Gripper: 7th dim
+        movement = actions[0, :6] if actions.shape[1] >= 6 else np.zeros(6)
+        gripper_action = float(actions[0, 6]) if actions.shape[1] >= 7 else None
+
+        return movement, gripper_action
+
+    def parse_to_full_actions(self, reasoning: str) -> np.ndarray:
+        """Parse VLA0 text format to full action array.
+
+        Args:
+            reasoning: VLA0 format string like "<523 127 890 512 512 512 500>"
+
+        Returns:
+            Actions array of shape [action_horizon, action_dim] in [-1, 1] range
+        """
+        if isinstance(reasoning, list):
+            reasoning = " ".join(reasoning)
+
+        # Extract integers from <...> format
+        match = re.search(r"<([\d\s]+)>", reasoning)
+        if not match:
+            return np.zeros((self.action_horizon, self.action_dim), dtype=float)
+
+        try:
+            ints = [int(x) for x in match.group(1).split()]
+        except ValueError:
+            return np.zeros((self.action_horizon, self.action_dim), dtype=float)
+
+        # Convert back to continuous [-1, 1]
+        continuous = np.array(ints, dtype=float) / self.num_bins * 2.0 - 1.0
+
+        # Reshape to [action_horizon, action_dim]
+        expected_len = self.action_horizon * self.action_dim
+        if len(continuous) < expected_len:
+            continuous = np.pad(continuous, (0, expected_len - len(continuous)))
+        elif len(continuous) > expected_len:
+            continuous = continuous[:expected_len]
+
+        return continuous.reshape(self.action_horizon, self.action_dim)
+
+
 # Predefined language action formats
 VERBOSE_FORMAT = LanguageActionFormat(
     name="verbose",
@@ -187,6 +321,21 @@ COMPACT_BIMANUAL_WITH_ROTATION_FORMAT = LanguageActionFormat(
     include_rotation=True,
 )
 
+# VLA-0 formats: actions as discretized integers
+VLA0_FORMAT = VLA0ActionFormat(
+    name="vla0",
+    num_bins=1000,
+    action_horizon=1,
+    action_dim=7,
+)
+
+VLA0_CHUNKED_FORMAT = VLA0ActionFormat(
+    name="vla0_chunked",
+    num_bins=1000,
+    action_horizon=16,
+    action_dim=7,
+)
+
 LANGUAGE_ACTION_FORMAT_REGISTRY = {
     fmt.name: fmt
     for fmt in [
@@ -199,6 +348,8 @@ LANGUAGE_ACTION_FORMAT_REGISTRY = {
         EEF_WITH_ROTATION_FORMAT,
         COMPACT_BIMANUAL_FORMAT,
         COMPACT_BIMANUAL_WITH_ROTATION_FORMAT,
+        VLA0_FORMAT,
+        VLA0_CHUNKED_FORMAT,
     ]
 }
 

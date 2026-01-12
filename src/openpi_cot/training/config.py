@@ -1196,7 +1196,7 @@ _CONFIGS = [
             # use_fast=True,
             # prompt_format="pi05_notime_nostate",
             action_dim=7,
-            action_horizon=16,
+            action_horizon=10,
             max_token_len=220,
             pi05=True,
             discrete_state_input=True,
@@ -1212,6 +1212,71 @@ _CONFIGS = [
             "droid_dataset_name": "droid",
             "data_mix": "oxe_magic_soup",
             "shuffle_buffer_size": 400_000,
+            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        save_interval=2500,
+        keep_period=10000,
+        resume=True,
+    ),
+    # VLA-0 Baseline: Actions as discretized integers (no language descriptions)
+    # Reference: "VLA-0: Building State-of-the-Art VLAs with Zero Modification"
+    *create_multi_device_configs(
+        base_name="pi_combined_vla0",
+        devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
+        model=pi_cot_config.PiCoTConfig(
+            action_dim=7,
+            action_horizon=10,  # 10-step action chunking
+            max_token_len=180,  # VLA0 format is more compact
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=False,  # VLA0 uses language modeling loss only
+            enable_langact_training=True,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+            prompt_format="vla0_chunked",  # VLA-0 specific prompt format
+        ),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_magic_soup",
+            "shuffle_buffer_size": 400_000,
+            "language_action_format_name": "vla0_chunked",  # VLA-0 format with action chunking
+            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
+        save_interval=2500,
+        keep_period=10000,
+        resume=True,
+    ),
+    # VLA-0 Single-step variant (for comparison with original paper)
+    *create_multi_device_configs(
+        base_name="pi_combined_vla0_single",
+        devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
+        model=pi_cot_config.PiCoTConfig(
+            action_dim=7,
+            action_horizon=1,  # Single-step like original VLA-0
+            max_token_len=100,  # Shorter for single-step
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=False,
+            enable_langact_training=True,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+            prompt_format="vla0",  # VLA-0 specific prompt format
+        ),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_magic_soup",
+            "shuffle_buffer_size": 400_000,
+            "language_action_format_name": "vla0",  # Single-step VLA-0 format
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),

@@ -435,9 +435,7 @@ class PiCoT(_pi0.Pi0):
                 lang_mask = jnp.logical_and(lang_mask, combined_langact_mask)
                 num_active_samples = jnp.maximum(jnp.sum(combined_langact_mask), 1.0)
                 metrics["active_num_samples"] = jnp.sum(combined_langact_mask)
-                metrics["active_sample_portion"] = metrics["active_num_samples"] / jnp.maximum(
-                    batch_size, 1.0
-                )
+                metrics["active_sample_portion"] = metrics["active_num_samples"] / jnp.maximum(batch_size, 1.0)
                 metrics["vqa_num_samples"] = jnp.sum(vqa_mask)
                 metrics["vqa_sample_portion"] = metrics["vqa_num_samples"] / num_active_samples
                 metrics["pred_num_samples"] = jnp.sum(pred_mask)
@@ -672,7 +670,7 @@ class PiCoT(_pi0.Pi0):
 
             # Decode one step using only expert 0.
             token_embedding = self.PaliGemma.llm(token, method="embed")
-            positions = prefill_len[:, None] + step + 1
+            positions = prefill_len[:, None] + step
             mask = jnp.logical_and(
                 jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
                 jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
