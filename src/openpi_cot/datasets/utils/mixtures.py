@@ -144,7 +144,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("paco_lvis", 1.0),
         ("paco_ego4d", 1.0),
     ],
-    "oxe_magic_soup_vqa30": [
+    "oxe_magic_soup_magic_vqa": [
         # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
         ("bc_z", 0.05),
         ("droid", 2.0),
@@ -173,13 +173,13 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
         ("molmoact_dataset", 2.0),
-        ("coco_captions", 0.75),  # 10% COCO caption samples
-        ("vqa", 0.075),  # 10% vqa samples
-        ("lvis", 0.0075),
-        ("pixmo_cap", 0.5),  # 10% COCO caption samples
-        ("pixmo_point", 0.075),  # 10% vqa samples
-        ("paco_lvis", 0.75),
-        ("paco_ego4d", 0.75),
+        ("coco_captions", 1.0),  # 10% COCO caption samples
+        ("vqa", 0.1),  # 10% vqa samples
+        ("lvis", 0.01),
+        ("pixmo_cap", 3.0),  # 10% COCO caption samples
+        ("pixmo_point", 0.2),  # 10% vqa samples
+        ("paco_lvis", 3.0),
+        ("paco_ego4d", 10.0),
     ],
     "franka_no_droid": [
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
