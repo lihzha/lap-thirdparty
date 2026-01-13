@@ -471,7 +471,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             #     lambda: traj["observation"][self.spec.images_list[0]],
             #     lambda: traj["observation"][self.spec.images_list[1]],
             # )
-            primary_img = traj["observation"][self.spec.wrist_image_key]
+            primary_img = traj["observation"]["wrist_image_left"]
 
             # Create frame indices as strings
             frame_indices = tf.as_string(tf.range(traj_len))
