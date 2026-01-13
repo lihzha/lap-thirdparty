@@ -698,17 +698,6 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
-            if config.model.enable_langact_training and config.use_validation and config.use_eval:
-                eval_checkpoint(
-                    train_state,
-                    config,
-                    mesh,
-                    data_sharding,
-                    replicated_sharding,
-                    eval_data_loader,
-                    jax.random.fold_in(train_rng, train_state.step),
-                    train_state_sharding,
-                )
             checkpoint_manager = _checkpoints.save_state(
                 checkpoint_manager,
                 train_state,
@@ -721,6 +710,17 @@ def main(config: _config.TrainConfig):
                 async_timeout_secs=config.checkpoint_async_timeout_secs,
                 keep_period=config.keep_period,
             )
+            if config.model.enable_langact_training and config.use_validation and config.use_eval:
+                eval_checkpoint(
+                    train_state,
+                    config,
+                    mesh,
+                    data_sharding,
+                    replicated_sharding,
+                    eval_data_loader,
+                    jax.random.fold_in(train_rng, train_state.step),
+                    train_state_sharding,
+                )
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

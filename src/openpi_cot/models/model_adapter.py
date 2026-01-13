@@ -222,7 +222,7 @@ def preprocess_observation_aggressive(
             if "wrist" in key and aug_wrist_image:
                 image = image / 2.0 + 0.5
                 rng, crop_rng, aug_rng = jax.random.split(rng, 3)
-                crop_fracs = (0.65, 0.7, 0.75, 0.8, 0.85, 0.9)
+                crop_fracs = (0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99)
                 crop_heights = [int(h * frac) for frac in crop_fracs]
                 crop_idx = jax.random.randint(crop_rng, (), 0, len(crop_heights))
                 sub_rngs = jax.random.split(aug_rng, b)
