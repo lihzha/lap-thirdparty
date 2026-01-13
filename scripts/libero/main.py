@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import pathlib
+import time
 
 import imageio
 from libero.libero import benchmark
@@ -157,7 +158,9 @@ def eval_libero(args: Args) -> None:
                     if not action_plan:
                         # Query model to get action
                         request = obs_to_request(obs, args.policy_type, img, wrist_img, task_description)
+                        start_time = time.time()
                         response = client.infer(request)
+                        logging.info(f"Model inference time: {time.time() - start_time:.2f} seconds")
                         single_action_or_chunk = np.asarray(response["actions"], dtype=np.float32)
                         if single_action_or_chunk.ndim == 1:
                             assert args.policy_type == PolicyType.COT
@@ -174,11 +177,11 @@ def eval_libero(args: Args) -> None:
 
                     # Save preprocessed image for replay video
                     # Draw reasoning on image if available
-                    if "reasoning" in response and response["reasoning"] is not None:
-                        img_with_text = _draw_text_on_image(img, response["reasoning"])
-                        replay_images.append(img_with_text)
-                    else:
-                        replay_images.append(img)
+                    # if "reasoning" in response and response["reasoning"] is not None:
+                    #     img_with_text = _draw_text_on_image(img, response["reasoning"])
+                    #     replay_images.append(img_with_text)
+                    # else:
+                    replay_images.append(img)
                     wrist_replay_images.append(wrist_img)
 
                     action = action_plan.popleft()
