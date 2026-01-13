@@ -11,14 +11,23 @@
 #
 # Examples:
 #   ./local_libero_eval.sh
-#   EPOCH_DIR=checkpoints/my_model/1000 ./local_libero_eval.sh
-#   TASK_SUITES="libero_spatial" ./local_libero_eval.sh
+#   ./local_libero_eval.sh EPOCH_DIR=checkpoints/my_model/1000
+#   ./local_libero_eval.sh EPOCH_DIR=gs://bucket/path POLICY_CONFIG=my_config TASK_SUITES=libero_spatial
 
 set -uo pipefail  # Removed -e to allow proper cleanup on background process failure
 
 # Get script directory and cd to project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Parse KEY=VALUE arguments from command line
+for arg in "$@"; do
+  if [[ "$arg" == *"="* ]]; then
+    key="${arg%%=*}"
+    value="${arg#*=}"
+    export "$key"="$value"
+  fi
+done
 
 # Accept parameters from environment or use defaults
 POLICY_CONFIG="${POLICY_CONFIG:-pi_combined_fast_cot_local}"
