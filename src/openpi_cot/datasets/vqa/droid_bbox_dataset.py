@@ -462,15 +462,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             # Example file_path: gs://xembodiment_data/r2d2/r2d2-data-full/ILIAD/success/2023-04-21/.../trajectory.h5
             episode_path = extract_episode_path_from_file_path(file_path[0])
 
-            # Randomly select one exterior image for each frame
-            random_val = tf.random.stateless_uniform(
-                shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
-            )
-            # exterior_img = tf.cond(
-            #     random_val > 0.5,
-            #     lambda: traj["observation"][self.spec.images_list[0]],
-            #     lambda: traj["observation"][self.spec.images_list[1]],
-            # )
+            # Use wrist image for bbox annotations
             primary_img = traj["observation"]["wrist_image_left"]
 
             # Create frame indices as strings
@@ -498,8 +490,11 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         # Build a lookup table that maps episode_path--frame_idx to a list of objects
         frame_to_objects = self._build_frame_objects_table()
 
-        def lookup_and_sample_object(frame):
-            """Look up objects for this frame and sample one."""
+        # Target resolution for letterbox transformation
+        target_h, target_w = self.config.resize_resolution
+
+        def lookup_all_objects(frame):
+            """Look up ALL objects for this frame and generate caption with all bboxes."""
             # Create lookup key: episode_path--frame_idx
             lookup_key = tf.strings.join([frame["episode_path"], "--", frame["frame_idx"]])
 
@@ -509,54 +504,107 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             # Check if we have annotations
             has_annotations = tf.strings.length(objects_json) > 0
 
-            # Parse JSON and sample one object using tf.py_function
-            def parse_and_sample(objects_json_bytes, seed_hash, lookup_key_debug):
-                # Debug: log the lookup key for first few samples
-                key_str = lookup_key_debug.numpy().decode("utf-8") if lookup_key_debug.numpy() else ""
-                json_len = len(objects_json_bytes.numpy()) if objects_json_bytes.numpy() else 0
+            # Get image dimensions for letterbox transformation
+            # The image is still encoded at this point, so we need to decode to get dimensions
+            img_bytes = frame["observation"][self.spec.primary_image_key]
 
+            def parse_all_objects_and_transform(objects_json_bytes, img_bytes_tensor):
+                """Parse all objects and transform bbox coordinates for letterbox."""
                 if not objects_json_bytes.numpy():
-                    return b"", np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                    return b"", b""
+
                 try:
                     objects = json.loads(objects_json_bytes.numpy().decode("utf-8"))
                     if not objects:
-                        return b"", np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                        return b"", b""
 
-                    # Sample one object deterministically based on seed
-                    np.random.seed(int(seed_hash.numpy()) % (2**31))
-                    obj = objects[np.random.randint(len(objects))]
-                    label = obj["label"].encode("utf-8")
-                    bbox = np.array(obj["bbox"], dtype=np.float32)
-                    return label, bbox
+                    # Decode image to get original dimensions
+                    img_data = img_bytes_tensor.numpy()
+                    if len(img_data) == 0:
+                        return b"", b""
+
+                    # Use TensorFlow to decode and get shape
+                    import io
+                    from PIL import Image
+                    try:
+                        img = Image.open(io.BytesIO(img_data))
+                        orig_w, orig_h = img.size
+                    except Exception:
+                        # Default to common DROID wrist image size
+                        orig_w, orig_h = 640, 480
+
+                    # Compute letterbox transformation parameters
+                    # Same logic as _tf_resize_with_pad
+                    ratio = max(orig_w / target_w, orig_h / target_h)
+                    resized_w = int(orig_w / ratio)
+                    resized_h = int(orig_h / ratio)
+                    pad_w = (target_w - resized_w) / 2.0
+                    pad_h = (target_h - resized_h) / 2.0
+
+                    # Build prompt with all object labels
+                    labels = [obj["label"] for obj in objects]
+                    unique_labels = list(dict.fromkeys(labels))  # Preserve order, remove duplicates
+                    prompt_labels = ", ".join(unique_labels)
+
+                    # Build caption with all bboxes
+                    # Format: "<loc...> label1 ; <loc...> label2 ; ..."
+                    caption_parts = []
+                    for obj in objects:
+                        label = obj["label"]
+                        bbox = obj["bbox"]  # [x_min, y_min, x_max, y_max] normalized 0-1
+
+                        # Transform bbox coordinates for letterbox
+                        # Original coords are normalized (0-1), need to transform to letterboxed space
+                        x_min = bbox[0] * (resized_w / target_w) + (pad_w / target_w)
+                        y_min = bbox[1] * (resized_h / target_h) + (pad_h / target_h)
+                        x_max = bbox[2] * (resized_w / target_w) + (pad_w / target_w)
+                        y_max = bbox[3] * (resized_h / target_h) + (pad_h / target_h)
+
+                        # Clamp to valid range
+                        x_min = max(0.0, min(1.0, x_min))
+                        y_min = max(0.0, min(1.0, y_min))
+                        x_max = max(0.0, min(1.0, x_max))
+                        y_max = max(0.0, min(1.0, y_max))
+
+                        # Convert to loc tokens (PaLiGemma format: y_min, x_min, y_max, x_max)
+                        N = 1024
+                        y_min_idx = int(round(y_min * (N - 1)))
+                        x_min_idx = int(round(x_min * (N - 1)))
+                        y_max_idx = int(round(y_max * (N - 1)))
+                        x_max_idx = int(round(x_max * (N - 1)))
+
+                        loc_str = f"<loc{y_min_idx:04d}><loc{x_min_idx:04d}><loc{y_max_idx:04d}><loc{x_max_idx:04d}>"
+                        caption_parts.append(f"{loc_str} {label}")
+
+                    caption = " ; ".join(caption_parts)
+
+                    return prompt_labels.encode("utf-8"), caption.encode("utf-8")
+
                 except Exception as e:
                     logging.warning(f"Error parsing objects JSON: {e}")
-                    return b"", np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+                    return b"", b""
 
-            # Create deterministic seed from frame info
-            seed_key = tf.strings.join([frame["trajectory_id"], "_", frame["frame_idx"]])
-            seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
-
-            label, bbox = tf.py_function(
-                parse_and_sample,
-                [objects_json, seed_hash, lookup_key],
-                [tf.string, tf.float32],
+            prompt_labels, caption = tf.py_function(
+                parse_all_objects_and_transform,
+                [objects_json, img_bytes],
+                [tf.string, tf.string],
             )
-            label.set_shape([])
-            bbox.set_shape([4])
+            prompt_labels.set_shape([])
+            caption.set_shape([])
 
-            frame["object_label"] = label
-            frame["bbox"] = bbox
+            frame["object_labels"] = prompt_labels
+            frame["bbox_caption"] = caption
             frame["has_bbox"] = has_annotations
 
             return frame
 
-        self.dataset = self.dataset.frame_map(lookup_and_sample_object, num_parallel_calls=self.num_parallel_calls)
+        self.dataset = self.dataset.frame_map(lookup_all_objects, num_parallel_calls=self.num_parallel_calls)
 
         # Filter out frames without annotations
         def has_valid_bbox(frame):
             return tf.logical_and(
                 frame["has_bbox"],
-                tf.strings.length(frame["object_label"]) > 0,
+                tf.strings.length(frame["bbox_caption"]) > 0,
             )
 
         self.dataset = self.dataset.filter(has_valid_bbox)
@@ -564,9 +612,9 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         # Convert to final VQA format
         def finalize_vqa(frame):
             """Create final VQA sample with prompt and caption."""
-            # Generate prompt
-            label = frame["object_label"]
-            bbox = frame["bbox"]
+            # Generate prompt asking about all objects
+            labels = frame["object_labels"]
+            caption = frame["bbox_caption"]
 
             # Sample a prompt template
             seed_key = tf.strings.join([frame["trajectory_id"], "_bbox_", frame["frame_idx"]])
@@ -583,15 +631,12 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 prefix, suffix = DROID_BBOX_PROMPT_PARTS[idx]
 
                 def fn():
-                    return tf.strings.join([prefix, label, suffix])
+                    return tf.strings.join([prefix, labels, suffix])
 
                 return fn
 
             prompt_branches = {i: make_prompt_fn(i) for i in range(num_prompts)}
             prompt = tf.switch_case(prompt_idx, branch_fns=prompt_branches)
-
-            # Convert bbox to loc tokens
-            caption = self.bbox_to_text(bbox)
 
             # Create final output
             return {
