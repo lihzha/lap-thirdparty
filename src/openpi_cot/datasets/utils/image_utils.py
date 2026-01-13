@@ -35,8 +35,8 @@ def _tf_aggressive_augment_wrist(image: tf.Tensor, seed: tf.Tensor | None = None
     # Random crop
     image = tf.image.random_crop(image, [crop_h, crop_w, 3], seed=seed)
 
-    # # Resize back to original dimensions
-    # image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
+    # Resize back to original dimensions
+    image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
 
     # # Random rotation (-10 to 10 degrees)
     # angle_rad = tf.random.uniform([], -10.0 * 3.14159 / 180.0, 10.0 * 3.14159 / 180.0, seed=seed)
@@ -113,8 +113,8 @@ def _tf_aggressive_augment_base(image: tf.Tensor, seed: tf.Tensor | None = None)
     # Random crop
     image = tf.image.random_crop(image, [crop_h, crop_w, 3], seed=seed)
 
-    # # Resize back to original dimensions
-    # image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
+    # Resize back to original dimensions
+    image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
 
     # # Random rotation (-5 to 5 degrees)
     # angle_rad = tf.random.uniform([], -5.0 * 3.14159 / 180.0, 5.0 * 3.14159 / 180.0, seed=seed)
