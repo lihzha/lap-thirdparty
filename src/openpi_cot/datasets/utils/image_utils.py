@@ -222,12 +222,13 @@ def make_decode_images_fn(
         padded = tf.pad(resized, [[pad_h0, pad_h1], [pad_w0, pad_w1], [0, 0]], constant_values=const_val)
         return padded
 
-    def _decode_single(img_bytes, is_wrist: bool = False):
+    def _decode_single(img_bytes, is_wrist: bool = False, apply_aug: bool = False):
         """Decode image bytes and optionally apply augmentation before padding.
 
         Args:
             img_bytes: Encoded image bytes or numeric tensor.
             is_wrist: Whether this is a wrist image (affects augmentation).
+            apply_aug: Whether to apply augmentation to this specific image.
         """
         # If already numeric, cast to uint8 and return
         if img_bytes.dtype != tf.string:
@@ -246,9 +247,9 @@ def make_decode_images_fn(
                 lambda: tf.zeros([1, 1, 3], dtype=tf.uint8),
             )
 
-        # Apply aggressive augmentation BEFORE padding (if enabled)
+        # Apply aggressive augmentation BEFORE padding (if enabled and this sample should be augmented)
         # This makes cropping more effective since it operates on original images
-        if aggressive_aug:
+        if aggressive_aug and apply_aug:
             if is_wrist and aug_wrist_image:
                 img = _tf_aggressive_augment_wrist(img)
             elif not is_wrist:
@@ -261,12 +262,30 @@ def make_decode_images_fn(
         return img
 
     def _decode_frame(traj: dict) -> dict:
-        traj["observation"][primary_key] = _decode_single(
-            traj["observation"][primary_key], is_wrist=False
+        # Check if this sample is from DROID dataset (only augment DROID samples)
+        # dataset_name is stored in the trajectory dict
+        dataset_name = traj.get("dataset_name", tf.constant("", dtype=tf.string))
+        # Check if "droid" is in the dataset name (case-insensitive)
+        is_droid = tf.strings.regex_full_match(
+            tf.strings.lower(dataset_name), ".*droid.*"
         )
-        traj["observation"][wrist_key] = _decode_single(
-            traj["observation"][wrist_key], is_wrist=True
-        )
+
+        # Use tf.cond to conditionally apply augmentation
+        def decode_with_aug():
+            return (
+                _decode_single(traj["observation"][primary_key], is_wrist=False, apply_aug=True),
+                _decode_single(traj["observation"][wrist_key], is_wrist=True, apply_aug=True),
+            )
+
+        def decode_without_aug():
+            return (
+                _decode_single(traj["observation"][primary_key], is_wrist=False, apply_aug=False),
+                _decode_single(traj["observation"][wrist_key], is_wrist=True, apply_aug=False),
+            )
+
+        primary_img, wrist_img = tf.cond(is_droid, decode_with_aug, decode_without_aug)
+        traj["observation"][primary_key] = primary_img
+        traj["observation"][wrist_key] = wrist_img
         # traj["observation"][wrist_right_key] = _decode_single(traj["observation"][wrist_right_key])
 
         return traj

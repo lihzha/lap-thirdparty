@@ -136,7 +136,7 @@ def prepare_batched_dataset(
     wrist_image_right_key=None,
     aggressive_aug: bool = False,
     aug_wrist_image: bool = True,
-    dataset_type: str = "droid",
+    dataset_type: str = "droid",  # kept for backwards compatibility, but per-sample check is used
 ):
     """Prepare a batched dataset with optional aggressive augmentation.
 
@@ -155,10 +155,11 @@ def prepare_batched_dataset(
         aggressive_aug: If True, apply aggressive augmentation BEFORE padding.
             This mirrors the logic from preprocess_observation_aggressive and
             makes cropping more effective since it operates on original images.
-            Only applied during training (when want_val=False) and only for DROID datasets.
+            Only applied during training (when want_val=False) and only for samples
+            where dataset_name contains "droid".
         aug_wrist_image: If True and aggressive_aug is True, augment wrist images.
-        dataset_type: The dataset type ("droid", "oxe", "combined"). Aggressive
-            augmentation is only applied for "droid" type.
+        dataset_type: Kept for backwards compatibility. Per-sample dataset_name check
+            is used to determine if augmentation should be applied.
     """
     # Apply standard pipeline operations
     if (not want_val) and shuffle and max_samples is None:
@@ -171,8 +172,9 @@ def prepare_batched_dataset(
     else:
         raise NotImplementedError("Mode with max_samples and no val not implemented")
 
-    # Only apply aggressive augmentation during training (not validation) and only for DROID
-    apply_aggressive_aug = aggressive_aug and (not want_val) and (dataset_type == "droid")
+    # Only apply aggressive augmentation during training (not validation)
+    # Per-sample check for "droid" in dataset_name is done inside make_decode_images_fn
+    apply_aggressive_aug = aggressive_aug and (not want_val)
 
     decode_fn = make_decode_images_fn(
         primary_key=primary_image_key,

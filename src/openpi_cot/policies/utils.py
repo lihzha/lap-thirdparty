@@ -134,19 +134,7 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     # Transform to EEF frame: R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
     R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
     # Convert back to euler angles
-    try:
-        delta_rot_eef = R.from_matrix(R_delta_eef).as_euler("xyz")
-    except Exception as e:
-        import logging
-
-        logging.info(f"Dataset: {dataset_name}")
-        logging.info(f"R_base_to_eef: {R_base_to_eef}")
-        logging.info(f"initial_state: {initial_state}")
-        logging.info(f"initial_rotation: {initial_rotation}")
-        logging.info(f"Action: {actions}")
-        logging.info(f"R_delta_base: {R_delta_base}")
-        logging.info(f"R_delta_eef: {R_delta_eef}")
-        raise ValueError(f"Failed to convert rotation matrix to euler angles: {e}")
+    delta_rot_eef = R.from_matrix(R_delta_eef).as_euler("xyz")
     # Apply additional transformation: y -> -y, z -> -z to rotation as well
     delta_rot_eef[1] = -delta_rot_eef[1]
     delta_rot_eef[2] = -delta_rot_eef[2]
