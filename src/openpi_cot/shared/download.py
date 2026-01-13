@@ -108,8 +108,11 @@ def maybe_download(
         return tf.io.gfile.exists(p) if remote_cache else pathlib.Path(p).exists()
 
     def _is_complete_remote_dir(p: str) -> bool:
-        # Directory is considered complete if Orbax metadata exists.
-        return tf.io.gfile.isdir(p) and tf.io.gfile.exists(_join(p, "_METADATA"))
+        # Directory is considered complete if Orbax metadata OR our COMMIT_SUCCESS marker exists.
+        # We create COMMIT_SUCCESS on download (line ~194), so we need to check for it here.
+        if not tf.io.gfile.isdir(p):
+            return False
+        return tf.io.gfile.exists(_join(p, "_METADATA")) or tf.io.gfile.exists(_join(p, "COMMIT_SUCCESS"))
 
     invalidate_cache = False
     if _exists(cache_path):
@@ -305,9 +308,10 @@ def mirror_checkpoint_to_remote_cache(url: str, **kwargs) -> str:
         return tf.io.gfile.exists(p)
 
     # If checkpoint already present at mirror location, skip copying if it appears
-    # complete (directory with _METADATA file present).
+    # complete (directory with _METADATA or COMMIT_SUCCESS file present).
     metadata_marker = _join(mirror_path, "_METADATA")
-    if tf.io.gfile.isdir(mirror_path) and _exists(metadata_marker):
+    commit_success_marker = _join(mirror_path, "COMMIT_SUCCESS")
+    if tf.io.gfile.isdir(mirror_path) and (_exists(metadata_marker) or _exists(commit_success_marker)):
         ensure_commit_success(mirror_path)
         return mirror_path
 

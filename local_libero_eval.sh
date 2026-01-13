@@ -35,7 +35,6 @@ EPOCH_DIR="${EPOCH_DIR:-checkpoints/pi_combined_fast_cot_v5europe/libero_fast_ov
 POLICY_TYPE="${POLICY_TYPE:-COT_FT}"
 CONTROL_MODE="${CONTROL_MODE:-OSC_POSE}"
 TASK_SUITES_STR="${TASK_SUITES:-libero_spatial,libero_object,libero_goal,libero_10}"
-STARTUP_WAIT="${STARTUP_WAIT:-30}"
 
 # Parse task suites from comma-separated string
 IFS=',' read -ra TASK_SUITES <<< "$TASK_SUITES_STR"
@@ -75,16 +74,30 @@ uv run --group cuda --active scripts/serve_policy.py \
 policy_pid=$!
 echo "Started policy server with PID $policy_pid"
 
-# Give the server time to start up
-echo "Waiting ${STARTUP_WAIT}s for server to initialize..."
-sleep "$STARTUP_WAIT"
+# Wait for server to be ready (check if port 8000 is listening)
+SERVER_PORT="${SERVER_PORT:-8000}"
+MAX_WAIT="${MAX_WAIT:-600}"  # Max 10 minutes for checkpoint download
+echo "Waiting for server to be ready on port ${SERVER_PORT} (max ${MAX_WAIT}s)..."
 
-# Check if server is still running
-if ! kill -0 $policy_pid 2>/dev/null; then
-  echo "ERROR: Policy server died during startup."
-  exit 1
-fi
-echo "Policy server is running."
+waited=0
+while ! nc -z localhost "$SERVER_PORT" 2>/dev/null; do
+  # Check if server process died
+  if ! kill -0 $policy_pid 2>/dev/null; then
+    echo "ERROR: Policy server died during startup."
+    exit 1
+  fi
+  
+  if [ $waited -ge $MAX_WAIT ]; then
+    echo "ERROR: Timeout waiting for server to be ready."
+    exit 1
+  fi
+  
+  sleep 5
+  waited=$((waited + 5))
+  echo "  Still waiting... (${waited}s elapsed)"
+done
+
+echo "Policy server is ready! (took ${waited}s)"
 
 # Track success/failure
 declare -A results
