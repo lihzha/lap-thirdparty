@@ -143,7 +143,6 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         # Build lookup tables
         if hash_tables is not None:
             self.ep_table = hash_tables.get("ep_table")
-            self.bbox_table = hash_tables.get("bbox_table")
         else:
             if self.spec.lang_action_dir_name in config.language_action_dir:
                 metadata_path = config.language_action_dir.replace(
@@ -157,12 +156,10 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 raise ValueError(f"Unknown language action directory: {config.language_action_dir}")
 
             self.ep_table = self.build_lookup_table(metadata_path)
-            self.bbox_table = self.build_bbox_table()
 
             if standalone:
                 self.hash_tables = {
                     "ep_table": self.ep_table,
-                    "bbox_table": self.bbox_table,
                 }
 
         # Build RLDS dataset
@@ -244,128 +241,6 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         )
         print_memory_usage("After building ep_table")
         return ep_table
-
-    def build_bbox_table(self):
-        """Build lookup table from (episode_path, frame_index) to bbox annotations.
-
-        The key format is: "episode_path--frame_index"
-        The value is a serialized tensor of shape [N, 5] where each row is [label_hash, x_min, y_min, x_max, y_max]
-        normalized to [0, 1]. The label string is stored in a separate table.
-        """
-        logging.info(f"Building bbox lookup table from {self.bbox_annotations_dir}")
-
-        # Find all JSONL files
-        jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
-        if not jsonl_files:
-            logging.warning(f"No JSONL files found in {self.bbox_annotations_dir}")
-            # Return table with dummy entry (TF doesn't allow empty tables)
-            return tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    tf.constant(["__dummy_key__"], dtype=tf.string),
-                    tf.constant([""], dtype=tf.string),
-                ),
-                default_value=tf.constant(b"", dtype=tf.string),
-            )
-
-        logging.info(f"Found {len(jsonl_files)} JSONL files")
-
-        keys_list = []
-        values_list = []
-        label_keys = []
-        label_values = []
-
-        for jsonl_file in jsonl_files:
-            logging.info(f"Processing {jsonl_file}")
-            with tf.io.gfile.GFile(jsonl_file, "r") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        episode_data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-
-                    # Extract episode path from file_path in episode_metadata
-                    file_path = episode_data.get("episode_metadata", {}).get("file_path", "")
-                    if not file_path:
-                        continue
-
-                    # Extract episode path using same logic as DroidCoTDataset
-                    # Remove dataset prefix up to r2d2-data or r2d2-data-full
-                    import re
-
-                    match = re.search(r"r2d2-data(?:-full)?/(.+?)/trajectory", file_path)
-                    if match:
-                        episode_path = match.group(1)
-                    else:
-                        continue
-
-                    # Process each labeled frame
-                    labels = episode_data.get("labels", [])
-                    for label_entry in labels:
-                        frame_idx = label_entry.get("frame")
-                        all_objects = label_entry.get("all_objects", [])
-
-                        if frame_idx is None or not all_objects:
-                            continue
-
-                        # Create key: episode_path--frame_index
-                        key = f"{episode_path}--{frame_idx}"
-
-                        # Process all objects in this frame
-                        for obj in all_objects:
-                            obj_label = obj.get("label", "")
-                            bbox = obj.get("bbox", [])
-
-                            if not obj_label or len(bbox) < 4:
-                                continue
-
-                            # Normalize bbox from 0-1000 to 0-1
-                            y_min = float(bbox[0]) / 1000.0
-                            x_min = float(bbox[1]) / 1000.0
-                            y_max = float(bbox[2]) / 1000.0
-                            x_max = float(bbox[3]) / 1000.0
-
-                            # Clamp to valid range
-                            x_min = max(0.0, min(1.0, x_min))
-                            y_min = max(0.0, min(1.0, y_min))
-                            x_max = max(0.0, min(1.0, x_max))
-                            y_max = max(0.0, min(1.0, y_max))
-
-                            # Create unique key for this object: episode_path--frame_idx--label--bbox_hash
-                            bbox_str = f"{x_min:.4f}_{y_min:.4f}_{x_max:.4f}_{y_max:.4f}"
-                            obj_key = f"{key}--{obj_label}--{bbox_str}"
-
-                            # Serialize the annotation: label + bbox
-                            annotation = {
-                                "label": obj_label,
-                                "bbox": [x_min, y_min, x_max, y_max],
-                            }
-                            value = json.dumps(annotation)
-
-                            keys_list.append(obj_key)
-                            values_list.append(value)
-
-        logging.info(f"Built bbox table with {len(keys_list)} entries")
-
-        if not keys_list:
-            return tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    tf.constant([], dtype=tf.string),
-                    tf.constant([], dtype=tf.string),
-                ),
-                default_value=tf.constant(b"", dtype=tf.string),
-            )
-
-        bbox_table = tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(
-                tf.constant(keys_list, dtype=tf.string),
-                tf.constant(values_list, dtype=tf.string),
-            ),
-            default_value=tf.constant(b"", dtype=tf.string),
-        )
-        print_memory_usage("After building bbox_table")
-        return bbox_table
 
     def build_dataset_builder(self, ds_name, data_dir):
         """Build TFDS builder for DROID."""
@@ -523,15 +398,16 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                     if len(img_data) == 0:
                         return b"", b""
 
-                    # Use TensorFlow to decode and get shape
-                    import io
-                    from PIL import Image
-                    try:
-                        img = Image.open(io.BytesIO(img_data))
-                        orig_w, orig_h = img.size
-                    except Exception:
-                        # Default to common DROID wrist image size
-                        orig_w, orig_h = 640, 480
+                    # # Use TensorFlow to decode and get shape
+                    # import io
+                    # from PIL import Image
+                    # try:
+                    #     img = Image.open(io.BytesIO(img_data))
+                    #     orig_w, orig_h = img.size
+                    # except Exception:
+                    #     # Default to common DROID wrist image size
+                    #     orig_w, orig_h = 640, 480
+                    orig_w, orig_h = 320, 180
 
                     # Compute letterbox transformation parameters
                     # Same logic as _tf_resize_with_pad
@@ -719,10 +595,10 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                                 continue
 
                             # Normalize bbox
-                            x_min = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
-                            y_min = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
-                            x_max = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
-                            y_max = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
+                            y_min = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
+                            x_min = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
+                            y_max = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
+                            x_max = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
 
                             objects_list.append({
                                 "label": obj_label,
@@ -762,36 +638,36 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             default_value=tf.constant(b"", dtype=tf.string),
         )
 
-    def bbox_to_text(self, bbox: tf.Tensor) -> tf.Tensor:
-        """Convert bbox to formatted text representation using paligemma loc tokens.
+    # def bbox_to_text(self, bbox: tf.Tensor) -> tf.Tensor:
+    #     """Convert bbox to formatted text representation using paligemma loc tokens.
 
-        Args:
-            bbox: Tensor of shape [4] with normalized coordinates [x_min, y_min, x_max, y_max]
-                  where coordinates are in range [0, 1].
+    #     Args:
+    #         bbox: Tensor of shape [4] with normalized coordinates [x_min, y_min, x_max, y_max]
+    #               where coordinates are in range [0, 1].
 
-        Returns:
-            Formatted string in PaLiGemma2 bbox format: "<loc_ymin><loc_xmin><loc_ymax><loc_xmax>".
-        """
-        x_min = bbox[0]
-        y_min = bbox[1]
-        x_max = bbox[2]
-        y_max = bbox[3]
+    #     Returns:
+    #         Formatted string in PaLiGemma2 bbox format: "<loc_ymin><loc_xmin><loc_ymax><loc_xmax>".
+    #     """
+    #     x_min = bbox[0]
+    #     y_min = bbox[1]
+    #     x_max = bbox[2]
+    #     y_max = bbox[3]
 
-        # Convert to paligemma loc token indices (0-1023)
-        N = 1024
-        y_min_idx = tf.cast(tf.round(y_min * (N - 1)), tf.int32)
-        x_min_idx = tf.cast(tf.round(x_min * (N - 1)), tf.int32)
-        y_max_idx = tf.cast(tf.round(y_max * (N - 1)), tf.int32)
-        x_max_idx = tf.cast(tf.round(x_max * (N - 1)), tf.int32)
+    #     # Convert to paligemma loc token indices (0-1023)
+    #     N = 1024
+    #     y_min_idx = tf.cast(tf.round(y_min * (N - 1)), tf.int32)
+    #     x_min_idx = tf.cast(tf.round(x_min * (N - 1)), tf.int32)
+    #     y_max_idx = tf.cast(tf.round(y_max * (N - 1)), tf.int32)
+    #     x_max_idx = tf.cast(tf.round(x_max * (N - 1)), tf.int32)
 
-        # Format as loc tokens in PaLiGemma2 order: y_min, x_min, y_max, x_max
-        y_min_token = tf.strings.join(["<loc", tf.strings.as_string(y_min_idx, width=4, fill="0"), ">"])
-        x_min_token = tf.strings.join(["<loc", tf.strings.as_string(x_min_idx, width=4, fill="0"), ">"])
-        y_max_token = tf.strings.join(["<loc", tf.strings.as_string(y_max_idx, width=4, fill="0"), ">"])
-        x_max_token = tf.strings.join(["<loc", tf.strings.as_string(x_max_idx, width=4, fill="0"), ">"])
+    #     # Format as loc tokens in PaLiGemma2 order: y_min, x_min, y_max, x_max
+    #     y_min_token = tf.strings.join(["<loc", tf.strings.as_string(y_min_idx, width=4, fill="0"), ">"])
+    #     x_min_token = tf.strings.join(["<loc", tf.strings.as_string(x_min_idx, width=4, fill="0"), ">"])
+    #     y_max_token = tf.strings.join(["<loc", tf.strings.as_string(y_max_idx, width=4, fill="0"), ">"])
+    #     x_max_token = tf.strings.join(["<loc", tf.strings.as_string(x_max_idx, width=4, fill="0"), ">"])
 
-        # Join in PaLiGemma2 order: y_min, x_min, y_max, x_max
-        return tf.strings.join([y_min_token, x_min_token, y_max_token, x_max_token])
+    #     # Join in PaLiGemma2 order: y_min, x_min, y_max, x_max
+    #     return tf.strings.join([y_min_token, x_min_token, y_max_token, x_max_token])
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""
