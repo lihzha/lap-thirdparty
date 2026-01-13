@@ -192,7 +192,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     filter_all_1s_actions: bool = False
     stateless_gripper: bool = True
     filter_large_actions: bool = False
-    random_base_frame: bool = True
+    random_base_prob: float = 0.0
     random_mask_prob: float = 0.0
     use_rough_scale: bool = False
     horizon_seconds: list[float] = dataclasses.field(default_factory=lambda: [1.0])
@@ -382,7 +382,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
                     random_mask_prob=base_cfg.random_mask_prob,
                     stateless_gripper=base_cfg.stateless_gripper,
-                    random_base_frame=base_cfg.random_base_frame,
+                    random_base_prob=base_cfg.random_base_prob,
                     filter_large_actions=base_cfg.filter_large_actions,
                     use_rough_scale=base_cfg.use_rough_scale,
                     enable_langact_training=model_config.enable_langact_training,
@@ -1318,7 +1318,7 @@ _CONFIGS = [
     TrainConfig(
         name="paligemma_boundsq99",
         model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
+            action_horizon=16,
             max_token_len=180,
             pi05=True,
             discrete_state_input=True,

@@ -48,7 +48,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     use_rough_scale: bool = False
     filter_large_actions: bool = False
     stateless_gripper: bool = True
-    random_base_frame: bool = True
+    random_base_prob: float = 0.0
     random_mask_prob: float = 0.0
 
     def __post_init__(self):
@@ -207,8 +207,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         frame_description = "robot base frame"
 
         use_eef_frame = self.language_action_format.use_eef_frame and initial_state is not None
-        if self.random_base_frame:
-            use_eef_frame = use_eef_frame and has_wrist_image and random.random() < 0.9
+        if self.random_base_prob > 0.0:
+            use_eef_frame = use_eef_frame and has_wrist_image and random.random() < self.random_base_prob
 
         # Transform to EEF frame if requested
         if use_eef_frame:
