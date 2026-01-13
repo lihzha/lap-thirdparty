@@ -313,6 +313,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         time_horizon_seconds: float | None = None,
         state_dropout: float = 0.0,
         clip_action: bool = False,
+        frame_description: str = "end-effector frame",
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Tokenize prompt, language actions (if any), state, and actions for FAST model.
 
@@ -352,6 +353,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             state_type,
             time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
             state_dropout=state_dropout,
+            frame_description=frame_description,
         )
 
         # Tokenize prompt

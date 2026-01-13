@@ -473,6 +473,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
                 raise ValueError("State is required for FAST tokenization.")
 
         time_horizon_seconds = data.pop("time_horizon_seconds", None)
+        frame_description = data.pop("frame_description", "end-effector frame")
 
         # Get state type if available
         state_type = data.pop("state_type", None)
@@ -496,6 +497,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             is_prediction_sample=is_prediction_sample,
             time_horizon_seconds=time_horizon_seconds,
             state_dropout=self.state_dropout,
+            frame_description=frame_description,
         )
 
         return {
