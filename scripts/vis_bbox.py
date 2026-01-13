@@ -256,7 +256,7 @@ def _parse_loc_tokens(text: str) -> list[int]:
 
 
 def _extract_bbox_from_caption(caption: str) -> tuple[float, float, float, float] | None:
-    """Extract bounding box coordinates from caption with loc tokens.
+    """Extract single bounding box coordinates from caption with loc tokens.
 
     For PaLiGemma2 format, bbox is: <loc_ymin><loc_xmin><loc_ymax><loc_xmax>
 
@@ -283,6 +283,57 @@ def _extract_bbox_from_caption(caption: str) -> tuple[float, float, float, float
     x_max = x_max_idx / (N - 1)
 
     return (y_min, x_min, y_max, x_max)
+
+
+def _extract_all_bboxes_from_caption(caption: str) -> list[tuple[tuple[float, float, float, float], str]]:
+    """Extract ALL bounding boxes and labels from caption.
+
+    Caption format: "<loc0123><loc0456><loc0789><loc0321> label1 ; <loc0100><loc0200><loc0300><loc0400> label2"
+
+    Args:
+        caption: Caption text containing multiple bbox annotations
+
+    Returns:
+        List of (bbox, label) tuples where bbox is (y_min, x_min, y_max, x_max) in normalized [0, 1] coordinates
+    """
+    if not caption:
+        return []
+
+    results = []
+
+    # Split by semicolon to get individual object annotations
+    parts = caption.split(" ; ")
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        # Parse loc tokens from this part
+        indices = _parse_loc_tokens(part)
+
+        if len(indices) < 4:
+            continue
+
+        # Take first 4 tokens as ymin, xmin, ymax, xmax
+        y_min_idx, x_min_idx, y_max_idx, x_max_idx = indices[:4]
+
+        # Convert from 0-1023 scale to 0-1 normalized
+        N = 1024
+        y_min = y_min_idx / (N - 1)
+        x_min = x_min_idx / (N - 1)
+        y_max = y_max_idx / (N - 1)
+        x_max = x_max_idx / (N - 1)
+
+        bbox = (y_min, x_min, y_max, x_max)
+
+        # Extract label: everything after the loc tokens
+        # Remove all loc tokens to get the label
+        label = re.sub(r"<loc\d{4}>", "", part).strip()
+
+        results.append((bbox, label))
+
+    return results
 
 
 def _draw_bbox_on_image(
