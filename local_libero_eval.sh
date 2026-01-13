@@ -37,11 +37,6 @@ export LIBERO_CONFIG_PATH=third_party/openpi/third_party/libero
 PYTHONPATH=${PYTHONPATH:-}
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PWD/third_party/openpi/third_party/libero"
 
-# Create log directory with timestamp
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="logs/local_${TIMESTAMP}"
-mkdir -p "$LOG_DIR"
-
 echo "========================================"
 echo "Local LIBERO Evaluation"
 echo "========================================"
@@ -50,7 +45,6 @@ echo "Epoch dir: ${EPOCH_DIR}"
 echo "Policy type: ${POLICY_TYPE}"
 echo "Control mode: ${CONTROL_MODE}"
 echo "Task suites: ${TASK_SUITES[*]}"
-echo "Log directory: ${LOG_DIR}"
 echo "========================================"
 
 # Function to cleanup on exit
@@ -65,14 +59,12 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# Start the policy server in background with separate logs
+# Start the policy server in background (output goes to terminal)
 echo "Starting policy server..."
 uv run --group cuda --active scripts/serve_policy.py \
-  policy:checkpoint --policy.config="${POLICY_CONFIG}" --policy.dir="${EPOCH_DIR}" \
-  > "${LOG_DIR}/serve.out" 2> "${LOG_DIR}/serve.err" &
+  policy:checkpoint --policy.config="${POLICY_CONFIG}" --policy.dir="${EPOCH_DIR}" &
 policy_pid=$!
 echo "Started policy server with PID $policy_pid"
-echo "Server logs: ${LOG_DIR}/serve.out, ${LOG_DIR}/serve.err"
 
 # Give the server time to start up
 echo "Waiting ${STARTUP_WAIT}s for server to initialize..."
@@ -80,7 +72,7 @@ sleep "$STARTUP_WAIT"
 
 # Check if server is still running
 if ! kill -0 $policy_pid 2>/dev/null; then
-  echo "ERROR: Policy server died during startup. Check ${LOG_DIR}/serve.err for details."
+  echo "ERROR: Policy server died during startup."
   exit 1
 fi
 echo "Policy server is running."
@@ -101,7 +93,7 @@ for task_suite in "${TASK_SUITES[@]}"; do
       --args.policy-type "${POLICY_TYPE}" \
       --args.control-mode "${CONTROL_MODE}" \
       --args.task-suite-name "${task_suite}"
-  ) >> "${LOG_DIR}/libero.out" 2>> "${LOG_DIR}/libero.err"
+  )
   
   libero_exit=$?
   
@@ -121,9 +113,6 @@ echo "========================================"
 for task_suite in "${TASK_SUITES[@]}"; do
   echo "  ${task_suite}: ${results[$task_suite]}"
 done
-echo ""
-echo "Client logs: ${LOG_DIR}/libero.out, ${LOG_DIR}/libero.err"
-echo "Server logs: ${LOG_DIR}/serve.out, ${LOG_DIR}/serve.err"
 echo "========================================"
 echo "All task suites completed!"
 
