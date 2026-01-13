@@ -466,18 +466,19 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             random_val = tf.random.stateless_uniform(
                 shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(episode_id, 2147483647)]
             )
-            exterior_img = tf.cond(
-                random_val > 0.5,
-                lambda: traj["observation"][self.spec.images_list[0]],
-                lambda: traj["observation"][self.spec.images_list[1]],
-            )
+            # exterior_img = tf.cond(
+            #     random_val > 0.5,
+            #     lambda: traj["observation"][self.spec.images_list[0]],
+            #     lambda: traj["observation"][self.spec.images_list[1]],
+            # )
+            primary_img = traj["observation"][self.spec.wrist_image_key]
 
             # Create frame indices as strings
             frame_indices = tf.as_string(tf.range(traj_len))
 
             return {
                 "observation": {
-                    self.spec.primary_image_key: exterior_img,
+                    self.spec.primary_image_key: primary_img,
                     self.spec.wrist_image_key: tf.repeat("", traj_len),
                     "state": tf.zeros([traj_len, self.state_dim], dtype=tf.float32),
                 },
