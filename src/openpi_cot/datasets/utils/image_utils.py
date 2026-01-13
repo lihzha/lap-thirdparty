@@ -24,7 +24,8 @@ def _tf_aggressive_augment_wrist(image: tf.Tensor, seed: tf.Tensor | None = None
         image = image / 2.0 + 0.5
 
     # Random crop fraction selection (matching JAX version)
-    crop_fracs = tf.constant([0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99], dtype=tf.float32)
+    crop_fracs = tf.constant([0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65, 0.65], dtype=tf.float32)
+    # crop_fracs = tf.constant([0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99], dtype=tf.float32)
     crop_idx = tf.random.uniform([], 0, 8, dtype=tf.int32, seed=seed)
     crop_frac = tf.gather(crop_fracs, crop_idx)
 
@@ -34,43 +35,43 @@ def _tf_aggressive_augment_wrist(image: tf.Tensor, seed: tf.Tensor | None = None
     # Random crop
     image = tf.image.random_crop(image, [crop_h, crop_w, 3], seed=seed)
 
-    # Resize back to original dimensions
-    image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
+    # # Resize back to original dimensions
+    # image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
 
-    # Random rotation (-10 to 10 degrees)
-    angle_rad = tf.random.uniform([], -10.0 * 3.14159 / 180.0, 10.0 * 3.14159 / 180.0, seed=seed)
-    # TF doesn't have a direct rotate, use contrib or approximate with affine
-    # Using tfa.image.rotate if available, otherwise skip rotation in TF pipeline
-    # For simplicity, we'll use a rotation approximation via transform
-    cos_a = tf.cos(angle_rad)
-    sin_a = tf.sin(angle_rad)
-    h_f = tf.cast(orig_h, tf.float32)
-    w_f = tf.cast(orig_w, tf.float32)
-    cx, cy = w_f / 2.0, h_f / 2.0
-    # Affine transform matrix for rotation around center
-    transform = [
-        cos_a,
-        -sin_a,
-        cx - cx * cos_a + cy * sin_a,
-        sin_a,
-        cos_a,
-        cy - cx * sin_a - cy * cos_a,
-        0.0,
-        0.0,
-    ]
-    image = tf.raw_ops.ImageProjectiveTransformV3(
-        images=image[None],
-        transforms=tf.reshape(transform, [1, 8]),
-        output_shape=[orig_h, orig_w],
-        fill_value=0.0,
-        interpolation="BILINEAR",
-        fill_mode="CONSTANT",
-    )[0]
+    # # Random rotation (-10 to 10 degrees)
+    # angle_rad = tf.random.uniform([], -10.0 * 3.14159 / 180.0, 10.0 * 3.14159 / 180.0, seed=seed)
+    # # TF doesn't have a direct rotate, use contrib or approximate with affine
+    # # Using tfa.image.rotate if available, otherwise skip rotation in TF pipeline
+    # # For simplicity, we'll use a rotation approximation via transform
+    # cos_a = tf.cos(angle_rad)
+    # sin_a = tf.sin(angle_rad)
+    # h_f = tf.cast(orig_h, tf.float32)
+    # w_f = tf.cast(orig_w, tf.float32)
+    # cx, cy = w_f / 2.0, h_f / 2.0
+    # # Affine transform matrix for rotation around center
+    # transform = [
+    #     cos_a,
+    #     -sin_a,
+    #     cx - cx * cos_a + cy * sin_a,
+    #     sin_a,
+    #     cos_a,
+    #     cy - cx * sin_a - cy * cos_a,
+    #     0.0,
+    #     0.0,
+    # ]
+    # image = tf.raw_ops.ImageProjectiveTransformV3(
+    #     images=image[None],
+    #     transforms=tf.reshape(transform, [1, 8]),
+    #     output_shape=[orig_h, orig_w],
+    #     fill_value=0.0,
+    #     interpolation="BILINEAR",
+    #     fill_mode="CONSTANT",
+    # )[0]
 
-    # Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
-    image = tf.image.random_brightness(image, 0.2, seed=seed)
-    image = tf.image.random_contrast(image, 0.8, 1.2, seed=seed)
-    image = tf.image.random_saturation(image, 0.8, 1.2, seed=seed)
+    # # Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
+    # image = tf.image.random_brightness(image, 0.2, seed=seed)
+    # image = tf.image.random_contrast(image, 0.8, 1.2, seed=seed)
+    # image = tf.image.random_saturation(image, 0.8, 1.2, seed=seed)
 
     # Clip to valid range
     image = tf.clip_by_value(image, 0.0, 1.0)
@@ -112,39 +113,39 @@ def _tf_aggressive_augment_base(image: tf.Tensor, seed: tf.Tensor | None = None)
     # Random crop
     image = tf.image.random_crop(image, [crop_h, crop_w, 3], seed=seed)
 
-    # Resize back to original dimensions
-    image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
+    # # Resize back to original dimensions
+    # image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
 
-    # Random rotation (-5 to 5 degrees)
-    angle_rad = tf.random.uniform([], -5.0 * 3.14159 / 180.0, 5.0 * 3.14159 / 180.0, seed=seed)
-    cos_a = tf.cos(angle_rad)
-    sin_a = tf.sin(angle_rad)
-    h_f = tf.cast(orig_h, tf.float32)
-    w_f = tf.cast(orig_w, tf.float32)
-    cx, cy = w_f / 2.0, h_f / 2.0
-    transform = [
-        cos_a,
-        -sin_a,
-        cx - cx * cos_a + cy * sin_a,
-        sin_a,
-        cos_a,
-        cy - cx * sin_a - cy * cos_a,
-        0.0,
-        0.0,
-    ]
-    image = tf.raw_ops.ImageProjectiveTransformV3(
-        images=image[None],
-        transforms=tf.reshape(transform, [1, 8]),
-        output_shape=[orig_h, orig_w],
-        fill_value=0.0,
-        interpolation="BILINEAR",
-        fill_mode="CONSTANT",
-    )[0]
+    # # Random rotation (-5 to 5 degrees)
+    # angle_rad = tf.random.uniform([], -5.0 * 3.14159 / 180.0, 5.0 * 3.14159 / 180.0, seed=seed)
+    # cos_a = tf.cos(angle_rad)
+    # sin_a = tf.sin(angle_rad)
+    # h_f = tf.cast(orig_h, tf.float32)
+    # w_f = tf.cast(orig_w, tf.float32)
+    # cx, cy = w_f / 2.0, h_f / 2.0
+    # transform = [
+    #     cos_a,
+    #     -sin_a,
+    #     cx - cx * cos_a + cy * sin_a,
+    #     sin_a,
+    #     cos_a,
+    #     cy - cx * sin_a - cy * cos_a,
+    #     0.0,
+    #     0.0,
+    # ]
+    # image = tf.raw_ops.ImageProjectiveTransformV3(
+    #     images=image[None],
+    #     transforms=tf.reshape(transform, [1, 8]),
+    #     output_shape=[orig_h, orig_w],
+    #     fill_value=0.0,
+    #     interpolation="BILINEAR",
+    #     fill_mode="CONSTANT",
+    # )[0]
 
-    # Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
-    image = tf.image.random_brightness(image, 0.2, seed=seed)
-    image = tf.image.random_contrast(image, 0.8, 1.2, seed=seed)
-    image = tf.image.random_saturation(image, 0.8, 1.2, seed=seed)
+    # # Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
+    # image = tf.image.random_brightness(image, 0.2, seed=seed)
+    # image = tf.image.random_contrast(image, 0.8, 1.2, seed=seed)
+    # image = tf.image.random_saturation(image, 0.8, 1.2, seed=seed)
 
     # Clip to valid range
     image = tf.clip_by_value(image, 0.0, 1.0)
