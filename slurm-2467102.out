@@ -1,0 +1,18 @@
+Submitting LIBERO evaluation jobs...
+========================================
+Submitting job: cot_ft_5500
+  Policy config: pi_combined_fast_cot_local
+  Epoch dir: checkpoints/pi_combined_fast_cot_v5/libero_fast_overfitting_boundsq99noclip_val/5500
+  Policy type: COT_FT
+  Submitted job ID: 2467103
+----------------------------------------
+Submitting job: cot_ft_18500
+  Policy config: pi_combined_fast_cot_local
+  Epoch dir: checkpoints/pi_combined_fast_cot_v5/libero_fast_overfitting_boundsq99noclip_val/18500
+  Policy type: COT_FT
+  Submitted job ID: 2467104
+----------------------------------------
+All jobs submitted!
+
+Monitor jobs with: squeue -u $USER
+View logs in: logs/

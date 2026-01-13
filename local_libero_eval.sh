@@ -1,0 +1,134 @@
+#!/bin/bash
+# Run both policy server and LIBERO client locally in a single terminal
+# Usage: ./local_libero_eval.sh [OPTIONS]
+#
+# Options (via environment variables or command line):
+#   POLICY_CONFIG  - Policy configuration name (default: pi_combined_fast_cot_local)
+#   EPOCH_DIR      - Checkpoint directory path
+#   POLICY_TYPE    - Policy type: COT_FT, COT, RAW (default: COT_FT)
+#   CONTROL_MODE   - Control mode: OSC_POSE, JOINT (default: OSC_POSE)
+#   TASK_SUITES    - Comma-separated task suites (default: libero_spatial,libero_object,libero_goal,libero_10)
+#
+# Examples:
+#   ./local_libero_eval.sh
+#   EPOCH_DIR=checkpoints/my_model/1000 ./local_libero_eval.sh
+#   TASK_SUITES="libero_spatial" ./local_libero_eval.sh
+
+set -uo pipefail  # Removed -e to allow proper cleanup on background process failure
+
+# Get script directory and cd to project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Accept parameters from environment or use defaults
+POLICY_CONFIG="${POLICY_CONFIG:-pi_combined_fast_cot_local}"
+EPOCH_DIR="${EPOCH_DIR:-checkpoints/pi_combined_fast_cot_v5europe/libero_fast_overfitting_boundsq99noclip_val_pi05/5500}"
+POLICY_TYPE="${POLICY_TYPE:-COT_FT}"
+CONTROL_MODE="${CONTROL_MODE:-OSC_POSE}"
+TASK_SUITES_STR="${TASK_SUITES:-libero_spatial,libero_object,libero_goal,libero_10}"
+STARTUP_WAIT="${STARTUP_WAIT:-30}"
+
+# Parse task suites from comma-separated string
+IFS=',' read -ra TASK_SUITES <<< "$TASK_SUITES_STR"
+
+export JAX_PLATFORMS=cuda
+export OPENPI_DATA_HOME="${OPENPI_DATA_HOME:-/n/fs/robot-data/cache/openpi}"
+export LIBERO_CONFIG_PATH=third_party/openpi/third_party/libero
+PYTHONPATH=${PYTHONPATH:-}
+export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PWD/third_party/openpi/third_party/libero"
+
+# Create log directory with timestamp
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOG_DIR="logs/local_${TIMESTAMP}"
+mkdir -p "$LOG_DIR"
+
+echo "========================================"
+echo "Local LIBERO Evaluation"
+echo "========================================"
+echo "Policy config: ${POLICY_CONFIG}"
+echo "Epoch dir: ${EPOCH_DIR}"
+echo "Policy type: ${POLICY_TYPE}"
+echo "Control mode: ${CONTROL_MODE}"
+echo "Task suites: ${TASK_SUITES[*]}"
+echo "Log directory: ${LOG_DIR}"
+echo "========================================"
+
+# Function to cleanup on exit
+cleanup() {
+  echo ""
+  echo "Cleaning up processes..."
+  if [ -n "${policy_pid:-}" ]; then
+    kill $policy_pid 2>/dev/null || true
+    wait $policy_pid 2>/dev/null || true
+    echo "Policy server stopped."
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# Start the policy server in background with separate logs
+echo "Starting policy server..."
+uv run --group cuda --active scripts/serve_policy.py \
+  policy:checkpoint --policy.config="${POLICY_CONFIG}" --policy.dir="${EPOCH_DIR}" \
+  > "${LOG_DIR}/serve.out" 2> "${LOG_DIR}/serve.err" &
+policy_pid=$!
+echo "Started policy server with PID $policy_pid"
+echo "Server logs: ${LOG_DIR}/serve.out, ${LOG_DIR}/serve.err"
+
+# Give the server time to start up
+echo "Waiting ${STARTUP_WAIT}s for server to initialize..."
+sleep "$STARTUP_WAIT"
+
+# Check if server is still running
+if ! kill -0 $policy_pid 2>/dev/null; then
+  echo "ERROR: Policy server died during startup. Check ${LOG_DIR}/serve.err for details."
+  exit 1
+fi
+echo "Policy server is running."
+
+# Track success/failure
+declare -A results
+
+# Loop through each task suite
+for task_suite in "${TASK_SUITES[@]}"; do
+  echo ""
+  echo "========================================"
+  echo "Starting evaluation for: ${task_suite}"
+  echo "========================================"
+  
+  (
+    source scripts/libero/.venv/bin/activate
+    python scripts/libero/main.py \
+      --args.policy-type "${POLICY_TYPE}" \
+      --args.control-mode "${CONTROL_MODE}" \
+      --args.task-suite-name "${task_suite}"
+  ) >> "${LOG_DIR}/libero.out" 2>> "${LOG_DIR}/libero.err"
+  
+  libero_exit=$?
+  
+  if [ $libero_exit -eq 0 ]; then
+    echo "✓ ${task_suite} completed successfully"
+    results["$task_suite"]="SUCCESS"
+  else
+    echo "✗ ${task_suite} failed with exit code ${libero_exit}"
+    results["$task_suite"]="FAILED (exit $libero_exit)"
+  fi
+done
+
+echo ""
+echo "========================================"
+echo "Evaluation Summary"
+echo "========================================"
+for task_suite in "${TASK_SUITES[@]}"; do
+  echo "  ${task_suite}: ${results[$task_suite]}"
+done
+echo ""
+echo "Client logs: ${LOG_DIR}/libero.out, ${LOG_DIR}/libero.err"
+echo "Server logs: ${LOG_DIR}/serve.out, ${LOG_DIR}/serve.err"
+echo "========================================"
+echo "All task suites completed!"
+
+# Kill the server
+kill $policy_pid 2>/dev/null || true
+wait $policy_pid 2>/dev/null || true
+
+exit 0

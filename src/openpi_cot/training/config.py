@@ -1175,6 +1175,7 @@ _CONFIGS = [
             "droid_dataset_name": "droid",
             "data_mix": "oxe_magic_soup",
             "shuffle_buffer_size": 400_000,
+            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
