@@ -21,6 +21,7 @@ from openpi_cot.datasets.utils.helpers import state_encoding_to_type
 from openpi_cot.datasets.utils.mixtures import OXE_NAMED_MIXTURES
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.coco_caption_dataset import CocoCaption
+from openpi_cot.datasets.vqa.droid_bbox_dataset import DroidBoundingBoxDataset
 from openpi_cot.datasets.vqa.lvis_dataset import Lvis
 from openpi_cot.datasets.vqa.paco_dataset import PacoEgo4d
 from openpi_cot.datasets.vqa.paco_dataset import PacoLvis
@@ -182,6 +183,14 @@ class OXECoTDatasets:
                     dataset_name=dataset_name,
                     **kwargs,
                 )
+            elif dataset_name == "droid_bbox":
+                ds = DroidBoundingBoxDataset(
+                    **kwargs,
+                    hash_tables=self.hash_tables,
+                )
+                # Update hash tables if not already set
+                if self.hash_tables is None and hasattr(ds, "hash_tables"):
+                    self.hash_tables = ds.hash_tables
             else:
                 ds = SingleOXECoTDataset(
                     dataset_name=dataset_name,
