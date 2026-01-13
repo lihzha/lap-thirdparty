@@ -321,10 +321,10 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                                 continue
 
                             # Normalize bbox from 0-1000 to 0-1
-                            y_min = float(bbox[0]) / 1000.0
-                            x_min = float(bbox[1]) / 1000.0
-                            y_max = float(bbox[2]) / 1000.0
-                            x_max = float(bbox[3]) / 1000.0
+                            x_min = float(bbox[0]) / 1000.0
+                            y_min = float(bbox[1]) / 1000.0
+                            x_max = float(bbox[2]) / 1000.0
+                            y_max = float(bbox[3]) / 1000.0
 
                             # Clamp to valid range
                             x_min = max(0.0, min(1.0, x_min))
