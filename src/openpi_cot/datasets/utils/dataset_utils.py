@@ -136,7 +136,6 @@ def prepare_batched_dataset(
     wrist_image_right_key=None,
     aggressive_aug: bool = False,
     aug_wrist_image: bool = True,
-    dataset_type: str = "droid",  # kept for backwards compatibility, but per-sample check is used
 ):
     """Prepare a batched dataset with optional aggressive augmentation.
 
@@ -158,8 +157,6 @@ def prepare_batched_dataset(
             Only applied during training (when want_val=False) and only for samples
             where dataset_name contains "droid".
         aug_wrist_image: If True and aggressive_aug is True, augment wrist images.
-        dataset_type: Kept for backwards compatibility. Per-sample dataset_name check
-            is used to determine if augmentation should be applied.
     """
     # Apply standard pipeline operations
     if (not want_val) and shuffle and max_samples is None:
