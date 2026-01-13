@@ -707,28 +707,58 @@ def main(config: _config.TrainConfig):
             col1 = np.copy(_ensure_color(start_u8))
             col2 = np.copy(_ensure_color(end_u8))
 
-            # Draw bounding box if caption contains loc tokens (for LVIS and similar datasets)
+            # Draw bounding boxes if caption contains loc tokens (for LVIS, PACO, DROID bbox datasets)
             if is_vqa and caption_text:
-                bbox = _extract_bbox_from_caption(caption_text)
-                if bbox is not None:
-                    # Extract category name from prompt for label
-                    # Prompts are like "Point out the chair in the image."
-                    category_label = None
-                    if prompt_text:
-                        # Try to extract the object name between "the " and " in"
-                        match = re.search(r"(?:the|a)\s+(\w+(?:\s+\w+)*)\s+(?:in|is)", prompt_text.lower())
-                        if match:
-                            category_label = match.group(1)
+                # Try to extract multiple bboxes first (new format with labels)
+                all_bboxes = _extract_all_bboxes_from_caption(caption_text)
 
-                    # Draw bbox on the first image (start image)
-                    col1 = _draw_bbox_on_image(
-                        col1,
-                        bbox,
-                        color=(0, 255, 0),  # Green
-                        thickness=3,
-                        label=category_label,
-                    )
-                    logging.info(f"[{i}] Drew bbox: {bbox} with label: {category_label}")
+                if all_bboxes:
+                    # Multiple bboxes with labels - use different colors for each
+                    colors = [
+                        (0, 255, 0),    # Green
+                        (255, 0, 0),    # Red
+                        (0, 0, 255),    # Blue
+                        (255, 255, 0),  # Yellow
+                        (255, 0, 255),  # Magenta
+                        (0, 255, 255),  # Cyan
+                        (255, 128, 0),  # Orange
+                        (128, 0, 255),  # Purple
+                        (0, 255, 128),  # Spring Green
+                        (255, 128, 128),  # Light Red
+                    ]
+
+                    for idx, (bbox, label) in enumerate(all_bboxes):
+                        color = colors[idx % len(colors)]
+                        col1 = _draw_bbox_on_image(
+                            col1,
+                            bbox,
+                            color=color,
+                            thickness=3,
+                            label=label if label else None,
+                        )
+
+                    logging.info(f"[{i}] Drew {len(all_bboxes)} bboxes: {[(b, l) for b, l in all_bboxes]}")
+                else:
+                    # Fall back to single bbox extraction (legacy format without labels)
+                    bbox = _extract_bbox_from_caption(caption_text)
+                    if bbox is not None:
+                        # Extract category name from prompt for label
+                        category_label = None
+                        if prompt_text:
+                            # Try to extract the object name between "the " and " in"
+                            match = re.search(r"(?:the|a)\s+(\w+(?:\s+\w+)*)\s+(?:in|is)", prompt_text.lower())
+                            if match:
+                                category_label = match.group(1)
+
+                        # Draw bbox on the first image (start image)
+                        col1 = _draw_bbox_on_image(
+                            col1,
+                            bbox,
+                            color=(0, 255, 0),  # Green
+                            thickness=3,
+                            label=category_label,
+                        )
+                        logging.info(f"[{i}] Drew single bbox: {bbox} with label: {category_label}")
 
             panels = [col1]
             panels.append(col2)
