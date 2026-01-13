@@ -198,6 +198,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     filter_large_actions: bool = False
     random_base_prob: float = 0.0
     random_mask_prob: float = 0.0
+    not_rotate_wrist_prob: float = 0.0
     use_rough_scale: bool = False
     horizon_seconds: list[float] = dataclasses.field(default_factory=lambda: [1.0])
 

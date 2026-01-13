@@ -50,6 +50,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     stateless_gripper: bool = True
     random_base_prob: float = 0.0
     random_mask_prob: float = 0.0
+    not_rotate_wrist_prob: float = 0.0
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -104,6 +105,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 image = np.rot90(image, k=2)
             images.append(image)
             image_masks.append(image_mask)
+        
+        need_flip_ee_frame = False
 
         if not is_prediction_sample:
             add_image(base_image, apply_rotation=False)
@@ -112,14 +115,20 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     wrist_image = parse_image(data["observation"][key])
                     if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
                         wrist_image = np.zeros_like(base_image)
-                    add_image(wrist_image, apply_rotation=needs_wrist_rotation, random_mask_prob=self.random_mask_prob)
+                    actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
+                    if actual_apply_rotation != need_flip_ee_frame:
+                        need_flip_ee_frame = True
+                    add_image(wrist_image, apply_rotation=actual_apply_rotation, random_mask_prob=self.random_mask_prob)
                 else:
                     add_image(np.zeros_like(base_image), apply_rotation=False, random_mask_prob=self.random_mask_prob)
         elif not pred_use_primary:
             for key in IMAGE_KEYS:
                 if key in data["observation"]:
                     image = parse_image(data["observation"][key])
-                    add_image(image, apply_rotation=needs_wrist_rotation)
+                    actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
+                    if actual_apply_rotation != need_flip_ee_frame:
+                        need_flip_ee_frame = True
+                    add_image(image, apply_rotation=actual_apply_rotation)
                 else:
                     add_image(np.zeros_like(base_image), apply_rotation=False)
         else:
@@ -131,7 +140,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 else:
                     add_image(np.zeros_like(base_image), apply_rotation=False)
 
-        return images, image_masks
+        return images, image_masks, need_flip_ee_frame
 
     def _prepare_inputs(self, data: dict) -> dict:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST, ModelType.PI0_FAST}
@@ -146,7 +155,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         is_prediction_sample = data.get("is_prediction_sample", False)
         pred_use_primary = data.get("pred_use_primary", False)
 
-        images, image_masks = self._collect_images(
+        images, image_masks, need_flip_ee_frame = self._collect_images(
             data, base_image, needs_wrist_rotation, is_prediction_sample, pred_use_primary
         )
 
@@ -195,10 +204,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             inputs["actions"] = np.array(actions)
 
         inputs["is_prediction_sample"] = is_prediction_sample
-        return inputs
+        return inputs, need_flip_ee_frame
 
     def _summarize_language_actions(
-        self, data: dict, lang_action_key: str, initial_state: np.ndarray = None, dataset_name=None
+        self, data: dict, lang_action_key: str, initial_state: np.ndarray = None, dataset_name=None, need_flip_ee_frame=False
     ) -> tuple[str | None, str]:
         language_actions = data[lang_action_key]
         is_bimanual: bool = data.get("is_bimanual", False)
@@ -212,7 +221,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         # Transform to EEF frame if requested
         if use_eef_frame:
-            language_actions = transform_actions_to_eef_frame(language_actions, initial_state, dataset_name)
+            language_actions = transform_actions_to_eef_frame(language_actions, initial_state, dataset_name, need_flip_ee_frame)
             frame_description = "end-effector frame"
         if is_bimanual:
             summed = summarize_bimanual_numeric_actions(
@@ -245,7 +254,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         # Extract initial state for EEF frame transformation
 
-        inputs = self._prepare_inputs(data)
+        inputs, need_flip_ee_frame = self._prepare_inputs(data)
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)
         dataset_name = self._dataset_name(data)
 
@@ -297,7 +306,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             initial_state = np.asarray(data["raw_state"])
 
             inputs["language_actions"], inputs["frame_description"] = self._summarize_language_actions(
-                data, "language_actions", initial_state, dataset_name=dataset_name
+                data, "language_actions", initial_state, dataset_name=dataset_name, need_flip_ee_frame=need_flip_ee_frame
             )
             if self.use_rough_scale:
                 inputs["language_actions"] = describe_language_action_scale(inputs["language_actions"])

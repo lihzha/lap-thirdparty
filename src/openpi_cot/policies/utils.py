@@ -92,7 +92,7 @@ def rot6d_to_rotmat(rot6d: np.ndarray) -> np.ndarray:
     return R
 
 
-def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarray, dataset_name) -> np.ndarray:
+def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarray, dataset_name, need_flip_ee_frame=False) -> np.ndarray:
     """Transform actions from base frame to end effector frame.
 
     Args:
@@ -124,16 +124,17 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     delta_pos_base = actions[:3]
     delta_pos_eef = R_base_to_eef @ delta_pos_base
     # Apply additional transformation: y -> -y, z -> -z
-    delta_pos_eef[1] = -delta_pos_eef[1]
-    delta_pos_eef[2] = -delta_pos_eef[2]
+    if not need_flip_ee_frame:
+        delta_pos_eef[1] = -delta_pos_eef[1]
+        delta_pos_eef[2] = -delta_pos_eef[2]
     transformed_actions[:3] = delta_pos_eef
 
     delta_rot_base = actions[3:6]  # [roll, pitch, yaw] in radians
     # Convert euler angles to rotation matrix
     R_delta_base = R.from_euler("xyz", delta_rot_base).as_matrix()
     # Transform to EEF frame: R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
-    F = np.diag([1, -1, -1])   # 180° rotation about x
-    R_base_to_eef = F @ initial_rotation.T
+    # F = np.diag([1, -1, -1])   # 180° rotation about x
+    # R_base_to_eef = F @ initial_rotation.T
     
     R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
     # Convert back to euler angles
