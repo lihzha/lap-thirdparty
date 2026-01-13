@@ -86,6 +86,9 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         batch_size: int = 1,
         max_samples: int | None = None,
         hash_tables: dict = None,
+        enable_prediction_training: bool = False,
+        pred_prob: float = 0.2,
+        primary_pred_prob: float = 0.5,
     ):
         if num_parallel_calls == -1 or num_parallel_reads == -1:
             total_threads = len(os.sched_getaffinity(0))
