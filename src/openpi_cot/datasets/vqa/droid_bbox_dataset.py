@@ -172,8 +172,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         # Apply trajectory identifier
         self.get_traj_identifier()
 
-        # Apply trajectory filters (only keep episodes with bbox annotations)
-        self.apply_traj_filters(action_key="action")
+        # # Apply trajectory filters (only keep episodes with bbox annotations)
+        # self.apply_traj_filters(action_key="action")
 
         # Split train/val
         self.split_val(split_seed=seed)
@@ -452,12 +452,15 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
         def restructure(traj):
             """Convert trajectory to VQA bbox format."""
-            # Get episode path from file_path
+            # Get file_path directly from metadata
             file_path = traj["traj_metadata"]["episode_metadata"]["file_path"]
-            recording_folderpath = traj["traj_metadata"]["episode_metadata"]["recording_folderpath"]
 
             traj_len = tf.shape(traj["action"])[0]
             episode_id = traj["trajectory_id"][0]
+
+            # Extract episode path from file_path
+            # Example file_path: gs://xembodiment_data/r2d2/r2d2-data-full/ILIAD/success/2023-04-21/.../trajectory.h5
+            episode_path = extract_episode_path_from_file_path(file_path[0])
 
             # Randomly select one exterior image for each frame
             random_val = tf.random.stateless_uniform(
@@ -469,9 +472,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 lambda: traj["observation"][self.spec.images_list[1]],
             )
 
-            indices = tf.as_string(tf.range(traj_len))
-            # Create step_id for each frame: recording_folderpath--file_path--frame_index
-            step_id = recording_folderpath + "--" + file_path + "--" + indices
+            # Create frame indices as strings
+            frame_indices = tf.as_string(tf.range(traj_len))
 
             return {
                 "observation": {
@@ -480,8 +482,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                     "state": tf.zeros([traj_len, self.state_dim], dtype=tf.float32),
                 },
                 "trajectory_id": traj["trajectory_id"],
-                "step_id": step_id,
-                "traj_metadata": traj["traj_metadata"],
+                "episode_path": tf.fill([traj_len], episode_path),
+                "frame_idx": frame_indices,
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
             }
 
@@ -490,63 +492,14 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         # Flatten to individual frames
         self.dataset = self.dataset.flatten(num_parallel_calls=self.num_parallel_calls)
 
-        # Convert each frame to VQA sample with bbox
-        def frame_to_vqa(frame):
-            """Convert a single frame to VQA bbox sample."""
-            # Get the step_id and look up bbox annotations
-            step_id = frame["step_id"]
-
-            # Extract episode path from step_id
-            # step_id format: recording_folderpath--file_path--frame_index
-            # We need to extract the episode path and frame index
-
-            # Parse the trajectory_id to get episode path
-            trajectory_id = frame["trajectory_id"]
-
-            # Get the recording_folderpath and file_path from traj_metadata
-            # Since we flattened, we need to extract from step_id
-            parts = tf.strings.split(step_id, "--")
-
-            # Extract episode_path from the file_path component
-            # The file_path is at index 1
-            file_path = parts[1]
-            frame_idx_str = parts[2]
-
-            # Extract episode path using regex
-            episode_path = tf.strings.regex_replace(
-                file_path,
-                r"^.*r2d2-data(?:-full)?/",
-                "",
-            )
-            episode_path = tf.strings.regex_replace(
-                episode_path,
-                r"/trajectory.*$",
-                "",
-            )
-
-            # Create lookup key: episode_path--frame_index
-            lookup_key_prefix = tf.strings.join([episode_path, "--", frame_idx_str, "--"])
-
-            # We can't do a prefix lookup in TF hash table, so we use a different approach
-            # Store the lookup key for later filtering
-            frame["lookup_key_prefix"] = lookup_key_prefix
-            frame["episode_path"] = episode_path
-            frame["frame_idx"] = frame_idx_str
-
-            return frame
-
-        self.dataset = self.dataset.frame_map(frame_to_vqa, num_parallel_calls=self.num_parallel_calls)
-
     def apply_frame_filters(self):
         """Filter and expand frames to create final VQA samples."""
-        # Since we can't do prefix lookup in TF, we need a different approach
-        # We'll build a separate table that maps episode_path--frame_idx to a list of keys
-
-        # First, build a frame-level lookup table
+        # Build a lookup table that maps episode_path--frame_idx to a list of objects
         frame_to_objects = self._build_frame_objects_table()
 
         def lookup_and_sample_object(frame):
             """Look up objects for this frame and sample one."""
+            # Create lookup key: episode_path--frame_idx
             lookup_key = tf.strings.join([frame["episode_path"], "--", frame["frame_idx"]])
 
             # Look up the serialized list of objects
@@ -555,9 +508,12 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             # Check if we have annotations
             has_annotations = tf.strings.length(objects_json) > 0
 
-            # Parse JSON and sample one object
-            # We'll use tf.py_function for JSON parsing
-            def parse_and_sample(objects_json_bytes, seed_hash):
+            # Parse JSON and sample one object using tf.py_function
+            def parse_and_sample(objects_json_bytes, seed_hash, lookup_key_debug):
+                # Debug: log the lookup key for first few samples
+                key_str = lookup_key_debug.numpy().decode("utf-8") if lookup_key_debug.numpy() else ""
+                json_len = len(objects_json_bytes.numpy()) if objects_json_bytes.numpy() else 0
+
                 if not objects_json_bytes.numpy():
                     return b"", np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
                 try:
@@ -571,7 +527,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                     label = obj["label"].encode("utf-8")
                     bbox = np.array(obj["bbox"], dtype=np.float32)
                     return label, bbox
-                except Exception:
+                except Exception as e:
+                    logging.warning(f"Error parsing objects JSON: {e}")
                     return b"", np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
             # Create deterministic seed from frame info
@@ -580,7 +537,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
             label, bbox = tf.py_function(
                 parse_and_sample,
-                [objects_json, seed_hash],
+                [objects_json, seed_hash, lookup_key],
                 [tf.string, tf.float32],
             )
             label.set_shape([])
@@ -667,8 +624,10 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
     def _build_frame_objects_table(self):
         """Build a lookup table from episode_path--frame_idx to list of objects."""
         logging.info("Building frame objects lookup table...")
+        import re
 
         frame_to_objects = {}
+        sample_keys_logged = 0
 
         jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
 
@@ -686,13 +645,13 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                     if not file_path:
                         continue
 
-                    # Extract episode path
-                    import re
+                    # Extract episode path using the same logic as extract_episode_path_from_file_path
+                    # Remove prefix up to r2d2-data or r2d2-data-full
+                    rel = re.sub(r"^.*r2d2-data(?:-full)?/", "", file_path)
+                    # Remove /trajectory... suffix
+                    episode_path = re.sub(r"/trajectory.*$", "", rel)
 
-                    match = re.search(r"r2d2-data(?:-full)?/(.+?)/trajectory", file_path)
-                    if match:
-                        episode_path = match.group(1)
-                    else:
+                    if not episode_path:
                         continue
 
                     labels = episode_data.get("labels", [])
