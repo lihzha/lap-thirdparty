@@ -169,6 +169,7 @@ class BaseVQADataset(SingleCoTDataset):
                 wrist_image_right_key=self.spec.wrist_image_right_key,
                 aggressive_aug=getattr(config, "aggressive_aug", False),
                 aug_wrist_image=getattr(config, "aug_wrist_image", True),
+                dataset_type="vqa",  # VQA datasets don't use aggressive augmentation
             )
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):

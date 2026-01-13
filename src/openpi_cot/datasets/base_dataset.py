@@ -155,6 +155,9 @@ class SingleCoTDataset:
 
         if standalone:
             # Apply common shuffling/take/cache behavior
+            # Determine dataset type: check if this is a DROID dataset based on ds_name
+            is_droid = "droid" in self.ds_name.lower()
+            effective_dataset_type = "droid" if is_droid else getattr(config, "dataset_type", "oxe")
             self.dataset = prepare_batched_dataset(
                 dataset=self.dataset,
                 want_val=self.want_val,
@@ -169,6 +172,7 @@ class SingleCoTDataset:
                 wrist_image_right_key=self.spec.wrist_image_right_key,
                 aggressive_aug=getattr(config, "aggressive_aug", False),
                 aug_wrist_image=getattr(config, "aug_wrist_image", True),
+                dataset_type=effective_dataset_type,
             )
 
     def build_dataset_builder(self, ds_name, data_dir):

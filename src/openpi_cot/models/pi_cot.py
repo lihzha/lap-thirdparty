@@ -52,7 +52,6 @@ class PiCoT(_pi0.Pi0):
         self.verbose_mode = config.verbose_mode
         self.aug_wrist_image = config.aug_wrist_image
         self.image_keys = config.image_keys
-        self.aggresive_aug = config.aggresive_aug
         # Loss/control knobs
         self.enable_action_training = bool(config.enable_action_training)
         self.enable_langact_training = bool(config.enable_langact_training)
@@ -378,7 +377,6 @@ class PiCoT(_pi0.Pi0):
             image_keys=self.image_keys,
             aug_wrist_image=self.aug_wrist_image,
             vqa_mask=vqa_mask,
-            aggresive_aug=self.aggresive_aug,
         )
 
         # Store augmented images for later visualization (if requested)

@@ -59,7 +59,6 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     state_dropout: float = 0.0
     reasoning_mask_prob: float = 0.0
-    aggresive_aug: bool = False
 
     # When True, stops gradients produced by the action expert from flowing back
     # into the VLM expert through cross-attention.
