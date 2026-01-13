@@ -124,14 +124,19 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         tf.random.set_seed(self.seed)
 
         # Build path to bbox annotations directory
-        self.bbox_annotations_dir = config.language_action_dir.replace(
-            self.spec.lang_action_dir_name, "droid-bbox-annotations"
-        )
-        if not tf.io.gfile.exists(self.bbox_annotations_dir):
-            # Try alternative path
+        # Try both possible directory name patterns
+        if self.spec.lang_action_dir_name in config.language_action_dir:
+            self.bbox_annotations_dir = config.language_action_dir.replace(
+                self.spec.lang_action_dir_name, "droid-bbox-annotations"
+            )
+        elif self.spec.lang_action_dir_name_base in config.language_action_dir:
             self.bbox_annotations_dir = config.language_action_dir.replace(
                 self.spec.lang_action_dir_name_base, "droid-bbox-annotations"
             )
+        else:
+            # Fallback: try to construct path from parent directory
+            parent_dir = os.path.dirname(config.language_action_dir.rstrip("/"))
+            self.bbox_annotations_dir = os.path.join(parent_dir, "droid-bbox-annotations")
 
         logging.info(f"Loading bbox annotations from: {self.bbox_annotations_dir}")
 
@@ -253,11 +258,11 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
         if not jsonl_files:
             logging.warning(f"No JSONL files found in {self.bbox_annotations_dir}")
-            # Return empty table
+            # Return table with dummy entry (TF doesn't allow empty tables)
             return tf.lookup.StaticHashTable(
                 tf.lookup.KeyValueTensorInitializer(
-                    tf.constant([], dtype=tf.string),
-                    tf.constant([], dtype=tf.string),
+                    tf.constant(["__dummy_key__"], dtype=tf.string),
+                    tf.constant([""], dtype=tf.string),
                 ),
                 default_value=tf.constant(b"", dtype=tf.string),
             )
@@ -735,10 +740,11 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         logging.info(f"Built frame objects table with {len(keys)} entries")
 
         if not keys:
+            # Return table with dummy entry (TF doesn't allow empty tables)
             return tf.lookup.StaticHashTable(
                 tf.lookup.KeyValueTensorInitializer(
-                    tf.constant([], dtype=tf.string),
-                    tf.constant([], dtype=tf.string),
+                    tf.constant(["__dummy_key__"], dtype=tf.string),
+                    tf.constant([""], dtype=tf.string),
                 ),
                 default_value=tf.constant(b"", dtype=tf.string),
             )
