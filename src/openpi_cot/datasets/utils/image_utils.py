@@ -3,16 +3,184 @@
 import tensorflow as tf
 
 
+def _tf_aggressive_augment_wrist(image: tf.Tensor, seed: tf.Tensor | None = None) -> tf.Tensor:
+    """Apply aggressive augmentation to wrist images BEFORE padding.
+
+    This mirrors the logic from preprocess_observation_aggressive for wrist images:
+    - Random crop with varying heights (0.65-0.99 of original) and 0.9 of width
+    - Resize back to original size
+    - Random rotation (-10 to 10 degrees)
+    - Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
+    """
+    orig_h = tf.shape(image)[0]
+    orig_w = tf.shape(image)[1]
+    orig_dtype = image.dtype
+
+    # Work in float32 for augmentation
+    if orig_dtype == tf.uint8:
+        image = tf.cast(image, tf.float32) / 255.0
+    else:
+        # Assume [-1, 1] range, convert to [0, 1]
+        image = image / 2.0 + 0.5
+
+    # Random crop fraction selection (matching JAX version)
+    crop_fracs = tf.constant([0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 0.99], dtype=tf.float32)
+    crop_idx = tf.random.uniform([], 0, 8, dtype=tf.int32, seed=seed)
+    crop_frac = tf.gather(crop_fracs, crop_idx)
+
+    crop_h = tf.cast(tf.cast(orig_h, tf.float32) * crop_frac, tf.int32)
+    crop_w = tf.cast(tf.cast(orig_w, tf.float32) * 0.9, tf.int32)
+
+    # Random crop
+    image = tf.image.random_crop(image, [crop_h, crop_w, 3], seed=seed)
+
+    # Resize back to original dimensions
+    image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
+
+    # Random rotation (-10 to 10 degrees)
+    angle_rad = tf.random.uniform([], -10.0 * 3.14159 / 180.0, 10.0 * 3.14159 / 180.0, seed=seed)
+    # TF doesn't have a direct rotate, use contrib or approximate with affine
+    # Using tfa.image.rotate if available, otherwise skip rotation in TF pipeline
+    # For simplicity, we'll use a rotation approximation via transform
+    cos_a = tf.cos(angle_rad)
+    sin_a = tf.sin(angle_rad)
+    h_f = tf.cast(orig_h, tf.float32)
+    w_f = tf.cast(orig_w, tf.float32)
+    cx, cy = w_f / 2.0, h_f / 2.0
+    # Affine transform matrix for rotation around center
+    transform = [
+        cos_a,
+        -sin_a,
+        cx - cx * cos_a + cy * sin_a,
+        sin_a,
+        cos_a,
+        cy - cx * sin_a - cy * cos_a,
+        0.0,
+        0.0,
+    ]
+    image = tf.raw_ops.ImageProjectiveTransformV3(
+        images=image[None],
+        transforms=tf.reshape(transform, [1, 8]),
+        output_shape=[orig_h, orig_w],
+        fill_value=0.0,
+        interpolation="BILINEAR",
+        fill_mode="CONSTANT",
+    )[0]
+
+    # Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
+    image = tf.image.random_brightness(image, 0.2, seed=seed)
+    image = tf.image.random_contrast(image, 0.8, 1.2, seed=seed)
+    image = tf.image.random_saturation(image, 0.8, 1.2, seed=seed)
+
+    # Clip to valid range
+    image = tf.clip_by_value(image, 0.0, 1.0)
+
+    # Convert back to original dtype
+    if orig_dtype == tf.uint8:
+        image = tf.cast(image * 255.0, tf.uint8)
+    else:
+        # Convert back to [-1, 1]
+        image = image * 2.0 - 1.0
+
+    return image
+
+
+def _tf_aggressive_augment_base(image: tf.Tensor, seed: tf.Tensor | None = None) -> tf.Tensor:
+    """Apply aggressive augmentation to base (non-wrist) images BEFORE padding.
+
+    This mirrors the logic from preprocess_observation_aggressive for base images:
+    - Random crop (0.9 width, 0.99 height)
+    - Resize back to original size
+    - Random rotation (-5 to 5 degrees)
+    - Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
+    """
+    orig_h = tf.shape(image)[0]
+    orig_w = tf.shape(image)[1]
+    orig_dtype = image.dtype
+
+    # Work in float32 for augmentation
+    if orig_dtype == tf.uint8:
+        image = tf.cast(image, tf.float32) / 255.0
+    else:
+        # Assume [-1, 1] range, convert to [0, 1]
+        image = image / 2.0 + 0.5
+
+    # Crop dimensions (0.9 width, 0.99 height)
+    crop_h = tf.cast(tf.cast(orig_h, tf.float32) * 0.99, tf.int32)
+    crop_w = tf.cast(tf.cast(orig_w, tf.float32) * 0.9, tf.int32)
+
+    # Random crop
+    image = tf.image.random_crop(image, [crop_h, crop_w, 3], seed=seed)
+
+    # Resize back to original dimensions
+    image = tf.image.resize(image, [orig_h, orig_w], method=tf.image.ResizeMethod.BILINEAR)
+
+    # Random rotation (-5 to 5 degrees)
+    angle_rad = tf.random.uniform([], -5.0 * 3.14159 / 180.0, 5.0 * 3.14159 / 180.0, seed=seed)
+    cos_a = tf.cos(angle_rad)
+    sin_a = tf.sin(angle_rad)
+    h_f = tf.cast(orig_h, tf.float32)
+    w_f = tf.cast(orig_w, tf.float32)
+    cx, cy = w_f / 2.0, h_f / 2.0
+    transform = [
+        cos_a,
+        -sin_a,
+        cx - cx * cos_a + cy * sin_a,
+        sin_a,
+        cos_a,
+        cy - cx * sin_a - cy * cos_a,
+        0.0,
+        0.0,
+    ]
+    image = tf.raw_ops.ImageProjectiveTransformV3(
+        images=image[None],
+        transforms=tf.reshape(transform, [1, 8]),
+        output_shape=[orig_h, orig_w],
+        fill_value=0.0,
+        interpolation="BILINEAR",
+        fill_mode="CONSTANT",
+    )[0]
+
+    # Color jitter (brightness=0.2, contrast=0.2, saturation=0.2)
+    image = tf.image.random_brightness(image, 0.2, seed=seed)
+    image = tf.image.random_contrast(image, 0.8, 1.2, seed=seed)
+    image = tf.image.random_saturation(image, 0.8, 1.2, seed=seed)
+
+    # Clip to valid range
+    image = tf.clip_by_value(image, 0.0, 1.0)
+
+    # Convert back to original dtype
+    if orig_dtype == tf.uint8:
+        image = tf.cast(image * 255.0, tf.uint8)
+    else:
+        # Convert back to [-1, 1]
+        image = image * 2.0 - 1.0
+
+    return image
+
+
 def make_decode_images_fn(
     *,
     primary_key: str,
     wrist_key: str | None,
     wrist_right_key: str | None = None,
     resize_to: tuple[int, int] | None = (224, 224),
+    aggressive_aug: bool = False,
+    aug_wrist_image: bool = True,
 ):
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors.
     Preserves aspect ratio, pads symmetrically, and returns the original dtype semantics
     (uint8 clamped 0-255, float32 clamped to [-1, 1]).
+
+    Args:
+        primary_key: Key for the primary (base) image in the observation dict.
+        wrist_key: Key for the wrist image in the observation dict.
+        wrist_right_key: Optional key for right wrist image.
+        resize_to: Target resolution (height, width) for resizing with padding.
+        aggressive_aug: If True, apply aggressive augmentation BEFORE padding.
+            This mirrors the logic from preprocess_observation_aggressive and
+            makes cropping more effective since it operates on original images.
+        aug_wrist_image: If True and aggressive_aug is True, augment wrist images.
     """
 
     def _tf_resize_with_pad(image: tf.Tensor, target_h: int, target_w: int) -> tf.Tensor:
@@ -53,7 +221,13 @@ def make_decode_images_fn(
         padded = tf.pad(resized, [[pad_h0, pad_h1], [pad_w0, pad_w1], [0, 0]], constant_values=const_val)
         return padded
 
-    def _decode_single(img_bytes):
+    def _decode_single(img_bytes, is_wrist: bool = False):
+        """Decode image bytes and optionally apply augmentation before padding.
+
+        Args:
+            img_bytes: Encoded image bytes or numeric tensor.
+            is_wrist: Whether this is a wrist image (affects augmentation).
+        """
         # If already numeric, cast to uint8 and return
         if img_bytes.dtype != tf.string:
             img = tf.cast(img_bytes, tf.uint8)
@@ -70,42 +244,28 @@ def make_decode_images_fn(
                 ),
                 lambda: tf.zeros([1, 1, 3], dtype=tf.uint8),
             )
+
+        # Apply aggressive augmentation BEFORE padding (if enabled)
+        # This makes cropping more effective since it operates on original images
+        if aggressive_aug:
+            if is_wrist and aug_wrist_image:
+                img = _tf_aggressive_augment_wrist(img)
+            elif not is_wrist:
+                img = _tf_aggressive_augment_base(img)
+
         # Optional resize-with-pad to ensure batching shape compatibility
         if resize_to is not None:
             h, w = resize_to
             img = _tf_resize_with_pad(img, h, w)
         return img
 
-    # def decode_with_time_dim(img_tensor):
-    #     """Decode images that may have time dimension.
-
-    #     Handles:
-    #     - Rank 0: scalar encoded string (single image)
-    #     - Rank 1: [T] vector of encoded strings (prediction mode with multiple frames)
-    #     - Rank 3: [H, W, C] single decoded image
-    #     - Rank 4: [T, H, W, C] decoded images with time dimension
-    #     """
-    #     rank = len(img_tensor.shape)
-
-    #     if rank == 1:  # [T] - multiple encoded strings (prediction mode)
-    #         # Decode each encoded string separately
-    #         # Output: [T, H, W, C] after decoding
-    #         decoded_frames = tf.map_fn(_decode_single, img_tensor, fn_output_signature=tf.uint8)
-    #         # Set explicit shape for downstream processing
-    #         if resize_to is not None:
-    #             h, w = resize_to
-    #             decoded_frames.set_shape([h, w, 3])
-    #         return decoded_frames
-    #     if rank == 4:  # [T, H, W, C] - already decoded with time dimension
-    #         # Apply resize if needed (shouldn't normally happen in this path)
-    #         return img_tensor
-    #     # rank == 0 (scalar string) or rank == 3 ([H, W, C])
-    #     # Single frame: decode if string, otherwise return as-is
-    #     return _decode_single(img_tensor)
-
     def _decode_frame(traj: dict) -> dict:
-        traj["observation"][primary_key] = _decode_single(traj["observation"][primary_key])
-        traj["observation"][wrist_key] = _decode_single(traj["observation"][wrist_key])
+        traj["observation"][primary_key] = _decode_single(
+            traj["observation"][primary_key], is_wrist=False
+        )
+        traj["observation"][wrist_key] = _decode_single(
+            traj["observation"][wrist_key], is_wrist=True
+        )
         # traj["observation"][wrist_right_key] = _decode_single(traj["observation"][wrist_right_key])
 
         return traj

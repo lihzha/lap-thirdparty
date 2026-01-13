@@ -620,7 +620,7 @@ class PiCoT(_pi0.Pi0):
         rng: at.KeyArrayLike,
         observation: _model.Observation,
         *,
-        max_decoding_steps: int | at.Int[at.Array, ""] = 256,
+        max_decoding_steps: int | at.Int[at.Array, ""] = 390,
         temperature: float = 0.0,
     ) -> _model.Actions:
         observation = preprocess_observation(

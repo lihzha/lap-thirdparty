@@ -186,6 +186,10 @@ class CoTDataConfig(upstream_config.DataConfig):
     # CLI: --data.action_proprio_normalization_type {normal|bounds|bounds_q99}
     action_proprio_normalization_type: NormalizationType = NormalizationType.BOUNDS
     resize_resolution: tuple[int, int] = (224, 224)
+    # Aggressive augmentation in data pipeline BEFORE padding (more effective cropping)
+    # This mirrors preprocess_observation_aggressive but applies in TF data pipeline
+    aggressive_aug: bool = False
+    aug_wrist_image: bool = True
 
     # Language action format
     language_action_format_name: str = "verbose_eef_with_rotation"

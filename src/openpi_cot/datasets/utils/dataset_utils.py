@@ -134,7 +134,29 @@ def prepare_batched_dataset(
     primary_image_key,
     wrist_image_key,
     wrist_image_right_key=None,
+    aggressive_aug: bool = False,
+    aug_wrist_image: bool = True,
 ):
+    """Prepare a batched dataset with optional aggressive augmentation.
+
+    Args:
+        dataset: The input TensorFlow dataset.
+        want_val: Whether this is for validation.
+        shuffle: Whether to shuffle the dataset.
+        shuffle_buffer_size: Size of the shuffle buffer.
+        seed: Random seed for shuffling.
+        max_samples: Maximum number of samples to use.
+        batch_size: Batch size.
+        resize_resolution: Target resolution for resizing images.
+        primary_image_key: Key for the primary (base) image.
+        wrist_image_key: Key for the wrist image.
+        wrist_image_right_key: Optional key for right wrist image.
+        aggressive_aug: If True, apply aggressive augmentation BEFORE padding.
+            This mirrors the logic from preprocess_observation_aggressive and
+            makes cropping more effective since it operates on original images.
+            Only applied during training (when want_val=False).
+        aug_wrist_image: If True and aggressive_aug is True, augment wrist images.
+    """
     # Apply standard pipeline operations
     if (not want_val) and shuffle and max_samples is None:
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
@@ -146,11 +168,16 @@ def prepare_batched_dataset(
     else:
         raise NotImplementedError("Mode with max_samples and no val not implemented")
 
+    # Only apply aggressive augmentation during training (not validation)
+    apply_aggressive_aug = aggressive_aug and (not want_val)
+
     decode_fn = make_decode_images_fn(
         primary_key=primary_image_key,
         wrist_key=wrist_image_key,
         wrist_right_key=wrist_image_right_key,
         resize_to=resize_resolution,
+        aggressive_aug=apply_aggressive_aug,
+        aug_wrist_image=aug_wrist_image,
     )
     num_parallel_calls = tf.data.AUTOTUNE
     dataset = dataset.frame_map(decode_fn, num_parallel_calls)
