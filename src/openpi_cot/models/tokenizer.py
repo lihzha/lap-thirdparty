@@ -261,7 +261,9 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         logging.info(f"Use reasoning_mask_prob: {self.reasoning_mask_prob}")
         
         # Load Gemma3 tokenizer from HuggingFace
-        self._hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        path = download.maybe_download("gs://pi0-cot/cache/gemma3-tokenizer.model", gs={"token": "anon"})
+        with path.open("rb") as f:
+            self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
         self._max_len = max_len
         self._num_image_tokens = num_image_tokens
         self._num_images = num_images
@@ -346,14 +348,14 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         # Build token sequence: [BOS] + [image_placeholders] + [prompt_tokens] + [reasoning_tokens] + [EOS]
         image_tokens = self._build_image_placeholder()
         
-        prompt_encoded = self._hf_tokenizer.encode(formatted_prompt, add_special_tokens=False)
+        prompt_encoded = self._tokenizer.encode(formatted_prompt, add_special_tokens=False)
         
         tokens = [self.bos_token_id] + image_tokens + prompt_encoded
         reasoning_start = len(tokens)
         
         if reasoning is not None:
             clean_reason = reasoning.strip().replace("_", " ").replace("\n", " ")
-            reasoning_encoded = self._hf_tokenizer.encode(clean_reason, add_special_tokens=False)
+            reasoning_encoded = self._tokenizer.encode(clean_reason, add_special_tokens=False)
             tokens = tokens + reasoning_encoded + [self.eos_token_id]
         reasoning_end = len(tokens)
 
@@ -394,7 +396,7 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
             for i in range(start_idx, end_idx):
                 if not reasoning_mask[i]:
                     continue
-                piece = self._hf_tokenizer.decode([tokens[i]])
+                piece = self._tokenizer.decode([tokens[i]])
                 if piece:
                     if is_number(piece):
                         number_mask[i] = True
@@ -402,7 +404,7 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
                         direction_mask[i] = True
 
         # Right pad with padding token
-        pad_id = self._hf_tokenizer.pad_token_id if self._hf_tokenizer.pad_token_id is not None else 0
+        pad_id = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else 0
         pad_count = self._max_len - len(tokens)
         if pad_count > 0:
             tokens = tokens + [pad_id] * pad_count
@@ -426,11 +428,11 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
             t for t in tokens 
             if t not in [self.begin_image_token_id, self.end_image_token_id, self.image_token_id]
         ]
-        return self._hf_tokenizer.decode(filtered_tokens, skip_special_tokens=True).strip()
+        return self._tokenizer.decode(filtered_tokens, skip_special_tokens=True).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
-        tokens = self._hf_tokenizer.encode(text, add_special_tokens=False)
+        tokens = self._tokenizer.encode(text, add_special_tokens=False)
         if add_bos:
             tokens = [self.bos_token_id] + tokens
         if add_eos:
