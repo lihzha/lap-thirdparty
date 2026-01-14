@@ -180,6 +180,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("pixmo_point", 0.2),  # 10% vqa samples
         ("paco_lvis", 3.0),
         ("paco_ego4d", 10.0),
+        ("droid_bbox", 3.0)
     ],
     "franka_no_droid": [
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
