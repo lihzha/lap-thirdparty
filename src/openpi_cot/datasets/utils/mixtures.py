@@ -106,6 +106,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("pixmo_point", 0.1),  # 10% vqa samples
         ("paco_lvis", 1.0),
         ("paco_ego4d", 1.0),
+        ("droid_bbox", 10.0)
     ],
     "oxe_magic_soup_vqa_lowerdroid": [
         # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
@@ -180,7 +181,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("pixmo_point", 0.2),  # 10% vqa samples
         ("paco_lvis", 3.0),
         ("paco_ego4d", 10.0),
-        ("droid_bbox", 3.0)
+        ("droid_bbox", 10.0)
     ],
     "franka_no_droid": [
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
