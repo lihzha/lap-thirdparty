@@ -1157,7 +1157,15 @@ _CONFIGS = [
     *create_multi_device_configs(
         base_name="pi_combined_cot",
         devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
-        model=build_picot_model(),
+        model=pi_cot_config.PiCoTConfig(
+            action_dim=7,
+            action_horizon=16,
+            max_token_len=220,
+            pi05=True,
+            discrete_state_input=True,
+            use_fast=True,
+            prompt_format="pi05_notime",
+        ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
             "repo_id": "combined",
