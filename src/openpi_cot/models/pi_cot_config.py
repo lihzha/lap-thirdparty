@@ -46,6 +46,11 @@ class PiCoTConfig(_model.BaseModelConfig):
     # Whether to use Pan & Scan for Gemma3 (multi-crop image processing)
     # When False, uses standard single-crop processing even with Gemma3
     use_pan_and_scan: bool = False
+    # Override image resolution for Gemma3. If None, uses default (896, 896).
+    # Set to (224, 224) to use smaller images with resized positional embeddings.
+    # Note: When using non-default resolution, you must also set weight_loader.target_pos_emb_grid_size
+    # to match (e.g., (16, 16) for 224x224 images with 14x14 patches).
+    gemma3_image_resolution: tuple[int, int] | None = None
 
     # Enable/disable individual loss components
     # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
@@ -85,9 +90,18 @@ class PiCoTConfig(_model.BaseModelConfig):
 
     @property
     def image_resolution(self) -> tuple[int, int]:
-        """Returns image resolution based on model variant."""
-        if "gemma3" in self.paligemma_variant:
-            return (896, 896)
+        """Returns image resolution based on model variant.
+        
+        For Gemma3, can be overridden via gemma3_image_resolution config.
+        Supported resolutions for Gemma3 (with 14x14 patches):
+        - (896, 896): 64x64 grid -> 4x4 pool -> 256 tokens (default)
+        - (448, 448): 32x32 grid -> 2x2 pool -> 256 tokens
+        - (224, 224): 16x16 grid -> no pool -> 256 tokens
+        """
+        # if "gemma3" in self.paligemma_variant:
+        #     if self.gemma3_image_resolution is not None:
+        #         return self.gemma3_image_resolution
+        #     return (896, 896)
         return (224, 224)
 
     @property

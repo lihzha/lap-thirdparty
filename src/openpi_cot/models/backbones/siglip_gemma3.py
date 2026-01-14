@@ -449,25 +449,34 @@ class _Module(nn.Module):
         encoded = out["encoded"] = x
 
         # ====================================================================
-        # NEW GEMMA3 POOLING LOGIC (4096 -> 256)
+        # GEMMA3 POOLING LOGIC: Reduce to 256 tokens (16x16 grid)
         # ====================================================================
-        # This logic performs the sequence reduction *before* any other pooling attempts.
+        # Supports different input resolutions:
+        # - 896x896 with 14x14 patches → 64x64 grid (4096 patches) → 4x4 pool → 16x16 (256 tokens)
+        # - 224x224 with 14x14 patches → 16x16 grid (256 patches) → no pooling needed
         if self.gemma3_pooling:
             n, seq_len, c = encoded.shape
-            grid_size = int(seq_len ** 0.5)  # sqrt(4096) = 64
+            grid_size = int(seq_len ** 0.5)
             assert grid_size * grid_size == seq_len, f"Sequence length {seq_len} must be perfect square"
 
-            x_2d = encoded.reshape(n, grid_size, grid_size, c)  # [n, 64, 64, c]
-            
-            # Pool 64×64 → 16×16 using 4×4 avg_pool
             if grid_size == 64:
-                print("Inside siglip, doing avg pooling for Gemma3")
+                # 896x896 input: Pool 64×64 → 16×16 using 4×4 avg_pool
+                x_2d = encoded.reshape(n, grid_size, grid_size, c)  # [n, 64, 64, c]
                 x_2d_pooled = nn.avg_pool(x_2d, window_shape=(4, 4), strides=(4, 4))
-                # New shape is [n, 16, 16, c]
+                encoded = x_2d_pooled.reshape(n, 16*16, c)  # [n, 256, c]
+            elif grid_size == 16:
+                # 224x224 input: Already 16×16 = 256 tokens, no pooling needed
+                pass
+            elif grid_size == 32:
+                # 448x448 input: Pool 32×32 → 16×16 using 2×2 avg_pool
+                x_2d = encoded.reshape(n, grid_size, grid_size, c)  # [n, 32, 32, c]
+                x_2d_pooled = nn.avg_pool(x_2d, window_shape=(2, 2), strides=(2, 2))
                 encoded = x_2d_pooled.reshape(n, 16*16, c)  # [n, 256, c]
             else:
-                # Should not happen for 896x896/14x14 patches, but keep it as is if it's smaller
-                encoded = encoded
+                raise ValueError(
+                    f"Unsupported grid size {grid_size}x{grid_size} for gemma3_pooling. "
+                    f"Expected 64 (896x896), 32 (448x448), or 16 (224x224) with 14x14 patches."
+                )
         
         # NOTE: 'x' is now only used as a reference to 'encoded' for the legacy pooling/head paths
         x = encoded
