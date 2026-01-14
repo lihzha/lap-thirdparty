@@ -245,5 +245,6 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "paco_ego4d": [("paco_ego4d", 1.0)],
     "droid_bbox": [("droid_bbox", 1.0)],
     "droid_100": [("droid_100", 1.0)],
+    "test_mixture": [("droid_bbox", 3.0), ("fmb", 1.0)]
 }
 ## to use ut_austin_mutex, we need to flip_wrist_image_channels,flip_image_channels. Other datasets are fine.
