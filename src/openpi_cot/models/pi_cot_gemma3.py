@@ -276,14 +276,13 @@ class PiCoTGemma3(PiCoT):
         # Get text masks
         token_mask = obs.tokenized_prompt_mask
         # Attention pattern for text tokens:
-        # - ALL text tokens (prompt + langact) should be causal (ar_mask=True)
+        # - Prompt tokens (tokenized_langact_mask=False): ar_mask=False → bidirectional
+        # - Langact tokens (tokenized_langact_mask=True): ar_mask=True → causal
         # - Image placeholders will be set to ar_mask=False in _replace_placeholders
-        # - This ensures:
-        #   - Images (ar_mask=False, cumsum=0) only attend to other images
-        #   - Prompt tokens are causal but can attend to images (cumsum > 0 can see cumsum=0)
-        #   - Langact tokens are causal and can attend to images + all prompt
-        # - This prevents images/prompt from attending to langact tokens
-        token_ar_mask = jnp.ones_like(token_mask, dtype=bool)
+        if obs.tokenized_langact_mask is not None:
+            token_ar_mask = obs.tokenized_langact_mask
+        else:
+            token_ar_mask = jnp.zeros_like(token_mask, dtype=bool)
         
         # Step 2: Get image embeddings from SigLIP
         image_embeddings, image_mask = self._embed_images(obs)
@@ -314,6 +313,18 @@ class PiCoTGemma3(PiCoT):
         loss_name: str = "lang_loss",
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Compute language loss using Gemma3's vocab size."""
+        # DEBUG: Check masks before loss computation
+        langact_mask = observation.tokenized_langact_mask
+        prompt_mask = observation.tokenized_prompt_mask
+        token_loss_mask = observation.token_loss_mask
+        
+        print(f"[DEBUG _compute_language_loss] tokenized_langact_mask is None: {langact_mask is None}")
+        if langact_mask is not None:
+            print(f"[DEBUG _compute_language_loss] tokenized_langact_mask shape: {langact_mask.shape}, sum: {jnp.sum(langact_mask)}")
+        print(f"[DEBUG _compute_language_loss] tokenized_prompt_mask sum: {jnp.sum(prompt_mask)}")
+        print(f"[DEBUG _compute_language_loss] token_loss_mask sum: {jnp.sum(token_loss_mask) if token_loss_mask is not None else 'None'}")
+        print(f"[DEBUG _compute_language_loss] sample_mask: {sample_mask}")
+        
         targets = jax.nn.one_hot(
             observation.tokenized_prompt[:, 1:],
             self.VOCAB_SIZE,  # Gemma3: 262144
@@ -327,6 +338,10 @@ class PiCoTGemma3(PiCoT):
             observation.tokenized_langact_mask[:, 1:],
             jnp.logical_and(observation.tokenized_prompt_mask[:, 1:], observation.token_loss_mask[:, 1:]),
         )
+        
+        # DEBUG: Check final loss mask
+        print(f"[DEBUG _compute_language_loss] loss_mask sum: {jnp.sum(loss_mask)}, shape: {loss_mask.shape}")
+        
         if sample_mask is not None:
             ex_mask = jnp.asarray(sample_mask)[..., None]
             loss_mask = loss_mask * ex_mask

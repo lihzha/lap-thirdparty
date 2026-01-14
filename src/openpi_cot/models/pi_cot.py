@@ -153,14 +153,17 @@ class PiCoT(_pi0.Pi0):
         input_mask.append(obs.tokenized_prompt_mask)
 
         # Attention pattern for text tokens:
-        # - ALL text tokens (prompt + langact) should be causal (ar_mask=True)
-        # - This ensures:
-        #   - Images (ar_mask=False, cumsum=0) only attend to other images
-        #   - Prompt tokens are causal but can attend to images (cumsum > 0 can see cumsum=0)
-        #   - Langact tokens are causal and can attend to images + all prompt
-        # - This prevents images/prompt from attending to langact tokens
-        text_ar_mask = jnp.ones((obs.tokenized_prompt.shape[0], obs.tokenized_prompt.shape[1]), dtype=bool)
-        ar_mask.append(text_ar_mask)
+        # - Prompt tokens (tokenized_langact_mask=False): ar_mask=False → bidirectional  
+        # - Langact tokens (tokenized_langact_mask=True): ar_mask=True → causal
+        # This allows:
+        #   - Images: bidirectional (ar_mask=False)
+        #   - Prompt: bidirectional, can attend to images
+        #   - Langact: causal, can attend to images + all prompt
+        if obs.tokenized_langact_mask is not None:
+            ar_mask.append(obs.tokenized_langact_mask)
+        else:
+            text_ar_mask = jnp.zeros((obs.tokenized_prompt.shape[0], obs.tokenized_prompt.shape[1]), dtype=bool)
+            ar_mask.append(text_ar_mask)
 
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
@@ -320,17 +323,15 @@ class PiCoT(_pi0.Pi0):
     ) -> at.Bool[at.Array, "b _t _s"]:
         """Build combined attention mask for prefix (VLM) and suffix (action expert).
         
-        Attention pattern:
-        - Image tokens: bidirectional among themselves, cannot attend to text
-        - Prompt tokens: causal, can attend to images, cannot attend to langact/action  
-        - Langact tokens: causal, can attend to images + all prompt
+        Current attention pattern (using tokenized_langact_mask as ar_mask):
+        - Image tokens: bidirectional (ar_mask=False)
+        - Prompt tokens: bidirectional (ar_mask=False from tokenized_langact_mask)
+        - Langact tokens: causal (ar_mask=True from tokenized_langact_mask)
         - Action tokens: causal, can attend to images + prompt, NOT langact
         
-        This is achieved by:
-        1. Prefix attention (rows 0:prefix_len): uses prefix_ar_mask where
-           ar_mask=False for images (bidirectional) and ar_mask=True for all text (causal)
-        2. Action attention (rows prefix_len:end): uses prefix_mask_action which
-           EXCLUDES langact tokens, with ar_mask=False (so action can fully attend to img+prompt)
+        This means images and prompt can attend to each other bidirectionally,
+        while langact is causal and can attend to all images + prompt.
+        Action tokens use prefix_mask_action which EXCLUDES langact.
         """
         prefix_attn = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
         if suffix_mask is None or suffix_ar_mask is None:
@@ -376,6 +377,15 @@ class PiCoT(_pi0.Pi0):
         verbose_mode: bool | None = None,
         return_augmented_images: bool = False,
     ) -> dict[str, at.Array]:
+        # DEBUG: Check training flags
+        print(f"[DEBUG compute_loss] enable_langact_training={self.enable_langact_training}")
+        print(f"[DEBUG compute_loss] enable_action_training={self.enable_action_training}")
+        print(f"[DEBUG compute_loss] tokenized_langact_mask is None: {observation.tokenized_langact_mask is None}")
+        if observation.tokenized_langact_mask is not None:
+            print(f"[DEBUG compute_loss] tokenized_langact_mask shape: {observation.tokenized_langact_mask.shape}")
+            # Use jnp for JAX arrays
+            print(f"[DEBUG compute_loss] tokenized_langact_mask sum: {jnp.sum(observation.tokenized_langact_mask)}")
+        
         preprocess_rng, _, noise_rng, time_rng = jax.random.split(rng, 4)
 
         # Use passed verbose_mode if provided, otherwise use class attribute
