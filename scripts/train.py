@@ -475,7 +475,12 @@ def main(config: _config.TrainConfig):
     dataloader_restored = False
     if resuming:
         try:
-            train_state = _checkpoints.restore_state(checkpoint_manager, train_state, data_loader=data_loader)
+            train_state = _checkpoints.restore_state(
+                checkpoint_manager,
+                train_state,
+                data_loader=data_loader,
+                train_state_sharding=train_state_sharding,
+            )
             dataloader_restored = True
             logging.info("Successfully restored checkpoint and dataloader state")
         except Exception as e:
