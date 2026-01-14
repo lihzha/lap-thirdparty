@@ -24,7 +24,7 @@ import jax.numpy as jnp
 import numpy as np
 
 import openpi.training.sharding as sharding
-from openpi_cot.models.gemma3 import RMSNorm as CommonRMSNorm
+from openpi_cot.models.backbones.gemma3 import RMSNorm as CommonRMSNorm
 #from openpi_cot.models.gemma_common import RMSNorm as CommonRMSNorm
 
 
