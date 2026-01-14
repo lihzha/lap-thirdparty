@@ -593,6 +593,20 @@ def main(config: _config.TrainConfig):
             # Buffer local dataset info (no multihost gathering at every step)
             # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
             log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
+        
+        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
+            checkpoint_manager = _checkpoints.save_state(
+                checkpoint_manager,
+                train_state,
+                data_loader,
+                step,
+                max_retries=config.checkpoint_max_retries,
+                retry_delay_secs=config.checkpoint_retry_delay_secs,
+                retry_backoff=config.checkpoint_retry_backoff,
+                fallback_to_sync=config.checkpoint_fallback_to_sync,
+                async_timeout_secs=config.checkpoint_async_timeout_secs,
+                keep_period=config.keep_period,
+            )
 
         if step % config.log_interval == 0:
             # Visualize augmented images (after augmentation in compute_loss)
@@ -698,18 +712,6 @@ def main(config: _config.TrainConfig):
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
-            checkpoint_manager = _checkpoints.save_state(
-                checkpoint_manager,
-                train_state,
-                data_loader,
-                step,
-                max_retries=config.checkpoint_max_retries,
-                retry_delay_secs=config.checkpoint_retry_delay_secs,
-                retry_backoff=config.checkpoint_retry_backoff,
-                fallback_to_sync=config.checkpoint_fallback_to_sync,
-                async_timeout_secs=config.checkpoint_async_timeout_secs,
-                keep_period=config.keep_period,
-            )
             if config.model.enable_langact_training and config.use_validation and config.use_eval:
                 eval_checkpoint(
                     train_state,

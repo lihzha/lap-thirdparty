@@ -277,7 +277,11 @@ class OXECoTDatasets:
 
             # Repeat each dataset before interleaving to ensure correct sampling weights
             # Without .repeat(), exhausted datasets cause incorrect sampling behavior
-            repeated_datasets = [ds.repeat() for ds in normalized_datasets]
+            # NOTE: Only repeat for training - validation should iterate once through the data
+            if not want_val:
+                repeated_datasets = [ds.repeat() for ds in normalized_datasets]
+            else:
+                repeated_datasets = normalized_datasets
             
             # Interleave the normalized datasets
             self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
@@ -287,7 +291,11 @@ class OXECoTDatasets:
         else:
             # No global normalization - just interleave the datasets
             # Repeat each dataset before interleaving to ensure correct sampling weights
-            repeated_datasets = [ds.repeat() for ds in datasets]
+            # NOTE: Only repeat for training - validation should iterate once through the data
+            if not want_val:
+                repeated_datasets = [ds.repeat() for ds in datasets]
+            else:
+                repeated_datasets = datasets
             self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
                 repeated_datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
             )
