@@ -175,7 +175,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     max_samples: int | None = None
     # Validation controls for RLDS-CoT dataset splitting/visualization
     val_max_samples: int | None = None
-    val_fraction: float | None = 0.01
+    val_fraction: float | None = 0.025
     use_wrist_image: bool = True
     wrist_image_dropout_prob: float = 0.0
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
@@ -197,7 +197,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     stateless_gripper: bool = True
     filter_large_actions: bool = False
     random_base_prob: float = 0.0
-    random_mask_prob: float = 0.0
+    random_mask_prob: float = 0.2
     not_rotate_wrist_prob: float = 0.0
     use_rough_scale: bool = False
     horizon_seconds: list[float] = dataclasses.field(default_factory=lambda: [1.0])
@@ -1169,7 +1169,7 @@ _CONFIGS = [
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
+            kind="paligemma"
         ),
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
         optimizer=_optimizer.AdamW(weight_decay=0.0001),
