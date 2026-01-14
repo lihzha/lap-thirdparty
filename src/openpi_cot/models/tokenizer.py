@@ -20,6 +20,14 @@ GEMMA3_IMAGE_TOKEN = 262145  # Placeholder for image embedding
 GEMMA3_EOS_TOKEN = 106
 GEMMA3_BOS_TOKEN = 2
 
+# Gemma3 IT (instruction-tuned) conversation tokens
+# These are the token IDs for the conversation markers
+GEMMA3_START_OF_TURN_TOKEN = 106  # <start_of_turn>
+GEMMA3_END_OF_TURN_TOKEN = 107    # <end_of_turn>
+GEMMA3_USER_TOKEN = 1645          # user
+GEMMA3_MODEL_TOKEN = 2516         # model
+GEMMA3_NEWLINE_TOKEN = 108        # \n
+
 
 class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def __init__(
@@ -274,6 +282,13 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         self.begin_image_token_id = GEMMA3_BEGIN_IMAGE_TOKEN
         self.end_image_token_id = GEMMA3_END_IMAGE_TOKEN
         self.image_token_id = GEMMA3_IMAGE_TOKEN
+        
+        # Conversation tokens for IT format
+        self.start_of_turn_token_id = GEMMA3_START_OF_TURN_TOKEN
+        self.end_of_turn_token_id = GEMMA3_END_OF_TURN_TOKEN
+        self.user_token_id = GEMMA3_USER_TOKEN
+        self.model_token_id = GEMMA3_MODEL_TOKEN
+        self.newline_token_id = GEMMA3_NEWLINE_TOKEN
 
         # Support both string and PromptFormat instance
         if isinstance(prompt_format, str):
@@ -309,6 +324,22 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         )
         return single_image_tokens * self._num_images
 
+    def _build_user_turn_start(self) -> list[int]:
+        """Build the start of user turn tokens: <start_of_turn>user\n"""
+        return [self.start_of_turn_token_id, self.user_token_id, self.newline_token_id]
+
+    def _build_user_turn_end(self) -> list[int]:
+        """Build the end of user turn tokens: <end_of_turn>\n"""
+        return [self.end_of_turn_token_id, self.newline_token_id]
+
+    def _build_model_turn_start(self) -> list[int]:
+        """Build the start of model turn tokens: <start_of_turn>model\n"""
+        return [self.start_of_turn_token_id, self.model_token_id, self.newline_token_id]
+
+    def _build_model_turn_end(self) -> list[int]:
+        """Build the end of model turn tokens: <end_of_turn>"""
+        return [self.end_of_turn_token_id]
+
     def tokenize_cot(
         self,
         prompt: str,
@@ -324,7 +355,13 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
         """Tokenize prompt and reasoning for Gemma3 chain-of-thought model.
         
-        Similar to PaligemmaCoTTokenizer but with Gemma3-specific image placeholder handling.
+        Uses Gemma3 IT (instruction-tuned) format:
+        <bos><start_of_turn>user
+        [system_message]
+        [images]
+        [prompt]<end_of_turn>
+        <start_of_turn>model
+        [reasoning]<end_of_turn><eos>
         """
         # Resolve prompt format
         if is_prediction_sample:
@@ -344,19 +381,38 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
             state_dropout=state_dropout,
         )
 
-        # Tokenize with Gemma3 tokenizer
-        # Build token sequence: [BOS] + [image_placeholders] + [prompt_tokens] + [reasoning_tokens] + [EOS]
+        # Tokenize with Gemma3 IT format
+        # Format: <bos><start_of_turn>user\n[system]\n[images]\n[prompt]<end_of_turn>\n<start_of_turn>model\n[reasoning]<end_of_turn><eos>
         image_tokens = self._build_image_placeholder()
         
-        prompt_encoded = self._tokenizer.encode(formatted_prompt, add_special_tokens=False)
+        # System message for robot context
+        system_message = "You are a helpful robot assistant."
+        system_encoded = self._tokenizer.encode(system_message, add_bos=False, add_eos=False)
         
-        tokens = [self.bos_token_id] + image_tokens + prompt_encoded
+        # Encode the prompt
+        prompt_encoded = self._tokenizer.encode(formatted_prompt, add_bos=False, add_eos=False)
+        
+        # Build user turn: <bos><start_of_turn>user\n[system]\n\n[images]\n[prompt]<end_of_turn>\n
+        tokens = (
+            [self.bos_token_id] +
+            self._build_user_turn_start() +
+            system_encoded +
+            [self.newline_token_id, self.newline_token_id] +
+            image_tokens +
+            [self.newline_token_id] +
+            prompt_encoded +
+            self._build_user_turn_end()
+        )
+        
+        # Build model turn: <start_of_turn>model\n
+        tokens = tokens + self._build_model_turn_start()
         reasoning_start = len(tokens)
         
         if reasoning is not None:
-            clean_reason = reasoning.strip().replace("_", " ").replace("\n", " ")
-            reasoning_encoded = self._tokenizer.encode(clean_reason, add_special_tokens=False)
-            tokens = tokens + reasoning_encoded + [self.eos_token_id]
+            clean_reason = reasoning.strip()
+            reasoning_encoded = self._tokenizer.encode(clean_reason, add_bos=False, add_eos=False)
+            # Add reasoning + <end_of_turn> + <eos>
+            tokens = tokens + reasoning_encoded + self._build_model_turn_end() + [self.eos_token_id]
         reasoning_end = len(tokens)
 
         if len(tokens) > self._max_len:
@@ -404,7 +460,7 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
                         direction_mask[i] = True
 
         # Right pad with padding token
-        pad_id = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else 0
+        pad_id = self._tokenizer.pad_id() if hasattr(self._tokenizer, 'pad_id') else 0
         pad_count = self._max_len - len(tokens)
         if pad_count > 0:
             tokens = tokens + [pad_id] * pad_count
@@ -418,26 +474,34 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
             token_loss_mask,
         )
 
-    def decode(self, tokens: np.ndarray) -> str:
-        """Decode tokens back to a string, skipping special tokens and placeholders."""
+    def decode(self, tokens: np.ndarray, skip_special_tokens: bool = True) -> str:
+        """Decode tokens back to a string, optionally skipping special tokens and placeholders."""
         if not isinstance(tokens, list):
             tokens = tokens.tolist()
         
-        # Filter out special tokens
-        filtered_tokens = [
-            t for t in tokens 
-            if t not in [self.begin_image_token_id, self.end_image_token_id, self.image_token_id]
-        ]
-        return self._tokenizer.decode(filtered_tokens, skip_special_tokens=True).strip()
+        if skip_special_tokens:
+            # Filter out image and conversation special tokens
+            special_tokens = {
+                self.begin_image_token_id, 
+                self.end_image_token_id, 
+                self.image_token_id,
+                self.start_of_turn_token_id,
+                self.end_of_turn_token_id,
+                self.user_token_id,
+                self.model_token_id,
+                self.bos_token_id,
+                self.eos_token_id,
+            }
+            filtered_tokens = [t for t in tokens if t not in special_tokens]
+        else:
+            filtered_tokens = tokens
+        
+        return self._tokenizer.decode(filtered_tokens).strip()
 
-    def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
+    def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> list[int]:
         """Encode a string to tokens."""
-        tokens = self._tokenizer.encode(text, add_special_tokens=False)
-        if add_bos:
-            tokens = [self.bos_token_id] + tokens
-        if add_eos:
-            tokens = tokens + [self.eos_token_id]
-        return tokens
+        # sentencepiece uses add_bos/add_eos directly
+        return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
 
 
 class FASTTokenizer(PaligemmaCoTTokenizer):

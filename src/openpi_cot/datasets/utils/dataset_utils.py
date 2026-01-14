@@ -163,9 +163,9 @@ def prepare_batched_dataset(
         dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
     elif want_val:
         if max_samples is not None:
-            dataset = dataset.take(int(max_samples)).cache()
-        else:
-            dataset = dataset.cache()
+            dataset = dataset.take(int(max_samples))
+        # NOTE: For validation, we cache AFTER image decoding (see below)
+        # This caches decoded images so subsequent val iterations are fast
     else:
         raise NotImplementedError("Mode with max_samples and no val not implemented")
 
@@ -183,6 +183,11 @@ def prepare_batched_dataset(
     )
     num_parallel_calls = tf.data.AUTOTUNE
     dataset = dataset.frame_map(decode_fn, num_parallel_calls)
+
+    # For validation: cache AFTER decoding so decoded images are cached
+    # This makes subsequent validation iterations much faster
+    if want_val:
+        dataset = dataset.cache()
 
     dataset = dataset.batch(batch_size, drop_remainder=True)
 
