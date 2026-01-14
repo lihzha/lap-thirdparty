@@ -4,7 +4,7 @@ from typing import Literal
 import numpy as np
 from openpi.models import tokenizer as _tokenizer
 import sentencepiece
-from transformers import AutoProcessor
+from transformers import AutoProcessor, AutoTokenizer
 
 from openpi_cot.models.prompt_utils.checkers import is_number
 from openpi_cot.models.prompt_utils.prompt import DEFAULT_VQA_PROMPT_FORMAT
@@ -12,6 +12,13 @@ from openpi_cot.models.prompt_utils.prompt import PREDICTION_PROMPT_FORMAT_REGIS
 from openpi_cot.models.prompt_utils.prompt import PROMPT_FORMAT_REGISTRY
 from openpi_cot.models.prompt_utils.prompt import PromptFormat
 import openpi_cot.shared.download as download
+
+# Gemma3 special tokens
+GEMMA3_BEGIN_IMAGE_TOKEN = 255999
+GEMMA3_END_IMAGE_TOKEN = 262144
+GEMMA3_IMAGE_TOKEN = 262145  # Placeholder for image embedding
+GEMMA3_EOS_TOKEN = 106
+GEMMA3_BOS_TOKEN = 2
 
 
 class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
@@ -210,6 +217,225 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
         return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
+
+
+class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
+    """Tokenizer for Gemma3-based models.
+    
+    Uses the Gemma3 tokenizer with different special tokens and image placeholders.
+    """
+    
+    def __init__(
+        self,
+        max_len: int = 800,
+        prompt_format: Literal[
+            "pi05",
+            "pi0",
+            "vqa",
+            "coordinate_system",
+            "schema_compact",
+            "schema_compact_with_rotation",
+            "schema_compact_bimanual",
+            "schema_compact_bimanual_with_rotation",
+            "schema_compact_named_params",
+            "verbose_state",
+            "grouped_state",
+            "grouped_state_verbose",
+            "no_state",
+            "pi05_notime",
+            "pi05_notime_ori",
+            "pi05_notime_nostate",
+            "vla0",
+            "vla0_chunked",
+        ]
+        | PromptFormat = "pi05",
+        prediction_format: Literal["default", "grouped"] | PromptFormat = "default",
+        reasoning_mask_prob: float = 0.0,
+        tokenizer_name: str = "google/gemma-3-4b-it",
+        num_image_tokens: int = 256,  # 4096 patches / 16 (4x4 pooling) = 256
+        num_images: int = 2,  # Number of images (base + wrist)
+    ):
+        # Don't call super().__init__ as we want to use a different tokenizer
+        self.reasoning_mask_prob = reasoning_mask_prob
+        logging.info(f"Using Gemma3 tokenizer from {tokenizer_name}")
+        logging.info(f"Use reasoning_mask_prob: {self.reasoning_mask_prob}")
+        
+        # Load Gemma3 tokenizer from HuggingFace
+        self._hf_tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        self._max_len = max_len
+        self._num_image_tokens = num_image_tokens
+        self._num_images = num_images
+        
+        # Special token IDs
+        self.bos_token_id = GEMMA3_BOS_TOKEN
+        self.eos_token_id = GEMMA3_EOS_TOKEN
+        self.begin_image_token_id = GEMMA3_BEGIN_IMAGE_TOKEN
+        self.end_image_token_id = GEMMA3_END_IMAGE_TOKEN
+        self.image_token_id = GEMMA3_IMAGE_TOKEN
+
+        # Support both string and PromptFormat instance
+        if isinstance(prompt_format, str):
+            if prompt_format not in PROMPT_FORMAT_REGISTRY:
+                raise ValueError(
+                    f"Unknown prompt format: {prompt_format}. Available formats: {list(PROMPT_FORMAT_REGISTRY.keys())}"
+                )
+            self._prompt_format = PROMPT_FORMAT_REGISTRY[prompt_format]
+        else:
+            self._prompt_format = prompt_format
+
+        # Support both string and PromptFormat instance
+        if isinstance(prediction_format, str):
+            if prediction_format not in PREDICTION_PROMPT_FORMAT_REGISTRY:
+                raise ValueError(
+                    f"Unknown prediction format: {prediction_format}. Available formats: {list(PREDICTION_PROMPT_FORMAT_REGISTRY.keys())}"
+                )
+            self._prediction_format = PREDICTION_PROMPT_FORMAT_REGISTRY[prediction_format]
+        else:
+            self._prediction_format = prediction_format
+
+        self._vqa_format = DEFAULT_VQA_PROMPT_FORMAT
+
+    def _build_image_placeholder(self) -> list[int]:
+        """Build the image placeholder token sequence for Gemma3.
+        
+        For each image: [BEGIN_IMAGE_TOKEN] + [IMAGE_TOKEN] * num_image_tokens + [END_IMAGE_TOKEN]
+        """
+        single_image_tokens = (
+            [self.begin_image_token_id] + 
+            [self.image_token_id] * self._num_image_tokens + 
+            [self.end_image_token_id]
+        )
+        return single_image_tokens * self._num_images
+
+    def tokenize_cot(
+        self,
+        prompt: str,
+        reasoning: str | None = None,
+        state: np.ndarray | None = None,
+        state_type: str | None = None,
+        *,
+        is_vqa_sample: bool = False,
+        is_prediction_sample: bool = False,
+        time_horizon_seconds: float | None = None,
+        frame_description: str = "end-effector frame",
+        state_dropout: float = 0.0,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
+        """Tokenize prompt and reasoning for Gemma3 chain-of-thought model.
+        
+        Similar to PaligemmaCoTTokenizer but with Gemma3-specific image placeholder handling.
+        """
+        # Resolve prompt format
+        if is_prediction_sample:
+            fmt = self._prediction_format
+        elif is_vqa_sample:
+            fmt = self._vqa_format
+        else:
+            fmt = self._prompt_format
+
+        # Format the prompt
+        formatted_prompt = fmt.format_prompt(
+            prompt,
+            state,
+            state_type,
+            time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
+            frame_description=frame_description,
+            state_dropout=state_dropout,
+        )
+
+        # Tokenize with Gemma3 tokenizer
+        # Build token sequence: [BOS] + [image_placeholders] + [prompt_tokens] + [reasoning_tokens] + [EOS]
+        image_tokens = self._build_image_placeholder()
+        
+        prompt_encoded = self._hf_tokenizer.encode(formatted_prompt, add_special_tokens=False)
+        
+        tokens = [self.bos_token_id] + image_tokens + prompt_encoded
+        reasoning_start = len(tokens)
+        
+        if reasoning is not None:
+            clean_reason = reasoning.strip().replace("_", " ").replace("\n", " ")
+            reasoning_encoded = self._hf_tokenizer.encode(clean_reason, add_special_tokens=False)
+            tokens = tokens + reasoning_encoded + [self.eos_token_id]
+        reasoning_end = len(tokens)
+
+        if len(tokens) > self._max_len:
+            tokens = tokens[: self._max_len]
+            reasoning_end = min(reasoning_end, self._max_len)
+
+        # Create masks
+        attn_mask = np.zeros(self._max_len, dtype=bool)
+        reasoning_mask = np.zeros(self._max_len, dtype=bool)
+        token_loss_mask = np.ones(self._max_len, dtype=bool)
+
+        # Mark all non-pad positions as valid for attention
+        attn_mask[: len(tokens)] = True
+        start_idx = max(0, min(self._max_len, reasoning_start))
+        end_idx = max(0, min(self._max_len, reasoning_end))
+        if end_idx > start_idx:
+            reasoning_mask[start_idx:end_idx] = True
+
+        if reasoning is None:
+            reasoning_mask = None
+            direction_mask = None
+            number_mask = None
+        else:
+            if not 0.0 <= self.reasoning_mask_prob <= 1.0:
+                raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {self.reasoning_mask_prob}")
+            if self.reasoning_mask_prob > 0.0 and end_idx > start_idx:
+                reasoning_span_len = end_idx - start_idx
+                drop_mask = np.random.rand(reasoning_span_len) < self.reasoning_mask_prob
+                if np.any(drop_mask):
+                    drop_indices = np.where(drop_mask)[0] + start_idx
+                    token_loss_mask[drop_indices] = False
+            number_mask = np.zeros(self._max_len, dtype=bool)
+            direction_mask = np.zeros(self._max_len, dtype=bool)
+
+        # Build number and direction masks
+        if not is_vqa_sample and reasoning is not None:
+            for i in range(start_idx, end_idx):
+                if not reasoning_mask[i]:
+                    continue
+                piece = self._hf_tokenizer.decode([tokens[i]])
+                if piece:
+                    if is_number(piece):
+                        number_mask[i] = True
+                    if fmt.direction_token_checker(piece):
+                        direction_mask[i] = True
+
+        # Right pad with padding token
+        pad_id = self._hf_tokenizer.pad_token_id if self._hf_tokenizer.pad_token_id is not None else 0
+        pad_count = self._max_len - len(tokens)
+        if pad_count > 0:
+            tokens = tokens + [pad_id] * pad_count
+
+        return (
+            np.asarray(tokens, dtype=np.int32),
+            attn_mask,
+            reasoning_mask,
+            number_mask,
+            direction_mask,
+            token_loss_mask,
+        )
+
+    def decode(self, tokens: np.ndarray) -> str:
+        """Decode tokens back to a string, skipping special tokens and placeholders."""
+        if not isinstance(tokens, list):
+            tokens = tokens.tolist()
+        
+        # Filter out special tokens
+        filtered_tokens = [
+            t for t in tokens 
+            if t not in [self.begin_image_token_id, self.end_image_token_id, self.image_token_id]
+        ]
+        return self._hf_tokenizer.decode(filtered_tokens, skip_special_tokens=True).strip()
+
+    def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
+        """Encode a string to tokens."""
+        tokens = self._hf_tokenizer.encode(text, add_special_tokens=False)
+        if add_bos:
+            tokens = [self.bos_token_id] + tokens
+        if add_eos:
+            tokens = tokens + [self.eos_token_id]
+        return tokens
 
 
 class FASTTokenizer(PaligemmaCoTTokenizer):

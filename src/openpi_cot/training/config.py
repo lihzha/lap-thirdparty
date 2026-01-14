@@ -22,7 +22,7 @@ from openpi_cot.datasets.utils.helpers import StateEncoding
 import openpi_cot.models.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
 from openpi_cot.models.tokenizer import FASTTokenizer
-from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
+from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer, Gemma3CoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.libero_policy as libero_policy
@@ -235,10 +235,11 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
         if model_config.model_type == ModelType.PI_COT:
             assert isinstance(model_config, pi_cot_config.PiCoTConfig)
             outputs = []
+            tok_cls = PaligemmaCoTTokenizer if "gemma3" not in model_config.paligemma_variant else Gemma3CoTTokenizer
             if self.include_outputs:
                 outputs = [
                     DetokenizeReasoning(
-                        PaligemmaCoTTokenizer(
+                        tok_cls(
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
@@ -251,7 +252,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     upstream_transforms.InjectDefaultPrompt(self.default_prompt),
                     # upstream_transforms.ResizeImages(224, 224),
                     TokenizePromptAndReasoning(
-                        PaligemmaCoTTokenizer(
+                        tok_cls(
                             model_config.max_token_len,
                             prompt_format=self.prompt_format,
                             prediction_format=self.prediction_format,
@@ -1185,6 +1186,37 @@ _CONFIGS = [
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
         ),
+        save_interval=2500,
+        keep_period=10000,
+        resume=True,
+    ),
+    *create_multi_device_configs(
+        base_name="gemma3_combined_cot",
+        devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
+        model=pi_cot_config.PiCoTConfig(
+            pi05=True,
+            discrete_state_input=True,
+            action_dim=7,
+            action_horizon=16,
+            enable_action_training=False,
+            enable_langact_training=True,
+            max_token_len=220,
+            paligemma_variant="gemma3_4b",
+            action_expert_variant="gemma3_300m",
+            prompt_format="pi05_notime",
+            use_pan_and_scan=False,
+        ),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_magic_soup",
+            "shuffle_buffer_size": 400_000,
+            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
         save_interval=2500,
         keep_period=10000,
         resume=True,
