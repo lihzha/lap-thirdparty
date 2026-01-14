@@ -336,7 +336,7 @@ def apply_rope(
     inputs: jax.Array,
     positions: jax.Array,
     *,
-    base_frequency: float = 10000.0,
+    base_frequency: float | jax.Array = 10000.0,
     scale_factor: float = 1.0,
 ) -> jax.Array:
     """Applies RoPE.
@@ -421,7 +421,7 @@ class Attention(nn.Module):
     """Gemma3 Attention with local/global sliding window support."""
     
     configs: Sequence[Config]
-    is_global_attn: bool = False  # Whether this layer uses global attention
+    is_global_attn: jax.Array | bool = False  # Whether this layer uses global attention (can be traced)
     stop_action_to_vlm_grad: bool = False
     cache_dtype: str | None = None
 
@@ -442,8 +442,12 @@ class Attention(nn.Module):
         config = self.configs[0]
         dtype = next(x.dtype for x in xs if x is not None)
 
-        # Determine RoPE base frequency based on attention type
-        rope_base = config.rope_global_base_freq if self.is_global_attn else config.rope_local_base_freq
+        # Determine RoPE base frequency based on attention type (use jnp.where for traced values)
+        rope_base = jnp.where(
+            self.is_global_attn,
+            config.rope_global_base_freq,
+            config.rope_local_base_freq
+        )
 
         qkvs = []
         for i, (x, cfg) in enumerate(zip(xs, self.configs, strict=True)):
@@ -537,12 +541,16 @@ class Attention(nn.Module):
 
         effective_mask = attn_mask
         
-        # Apply sliding window mask for local attention
-        if not self.is_global_attn:
-            sliding_mask = self._compute_sliding_window_mask(
-                positions, k.shape[1], config.sliding_window_size
-            )
-            effective_mask = effective_mask & sliding_mask
+        # Apply sliding window mask for local attention (always compute, conditionally apply)
+        sliding_mask = self._compute_sliding_window_mask(
+            positions, k.shape[1], config.sliding_window_size
+        )
+        # For global attention, use original mask; for local, apply sliding window
+        effective_mask = jnp.where(
+            self.is_global_attn,
+            effective_mask,  # global: keep original mask
+            effective_mask & sliding_mask  # local: apply sliding window
+        )
 
         # Apply bidirectional attention for image tokens
         if image_mask is not None:
@@ -664,7 +672,7 @@ class Block(nn.Module):
         positions: jnp.ndarray,
         attn_mask: jnp.ndarray,
         adarms_cond: Sequence[jnp.ndarray | None],
-        is_global_attn: bool,  # Passed from scan
+        is_global_attn: jax.Array | bool,  # Passed from scan (can be traced)
         image_mask: jnp.ndarray | None = None,
         deterministic: bool = True,
     ):
