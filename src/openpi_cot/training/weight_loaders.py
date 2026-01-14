@@ -291,7 +291,7 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
     """
 
     params_path: str
-    target_pos_emb_grid_size: tuple[int, int] | None = None  # e.g., (16, 16) for 256 patches
+    target_pos_emb_grid_size: tuple[int, int] | None = (16, 16)  # e.g., (16, 16) for 256 patches
 
     def _resize_positional_embedding(
         self, pos_emb: np.ndarray, original_grid_size: tuple[int, int], target_grid_size: tuple[int, int]

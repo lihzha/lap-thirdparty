@@ -152,11 +152,17 @@ class PiCoT(_pi0.Pi0):
         tokens.append(self.PaliGemma.llm(obs.tokenized_prompt, method="embed"))
         input_mask.append(obs.tokenized_prompt_mask)
 
+        # Attention pattern for text tokens:
+        # - Prompt tokens (tokenized_langact_mask=False): ar_mask=False → bidirectional  
+        # - Langact tokens (tokenized_langact_mask=True): ar_mask=True → causal
+        # This allows:
+        #   - Images: bidirectional (ar_mask=False)
+        #   - Prompt: bidirectional, can attend to images
+        #   - Langact: causal, can attend to images + all prompt
         if obs.tokenized_langact_mask is not None:
             ar_mask.append(obs.tokenized_langact_mask)
         else:
-            text_ar_mask = jnp.array([False] * obs.tokenized_prompt.shape[1])
-            text_ar_mask = einops.repeat(text_ar_mask, "s -> b s", b=obs.tokenized_prompt.shape[0])
+            text_ar_mask = jnp.zeros((obs.tokenized_prompt.shape[0], obs.tokenized_prompt.shape[1]), dtype=bool)
             ar_mask.append(text_ar_mask)
 
         tokens = jnp.concatenate(tokens, axis=1)
@@ -288,8 +294,14 @@ class PiCoT(_pi0.Pi0):
         prefix_mask: at.Bool[at.Array, "b s"],
         observation: CoTObservation | Observation,
     ) -> at.Bool[at.Array, "b s"]:
+        """Build prefix mask for action attention, excluding langact tokens.
+        
+        Action tokens should attend to images + prompt, but NOT langact tokens.
+        This creates a mask that is True for images and prompt, False for langact.
+        """
         if observation.tokenized_langact_mask is None:
             return prefix_mask
+        # Expand langact_mask to full prefix length (add zeros for image positions)
         img_seq_len = prefix_mask.shape[1] - observation.tokenized_langact_mask.shape[1]
         langact_mask_full = jnp.concatenate(
             [
@@ -298,6 +310,7 @@ class PiCoT(_pi0.Pi0):
             ],
             axis=1,
         )
+        # Return True for images + prompt (non-langact), False for langact
         return jnp.logical_and(prefix_mask, jnp.logical_not(langact_mask_full))
 
     def _build_combined_attention_mask(
@@ -308,6 +321,18 @@ class PiCoT(_pi0.Pi0):
         suffix_mask: at.Bool[at.Array, "b s"] | None,
         suffix_ar_mask: at.Bool[at.Array, "b s"] | None,
     ) -> at.Bool[at.Array, "b _t _s"]:
+        """Build combined attention mask for prefix (VLM) and suffix (action expert).
+        
+        Current attention pattern (using tokenized_langact_mask as ar_mask):
+        - Image tokens: bidirectional (ar_mask=False)
+        - Prompt tokens: bidirectional (ar_mask=False from tokenized_langact_mask)
+        - Langact tokens: causal (ar_mask=True from tokenized_langact_mask)
+        - Action tokens: causal, can attend to images + prompt, NOT langact
+        
+        This means images and prompt can attend to each other bidirectionally,
+        while langact is causal and can attend to all images + prompt.
+        Action tokens use prefix_mask_action which EXCLUDES langact.
+        """
         prefix_attn = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
         if suffix_mask is None or suffix_ar_mask is None:
             return prefix_attn
@@ -317,6 +342,9 @@ class PiCoT(_pi0.Pi0):
         combined = jnp.zeros((batch_size, prefix_len + suffix_len, prefix_len + suffix_len), dtype=bool)
         combined = combined.at[:, :prefix_len, :prefix_len].set(prefix_attn)
 
+        # For action rows: ar_mask=False for prefix (full attention to img+prompt),
+        # ar_mask=True for suffix (causal among action tokens)
+        # prefix_mask_action excludes langact so action cannot attend to langact
         prefix_ar_mask_action = jnp.zeros_like(prefix_mask_action, dtype=bool)
         input_mask = jnp.concatenate([prefix_mask_action, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask_action, suffix_ar_mask], axis=1)
