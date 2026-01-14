@@ -285,6 +285,11 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         if self.language_action_format.include_rotation:
             assert self.action_encoding == ActionEncoding.EEF_POS, "Rotation only supported for EEF_POS encoding"
 
+        # DEBUG: Check language_actions availability
+        print(f"[DEBUG CoTInputs] enable_langact_training={self.enable_langact_training}")
+        print(f"[DEBUG CoTInputs] 'language_actions' in data: {'language_actions' in data}")
+        print(f"[DEBUG CoTInputs] language_action_format.style={self.language_action_format.style}")
+        
         # Handle VLA-0 format: use normalized actions field directly (not language_actions)
         if self.language_action_format.style == "vla0" and self.enable_langact_training:
             # VLA-0 uses the normalized actions field directly
@@ -341,6 +346,16 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 inputs["sample_mask"] = True
         else:
             inputs["sample_mask"] = True
+            print(f"[DEBUG CoTInputs] WARNING: language_actions NOT SET (fell through else branch)")
+
+        # DEBUG: Final check
+        if "language_actions" in inputs:
+            la = inputs["language_actions"]
+            print(f"[DEBUG CoTInputs] language_actions set: type={type(la)}, len={len(la) if isinstance(la, str) else 'N/A'}")
+            if isinstance(la, str):
+                print(f"[DEBUG CoTInputs] language_actions preview: '{la[:100]}...'")
+        else:
+            print(f"[DEBUG CoTInputs] WARNING: language_actions NOT in inputs!")
 
         return inputs
 

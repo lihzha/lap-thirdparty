@@ -377,14 +377,6 @@ class PiCoT(_pi0.Pi0):
         verbose_mode: bool | None = None,
         return_augmented_images: bool = False,
     ) -> dict[str, at.Array]:
-        # DEBUG: Check training flags
-        print(f"[DEBUG compute_loss] enable_langact_training={self.enable_langact_training}")
-        print(f"[DEBUG compute_loss] enable_action_training={self.enable_action_training}")
-        print(f"[DEBUG compute_loss] tokenized_langact_mask is None: {observation.tokenized_langact_mask is None}")
-        if observation.tokenized_langact_mask is not None:
-            print(f"[DEBUG compute_loss] tokenized_langact_mask shape: {observation.tokenized_langact_mask.shape}")
-            # Use jnp for JAX arrays
-            print(f"[DEBUG compute_loss] tokenized_langact_mask sum: {jnp.sum(observation.tokenized_langact_mask)}")
         
         preprocess_rng, _, noise_rng, time_rng = jax.random.split(rng, 4)
 
