@@ -313,17 +313,6 @@ class PiCoTGemma3(PiCoT):
         loss_name: str = "lang_loss",
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Compute language loss using Gemma3's vocab size."""
-        # DEBUG: Check masks before loss computation
-        langact_mask = observation.tokenized_langact_mask
-        prompt_mask = observation.tokenized_prompt_mask
-        token_loss_mask = observation.token_loss_mask
-        
-        print(f"[DEBUG _compute_language_loss] tokenized_langact_mask is None: {langact_mask is None}")
-        if langact_mask is not None:
-            print(f"[DEBUG _compute_language_loss] tokenized_langact_mask shape: {langact_mask.shape}, sum: {jnp.sum(langact_mask)}")
-        print(f"[DEBUG _compute_language_loss] tokenized_prompt_mask sum: {jnp.sum(prompt_mask)}")
-        print(f"[DEBUG _compute_language_loss] token_loss_mask sum: {jnp.sum(token_loss_mask) if token_loss_mask is not None else 'None'}")
-        print(f"[DEBUG _compute_language_loss] sample_mask: {sample_mask}")
         
         targets = jax.nn.one_hot(
             observation.tokenized_prompt[:, 1:],
@@ -338,9 +327,6 @@ class PiCoTGemma3(PiCoT):
             observation.tokenized_langact_mask[:, 1:],
             jnp.logical_and(observation.tokenized_prompt_mask[:, 1:], observation.token_loss_mask[:, 1:]),
         )
-        
-        # DEBUG: Check final loss mask
-        print(f"[DEBUG _compute_language_loss] loss_mask sum: {jnp.sum(loss_mask)}, shape: {loss_mask.shape}")
         
         if sample_mask is not None:
             ex_mask = jnp.asarray(sample_mask)[..., None]
