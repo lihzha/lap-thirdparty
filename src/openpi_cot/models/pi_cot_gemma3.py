@@ -313,7 +313,6 @@ class PiCoTGemma3(PiCoT):
         loss_name: str = "lang_loss",
     ) -> tuple[at.Float[at.Array, "*b"], dict[str, at.Array]]:
         """Compute language loss using Gemma3's vocab size."""
-        
         targets = jax.nn.one_hot(
             observation.tokenized_prompt[:, 1:],
             self.VOCAB_SIZE,  # Gemma3: 262144
@@ -327,7 +326,6 @@ class PiCoTGemma3(PiCoT):
             observation.tokenized_langact_mask[:, 1:],
             jnp.logical_and(observation.tokenized_prompt_mask[:, 1:], observation.token_loss_mask[:, 1:]),
         )
-        
         if sample_mask is not None:
             ex_mask = jnp.asarray(sample_mask)[..., None]
             loss_mask = loss_mask * ex_mask

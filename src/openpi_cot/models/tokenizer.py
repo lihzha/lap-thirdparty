@@ -435,19 +435,11 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         if end_idx > start_idx:
             reasoning_mask[start_idx:end_idx] = True
 
-        # DEBUG: Gemma3 tokenizer mask creation
-        print(f"[DEBUG Gemma3CoTTokenizer.tokenize_cot] reasoning is None: {reasoning is None}")
-        print(f"[DEBUG Gemma3CoTTokenizer.tokenize_cot] reasoning_start={reasoning_start}, reasoning_end={reasoning_end}")
-        print(f"[DEBUG Gemma3CoTTokenizer.tokenize_cot] start_idx={start_idx}, end_idx={end_idx}, max_len={self._max_len}")
-        print(f"[DEBUG Gemma3CoTTokenizer.tokenize_cot] reasoning_mask sum before None check: {reasoning_mask.sum()}")
-
         if reasoning is None:
             reasoning_mask = None
             direction_mask = None
             number_mask = None
-            print(f"[DEBUG Gemma3CoTTokenizer.tokenize_cot] Setting reasoning_mask to None (reasoning was None)")
         else:
-            print(f"[DEBUG Gemma3CoTTokenizer.tokenize_cot] reasoning provided, len={len(reasoning)}")
             if not 0.0 <= self.reasoning_mask_prob <= 1.0:
                 raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {self.reasoning_mask_prob}")
             if self.reasoning_mask_prob > 0.0 and end_idx > start_idx:
@@ -458,7 +450,6 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
                     token_loss_mask[drop_indices] = False
             number_mask = np.zeros(self._max_len, dtype=bool)
             direction_mask = np.zeros(self._max_len, dtype=bool)
-            print(f"[DEBUG Gemma3CoTTokenizer.tokenize_cot] Final reasoning_mask sum: {reasoning_mask.sum()}")
 
         # Build number and direction masks
         if not is_vqa_sample and reasoning is not None:

@@ -377,7 +377,6 @@ class PiCoT(_pi0.Pi0):
         verbose_mode: bool | None = None,
         return_augmented_images: bool = False,
     ) -> dict[str, at.Array]:
-        
         preprocess_rng, _, noise_rng, time_rng = jax.random.split(rng, 4)
 
         # Use passed verbose_mode if provided, otherwise use class attribute

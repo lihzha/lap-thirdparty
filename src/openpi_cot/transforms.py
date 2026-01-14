@@ -46,14 +46,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
 
         # Always tokenize regular reasoning (prompt + language_actions)
         language_actions = data.pop("language_actions", None)  # if None, inference
-        
-        # DEBUG: Check language_actions before tokenization
-        print(f"[DEBUG TokenizePromptAndReasoning] language_actions is None: {language_actions is None}")
-        if language_actions is not None:
-            print(f"[DEBUG TokenizePromptAndReasoning] language_actions type: {type(language_actions)}")
-            if isinstance(language_actions, str):
-                print(f"[DEBUG TokenizePromptAndReasoning] language_actions len: {len(language_actions)}")
-                print(f"[DEBUG TokenizePromptAndReasoning] language_actions preview: '{language_actions[:100] if len(language_actions) > 0 else '(empty)'}'")
         dataset_name = data.pop("dataset_name", None)  # if None, inference
         frame_description = data.pop("frame_description", "end-effector frame")
         if dataset_name is not None:
@@ -94,11 +86,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
         # Combine number_mask and direction_mask for critical tokens
         critical_mask = np.logical_or(numeric_mask, direction_mask)
 
-        # DEBUG: Check reasoning_mask after tokenization
-        print(f"[DEBUG TokenizePromptAndReasoning] reasoning_mask is None: {reasoning_mask is None}")
-        if reasoning_mask is not None:
-            print(f"[DEBUG TokenizePromptAndReasoning] reasoning_mask sum: {reasoning_mask.sum()}, shape: {reasoning_mask.shape}")
-        
         result = {
             **data,
             "tokenized_prompt": tokens,  # kept for compatibility with upstream
