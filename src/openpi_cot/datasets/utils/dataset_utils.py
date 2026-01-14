@@ -186,8 +186,8 @@ def prepare_batched_dataset(
 
     # For validation: cache AFTER decoding so decoded images are cached
     # This makes subsequent validation iterations much faster
-    if want_val:
-        dataset = dataset.cache()
+    # if want_val:
+        # dataset = dataset.cache()
 
     dataset = dataset.batch(batch_size, drop_remainder=True)
 
