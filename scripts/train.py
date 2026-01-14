@@ -324,20 +324,34 @@ class TrainingStepRunner:
         grad_norm_bf16 = optax.global_norm(grads)
         grad_norm_f32 = optax.global_norm(jax.tree.map(lambda g: g.astype(jnp.float32), grads))
 
-        new_state = dataclasses.replace(state, step=state.step + 1, params=new_params, opt_state=new_opt_state)
         ema_decay, ema_enabled = self.config.get_ema_decay_for_step(step)
-
-        def _apply_ema(s):
-            return dataclasses.replace(
-                s,
-                ema_params=jax.tree.map(
-                    lambda old, new: ema_decay * old + (1 - ema_decay) * new,
-                    s.ema_params,
+        
+        # Compute EMA update: ema = decay * ema + (1 - decay) * new
+        # EMA params must have the same structure as new_params for tree.map to work
+        if state.ema_params is not None:
+            # Check if structures match by comparing treedef
+            ema_treedef = jax.tree_util.tree_structure(state.ema_params)
+            new_treedef = jax.tree_util.tree_structure(new_params)
+            
+            if ema_treedef == new_treedef:
+                # Structures match - apply EMA update
+                new_ema_params = jax.tree.map(
+                    lambda old, new: jnp.where(ema_enabled, ema_decay * old + (1 - ema_decay) * new, old),
+                    state.ema_params,
                     new_params,
-                ),
-            )
-
-        new_state = jax.lax.cond(ema_enabled, _apply_ema, lambda s: s, new_state)
+                )
+            else:
+                # Structures don't match - reinitialize EMA from new_params
+                # This can happen if the model structure changed during training
+                logging.warning("EMA params structure doesn't match new params - reinitializing EMA")
+                new_ema_params = new_params
+        else:
+            # No EMA params - keep as None
+            new_ema_params = None
+        
+        new_state = dataclasses.replace(
+            state, step=state.step + 1, params=new_params, opt_state=new_opt_state, ema_params=new_ema_params
+        )
 
         kernel_params = nnx.state(
             model,
