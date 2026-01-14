@@ -284,8 +284,11 @@ class OXECoTDatasets:
                 repeated_datasets = normalized_datasets
             
             # Interleave the normalized datasets
+            # NOTE: For validation, use rerandomize_each_iteration=False so that the .cache()
+            # downstream remains valid across iter() calls. With True, each iter() produces
+            # elements in a different order, invalidating the cache and causing slow re-reads.
             self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
-                repeated_datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
+                repeated_datasets, self.sample_weights, rerandomize_each_iteration=not want_val, seed=seed
             )
             self.global_statistics = global_stats
         else:
@@ -296,8 +299,11 @@ class OXECoTDatasets:
                 repeated_datasets = [ds.repeat() for ds in datasets]
             else:
                 repeated_datasets = datasets
+            # NOTE: For validation, use rerandomize_each_iteration=False so that the .cache()
+            # downstream remains valid across iter() calls. With True, each iter() produces
+            # elements in a different order, invalidating the cache and causing slow re-reads.
             self.dataset: dl.DLataset = dl.DLataset.sample_from_datasets(
-                repeated_datasets, self.sample_weights, rerandomize_each_iteration=True, seed=seed
+                repeated_datasets, self.sample_weights, rerandomize_each_iteration=not want_val, seed=seed
             )
             self.global_statistics = None
 
