@@ -220,7 +220,11 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         if not isinstance(tokens, list):
             tokens = tokens.tolist()
 
-        return self._tokenizer.decode(tokens).strip()
+        # Filter out tokens that are out of range for this tokenizer
+        vocab_size = self._tokenizer.vocab_size()
+        filtered_tokens = [t for t in tokens if 0 <= t < vocab_size]
+        
+        return self._tokenizer.decode(filtered_tokens).strip()
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> np.ndarray:
         """Encode a string to tokens."""
