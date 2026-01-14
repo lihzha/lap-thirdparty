@@ -21,10 +21,9 @@ def make_mesh(fsdp_devices: int) -> jax.sharding.Mesh:
 
     # Host-major device layout: shape [P, D] with each row = one host's devices.
     # This has no "data/model" meaning by itself; it's just a physical arrangement.
-    try:
-        devmesh = mesh_utils.create_device_mesh((P, D))  # shape (P, D)
-    except:
-        devmesh = mesh_utils.create_device_mesh((8, 8))
+    # Use allow_split_physical_axes=True to handle topologies where the logical mesh
+    # doesn't directly map to the physical mesh (e.g., TPU pod slices).
+    devmesh = mesh_utils.create_device_mesh((P, D), allow_split_physical_axes=True)
     if fsdp_devices <= D:
         # Intra-host FSDP: split each host's devices into [dp_per_host, fsdp_devices]
         if D % fsdp_devices != 0:
