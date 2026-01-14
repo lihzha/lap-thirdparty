@@ -530,9 +530,9 @@ class _Module(nn.Module):
         out["pre_logits"] = x
         
 
-        # Now, do embedding projection
+        # Now, do embedding projection (named "head" to match checkpoint)
         kw = {"kernel_init": nn.initializers.zeros} if self.head_zeroinit else {}
-        head = nn.Dense(self.num_classes, dtype=self.dtype_mm, use_bias=False, name="mm_input_projection", **kw)
+        head = nn.Dense(self.num_classes, dtype=self.dtype_mm, use_bias=False, name="head", **kw)
         x_2d = out["logits_2d"] = head(x_2d)
         x = out["logits"] = head(x)
 

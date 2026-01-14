@@ -512,6 +512,7 @@ class PiCoTGemma3(_pi0.Pi0):
             observation,
             train=train,
             image_keys=self.image_keys,
+            image_resolution=self.image_resolution,
             aug_wrist_image=self.aug_wrist_image,
             vqa_mask=vqa_mask,
         )
@@ -606,7 +607,8 @@ class PiCoTGemma3(_pi0.Pi0):
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
         observation = preprocess_observation(
-            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
+            None, observation, train=False, image_keys=self.image_keys, 
+            image_resolution=self.image_resolution, aug_wrist_image=self.aug_wrist_image
         )
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
@@ -666,6 +668,7 @@ class PiCoTGemma3(_pi0.Pi0):
             observation,
             train=False,
             image_keys=list(observation.images.keys()),
+            image_resolution=self.image_resolution,
             aug_wrist_image=self.aug_wrist_image,
         )
 

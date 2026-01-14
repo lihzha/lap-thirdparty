@@ -249,6 +249,49 @@ class RMSNorm(nn.Module):
         return normed_inputs.astype(dtype), gate
 
 
+class QKRMSNorm(nn.Module):
+    """RMSNorm for Query/Key normalization in Gemma3 attention.
+    
+    Unlike the main RMSNorm, this uses direct scaling (not 1 + scale).
+    Creates a nested 'scale' parameter to match checkpoint structure:
+    - q_rmsnorm/scale
+    - k_rmsnorm/scale
+    """
+    param_dtype: str = "bfloat16"
+    
+    @nn.compact
+    def __call__(self, x: jax.Array) -> jax.Array:
+        """Apply RMSNorm to query or key tensors.
+        
+        Args:
+            x: Input tensor of shape [..., head_dim]
+        
+        Returns:
+            Normalized tensor of same shape
+        """
+        original_shape = x.shape
+        head_dim = x.shape[-1]
+        dtype = x.dtype
+        
+        # Flatten for normalization
+        x_flat = x.reshape(-1, head_dim).astype(jnp.float32)
+        
+        # Scale parameter - initialized to ones for identity at start
+        scale = self.param(
+            "scale",
+            nn.initializers.ones,
+            (head_dim,),
+            jnp.dtype(self.param_dtype),
+        )
+        
+        # RMSNorm computation
+        variance = jnp.mean(x_flat ** 2, axis=-1, keepdims=True)
+        x_normed = x_flat * jax.lax.rsqrt(variance + 1e-6)
+        x_normed = x_normed * scale.astype(jnp.float32)
+
+        return x_normed.reshape(original_shape).astype(dtype)
+
+
 # ============================================================================
 # Einsum Layer
 # ============================================================================
@@ -493,8 +536,8 @@ class Attention(nn.Module):
 
         # Apply QK-norm (Gemma3 replaces softcapping with this)
         if config.use_qk_norm:
-            q = self._qk_norm(q, "q_norm", config.param_dtype)
-            k = self._qk_norm(k, "k_norm", config.param_dtype)
+            q = QKRMSNorm(param_dtype=config.param_dtype, name="q_rmsnorm")(q)
+            k = QKRMSNorm(param_dtype=config.param_dtype, name="k_rmsnorm")(k)
 
         # Apply RoPE with layer-appropriate base frequency
         q = apply_rope(q, positions=positions, base_frequency=rope_base)
@@ -598,24 +641,6 @@ class Attention(nn.Module):
                 out.append(None)
 
         return out, (idx, k, v)
-
-    def _qk_norm(self, x: jnp.ndarray, name: str, param_dtype: str) -> jnp.ndarray:
-        """Apply RMSNorm to query or key tensors."""
-        original_shape = x.shape
-        x_flat = x.reshape(-1, x.shape[-1])
-
-        scale = self.param(
-            f"{name}_scale",
-            nn.initializers.ones,
-            (x.shape[-1],),
-            jnp.dtype(param_dtype),
-        )
-
-        variance = jnp.mean(x_flat ** 2, axis=-1, keepdims=True)
-        x_normed = x_flat * jax.lax.rsqrt(variance + 1e-6)
-        x_normed = x_normed * scale.astype(x.dtype)
-
-        return x_normed.reshape(original_shape)
 
     def _compute_sliding_window_mask(
         self,
