@@ -154,9 +154,9 @@ def build_picot_model(
 
 def build_cosine_lr(
     *,
-    warmup_steps: int = 1_000,
+    warmup_steps: int = 5_000,
     peak_lr: float = 1e-4,
-    decay_steps: int = 1_000_000,
+    decay_steps: int = 40_000,
     decay_lr: float = 1e-4,
 ) -> _optimizer.LRScheduleConfig:
     """Shared cosine LR schedule used by most experiments."""
@@ -175,7 +175,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     max_samples: int | None = None
     # Validation controls for RLDS-CoT dataset splitting/visualization
     val_max_samples: int | None = None
-    val_fraction: float | None = 0.03
+    val_fraction: float | None = 0.01
     use_wrist_image: bool = True
     wrist_image_dropout_prob: float = 0.0
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
@@ -1074,7 +1074,7 @@ class TrainConfig(upstream_config.TrainConfig):
     checkpoint_retry_delay_secs: float = 30.0
     checkpoint_retry_backoff: float = 2.0
     checkpoint_fallback_to_sync: bool = True
-    allow_partial_weights: bool = False
+    allow_partial_weights: bool = True
     # Evaluation fields
     use_eval: bool = True
     eval_checkpoint_step: int | None = None
@@ -1154,21 +1154,6 @@ class TrainConfig(upstream_config.TrainConfig):
 
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
-    # Multi-device configs: Generated programmatically for v4, v5, v6, local
-    *create_multi_device_configs(
-        base_name="pi_droid_cot",
-        devices=["v4", "v5", "v6", "local", "v5europe"],
-        model=build_picot_model(),
-        data_config_class=RLDSCoTDataConfig,
-        data_config_kwargs={
-            "repo_id": "droid",
-            "asset_id": "droid",
-            "dataset_type": "droid",
-            "droid_dataset_name": "droid",
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-    ),
-    # Combined dataset configs for v4, v6, v6europe
     *create_multi_device_configs(
         base_name="pi_combined_cot",
         devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
@@ -1186,8 +1171,13 @@ _CONFIGS = [
         weight_loader=weight_loaders.WeightLoaderChoice(
             kind="checkpoint", params_path="gs://openpi-assets/checkpoints/pi05_base/params"
         ),
-        save_interval=2500,
-        keep_period=10000,
+        ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
+        optimizer=_optimizer.AdamW(weight_decay=0.0001),
+        save_interval=1000,
+        keep_period=5000,
+        val_interval=2000,
+        num_train_steps=40000,
+        seed=0,
         resume=True,
     ),
     *create_multi_device_configs(
@@ -1215,10 +1205,16 @@ _CONFIGS = [
             "data_mix": "oxe_magic_soup",
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
+            
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
-        save_interval=2500,
-        keep_period=10000,
+        ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
+        optimizer=_optimizer.AdamW(weight_decay=0.0001),
+        save_interval=1000,
+        keep_period=5000,
+        val_interval=2000,
+        num_train_steps=40000,
+        seed=0,
         resume=True,
     ),
     # Combined dataset configs for v4, v6, v6europe
@@ -1253,8 +1249,13 @@ _CONFIGS = [
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        save_interval=2500,
-        keep_period=10000,
+        ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
+        optimizer=_optimizer.AdamW(weight_decay=0.0001),
+        save_interval=1000,
+        keep_period=5000,
+        val_interval=2000,
+        num_train_steps=40000,
+        seed=0,
         resume=True,
     ),
     # VLA-0 Baseline: Actions as discretized integers (no language descriptions)
@@ -1286,72 +1287,14 @@ _CONFIGS = [
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        save_interval=2500,
-        keep_period=10000,
+        ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
+        optimizer=_optimizer.AdamW(weight_decay=0.0001),
+        save_interval=1000,
+        keep_period=5000,
+        val_interval=2000,
+        num_train_steps=40000,
+        seed=0,
         resume=True,
-    ),
-    # VLA-0 Single-step variant (for comparison with original paper)
-    *create_multi_device_configs(
-        base_name="pi_combined_vla0_single",
-        devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
-        model=pi_cot_config.PiCoTConfig(
-            action_dim=7,
-            action_horizon=1,  # Single-step like original VLA-0
-            max_token_len=100,  # Shorter for single-step
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=False,
-            enable_langact_training=True,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-            prompt_format="vla0",  # VLA-0 specific prompt format
-        ),
-        data_config_class=RLDSCoTDataConfig,
-        data_config_kwargs={
-            "repo_id": "combined",
-            "asset_id": "combined",
-            "dataset_type": "combined",
-            "droid_dataset_name": "droid",
-            "data_mix": "oxe_magic_soup",
-            "shuffle_buffer_size": 400_000,
-            "language_action_format_name": "vla0",  # Single-step VLA-0 format
-            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        save_interval=2500,
-        keep_period=10000,
-        resume=True,
-    ),
-    TrainConfig(
-        name="paligemma2_eval_eeframe",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            paligemma_variant="gemma2_2b",
-            action_expert_variant="gemma2_300m",
-        ),
-        data=RLDSCoTDataConfig(repo_id="combined", asset_id="combined", dataset_type="combined"),
-    ),
-    TrainConfig(
-        name="paligemma_bounds",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            action_dim=32,
-            discrete_state_input=True,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime_ori",
-        ),
-        data=RLDSCoTDataConfig(
-            action_proprio_normalization_type=NormalizationType.BOUNDS,
-            repo_id="combined",
-            asset_id="combined",
-            dataset_type="combined",
-        ),
     ),
     TrainConfig(
         name="paligemma_boundsq99",
@@ -1371,207 +1314,6 @@ _CONFIGS = [
             asset_id="combined",
             dataset_type="combined",
         ),
-    ),
-    TrainConfig(
-        name="paligemma_boundsq99_ori",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime_ori",
-        ),
-        data=RLDSCoTDataConfig(
-            action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,
-            repo_id="combined",
-            asset_id="combined",
-            dataset_type="combined",
-        ),
-    ),
-    TrainConfig(
-        name="paligemma_boundsq99_nostate",
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime_nostate",
-        ),
-        data=RLDSCoTDataConfig(
-            action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,
-            repo_id="combined",
-            asset_id="combined",
-            dataset_type="combined",
-        ),
-    ),
-    *create_multi_device_configs(
-        base_name="pi05_libero_finetune_langact",
-        devices=["v6", "v6europe", "v4", "local", "v5"],
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            enable_langact_training=True,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime",
-            stop_action_to_vlm_grad=False,
-        ),
-        data_config_class=RLDSCoTDataConfig,
-        data_config_kwargs={
-            "repo_id": "libero",
-            "asset_id": "libero",
-            "dataset_type": "combined",
-            "data_mix": "libero_finetune",
-            "shuffle_buffer_size": 400_000,
-            "language_action_format_name": "verbose_with_rotation",
-            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        fsdp_devices=1,
-        batch_size=32,
-        num_train_steps=50000,
-        save_interval=2000,
-        log_interval=100,
-        keep_period=2000,
-    ),
-    *create_multi_device_configs(
-        base_name="pi05_libero_finetune",
-        devices=["v6", "v6europe", "v4", "local", "v5"],
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            enable_langact_training=False,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-            prompt_format="pi05_notime_ori",
-            stop_action_to_vlm_grad=False,
-            action_dim=32,
-        ),
-        data_config_class=LiberoFinetuneDataConfig,
-        data_config_kwargs={
-            "repo_id": "libero",
-            "asset_id": "libero",
-            "dataset_type": "combined",
-            "data_mix": "libero_finetune",
-            "shuffle_buffer_size": 400_000,
-            "action_proprio_normalization_type": NormalizationType.NORMAL,
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        fsdp_devices=1,
-        batch_size=32,
-        num_train_steps=50000,
-        save_interval=2000,
-        log_interval=100,
-        keep_period=2000,
-    ),
-    *create_multi_device_configs(
-        base_name="pi05_libero_finetune_freezevlm",
-        devices=["v6", "v6europe", "v4", "local", "v5"],
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            enable_langact_training=False,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-        ),
-        data_config_class=LiberoFinetuneDataConfig,
-        data_config_kwargs={
-            "repo_id": "libero",
-            "asset_id": "libero",
-            "dataset_type": "combined",
-            "data_mix": "libero_finetune",
-            "shuffle_buffer_size": 400_000,
-            "language_action_format_name": "default",
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        fsdp_devices=1,
-        batch_size=32,
-        num_train_steps=50000,
-        save_interval=2000,
-        log_interval=100,
-        keep_period=2000,
-        freeze_filter=pi_cot_config.PiCoTConfig(
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-        ).get_vlm_freeze_filter(),
-    ),
-    *create_multi_device_configs(
-        base_name="pi05_libero_finetune_vlmlora",
-        devices=["v6", "v6europe", "v4", "local", "v5"],
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            enable_langact_training=False,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m",
-        ),
-        data_config_class=LiberoFinetuneDataConfig,
-        data_config_kwargs={
-            "repo_id": "libero",
-            "asset_id": "libero",
-            "dataset_type": "combined",
-            "data_mix": "libero_finetune",
-            "shuffle_buffer_size": 400_000,
-            "language_action_format_name": "default",
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        fsdp_devices=1,
-        batch_size=32,
-        num_train_steps=50000,
-        save_interval=2000,
-        log_interval=100,
-        keep_period=2000,
-        freeze_filter=pi_cot_config.PiCoTConfig(
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m",
-        ).get_freeze_filter(),
-    ),
-    *create_multi_device_configs(
-        base_name="pi05_libero_cot",
-        devices=["v6", "v6europe", "v4", "local", "v5"],
-        model=pi_cot_config.PiCoTConfig(
-            action_horizon=10,
-            max_token_len=180,
-            pi05=True,
-            discrete_state_input=True,
-            enable_action_training=True,
-            enable_langact_training=False,
-            paligemma_variant="gemma_2b",
-            action_expert_variant="gemma_300m",
-        ),
-        data_config_class=LiberoCoTDataConfig,
-        data_config_kwargs={
-            "repo_id": "libero",
-            "asset_id": "libero",
-            "dataset_type": "combined",
-            "data_mix": "libero_finetune",
-            "shuffle_buffer_size": 400_000,
-            "language_action_format_name": "default",
-        },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
-        fsdp_devices=1,
-        batch_size=32,
-        num_train_steps=50000,
-        save_interval=2000,
-        log_interval=100,
-        keep_period=2000,
     ),
     TrainConfig(
         name="pi05_vqa_v4",
