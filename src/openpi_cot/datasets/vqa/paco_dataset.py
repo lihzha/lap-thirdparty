@@ -119,7 +119,7 @@ class PacoLvis(BaseVQADataset):
 
 class PacoEgo4d(PacoLvis):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directional=True, **kwargs)
+        super().__init__(*args, directional=False, **kwargs)
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
         return tfds.builder("paco_ego4d:1.0.0", data_dir=data_dir)

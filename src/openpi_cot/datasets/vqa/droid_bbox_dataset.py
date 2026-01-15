@@ -24,6 +24,7 @@ from openpi_cot.datasets.vqa.bbox_common import (
     build_annotated_keys_set,
     build_frame_objects_table_v2,
     build_frame_objects_table_v2_direction,
+    count_annotated_frames,
     droid_key_extractor,
     sample_and_format_objects_direction_tf,
     sample_and_format_objects_tf,
@@ -488,8 +489,12 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         return "droid_bbox_direction" if self.directional else "droid_bbox"
 
     def get_num_transitions(self) -> int:
-        """Return approximate number of transitions."""
-        return 100000
+        """Return number of transitions computed from JSONL annotation files."""
+        if not hasattr(self, "_num_transitions"):
+            self._num_transitions = count_annotated_frames(
+                self.bbox_annotations_dir, droid_key_extractor
+            )
+        return self._num_transitions
 
     def __iter__(self):
         assert self.standalone, "This dataset is not standalone"

@@ -22,6 +22,7 @@ from openpi_cot.datasets.vqa.bbox_common import (
     ROBOT_BBOX_PROMPT_PARTS,
     build_annotated_keys_set,
     build_frame_objects_table_v2,
+    count_annotated_frames,
     oxe_key_extractor,
     sample_and_format_objects_tf,
     sample_prompt_tf,
@@ -489,8 +490,12 @@ class OXEBoundingBoxDataset(ABC):
         )
 
     def get_num_transitions(self) -> int:
-        """Return approximate number of transitions."""
-        return 100000
+        """Return number of transitions computed from JSONL annotation files."""
+        if not hasattr(self, "_num_transitions"):
+            self._num_transitions = count_annotated_frames(
+                self.bbox_annotations_dir, oxe_key_extractor
+            )
+        return self._num_transitions
 
     def debug_key_mismatch(self, num_samples: int = 5):
         """Debug helper to compare file_path keys between trajectory and JSONL.

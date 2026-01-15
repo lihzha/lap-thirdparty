@@ -919,6 +919,58 @@ def oxe_key_extractor(episode_data: dict) -> str | None:
     return None
 
 
+def count_annotated_frames(
+    bbox_annotations_dir: str,
+    key_extractor: callable,
+) -> int:
+    """Count total number of annotated frames in JSONL files.
+
+    This is used to compute the number of transitions for dataset statistics.
+
+    Args:
+        bbox_annotations_dir: Directory containing JSONL annotation files
+        key_extractor: Function that takes episode_data dict and returns the key string
+
+    Returns:
+        Total count of annotated frames across all JSONL files
+    """
+    import json
+    import os
+
+    import tensorflow as tf
+
+    total_frames = 0
+
+    jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
+
+    for jsonl_file in jsonl_files:
+        if "merged" in jsonl_file:
+            continue
+        with tf.io.gfile.GFile(jsonl_file, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    episode_data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                episode_key = key_extractor(episode_data)
+                if not episode_key:
+                    continue
+
+                labels = episode_data.get("labels", [])
+                for label_entry in labels:
+                    frame_idx = label_entry.get("frame")
+                    all_objects = label_entry.get("all_objects", [])
+
+                    # Only count frames that have valid annotations
+                    if frame_idx is not None and all_objects:
+                        total_frames += 1
+
+    return total_frames
+
+
 def compute_direction_from_bbox(
     x_min: float,
     y_min: float,
