@@ -4,8 +4,8 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.vqa.bbox_common import (
-    BBOX_PROMPT_PARTS,
     DIRECTION_PROMPT_PARTS,
+    ROBOT_BBOX_PROMPT_PARTS,
     bbox_to_text_tf,
     direction_from_bbox_tf,
     sample_prompt_tf,
@@ -60,7 +60,7 @@ class PacoLvis(BaseVQADataset):
 
         Returns:
             (prompt, caption) where prompt asks about the specific category
-            and caption contains the formatted bbox.
+            and caption contains the formatted bbox or direction (50% each).
         """
         if self.directional:
             return self._extract_direction_prompt_and_caption(example)
@@ -77,10 +77,19 @@ class PacoLvis(BaseVQADataset):
         bbox = example["annotations"]["bbox"][0]
 
         # Sample a prompt using the shared helper
-        prompt = sample_prompt_tf(BBOX_PROMPT_PARTS, category_name, (self.seed, image_id_hash))
+        prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS, category_name, (self.seed, image_id_hash))
+
+        # With 50% probability, use direction caption instead of bbox
+        dir_seed = (self.seed + 7919, image_id_hash)
+        use_direction = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < 0.5
 
         # Format bbox as caption using shared function
-        caption = bbox_to_text_tf(bbox)
+        bbox_caption = bbox_to_text_tf(bbox)
+
+        # Get direction from bbox with "move " prefix
+        direction_caption = direction_from_bbox_tf(bbox, slope=self.direction_slope, add_move_prefix=True)
+
+        caption = tf.cond(use_direction, lambda: direction_caption, lambda: bbox_caption)
 
         return prompt, caption
 
@@ -96,8 +105,8 @@ class PacoLvis(BaseVQADataset):
         # Sample a direction prompt using the shared helper
         prompt = sample_prompt_tf(DIRECTION_PROMPT_PARTS, category_name, (self.seed, image_id_hash))
 
-        # Get direction from bbox using shared function
-        direction_caption = direction_from_bbox_tf(bbox, slope=self.direction_slope)
+        # Get direction from bbox using shared function with "move " prefix
+        direction_caption = direction_from_bbox_tf(bbox, slope=self.direction_slope, add_move_prefix=True)
 
         return prompt, direction_caption
 

@@ -49,17 +49,27 @@ BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
     ("Move to the ", ", predict where it is in the image."),
 ]
 
-# Robot-specific bounding box prompts (for DROID wrist camera)
+# Robot-specific bounding box prompts (for robot manipulation tasks)
 ROBOT_BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
+    # Pick/grasp actions
     ("Pick up the ", ", predict where it is relative to the robot."),
+    ("Grasp the ", ", predict where it is in the image."),
+    ("Grab the ", ", show its location with a bounding box."),
+    ("Pick the ", " and place it elsewhere. First, locate it."),
+    # Move/reach actions
     ("Move to the ", ", predict where it is relative to the robot."),
     ("Move near to the ", ", predict where it is relative to the robot."),
-    ("Pick up the ", ", predict where it is in the end-effector frame."),
-    ("Move to the ", ", predict where it is in the end-effector frame."),
-    ("Move near to the ", ", predict where it is in the end-effector frame."),
-    ("Pick up the ", ", predict where it is in the robot base frame."),
-    ("Move to the ", ", predict where it is in the robot base frame."),
-    ("Move near to the ", ", predict where it is in the robot base frame."),
+    ("Reach for the ", ", predict where it is in the end-effector frame."),
+    ("Move the gripper to the ", ", predict where it is relative to the robot."),
+    ("Navigate to the ", ", predict where it is relative to the robot."),
+    # Place/put actions
+    ("Place the object on the ", ", predict where it is relative to the robot."),
+    ("Put the item near the ", ", predict where it is in the end-effector frame."),
+    ("Stack the object on the ", ", predict where it is relative to the robot."),
+    # Push/pull/slide actions
+    ("Push the ", " forward, predict where it is in the end-effector frame."),
+    ("Pull the ", " toward you, predict where it is in the end-effector frame."),
+    ("Slide the ", " to the side, predict where it is in the end-effector frame."),
 ]
 
 # Direction classification prompts (for directional VQA tasks)
@@ -212,16 +222,18 @@ def sample_prompt_tf(
 # DIRECTION CLASSIFICATION
 # =============================================================================
 
-def direction_from_bbox_tf(bbox: tf.Tensor, slope: float = 2.0) -> tf.Tensor:
+def direction_from_bbox_tf(bbox: tf.Tensor, slope: float = 2.0, add_move_prefix: bool = False) -> tf.Tensor:
     """Map bbox center to direction string relative to image center.
 
     Args:
         bbox: Tensor of shape [2, 2] with [[x_min, y_min], [x_max, y_max]]
         slope: Slope parameter for direction boundaries (default 2.0)
+        add_move_prefix: If True, prefix direction with "move " (e.g., "move left")
 
     Returns:
         tf.string tensor with direction ("forward", "back", "left", "right",
-        or compound like "left and forward")
+        or compound like "left and forward"). If add_move_prefix is True,
+        returns "move forward", "move left and forward", etc.
     """
     top_left = bbox[0]
     bottom_right = bbox[1]
@@ -261,7 +273,7 @@ def direction_from_bbox_tf(bbox: tf.Tensor, slope: float = 2.0) -> tf.Tensor:
         vert_dir = tf.where(y_rel >= 0.0, tf.constant("forward"), tf.constant("back"))
         return tf.strings.join([base_dir, " and ", vert_dir])
 
-    return tf.case(
+    direction = tf.case(
         [
             (is_forward, forward),
             (is_back, back),
@@ -271,6 +283,10 @@ def direction_from_bbox_tf(bbox: tf.Tensor, slope: float = 2.0) -> tf.Tensor:
         default=diagonal,
         exclusive=True,
     )
+
+    if add_move_prefix:
+        return tf.strings.join(["move ", direction])
+    return direction
 
 
 # =============================================================================
@@ -581,17 +597,22 @@ def sample_and_format_objects_tf(
     objects_data: tf.Tensor,
     max_objects: int = 2,
     seed_pair: tuple[int, tf.Tensor] | None = None,
+    direction_prob: float = 0.5,
 ) -> tuple[tf.Tensor, tf.Tensor]:
     """Sample objects and format them into prompt labels and caption (pure TensorFlow).
 
     This function uses pure TensorFlow operations, avoiding py_function overhead.
-    The input format is a pipe-delimited string: "label1|loc_tokens1;label2|loc_tokens2;..."
-    where loc_tokens is already formatted as "<loc...><loc...><loc...><loc...>".
+    The input format is a pipe-delimited string: "label1|loc_tokens1|direction1;label2|loc_tokens2|direction2;..."
+    where loc_tokens is already formatted as "<loc...><loc...><loc...><loc...>"
+    and direction is like "move forward", "move left", etc.
+
+    With probability direction_prob, the caption will use direction instead of loc_tokens.
 
     Args:
         objects_data: tf.string tensor with pipe-delimited objects data
         max_objects: Maximum number of objects to include (randomly sampled if more)
         seed_pair: Tuple of (base_seed, hash_value) for stateless random sampling
+        direction_prob: Probability of using direction caption instead of bbox (default 0.5)
 
     Returns:
         Tuple of (prompt_labels, caption) as tf.string tensors
@@ -632,31 +653,61 @@ def sample_and_format_objects_tf(
         # Gather selected objects
         selected_objects = tf.gather(objects, selected_indices)
 
-        # Split each object into label and loc_tokens
+        # Split each object into label, loc_tokens, and direction
         def split_object(obj):
             parts = tf.strings.split(obj, "|")
-            # parts[0] is label, parts[1] is loc_tokens
+            # parts[0] is label, parts[1] is loc_tokens, parts[2] is direction
             label = parts[0]
             loc_tokens = parts[1]
-            return label, loc_tokens
+            # Handle both old format (2 parts) and new format (3 parts)
+            direction = tf.cond(
+                tf.greater_equal(tf.shape(parts)[0], 3),
+                lambda: parts[2],
+                lambda: tf.constant(""),
+            )
+            return label, loc_tokens, direction
 
-        labels_and_locs = tf.map_fn(
+        labels_locs_dirs = tf.map_fn(
             split_object,
             selected_objects,
-            fn_output_signature=(tf.TensorSpec([], tf.string), tf.TensorSpec([], tf.string)),
+            fn_output_signature=(
+                tf.TensorSpec([], tf.string),
+                tf.TensorSpec([], tf.string),
+                tf.TensorSpec([], tf.string),
+            ),
         )
-        labels = labels_and_locs[0]
-        loc_tokens = labels_and_locs[1]
+        labels = labels_locs_dirs[0]
+        loc_tokens = labels_locs_dirs[1]
+        directions = labels_locs_dirs[2]
 
         # Build prompt_labels: unique labels joined by ", "
         # For simplicity, we join all labels (duplicates will be included)
         # A true unique would require py_function, but for small max_objects this is acceptable
         prompt_labels = tf.strings.reduce_join(labels, separator=", ")
 
-        # Build caption: "loc_tokens label" joined by " ; "
-        # tf.strings.join with separator joins corresponding elements: loc_tokens[i] + " " + labels[i]
-        caption_parts = tf.strings.join([loc_tokens, labels], separator=" ")
-        caption = tf.strings.reduce_join(caption_parts, separator=" ; ")
+        # Decide whether to use direction or loc_tokens for caption (50% probability)
+        if seed_pair is not None:
+            # Use a different seed for direction choice
+            dir_seed = (seed_pair[0] + 7919, seed_pair[1])
+            use_direction = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < direction_prob
+        else:
+            use_direction = tf.random.uniform([], dtype=tf.float32) < direction_prob
+
+        # Check if we have valid direction data (non-empty)
+        has_direction = tf.greater(tf.strings.length(directions[0]), 0)
+        use_direction = tf.logical_and(use_direction, has_direction)
+
+        def bbox_caption():
+            # Build caption: "loc_tokens label" joined by " ; "
+            caption_parts = tf.strings.join([loc_tokens, labels], separator=" ")
+            return tf.strings.reduce_join(caption_parts, separator=" ; ")
+
+        def direction_caption():
+            # For direction, just return the direction of the first object
+            # This is consistent with direction-only mode behavior
+            return directions[0]
+
+        caption = tf.cond(use_direction, direction_caption, bbox_caption)
 
         return prompt_labels, caption
 
@@ -670,13 +721,15 @@ def build_frame_objects_table_v2(
     orig_size: tuple[int, int] = (256, 256),
     target_size: tuple[int, int] = (224, 224),
     target_only: bool = False,
+    direction_slope: float = 2.0,
 ) -> "tf.lookup.StaticHashTable":
     """Build a lookup table from key--frame_idx to pipe-delimited objects string.
 
     This version stores data in a TF-parseable format instead of JSON, enabling
     pure TensorFlow operations for sampling and formatting.
 
-    Format: "label1|<loc...>;label2|<loc...>;..."
+    Format: "label1|<loc...>|direction1;label2|<loc...>|direction2;..."
+    where direction is "move forward", "move left", etc.
 
     Args:
         bbox_annotations_dir: Directory containing JSONL annotation files
@@ -685,6 +738,7 @@ def build_frame_objects_table_v2(
         orig_size: Original image (width, height) for letterbox transformation
         target_size: Target image (width, height) for letterbox transformation
         target_only: If True, only include objects where is_target is True
+        direction_slope: Slope parameter for direction computation (default 2.0)
 
     Returns:
         tf.lookup.StaticHashTable mapping "key--frame_idx" to pipe-delimited objects string
@@ -772,8 +826,15 @@ def build_frame_objects_table_v2(
                         # Pre-compute loc tokens
                         loc_tokens = bbox_to_loc_tokens(x_min, y_min, x_max, y_max)
 
-                        # Store as "label|loc_tokens"
-                        objects_list.append(f"{obj_label}|{loc_tokens}")
+                        # Pre-compute direction with "move " prefix
+                        direction = compute_direction_from_bbox(
+                            x_min, y_min, x_max, y_max,
+                            slope=direction_slope,
+                            add_move_prefix=True,
+                        )
+
+                        # Store as "label|loc_tokens|direction"
+                        objects_list.append(f"{obj_label}|{loc_tokens}|{direction}")
 
                     if objects_list:
                         if key in frame_to_objects:
@@ -864,15 +925,18 @@ def compute_direction_from_bbox(
     x_max: float,
     y_max: float,
     slope: float = 2.0,
+    add_move_prefix: bool = True,
 ) -> str:
     """Compute direction string from bbox coordinates (Python version for table building).
 
     Args:
         x_min, y_min, x_max, y_max: Normalized bbox coordinates (0-1)
         slope: Slope parameter for direction boundaries (default 2.0)
+        add_move_prefix: If True, prefix direction with "move " (e.g., "move left")
 
     Returns:
-        Direction string ("forward", "back", "left", "right", or compound like "left and forward")
+        Direction string. If add_move_prefix is True (default), returns "move forward",
+        "move left and forward", etc. Otherwise returns just "forward", "left and forward", etc.
     """
     # Compute center
     center_x = (x_min + x_max) / 2.0
@@ -894,18 +958,22 @@ def compute_direction_from_bbox(
     is_left = (not is_forward) and (not is_back) and (x_rel < -inv_k * abs_y)
 
     if is_forward:
-        return "forward"
+        direction = "forward"
     elif is_back:
-        return "back"
+        direction = "back"
     elif is_right:
-        return "right"
+        direction = "right"
     elif is_left:
-        return "left"
+        direction = "left"
     else:
         # Diagonal
         base_dir = "left" if x_rel < 0.0 else "right"
         vert_dir = "forward" if y_rel >= 0.0 else "back"
-        return f"{base_dir} and {vert_dir}"
+        direction = f"{base_dir} and {vert_dir}"
+
+    if add_move_prefix:
+        return f"move {direction}"
+    return direction
 
 
 def build_frame_objects_table_v2_direction(

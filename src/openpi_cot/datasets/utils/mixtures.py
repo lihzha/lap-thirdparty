@@ -183,7 +183,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("paco_ego4d", 10.0),
         ("droid_bbox", 10.0),
         ("molmoact_bbox", 10.0),
-        ("bridge_bbox", 10.0),
+        # ("bridge_bbox", 10.0),
     ],
     "franka_no_droid": [
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
