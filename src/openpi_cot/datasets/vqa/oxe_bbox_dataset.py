@@ -283,8 +283,8 @@ class OXEBoundingBoxDataset(ABC):
             traj["trajectory_id"] = tf.repeat(traj_uid, traj_len)
 
             # Extract episode_id for bbox lookup - this exists in both JSONL and trajectory
-            episode_id = traj["traj_metadata"]["episode_metadata"]["episode_id"]
-            episode_id = tf.reshape(episode_id, [])
+            # episode_metadata is stored per-step, so take the first element
+            episode_id = traj["traj_metadata"]["episode_metadata"]["episode_id"][0]
             episode_id_str = tf.strings.as_string(episode_id)
             traj["episode_id"] = tf.repeat(episode_id_str, traj_len)
 
