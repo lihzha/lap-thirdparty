@@ -71,6 +71,18 @@ DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
     ("Which direction from the center is the ", " in this image?"),
 ]
 
+# Robot-specific direction prompts (for DROID wrist camera)
+ROBOT_DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
+    ("Pick up the ", ", predict which direction it is relative to the robot."),
+    ("Move to the ", ", predict which direction it is relative to the robot."),
+    ("Move near to the ", ", predict which direction it is from the end-effector."),
+    ("Pick up the ", ", in what direction should the robot move?"),
+    ("Move to the ", ", which direction should the end-effector go?"),
+    ("Reach the ", ", predict the direction from the robot's current position."),
+    ("Grasp the ", ", which direction is it relative to the gripper?"),
+    ("Navigate to the ", ", in what direction from the robot?"),
+]
+
 
 # =============================================================================
 # BBOX TO TEXT CONVERSION
@@ -795,6 +807,267 @@ def oxe_key_extractor(episode_data: dict) -> str | None:
     if episode_id is not None:
         return str(episode_id)
     return None
+
+
+def compute_direction_from_bbox(
+    x_min: float,
+    y_min: float,
+    x_max: float,
+    y_max: float,
+    slope: float = 2.0,
+) -> str:
+    """Compute direction string from bbox coordinates (Python version for table building).
+
+    Args:
+        x_min, y_min, x_max, y_max: Normalized bbox coordinates (0-1)
+        slope: Slope parameter for direction boundaries (default 2.0)
+
+    Returns:
+        Direction string ("forward", "back", "left", "right", or compound like "left and forward")
+    """
+    # Compute center
+    center_x = (x_min + x_max) / 2.0
+    center_y = (y_min + y_max) / 2.0
+
+    x_rel = center_x - 0.5  # +x is right
+    y_rel = 0.5 - center_y  # invert so +y is up/forward
+
+    k = slope
+    inv_k = 1.0 / k
+
+    abs_x = abs(x_rel)
+    abs_y = abs(y_rel)
+
+    # Primary axis regions using slopes k and 1/k
+    is_forward = y_rel > k * abs_x
+    is_back = y_rel < -k * abs_x
+    is_right = (not is_forward) and (not is_back) and (x_rel > inv_k * abs_y)
+    is_left = (not is_forward) and (not is_back) and (x_rel < -inv_k * abs_y)
+
+    if is_forward:
+        return "forward"
+    elif is_back:
+        return "back"
+    elif is_right:
+        return "right"
+    elif is_left:
+        return "left"
+    else:
+        # Diagonal
+        base_dir = "left" if x_rel < 0.0 else "right"
+        vert_dir = "forward" if y_rel >= 0.0 else "back"
+        return f"{base_dir} and {vert_dir}"
+
+
+def build_frame_objects_table_v2_direction(
+    bbox_annotations_dir: str,
+    key_extractor: callable,
+    dataset_name: str = "",
+    orig_size: tuple[int, int] = (256, 256),
+    target_size: tuple[int, int] = (224, 224),
+    direction_slope: float = 2.0,
+) -> "tf.lookup.StaticHashTable":
+    """Build a lookup table from key--frame_idx to pipe-delimited objects with directions.
+
+    This version computes direction strings from bbox coordinates instead of loc tokens.
+
+    Format: "label1|direction1;label2|direction2;..."
+
+    Args:
+        bbox_annotations_dir: Directory containing JSONL annotation files
+        key_extractor: Function that takes episode_data dict and returns the key string
+        dataset_name: Optional dataset name for logging
+        orig_size: Original image (width, height) for letterbox transformation
+        target_size: Target image (width, height) for letterbox transformation
+        direction_slope: Slope parameter for direction boundaries
+
+    Returns:
+        tf.lookup.StaticHashTable mapping "key--frame_idx" to pipe-delimited objects string
+    """
+    import json
+    import logging
+    import os
+
+    import tensorflow as tf
+
+    log_prefix = f" for {dataset_name}" if dataset_name else ""
+    logging.info(f"Building frame objects direction lookup table{log_prefix}...")
+
+    orig_w, orig_h = orig_size
+    target_w, target_h = target_size
+
+    frame_to_objects = {}
+
+    jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
+
+    for jsonl_file in jsonl_files:
+        if "merged" in jsonl_file:
+            continue
+        with tf.io.gfile.GFile(jsonl_file, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    episode_data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # Use the provided key extractor to get the lookup key
+                episode_key = key_extractor(episode_data)
+                if not episode_key:
+                    continue
+
+                labels = episode_data.get("labels", [])
+                for label_entry in labels:
+                    frame_idx = label_entry.get("frame")
+                    all_objects = label_entry.get("all_objects", [])
+
+                    if frame_idx is None or not all_objects:
+                        continue
+
+                    key = f"{episode_key}--{frame_idx}"
+
+                    objects_list = []
+                    for obj in all_objects:
+                        obj_label = obj.get("label", "")
+                        bbox = obj.get("bbox", [])
+
+                        if not obj_label or len(bbox) < 4:
+                            continue
+
+                        # Normalize bbox (bbox values are in 0-1000 range in JSONL)
+                        y_min_raw = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
+                        x_min_raw = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
+                        y_max_raw = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
+                        x_max_raw = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
+
+                        # Pre-apply letterbox transformation
+                        x_min, y_min, x_max, y_max = transform_bbox_for_letterbox(
+                            x_min_raw, y_min_raw, x_max_raw, y_max_raw,
+                            orig_w, orig_h, target_w, target_h,
+                        )
+
+                        # Compute direction from bbox
+                        direction = compute_direction_from_bbox(
+                            x_min, y_min, x_max, y_max, slope=direction_slope
+                        )
+
+                        # Store as "label|direction"
+                        objects_list.append(f"{obj_label}|{direction}")
+
+                    if objects_list:
+                        if key in frame_to_objects:
+                            frame_to_objects[key].extend(objects_list)
+                        else:
+                            frame_to_objects[key] = objects_list
+
+    # Convert to lookup table with semicolon-delimited values
+    keys = []
+    values = []
+    for k, v in frame_to_objects.items():
+        keys.append(k)
+        values.append(";".join(v))
+
+    logging.info(f"Built frame objects direction table with {len(keys)} entries{log_prefix}")
+
+    if not keys:
+        # Return table with dummy entry (TF doesn't allow empty tables)
+        return tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(
+                tf.constant(["__dummy_key__"], dtype=tf.string),
+                tf.constant([""], dtype=tf.string),
+            ),
+            default_value=tf.constant("", dtype=tf.string),
+        )
+
+    return tf.lookup.StaticHashTable(
+        tf.lookup.KeyValueTensorInitializer(
+            tf.constant(keys, dtype=tf.string),
+            tf.constant(values, dtype=tf.string),
+        ),
+        default_value=tf.constant("", dtype=tf.string),
+    )
+
+
+def sample_and_format_objects_direction_tf(
+    objects_data: tf.Tensor,
+    max_objects: int = 2,
+    seed_pair: tuple[int, tf.Tensor] | None = None,
+) -> tuple[tf.Tensor, tf.Tensor]:
+    """Sample objects and format them for direction-based VQA (pure TensorFlow).
+
+    This function uses pure TensorFlow operations for direction-based output.
+    The input format is a pipe-delimited string: "label1|direction1;label2|direction2;..."
+
+    Args:
+        objects_data: tf.string tensor with pipe-delimited objects data
+        max_objects: Maximum number of objects to include (randomly sampled if more)
+        seed_pair: Tuple of (base_seed, hash_value) for stateless random sampling
+
+    Returns:
+        Tuple of (prompt_labels, direction_caption) as tf.string tensors
+        - prompt_labels: comma-separated object labels for the prompt
+        - direction_caption: the direction string for the caption (just the direction)
+    """
+    # Handle empty input
+    is_empty = tf.equal(tf.strings.length(objects_data), 0)
+
+    def empty_result():
+        return tf.constant(""), tf.constant("")
+
+    def process_objects():
+        # Split by semicolon to get individual objects
+        objects = tf.strings.split(objects_data, ";")
+        num_objects = tf.shape(objects)[0]
+
+        # Sample indices if we have more than max_objects
+        def sample_indices():
+            if seed_pair is not None:
+                random_vals = tf.random.stateless_uniform(
+                    [num_objects], seed=seed_pair, dtype=tf.float32
+                )
+            else:
+                random_vals = tf.random.uniform([num_objects], dtype=tf.float32)
+            shuffled = tf.argsort(random_vals)
+            return shuffled[:max_objects]
+
+        def all_indices():
+            return tf.range(num_objects)
+
+        selected_indices = tf.cond(
+            num_objects > max_objects,
+            sample_indices,
+            all_indices,
+        )
+
+        # Gather selected objects
+        selected_objects = tf.gather(objects, selected_indices)
+
+        # Split each object into label and direction
+        def split_object(obj):
+            parts = tf.strings.split(obj, "|")
+            label = parts[0]
+            direction = parts[1]
+            return label, direction
+
+        labels_and_dirs = tf.map_fn(
+            split_object,
+            selected_objects,
+            fn_output_signature=(tf.TensorSpec([], tf.string), tf.TensorSpec([], tf.string)),
+        )
+        labels = labels_and_dirs[0]
+        directions = labels_and_dirs[1]
+
+        # Build prompt_labels: labels joined by ", "
+        prompt_labels = tf.strings.reduce_join(labels, separator=", ")
+
+        # For direction caption, we just use the first selected direction
+        # (similar to how PACO works with single objects)
+        direction_caption = directions[0]
+
+        return prompt_labels, direction_caption
+
+    return tf.cond(is_empty, empty_result, process_objects)
 
 
 def build_annotated_keys_set(

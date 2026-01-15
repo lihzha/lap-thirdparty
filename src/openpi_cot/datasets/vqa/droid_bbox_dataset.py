@@ -20,9 +20,12 @@ from openpi_cot.datasets.utils.helpers import extract_episode_path_from_file_pat
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
     ROBOT_BBOX_PROMPT_PARTS,
+    ROBOT_DIRECTION_PROMPT_PARTS,
     build_annotated_keys_set,
     build_frame_objects_table_v2,
+    build_frame_objects_table_v2_direction,
     droid_key_extractor,
+    sample_and_format_objects_direction_tf,
     sample_and_format_objects_tf,
     sample_prompt_tf,
 )
@@ -61,6 +64,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         enable_prediction_training: bool = False,
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
+        directional: bool = True,
+        direction_slope: float = 2.0,
     ):
         if num_parallel_calls == -1 or num_parallel_reads == -1:
             total_threads = len(os.sched_getaffinity(0))
@@ -72,7 +77,9 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.config = config
         self.seed = seed
         self.want_val = split == "val"
-        self.dataset_name = "droid_bbox"
+        self.directional = directional
+        self.direction_slope = direction_slope
+        self.dataset_name = "droid_bbox_direction" if directional else "droid_bbox"
         self.action_dim = action_dim
         self.state_dim = state_dim
         self.vis_dataset = bool(config.vis_dataset)
@@ -372,6 +379,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
         # Sample objects and format caption using pure TensorFlow operations
         max_objects = 2
+        use_directional = self.directional
 
         def lookup_and_sample_objects(frame):
             """Look up objects, sample if needed, and format caption using pure TF."""
@@ -385,9 +393,14 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             seed_pair = (self.seed, seed_hash_int)
 
             # Use pure TensorFlow sampling and formatting
-            labels, caption = sample_and_format_objects_tf(
-                objects_data, max_objects=max_objects, seed_pair=seed_pair
-            )
+            if use_directional:
+                labels, caption = sample_and_format_objects_direction_tf(
+                    objects_data, max_objects=max_objects, seed_pair=seed_pair
+                )
+            else:
+                labels, caption = sample_and_format_objects_tf(
+                    objects_data, max_objects=max_objects, seed_pair=seed_pair
+                )
 
             frame["object_labels"] = labels
             frame["bbox_caption"] = caption
@@ -403,6 +416,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.dataset = self.dataset.filter(has_valid_caption)
 
         # Convert to final VQA format
+        prompt_parts = ROBOT_DIRECTION_PROMPT_PARTS if self.directional else ROBOT_BBOX_PROMPT_PARTS
+
         def finalize_vqa(frame):
             """Create final VQA sample with prompt and caption."""
             labels = frame["object_labels"]
@@ -413,7 +428,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
             seed_hash_int = tf.cast(seed_hash, tf.int32)
 
-            prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS, labels, (self.seed, seed_hash_int))
+            prompt = sample_prompt_tf(prompt_parts, labels, (self.seed, seed_hash_int))
 
             # Create final output
             return {
@@ -449,17 +464,28 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         # DROID wrist image size
         orig_w, orig_h = 320, 180
         target_h, target_w = self.config.resize_resolution
-        return build_frame_objects_table_v2(
-            bbox_annotations_dir=self.bbox_annotations_dir,
-            key_extractor=droid_key_extractor,
-            dataset_name=self.dataset_name,
-            orig_size=(orig_w, orig_h),
-            target_size=(target_w, target_h),
-        )
+
+        if self.directional:
+            return build_frame_objects_table_v2_direction(
+                bbox_annotations_dir=self.bbox_annotations_dir,
+                key_extractor=droid_key_extractor,
+                dataset_name=self.dataset_name,
+                orig_size=(orig_w, orig_h),
+                target_size=(target_w, target_h),
+                direction_slope=self.direction_slope,
+            )
+        else:
+            return build_frame_objects_table_v2(
+                bbox_annotations_dir=self.bbox_annotations_dir,
+                key_extractor=droid_key_extractor,
+                dataset_name=self.dataset_name,
+                orig_size=(orig_w, orig_h),
+                target_size=(target_w, target_h),
+            )
 
     def get_dataset_name(self) -> str:
         """Return dataset name for metadata."""
-        return "droid_bbox"
+        return "droid_bbox_direction" if self.directional else "droid_bbox"
 
     def get_num_transitions(self) -> int:
         """Return approximate number of transitions."""

@@ -177,11 +177,13 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("coco_captions", 1.0),  # 10% COCO caption samples
         ("vqa", 0.1),  # 10% vqa samples
         ("lvis", 0.01),
-        ("pixmo_cap", 10.0),  # 10% COCO caption samples
-        ("pixmo_point", 1),  # 10% vqa samples
+        ("pixmo_cap", 3.0),  # 10% COCO caption samples
+        ("pixmo_point", 1.0),  # 10% vqa samples
         ("paco_lvis", 5.0),
         ("paco_ego4d", 10.0),
-        ("droid_bbox", 10.0)
+        ("droid_bbox", 10.0),
+        ("molmoact_bbox", 10.0),
+        ("bridge_bbox", 10.0),
     ],
     "franka_no_droid": [
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
