@@ -321,22 +321,19 @@ class OXEBoundingBoxDataset(ABC):
         )
         logging.info(f"Found {len(annotated_uuids)} trajectories with bbox annotations")
 
+        # Log sample UUIDs from JSONL for debugging
         if annotated_uuids:
-            # Build a lookup table for fast trajectory-level filtering
-            annotated_uuids_table = tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    tf.constant(list(annotated_uuids), dtype=tf.string),
-                    tf.constant([True] * len(annotated_uuids), dtype=tf.bool),
-                ),
-                default_value=tf.constant(False, dtype=tf.bool),
-            )
+            sample_uuids = list(annotated_uuids)[:3]
+            logging.info(f"Sample JSONL UUIDs: {sample_uuids}")
 
-            def has_any_annotations(traj):
-                """Filter trajectories that have at least one annotated frame."""
-                uuid = traj["uuid"][0]  # UUID is repeated for all frames
-                return annotated_uuids_table.lookup(uuid)
-
-            self.dataset = self.dataset.filter(has_any_annotations)
+        # NOTE: Trajectory-level filtering is disabled because UUID extraction from
+        # RLDS metadata may not match the JSONL uuid format exactly.
+        # Frame-level filtering will still work via the lookup table.
+        # TODO: Enable this optimization once UUID extraction is verified to match JSONL format.
+        #
+        # if annotated_uuids:
+        #     annotated_uuids_table = tf.lookup.StaticHashTable(...)
+        #     self.dataset = self.dataset.filter(has_any_annotations)
 
         primary_image_key = self.get_primary_image_key()
 

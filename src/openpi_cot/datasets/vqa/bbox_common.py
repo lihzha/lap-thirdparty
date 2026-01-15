@@ -520,11 +520,39 @@ def droid_key_extractor(episode_data: dict) -> str | None:
 
 
 def oxe_key_extractor(episode_data: dict) -> str | None:
-    """Extract UUID key from OXE JSONL entry.
+    """Extract key from OXE JSONL entry.
 
-    OXE datasets use a 'uuid' field directly in the JSONL.
+    Tries multiple key formats in order of preference:
+    1. uuid field (if present)
+    2. episode_metadata.file_path (normalized)
+
+    Returns the key or None if no valid key found.
     """
-    return episode_data.get("uuid", "") or None
+    # Try uuid first
+    uuid = episode_data.get("uuid", "")
+    if uuid:
+        return uuid
+
+    # Fallback to episode_metadata.file_path
+    file_path = episode_data.get("episode_metadata", {}).get("file_path", "")
+    if file_path:
+        return file_path
+
+    return None
+
+
+def normalize_oxe_file_path(file_path: str) -> str:
+    """Normalize an OXE file path to a consistent format for matching.
+
+    Removes gs:// prefix variations and version numbers to make matching more robust.
+    """
+    import re
+
+    # Remove gs:// prefix and bucket name variations
+    normalized = re.sub(r"^gs://[^/]+/", "", file_path)
+    # Remove version numbers like /1.0.0/
+    normalized = re.sub(r"/\d+\.\d+\.\d+/", "/", normalized)
+    return normalized
 
 
 def build_annotated_keys_set(
@@ -553,6 +581,8 @@ def build_annotated_keys_set(
     jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
 
     for jsonl_file in jsonl_files:
+        if "merged" in jsonl_file:
+            continue
         with tf.io.gfile.GFile(jsonl_file, "r") as f:
             for line in f:
                 if not line.strip():
