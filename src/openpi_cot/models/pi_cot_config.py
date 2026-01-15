@@ -28,14 +28,14 @@ class PiCoTConfig(_model.BaseModelConfig):
     # Set the model specific defaults.
     action_dim: int = 7
     action_horizon: int = 16
-    max_token_len: int = None
+    max_token_len: int = 220
 
     # if verbose_mode=True, log per sample metrics
     verbose_mode: bool = False
 
-    pi05: bool = False
-    discrete_state_input: bool = None
-    prompt_format: str = "pi05"
+    pi05: bool = True
+    discrete_state_input: bool = True
+    prompt_format: str = "pi05_notime"
     prediction_format: str = "default"
     use_fast: bool = False
 
