@@ -1152,13 +1152,13 @@ def vis_batch(batch, tok=None, step=None):
             tokens_full = tokenized_prompt[sample_idx]
             decoded_full = tok.decode(tokens_full)
             logging.info(f"\n[Sample {sample_idx}] Full tokenized_prompt:")
-            logging.info(f"  Decoded: {decoded_full[:500]}...")  # First 500 chars
+            logging.info(f"  Decoded: {decoded_full}")
 
             # Tokenized prompt with prompt mask applied
             tokens_masked = tokenized_prompt[sample_idx] * tokenized_prompt_mask[sample_idx]
             decoded_masked = tok.decode(tokens_masked)
             logging.info(f"\n[Sample {sample_idx}] tokenized_prompt * tokenized_prompt_mask:")
-            logging.info(f"  Decoded: {decoded_masked[:500]}...")
+            logging.info(f"  Decoded: {decoded_masked}")
 
             # # Tokenized prompt with AR mask applied
             # tokens_ar = tokenized_prompt[sample_idx] * token_ar_mask[sample_idx]
