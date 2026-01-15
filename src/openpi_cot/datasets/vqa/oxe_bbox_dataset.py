@@ -525,7 +525,7 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
         return "bridge_v2_oxe"
 
     def get_primary_image_key(self) -> str:
-        return "image_0"
+        return "image_1"
 
     def get_original_image_size(self) -> tuple[int, int]:
         # Bridge uses 256x256 images
