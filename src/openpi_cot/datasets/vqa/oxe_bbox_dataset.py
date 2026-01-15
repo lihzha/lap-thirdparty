@@ -538,7 +538,7 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
     @property
     def episode_id_key(self) -> str:
         # Bridge V2 uses episode_index, not episode_id
-        return "episode_index"
+        return "episode_id"
 
     def get_frame_offset(self) -> int:
         # Bridge V2 transform removes the first frame, so offset by 1
