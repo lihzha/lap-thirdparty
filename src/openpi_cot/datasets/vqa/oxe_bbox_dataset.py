@@ -202,6 +202,10 @@ class OXEBoundingBoxDataset(ABC):
         raise NotImplementedError
 
     # ========== Common methods ==========
+    
+    @property
+    def episode_id_key(self) -> str:
+        return "episode_id"
 
     def _get_bbox_annotations_dir(self, config) -> str:
         """Build path to bbox annotations directory."""
@@ -285,7 +289,7 @@ class OXEBoundingBoxDataset(ABC):
 
             # Extract episode_id for bbox lookup - this exists in both JSONL and trajectory
             # episode_metadata is stored per-step, so take the first element
-            episode_id = traj["traj_metadata"]["episode_metadata"]["episode_id"][0]
+            episode_id = traj["traj_metadata"]["episode_metadata"][self.episode_id_key][0]
             episode_id_str = tf.strings.as_string(episode_id)
             traj["episode_id"] = tf.repeat(episode_id_str, traj_len)
 
@@ -491,6 +495,10 @@ class MolmoActBoundingBoxDataset(OXEBoundingBoxDataset):
 
     Uses the molmoact_dataset from OXE with bbox annotations from JSONL files.
     """
+    
+    @property
+    def episode_id_key(self) -> str:
+        return "episode_index"
 
     def get_dataset_name(self) -> str:
         return "molmoact_bbox"
@@ -525,7 +533,7 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
         return "bridge_v2_oxe"
 
     def get_primary_image_key(self) -> str:
-        return "image_1"
+        return "image_0"
 
     def get_original_image_size(self) -> tuple[int, int]:
         # Bridge uses 256x256 images
