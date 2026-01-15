@@ -755,6 +755,11 @@ def build_frame_objects_table_v2(
         values.append(";".join(v))
 
     logging.info(f"Built frame objects table (v2) with {len(keys)} entries{log_prefix}")
+    
+    # Debug: Log sample keys to help diagnose mismatches
+    if keys:
+        sample_keys = keys[:5]
+        logging.info(f"Sample JSONL lookup keys{log_prefix}: {sample_keys}")
 
     if not keys:
         # Return table with dummy entry (TF doesn't allow empty tables)
@@ -799,21 +804,16 @@ def droid_key_extractor(episode_data: dict) -> str | None:
 def oxe_key_extractor(episode_data: dict) -> str | None:
     """Extract episode identifier key from OXE JSONL entry.
 
-    Tries episode_metadata.episode_id first, then falls back to episode_metadata.episode_index.
-    This handles both datasets that use episode_id (some OXE datasets) and those that use
-    episode_index (MolmoAct, Bridge V2).
+    Uses file_path as the unique key since episode_id/episode_index may not be unique
+    across combined datasets (e.g., MolmoAct combines household and tabletop which
+    may have overlapping episode_index values).
 
-    Returns the episode identifier as string or None if not found.
+    Returns the file_path as the key or None if not found.
     """
     episode_metadata = episode_data.get("episode_metadata", {})
-    # Try episode_id first (standard RLDS naming)
-    episode_id = episode_metadata.get("episode_id")
-    if episode_id is not None:
-        return str(episode_id)
-    # Fall back to episode_index (used by MolmoAct, Bridge V2, etc.)
-    episode_index = episode_metadata.get("episode_index")
-    if episode_index is not None:
-        return str(episode_index)
+    file_path = episode_metadata.get("file_path")
+    if file_path:
+        return str(file_path)
     return None
 
 

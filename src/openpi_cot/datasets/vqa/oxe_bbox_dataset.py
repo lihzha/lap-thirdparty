@@ -203,10 +203,6 @@ class OXEBoundingBoxDataset(ABC):
 
     # ========== Common methods ==========
     
-    @property
-    def episode_id_key(self) -> str:
-        return "episode_id"
-
     def get_frame_offset(self) -> int:
         """Return the frame offset to account for frames removed by transforms.
         
@@ -296,11 +292,11 @@ class OXEBoundingBoxDataset(ABC):
             traj_uid = tf.strings.join([name_tensor, sep2, tf.strings.as_string(hashed)])
             traj["trajectory_id"] = tf.repeat(traj_uid, traj_len)
 
-            # Extract episode_id for bbox lookup - this exists in both JSONL and trajectory
+            # Extract file_path for bbox lookup - this is unique across all episodes
+            # even when combining datasets (e.g., MolmoAct household + tabletop)
             # episode_metadata is stored per-step, so take the first element
-            episode_id = traj["traj_metadata"]["episode_metadata"][self.episode_id_key][0]
-            episode_id_str = tf.strings.as_string(episode_id)
-            traj["episode_id"] = tf.repeat(episode_id_str, traj_len)
+            file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+            traj["episode_id"] = tf.repeat(file_path, traj_len)
 
             return traj
 
@@ -329,10 +325,10 @@ class OXEBoundingBoxDataset(ABC):
         )
         logging.info(f"Found {len(annotated_episode_ids)} trajectories with bbox annotations")
 
-        # Log sample episode_ids from JSONL for debugging
+        # Log sample file_paths from JSONL for debugging
         if annotated_episode_ids:
-            sample_ids = list(annotated_episode_ids)[:3]
-            logging.info(f"Sample JSONL episode_ids: {sample_ids}")
+            sample_paths = list(annotated_episode_ids)[:2]
+            logging.info(f"Sample JSONL file_paths (keys): {sample_paths}")
 
         # Enable trajectory-level filtering using episode_id
         if annotated_episode_ids:
@@ -487,6 +483,46 @@ class OXEBoundingBoxDataset(ABC):
         """Return approximate number of transitions."""
         return 100000
 
+    def debug_key_mismatch(self, num_samples: int = 5):
+        """Debug helper to compare file_path keys between trajectory and JSONL.
+        
+        Call this method to inspect sample keys from the JSONL annotations.
+        The key is now file_path which should be unique across all episodes.
+        """
+        import json
+        
+        # Get sample keys from JSONL
+        jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
+        jsonl_keys = []
+        jsonl_episode_ids = set()
+        for jsonl_file in jsonl_files[:1]:  # Just check first file
+            if "merged" in jsonl_file:
+                continue
+            with tf.io.gfile.GFile(jsonl_file, "r") as f:
+                for i, line in enumerate(f):
+                    if i >= num_samples:
+                        break
+                    if not line.strip():
+                        continue
+                    try:
+                        episode_data = json.loads(line)
+                        episode_key = oxe_key_extractor(episode_data)
+                        if episode_key:
+                            jsonl_episode_ids.add(episode_key)
+                            labels = episode_data.get("labels", [])
+                            for label_entry in labels[:2]:  # Just first 2 frames
+                                frame_idx = label_entry.get("frame")
+                                if frame_idx is not None:
+                                    jsonl_keys.append(f"{episode_key}--{frame_idx}")
+                        # Also log the raw episode_metadata structure
+                        if i == 0:
+                            logging.info(f"JSONL episode_metadata structure: {episode_data.get('episode_metadata', {})}")
+                    except json.JSONDecodeError:
+                        continue
+        
+        logging.info(f"Sample JSONL file_paths (keys): {list(jsonl_episode_ids)[:3]}")
+        logging.info(f"Sample JSONL lookup keys: {jsonl_keys[:5]}")
+
     def __iter__(self):
         assert self.standalone, "This dataset is not standalone"
         it = self.dataset.as_numpy_iterator()
@@ -507,10 +543,6 @@ class MolmoActBoundingBoxDataset(OXEBoundingBoxDataset):
 
     Uses the molmoact_dataset from OXE with bbox annotations from JSONL files.
     """
-    
-    @property
-    def episode_id_key(self) -> str:
-        return "episode_index"
 
     def get_dataset_name(self) -> str:
         return "molmoact_bbox"
@@ -535,15 +567,10 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
     Uses the bridge_v2_oxe dataset from OXE with bbox annotations from JSONL files.
     """
 
-    @property
-    def episode_id_key(self) -> str:
-        # Bridge V2 uses episode_index, not episode_id
-        return "episode_id"
-
     def get_frame_offset(self) -> int:
-        # Bridge V2 transform removes the first frame, so offset by 1
-        # Processed frame 0 corresponds to original frame 1 in the JSONL annotations
-        return 1
+        # Set to 0 if JSONL annotations were made on processed data (after transform)
+        # Set to 1 if JSONL annotations were made on raw data (before transform removed frame 0)
+        return 0
 
     def get_dataset_name(self) -> str:
         return "bridge_bbox"
