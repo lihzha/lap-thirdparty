@@ -3,48 +3,14 @@
 import tensorflow as tf
 import tensorflow_datasets as tfds
 
+from openpi_cot.datasets.vqa.bbox_common import (
+    BBOX_PROMPT_PARTS,
+    DIRECTION_PROMPT_PARTS,
+    bbox_to_text_tf,
+    direction_from_bbox_tf,
+    sample_prompt_tf,
+)
 from openpi_cot.datasets.vqa.vqa_base import BaseVQADataset
-
-PACO_PROMPT_PARTS = [
-    ("Show me where the ", " is in the image using a bounding box."),
-    ("Draw a bounding box around the ", " in the image."),
-    ("Please provide a bounding box for the ", " in this image."),
-    ("Locate the ", " in the image by drawing a bounding box."),
-    ("mark the ", " with a bounding box."),
-    ("Identify the ", " in the image by bounding it."),
-    ("Find the ", " and draw a bounding box around it."),
-    ("Highlight the ", " with a bounding box."),
-    ("Can you draw a bounding box around the ", "?"),
-    ("Where is the ", " in the image? Show it with a bounding box."),
-    ("Indicate the ", " by marking a bounding box."),
-    ("If there is a ", " in the image, draw a bounding box around it."),
-    ("If any ", " is present, show one bounding box."),
-    ("Show a ", " in the image by drawing a bounding box."),
-    ("Please locate the ", " using a bounding box."),
-    ("Detect the ", " and provide its bounding box."),
-    ("Find any ", " in the picture and draw a bounding box around it."),
-    ("Bounding box task: draw a box around the ", "."),
-    ("Object: ", ". Instruction: Draw a bounding box around the object."),
-    ("Look for the ", " and mark it with a bounding box."),
-    ("Help me find the ", " by drawing a bounding box around it."),
-    ("Show me one visible ", " using a bounding box."),
-    ("For each ", " in the image, draw a bounding box."),
-    ("Indicate each ", " with a bounding box."),
-    ("Please show the region containing the ", " using a bounding box."),
-    ("point out the ", " by drawing a bounding box."),
-    ("Locate one ", " and provide a bounding box."),
-    ("Draw a bounding box around one occurrence of ", "."),
-    ("Find and outline the ", " with a bounding box."),
-    ("Mark one instance of ", " using a bounding box."),
-]
-
-DIRECTION_PROMPT_PARTS = [
-    ("From the image center, which direction is the ", " located?"),
-    ("Relative to the center point of the image, where is the ", "?"),
-    ("If you stand at the center of the image, which way do you go to reach the ", "?"),
-    ("Looking from the center of the frame, in what direction is the ", " situated?"),
-    ("Which direction from the center is the ", " in this image?"),
-]
 
 
 class PacoLvis(BaseVQADataset):
@@ -87,44 +53,10 @@ class PacoLvis(BaseVQADataset):
         combined = tf.strings.join([image_id, "_", category_name, "_", bbox_str])
         combined_hash = tf.strings.to_hash_bucket_fast(combined, 2147483647)
         combined_hash_str = tf.strings.as_string(combined_hash)
-        return tf.strings.join(["lvis_", image_id, "_", combined_hash_str])
-
-    def bbox_to_text(self, bbox: tf.Tensor) -> tf.Tensor:
-        """Convert bbox to formatted text representation using paligemma loc tokens.
-
-        Args:
-            bbox: Tensor of shape [2, 2] with normalized coordinates [[x_min, y_min], [x_max, y_max]]
-                  where coordinates are in range [0, 1].
-
-        Returns:
-            Formatted string in PaLiGemma2 bbox format: "<loc_ymin><loc_xmin><loc_ymax><loc_xmax>".
-        """
-        # Extract corner coordinates (already normalized to 0-1)
-        # bbox[0] = [x_min, y_min], bbox[1] = [x_max, y_max]
-        top_left = bbox[0]
-        bottom_right = bbox[1]
-
-        x_min, y_min = top_left[0], top_left[1]
-        x_max, y_max = bottom_right[0], bottom_right[1]
-
-        # Convert to paligemma loc token indices (0-1023)
-        N = 1024
-        y_min_idx = tf.cast(tf.round(y_min * (N - 1)), tf.int32)
-        x_min_idx = tf.cast(tf.round(x_min * (N - 1)), tf.int32)
-        y_max_idx = tf.cast(tf.round(y_max * (N - 1)), tf.int32)
-        x_max_idx = tf.cast(tf.round(x_max * (N - 1)), tf.int32)
-
-        # Format as loc tokens in PaLiGemma2 order: y_min, x_min, y_max, x_max
-        y_min_token = tf.strings.join(["<loc", tf.strings.as_string(y_min_idx, width=4, fill="0"), ">"])
-        x_min_token = tf.strings.join(["<loc", tf.strings.as_string(x_min_idx, width=4, fill="0"), ">"])
-        y_max_token = tf.strings.join(["<loc", tf.strings.as_string(y_max_idx, width=4, fill="0"), ">"])
-        x_max_token = tf.strings.join(["<loc", tf.strings.as_string(x_max_idx, width=4, fill="0"), ">"])
-
-        # Join in PaLiGemma2 order: y_min, x_min, y_max, x_max
-        return tf.strings.join([y_min_token, x_min_token, y_max_token, x_max_token])
+        return tf.strings.join(["paco_", image_id, "_", combined_hash_str])
 
     def extract_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
-        """Extract prompt and caption from LVIS example.
+        """Extract prompt and caption from PACO example.
 
         Returns:
             (prompt, caption) where prompt asks about the specific category
@@ -144,79 +76,13 @@ class PacoLvis(BaseVQADataset):
         # Extract the bbox (shape: [2, 2] with [[x_min, y_min], [x_max, y_max]])
         bbox = example["annotations"]["bbox"][0]
 
-        # Randomly select a prompt template using tf.switch_case
-        num_prompts = len(PACO_PROMPT_PARTS)
-        prompt_idx = tf.random.stateless_uniform(
-            [], seed=[self.seed, image_id_hash], minval=0, maxval=num_prompts, dtype=tf.int32
-        )
+        # Sample a prompt using the shared helper
+        prompt = sample_prompt_tf(BBOX_PROMPT_PARTS, category_name, (self.seed, image_id_hash))
 
-        # Create branches for each prompt template
-        def make_prompt_fn(idx):
-            prefix, suffix = PACO_PROMPT_PARTS[idx]
-
-            def fn():
-                return tf.strings.join([prefix, category_name, suffix])
-
-            return fn
-
-        prompt_branches = {i: make_prompt_fn(i) for i in range(num_prompts)}
-        prompt = tf.switch_case(prompt_idx, branch_fns=prompt_branches)
-
-        # Format bbox as caption using loc tokens
-        caption = self.bbox_to_text(bbox)
+        # Format bbox as caption using shared function
+        caption = bbox_to_text_tf(bbox)
 
         return prompt, caption
-
-    def _direction_from_bbox(self, bbox: tf.Tensor) -> tf.Tensor:
-        """Map bbox center to one of 8 direction strings relative to image center."""
-        top_left = bbox[0]
-        bottom_right = bbox[1]
-        center = (top_left + bottom_right) / 2.0
-
-        x_rel = center[0] - 0.5  # +x is right
-        y_rel = 0.5 - center[1]  # invert so +y is up as described
-
-        k = tf.constant(self.direction_slope, dtype=tf.float32)
-        inv_k = 1.0 / k
-
-        abs_x = tf.abs(x_rel)
-        abs_y = tf.abs(y_rel)
-
-        # Use strict inequalities so tf.case(exclusive=True) doesn't see overlaps on boundaries.
-        is_forward = y_rel > k * abs_x
-        is_back = y_rel < -k * abs_x
-        is_right = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
-        is_right = tf.logical_and(is_right, x_rel > inv_k * abs_y)
-        is_left = tf.logical_and(tf.logical_not(is_forward), tf.logical_not(is_back))
-        is_left = tf.logical_and(is_left, x_rel < -inv_k * abs_y)
-
-        def forward():
-            return tf.constant("forward")
-
-        def back():
-            return tf.constant("back")
-
-        def right():
-            return tf.constant("right")
-
-        def left():
-            return tf.constant("left")
-
-        def diagonal():
-            base_dir = tf.where(x_rel < 0.0, tf.constant("left"), tf.constant("right"))
-            vert_dir = tf.where(y_rel >= 0.0, tf.constant("forward"), tf.constant("back"))
-            return tf.strings.join([base_dir, " and ", vert_dir])
-
-        return tf.case(
-            [
-                (is_forward, forward),
-                (is_back, back),
-                (is_right, right),
-                (is_left, left),
-            ],
-            default=diagonal,
-            exclusive=True,
-        )
 
     def _extract_direction_prompt_and_caption(self, example: dict) -> tuple[tf.Tensor, tf.Tensor]:
         """Extract prompt/caption asking for direction of the object relative to center."""
@@ -227,30 +93,18 @@ class PacoLvis(BaseVQADataset):
         category_name = example["annotations"]["category_name"][0]
         bbox = example["annotations"]["bbox"][0]
 
-        num_prompts = len(DIRECTION_PROMPT_PARTS)
-        prompt_idx = tf.random.stateless_uniform(
-            [], seed=[self.seed, image_id_hash], minval=0, maxval=num_prompts, dtype=tf.int32
-        )
+        # Sample a direction prompt using the shared helper
+        prompt = sample_prompt_tf(DIRECTION_PROMPT_PARTS, category_name, (self.seed, image_id_hash))
 
-        def make_prompt_fn(idx):
-            prefix, suffix = DIRECTION_PROMPT_PARTS[idx]
-
-            def fn():
-                return tf.strings.join([prefix, category_name, suffix])
-
-            return fn
-
-        prompt_branches = {i: make_prompt_fn(i) for i in range(num_prompts)}
-        prompt = tf.switch_case(prompt_idx, branch_fns=prompt_branches)
-
-        direction_caption = self._direction_from_bbox(bbox)
+        # Get direction from bbox using shared function
+        direction_caption = direction_from_bbox_tf(bbox, slope=self.direction_slope)
 
         return prompt, direction_caption
 
     def extract_and_encode_image(self, example: dict) -> tf.Tensor:
-        """Extract and encode LVIS image to JPEG bytes."""
+        """Extract and encode PACO image to JPEG bytes."""
         image = example["image"]
-        # LVIS images are not pre-encoded, so encode them
+        # PACO images are not pre-encoded, so encode them
         return tf.io.encode_jpeg(image, quality=95)
 
 

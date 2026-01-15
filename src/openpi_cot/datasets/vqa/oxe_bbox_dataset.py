@@ -19,45 +19,16 @@ import tensorflow as tf
 from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
 from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
+from openpi_cot.datasets.vqa.bbox_common import (
+    BBOX_PROMPT_PARTS,
+    build_frame_objects_table,
+    format_bbox_caption,
+    oxe_key_extractor,
+    sample_prompt_tf,
+)
 
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
-
-# Bounding box prompts - same format as LVIS/PACO/DROID
-BBOX_PROMPT_PARTS = [
-    ("Show me where the ", " is in the image using a bounding box."),
-    ("Draw a bounding box around the ", " in the image."),
-    ("Please provide a bounding box for the ", " in this image."),
-    ("Locate the ", " in the image by drawing a bounding box."),
-    ("mark the ", " with a bounding box."),
-    ("Identify the ", " in the image by bounding it."),
-    ("Find the ", " and draw a bounding box around it."),
-    ("Highlight the ", " with a bounding box."),
-    ("Can you draw a bounding box around the ", "?"),
-    ("Where is the ", " in the image? Show it with a bounding box."),
-    ("Indicate the ", " by marking a bounding box."),
-    ("If there is a ", " in the image, draw a bounding box around it."),
-    ("If any ", " is present, show one bounding box."),
-    ("Show me one ", " in the image by drawing a bounding box."),
-    ("Please locate the ", " using a bounding box."),
-    ("Detect the ", " and provide its bounding box."),
-    ("Find a ", " in the picture and draw a bounding box around it."),
-    ("Bounding box task: draw a box around the ", "."),
-    ("Object: ", ". Instruction: Draw a bounding box around the object."),
-    ("Look for the ", " and mark it with a bounding box."),
-    ("Help me find the ", " by drawing a bounding box around it."),
-    ("Show me ", " using a bounding box."),
-    ("For ", " in the image, draw a bounding box."),
-    ("Indicate ", " with a bounding box."),
-    ("Please show the region containing the ", " using a bounding box."),
-    ("point out the ", " by drawing a bounding box."),
-    ("Locate a ", " and provide bounding box."),
-    ("Draw a bounding box around all the ", "."),
-    ("Find and outline the ", " with a bounding box."),
-    ("Mark ", " using bounding box."),
-    ("Pick up the ", ", predict where it is in the image."),
-    ("Move to the ", ", predict where it is in the image."),
-]
 
 
 class OXEBoundingBoxDataset(ABC):
@@ -406,48 +377,15 @@ class OXEBoundingBoxDataset(ABC):
                     if not objects:
                         return b"", b""
 
-                    # Compute letterbox transformation parameters
-                    ratio = max(orig_w / target_w, orig_h / target_h)
-                    resized_w = int(orig_w / ratio)
-                    resized_h = int(orig_h / ratio)
-                    pad_w = (target_w - resized_w) / 2.0
-                    pad_h = (target_h - resized_h) / 2.0
-
-                    # Build prompt with all object labels
-                    labels = [obj["label"] for obj in objects]
-                    unique_labels = list(dict.fromkeys(labels))  # Preserve order, remove duplicates
-                    prompt_labels = ", ".join(unique_labels)
-
-                    # Build caption with all bboxes
-                    # Format: "<loc...> label1 ; <loc...> label2 ; ..."
-                    caption_parts = []
-                    for obj in objects:
-                        label = obj["label"]
-                        bbox = obj["bbox"]  # [x_min, y_min, x_max, y_max] normalized 0-1
-
-                        # Transform bbox coordinates for letterbox
-                        x_min = bbox[0] * (resized_w / target_w) + (pad_w / target_w)
-                        y_min = bbox[1] * (resized_h / target_h) + (pad_h / target_h)
-                        x_max = bbox[2] * (resized_w / target_w) + (pad_w / target_w)
-                        y_max = bbox[3] * (resized_h / target_h) + (pad_h / target_h)
-
-                        # Clamp to valid range
-                        x_min = max(0.0, min(1.0, x_min))
-                        y_min = max(0.0, min(1.0, y_min))
-                        x_max = max(0.0, min(1.0, x_max))
-                        y_max = max(0.0, min(1.0, y_max))
-
-                        # Convert to loc tokens (PaLiGemma format: y_min, x_min, y_max, x_max)
-                        N = 1024
-                        y_min_idx = int(round(y_min * (N - 1)))
-                        x_min_idx = int(round(x_min * (N - 1)))
-                        y_max_idx = int(round(y_max * (N - 1)))
-                        x_max_idx = int(round(x_max * (N - 1)))
-
-                        loc_str = f"<loc{y_min_idx:04d}><loc{x_min_idx:04d}><loc{y_max_idx:04d}><loc{x_max_idx:04d}>"
-                        caption_parts.append(f"{loc_str} {label}")
-
-                    caption = " ; ".join(caption_parts)
+                    # Use shared format_bbox_caption function
+                    prompt_labels, caption = format_bbox_caption(
+                        objects=objects,
+                        orig_w=orig_w,
+                        orig_h=orig_h,
+                        target_w=target_w,
+                        target_h=target_h,
+                        apply_letterbox=True,
+                    )
 
                     return prompt_labels.encode("utf-8"), caption.encode("utf-8")
 
@@ -486,27 +424,12 @@ class OXEBoundingBoxDataset(ABC):
             labels = frame["object_labels"]
             caption = frame["bbox_caption"]
 
-            # Sample a prompt template
+            # Sample a prompt template using the shared helper
             seed_key = tf.strings.join([frame["trajectory_id"], "_bbox_", frame["frame_idx"]])
             seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
             seed_hash_int = tf.cast(seed_hash, tf.int32)
 
-            num_prompts = len(BBOX_PROMPT_PARTS)
-            prompt_idx = tf.random.stateless_uniform(
-                [], seed=[self.seed, seed_hash_int], minval=0, maxval=num_prompts, dtype=tf.int32
-            )
-
-            # Create branches for each prompt template
-            def make_prompt_fn(idx):
-                prefix, suffix = BBOX_PROMPT_PARTS[idx]
-
-                def fn():
-                    return tf.strings.join([prefix, labels, suffix])
-
-                return fn
-
-            prompt_branches = {i: make_prompt_fn(i) for i in range(num_prompts)}
-            prompt = tf.switch_case(prompt_idx, branch_fns=prompt_branches)
+            prompt = sample_prompt_tf(BBOX_PROMPT_PARTS, labels, (self.seed, seed_hash_int))
 
             # Create final output
             return {
@@ -539,88 +462,10 @@ class OXEBoundingBoxDataset(ABC):
 
     def _build_frame_objects_table(self):
         """Build a lookup table from uuid--frame_idx to list of objects."""
-        logging.info(f"Building frame objects lookup table for {self.dataset_name}...")
-
-        frame_to_objects = {}
-        orig_w, orig_h = self.get_original_image_size()
-
-        jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
-
-        for jsonl_file in jsonl_files:
-            with tf.io.gfile.GFile(jsonl_file, "r") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        episode_data = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-
-                    uuid = episode_data.get("uuid", "")
-                    if not uuid:
-                        continue
-
-                    labels = episode_data.get("labels", [])
-                    for label_entry in labels:
-                        frame_idx = label_entry.get("frame")
-                        all_objects = label_entry.get("all_objects", [])
-
-                        if frame_idx is None or not all_objects:
-                            continue
-
-                        key = f"{uuid}--{frame_idx}"
-
-                        objects_list = []
-                        for obj in all_objects:
-                            obj_label = obj.get("label", "")
-                            bbox = obj.get("bbox", [])
-
-                            if not obj_label or len(bbox) < 4:
-                                continue
-
-                            # Normalize bbox (bbox values are in 0-1000 range in JSONL)
-                            # Need to convert to 0-1 normalized coordinates
-                            y_min = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
-                            x_min = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
-                            y_max = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
-                            x_max = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
-
-                            objects_list.append({
-                                "label": obj_label,
-                                "bbox": [x_min, y_min, x_max, y_max],
-                            })
-
-                        if objects_list:
-                            if key in frame_to_objects:
-                                frame_to_objects[key].extend(objects_list)
-                            else:
-                                frame_to_objects[key] = objects_list
-
-        # Convert to lookup table
-        keys = []
-        values = []
-        for k, v in frame_to_objects.items():
-            keys.append(k)
-            values.append(json.dumps(v))
-
-        logging.info(f"Built frame objects table with {len(keys)} entries for {self.dataset_name}")
-
-        if not keys:
-            # Return table with dummy entry (TF doesn't allow empty tables)
-            return tf.lookup.StaticHashTable(
-                tf.lookup.KeyValueTensorInitializer(
-                    tf.constant(["__dummy_key__"], dtype=tf.string),
-                    tf.constant([""], dtype=tf.string),
-                ),
-                default_value=tf.constant(b"", dtype=tf.string),
-            )
-
-        return tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(
-                tf.constant(keys, dtype=tf.string),
-                tf.constant(values, dtype=tf.string),
-            ),
-            default_value=tf.constant(b"", dtype=tf.string),
+        return build_frame_objects_table(
+            bbox_annotations_dir=self.bbox_annotations_dir,
+            key_extractor=oxe_key_extractor,
+            dataset_name=self.dataset_name,
         )
 
     def get_num_transitions(self) -> int:
