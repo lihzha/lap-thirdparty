@@ -282,22 +282,11 @@ class OXEBoundingBoxDataset(ABC):
             traj_uid = tf.strings.join([name_tensor, sep2, tf.strings.as_string(hashed)])
             traj["trajectory_id"] = tf.repeat(traj_uid, traj_len)
 
-            # Extract UUID for bbox lookup using dlimp's source file tracking
-            # dlimp provides _source_file (tfrecord path) and _source_episode_idx
-            source_file = traj["traj_metadata"]["_source_file"]
-            source_episode_idx = traj["traj_metadata"]["_source_episode_idx"]
-
-            # Handle tensor shapes - these might be scalars or 1D tensors
-            source_file = tf.reshape(source_file, [])
-            source_episode_idx = tf.reshape(source_episode_idx, [])
-
-            # Construct UUID matching JSONL format: "gs://...tfrecord-file::episode_N"
-            uuid = tf.strings.join([
-                source_file,
-                tf.constant("::episode_", dtype=tf.string),
-                tf.strings.as_string(source_episode_idx),
-            ])
-            traj["uuid"] = tf.repeat(uuid, traj_len)
+            # Extract episode_id for bbox lookup - this exists in both JSONL and trajectory
+            episode_id = traj["traj_metadata"]["episode_metadata"]["episode_id"]
+            episode_id = tf.reshape(episode_id, [])
+            episode_id_str = tf.strings.as_string(episode_id)
+            traj["episode_id"] = tf.repeat(episode_id_str, traj_len)
 
             return traj
 
@@ -319,26 +308,34 @@ class OXEBoundingBoxDataset(ABC):
 
     def apply_restructure(self):
         """Restructure trajectory data into VQA-style bbox samples."""
-        # OPTIMIZATION: Build set of UUIDs with annotations and filter trajectories first
+        # OPTIMIZATION: Build set of episode_ids with annotations and filter trajectories first
         # This skips entire trajectories without any bbox annotations
-        annotated_uuids = build_annotated_keys_set(
+        annotated_episode_ids = build_annotated_keys_set(
             self.bbox_annotations_dir, oxe_key_extractor
         )
-        logging.info(f"Found {len(annotated_uuids)} trajectories with bbox annotations")
+        logging.info(f"Found {len(annotated_episode_ids)} trajectories with bbox annotations")
 
-        # Log sample UUIDs from JSONL for debugging
-        if annotated_uuids:
-            sample_uuids = list(annotated_uuids)[:3]
-            logging.info(f"Sample JSONL UUIDs: {sample_uuids}")
+        # Log sample episode_ids from JSONL for debugging
+        if annotated_episode_ids:
+            sample_ids = list(annotated_episode_ids)[:3]
+            logging.info(f"Sample JSONL episode_ids: {sample_ids}")
 
-        # NOTE: Trajectory-level filtering is disabled because UUID extraction from
-        # RLDS metadata may not match the JSONL uuid format exactly.
-        # Frame-level filtering will still work via the lookup table.
-        # TODO: Enable this optimization once UUID extraction is verified to match JSONL format.
-        #
-        # if annotated_uuids:
-        #     annotated_uuids_table = tf.lookup.StaticHashTable(...)
-        #     self.dataset = self.dataset.filter(has_any_annotations)
+        # Enable trajectory-level filtering using episode_id
+        if annotated_episode_ids:
+            annotated_ids_table = tf.lookup.StaticHashTable(
+                tf.lookup.KeyValueTensorInitializer(
+                    tf.constant(list(annotated_episode_ids), dtype=tf.string),
+                    tf.constant([True] * len(annotated_episode_ids), dtype=tf.bool),
+                ),
+                default_value=tf.constant(False, dtype=tf.bool),
+            )
+
+            def has_any_annotations(traj):
+                """Filter trajectories that have at least one annotated frame."""
+                episode_id = traj["episode_id"][0]  # episode_id is repeated for all frames
+                return annotated_ids_table.lookup(episode_id)
+
+            self.dataset = self.dataset.filter(has_any_annotations)
 
         primary_image_key = self.get_primary_image_key()
 
@@ -359,7 +356,7 @@ class OXEBoundingBoxDataset(ABC):
                     "state": tf.zeros([traj_len, self.state_dim], dtype=tf.float32),
                 },
                 "trajectory_id": traj["trajectory_id"],
-                "uuid": traj["uuid"],
+                "episode_id": traj["episode_id"],
                 "frame_idx": frame_indices,
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
             }
@@ -371,13 +368,13 @@ class OXEBoundingBoxDataset(ABC):
 
     def apply_frame_filters(self):
         """Filter and expand frames to create final VQA samples."""
-        # Build a lookup table that maps uuid--frame_idx to pre-formatted "labels\tcaption"
+        # Build a lookup table that maps episode_id--frame_idx to pre-formatted "labels\tcaption"
         frame_to_formatted = self._build_frame_objects_table()
 
         # Filter frames using pure TF lookup (fast) - only keep frames with annotations
         def has_bbox_annotation(frame):
             """Fast filter using pure TF lookup."""
-            lookup_key = tf.strings.join([frame["uuid"], "--", frame["frame_idx"]])
+            lookup_key = tf.strings.join([frame["episode_id"], "--", frame["frame_idx"]])
             formatted = frame_to_formatted.lookup(lookup_key)
             return tf.strings.length(formatted) > 0
 
@@ -386,7 +383,7 @@ class OXEBoundingBoxDataset(ABC):
         # Extract pre-formatted labels and caption from lookup table (pure TF, no py_function)
         def lookup_formatted_caption(frame):
             """Look up pre-formatted labels and caption - pure TensorFlow, no py_function."""
-            lookup_key = tf.strings.join([frame["uuid"], "--", frame["frame_idx"]])
+            lookup_key = tf.strings.join([frame["episode_id"], "--", frame["frame_idx"]])
             formatted = frame_to_formatted.lookup(lookup_key)
 
             # Split on tab to get labels and caption (pre-formatted during table construction)

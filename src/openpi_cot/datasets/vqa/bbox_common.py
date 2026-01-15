@@ -520,39 +520,16 @@ def droid_key_extractor(episode_data: dict) -> str | None:
 
 
 def oxe_key_extractor(episode_data: dict) -> str | None:
-    """Extract key from OXE JSONL entry.
+    """Extract episode_id key from OXE JSONL entry.
 
-    Tries multiple key formats in order of preference:
-    1. uuid field (if present)
-    2. episode_metadata.file_path (normalized)
+    Uses episode_metadata.episode_id which exists in both JSONL and trajectory metadata.
 
-    Returns the key or None if no valid key found.
+    Returns the episode_id as string or None if not found.
     """
-    # Try uuid first
-    uuid = episode_data.get("uuid", "")
-    if uuid:
-        return uuid
-
-    # Fallback to episode_metadata.file_path
-    file_path = episode_data.get("episode_metadata", {}).get("file_path", "")
-    if file_path:
-        return file_path
-
+    episode_id = episode_data.get("episode_metadata", {}).get("episode_id")
+    if episode_id is not None:
+        return str(episode_id)
     return None
-
-
-def normalize_oxe_file_path(file_path: str) -> str:
-    """Normalize an OXE file path to a consistent format for matching.
-
-    Removes gs:// prefix variations and version numbers to make matching more robust.
-    """
-    import re
-
-    # Remove gs:// prefix and bucket name variations
-    normalized = re.sub(r"^gs://[^/]+/", "", file_path)
-    # Remove version numbers like /1.0.0/
-    normalized = re.sub(r"/\d+\.\d+\.\d+/", "/", normalized)
-    return normalized
 
 
 def build_annotated_keys_set(
