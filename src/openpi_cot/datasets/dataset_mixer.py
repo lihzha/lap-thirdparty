@@ -195,12 +195,10 @@ class OXECoTDatasets:
                     self.hash_tables = ds.hash_tables
             elif dataset_name == "bridge_bbox":
                 ds = BridgeBoundingBoxDataset(
-                    dataset_name=dataset_name,
                     **kwargs,
                 )
             elif dataset_name == "molmoact_bbox":
                 ds = MolmoActBoundingBoxDataset(
-                    dataset_name=dataset_name,
                     **kwargs,
                 )
             else:
