@@ -83,14 +83,13 @@ DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
 
 # Robot-specific direction prompts (for DROID wrist camera)
 ROBOT_DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
-    ("Pick up the ", ", predict which direction it is relative to the robot."),
-    ("Move to the ", ", predict which direction it is relative to the robot."),
-    ("Move near to the ", ", predict which direction it is from the end-effector."),
-    ("Pick up the ", ", in what direction should the robot move?"),
-    ("Move to the ", ", which direction should the end-effector go?"),
-    ("Reach the ", ", predict the direction from the robot's current position."),
-    ("Grasp the ", ", which direction is it relative to the gripper?"),
-    ("Navigate to the ", ", in what direction from the robot?"),
+    ("Pick up the ", ", predict the robot's action."),
+    ("Move to the ", ", predict which direction should the end-effector go."),
+    ("Move near to the ", ", predict the robot's action."),
+    ("Pick up the ", ", predict the robot's action."),
+    ("Reach the ", ", predict the robot's action."),
+    ("Grasp the ", ", predict the robot's action."),
+    ("Navigate to the ", ", predict the robot's action."),
 ]
 
 
