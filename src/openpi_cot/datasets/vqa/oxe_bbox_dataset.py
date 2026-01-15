@@ -200,15 +200,6 @@ class OXEBoundingBoxDataset(ABC):
         """Return (width, height) of original images for bbox normalization."""
         raise NotImplementedError
 
-    @abstractmethod
-    def extract_uuid_from_traj(self, traj) -> tf.Tensor:
-        """Extract UUID from trajectory metadata for JSONL lookup.
-
-        The UUID should match the format in the JSONL annotations file.
-        Returns a tf.string tensor.
-        """
-        raise NotImplementedError
-
     # ========== Common methods ==========
 
     def _get_bbox_annotations_dir(self, config) -> str:
@@ -291,8 +282,22 @@ class OXEBoundingBoxDataset(ABC):
             traj_uid = tf.strings.join([name_tensor, sep2, tf.strings.as_string(hashed)])
             traj["trajectory_id"] = tf.repeat(traj_uid, traj_len)
 
-            # Also extract UUID for bbox lookup
-            traj["uuid"] = tf.repeat(self.extract_uuid_from_traj(traj), traj_len)
+            # Extract UUID for bbox lookup using dlimp's source file tracking
+            # dlimp provides _source_file (tfrecord path) and _source_episode_idx
+            source_file = traj["traj_metadata"]["_source_file"]
+            source_episode_idx = traj["traj_metadata"]["_source_episode_idx"]
+
+            # Handle tensor shapes - these might be scalars or 1D tensors
+            source_file = tf.reshape(source_file, [])
+            source_episode_idx = tf.reshape(source_episode_idx, [])
+
+            # Construct UUID matching JSONL format: "gs://...tfrecord-file::episode_N"
+            uuid = tf.strings.join([
+                source_file,
+                tf.constant("::episode_", dtype=tf.string),
+                tf.strings.as_string(source_episode_idx),
+            ])
+            traj["uuid"] = tf.repeat(uuid, traj_len)
 
             return traj
 
@@ -506,62 +511,6 @@ class MolmoActBoundingBoxDataset(OXEBoundingBoxDataset):
         # MolmoAct uses 256x256 images
         return (256, 256)
 
-    def extract_uuid_from_traj(self, traj) -> tf.Tensor:
-        """Extract UUID from MolmoAct trajectory metadata.
-
-        MolmoAct UUID format from JSONL:
-        gs://pi0-cot/OXE/molmoact_dataset/1.0.0/molmoact_dataset-train.tfrecord-00000-of-00512::episode_0
-
-        The dlimp library stores the source tfrecord file in traj_metadata._source_file
-        and episode index in episode_metadata or as _source_episode_idx.
-        """
-        # Try to extract source file and episode index from traj_metadata
-        if "traj_metadata" in traj:
-            traj_meta = traj["traj_metadata"]
-
-            # Method 1: Use _source_file and _source_episode_idx if available (dlimp standard)
-            if "_source_file" in traj_meta and "_source_episode_idx" in traj_meta:
-                source_file = traj_meta["_source_file"]
-                episode_idx = traj_meta["_source_episode_idx"]
-                if isinstance(source_file, tf.Tensor) and len(source_file.shape) > 0:
-                    source_file = source_file[0]
-                if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
-                    episode_idx = episode_idx[0]
-                return tf.strings.join([
-                    source_file,
-                    tf.constant("::episode_", dtype=tf.string),
-                    tf.strings.as_string(episode_idx)
-                ])
-
-            # Method 2: Use episode_metadata if available
-            if "episode_metadata" in traj_meta:
-                episode_meta = traj_meta["episode_metadata"]
-                # Some datasets have episode_id or episode_index
-                episode_idx = None
-                if "episode_index" in episode_meta:
-                    episode_idx = episode_meta["episode_index"]
-                elif "episode_id" in episode_meta:
-                    episode_idx = episode_meta["episode_id"]
-
-                if episode_idx is not None:
-                    if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
-                        episode_idx = episode_idx[0]
-                    # Construct UUID using dataset name and episode index
-                    # This won't match the exact GCS path but provides a unique key
-                    return tf.strings.join([
-                        tf.constant(f"gs://pi0-cot/OXE/{self.get_oxe_dataset_name()}/::episode_", dtype=tf.string),
-                        tf.strings.as_string(episode_idx)
-                    ])
-
-        # Fallback: construct a unique ID from the trajectory actions
-        action_sample = traj["action"][0]
-        serialized = tf.io.serialize_tensor(action_sample)
-        hash_val = tf.strings.to_hash_bucket_fast(serialized, 2147483647)
-        return tf.strings.join([
-            tf.constant("molmoact-fallback-", dtype=tf.string),
-            tf.strings.as_string(hash_val)
-        ])
-
 
 class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
     """Bridge dataset with bounding box annotations for VQA training.
@@ -584,58 +533,3 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
     def get_original_image_size(self) -> tuple[int, int]:
         # Bridge uses 256x256 images
         return (256, 256)
-
-    def extract_uuid_from_traj(self, traj) -> tf.Tensor:
-        """Extract UUID from Bridge trajectory metadata.
-
-        Bridge UUID format from JSONL:
-        gs://pi0-cot/OXE/bridge_v2_oxe/1.0.0/bridge_dataset-train.tfrecord-00000-of-01024::episode_0
-
-        The dlimp library stores the source tfrecord file in traj_metadata._source_file
-        and episode index in episode_metadata or as _source_episode_idx.
-        """
-        # Try to extract source file and episode index from traj_metadata
-        if "traj_metadata" in traj:
-            traj_meta = traj["traj_metadata"]
-
-            # Method 1: Use _source_file and _source_episode_idx if available (dlimp standard)
-            if "_source_file" in traj_meta and "_source_episode_idx" in traj_meta:
-                source_file = traj_meta["_source_file"]
-                episode_idx = traj_meta["_source_episode_idx"]
-                if isinstance(source_file, tf.Tensor) and len(source_file.shape) > 0:
-                    source_file = source_file[0]
-                if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
-                    episode_idx = episode_idx[0]
-                return tf.strings.join([
-                    source_file,
-                    tf.constant("::episode_", dtype=tf.string),
-                    tf.strings.as_string(episode_idx)
-                ])
-
-            # Method 2: Use episode_metadata if available
-            if "episode_metadata" in traj_meta:
-                episode_meta = traj_meta["episode_metadata"]
-                # Some datasets have episode_id or episode_index
-                episode_idx = None
-                if "episode_index" in episode_meta:
-                    episode_idx = episode_meta["episode_index"]
-                elif "episode_id" in episode_meta:
-                    episode_idx = episode_meta["episode_id"]
-
-                if episode_idx is not None:
-                    if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
-                        episode_idx = episode_idx[0]
-                    # Construct UUID using dataset name and episode index
-                    return tf.strings.join([
-                        tf.constant(f"gs://pi0-cot/OXE/{self.get_oxe_dataset_name()}/::episode_", dtype=tf.string),
-                        tf.strings.as_string(episode_idx)
-                    ])
-
-        # Fallback: construct a unique ID from the trajectory actions
-        action_sample = traj["action"][0]
-        serialized = tf.io.serialize_tensor(action_sample)
-        hash_val = tf.strings.to_hash_bucket_fast(serialized, 2147483647)
-        return tf.strings.join([
-            tf.constant("bridge-fallback-", dtype=tf.string),
-            tf.strings.as_string(hash_val)
-        ])
