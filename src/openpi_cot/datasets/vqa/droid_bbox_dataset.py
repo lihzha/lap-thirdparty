@@ -20,9 +20,9 @@ from openpi_cot.datasets.utils.helpers import extract_episode_path_from_file_pat
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
     ROBOT_BBOX_PROMPT_PARTS,
+    build_annotated_keys_set,
     build_frame_objects_table,
     droid_key_extractor,
-    format_bbox_caption,
     sample_prompt_tf,
 )
 
@@ -296,6 +296,30 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
     def apply_restructure(self):
         """Restructure trajectory data into VQA-style bbox samples."""
+        # OPTIMIZATION: Build set of episode_paths with annotations and filter trajectories first
+        # This skips entire trajectories without any bbox annotations
+        annotated_episode_paths = build_annotated_keys_set(
+            self.bbox_annotations_dir, droid_key_extractor
+        )
+        logging.info(f"Found {len(annotated_episode_paths)} trajectories with bbox annotations")
+
+        if annotated_episode_paths:
+            # Build a lookup table for fast trajectory-level filtering
+            annotated_paths_table = tf.lookup.StaticHashTable(
+                tf.lookup.KeyValueTensorInitializer(
+                    tf.constant(list(annotated_episode_paths), dtype=tf.string),
+                    tf.constant([True] * len(annotated_episode_paths), dtype=tf.bool),
+                ),
+                default_value=tf.constant(False, dtype=tf.bool),
+            )
+
+            def has_any_annotations(traj):
+                """Filter trajectories that have at least one annotated frame."""
+                file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+                episode_path = extract_episode_path_from_file_path(file_path)
+                return annotated_paths_table.lookup(episode_path)
+
+            self.dataset = self.dataset.filter(has_any_annotations)
 
         def restructure(traj):
             """Convert trajectory to VQA bbox format."""
@@ -303,7 +327,6 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             file_path = traj["traj_metadata"]["episode_metadata"]["file_path"]
 
             traj_len = tf.shape(traj["action"])[0]
-            episode_id = traj["trajectory_id"][0]
 
             # Extract episode path from file_path
             # Example file_path: gs://xembodiment_data/r2d2/r2d2-data-full/ILIAD/success/2023-04-21/.../trajectory.h5
@@ -334,78 +357,50 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
     def apply_frame_filters(self):
         """Filter and expand frames to create final VQA samples."""
-        # Build a lookup table that maps episode_path--frame_idx to a list of objects
-        frame_to_objects = self._build_frame_objects_table()
+        # Build a lookup table that maps episode_path--frame_idx to pre-formatted "labels\tcaption"
+        frame_to_formatted = self._build_frame_objects_table()
 
-        # Target resolution for letterbox transformation
-        target_h, target_w = self.config.resize_resolution
-        # DROID wrist image size
-        orig_w, orig_h = 320, 180
-
-        def lookup_all_objects(frame):
-            """Look up ALL objects for this frame and generate caption with all bboxes."""
-            # Create lookup key: episode_path--frame_idx
+        # Filter frames using pure TF lookup (fast) - only keep frames with annotations
+        def has_bbox_annotation(frame):
+            """Fast filter using pure TF lookup."""
             lookup_key = tf.strings.join([frame["episode_path"], "--", frame["frame_idx"]])
+            formatted = frame_to_formatted.lookup(lookup_key)
+            return tf.strings.length(formatted) > 0
 
-            # Look up the serialized list of objects
-            objects_json = frame_to_objects.lookup(lookup_key)
+        self.dataset = self.dataset.filter(has_bbox_annotation)
 
-            # Check if we have annotations
-            has_annotations = tf.strings.length(objects_json) > 0
+        # Extract pre-formatted labels and caption from lookup table (pure TF, no py_function)
+        def lookup_formatted_caption(frame):
+            """Look up pre-formatted labels and caption - pure TensorFlow, no py_function."""
+            lookup_key = tf.strings.join([frame["episode_path"], "--", frame["frame_idx"]])
+            formatted = frame_to_formatted.lookup(lookup_key)
 
-            # Get image bytes for potential dimension check (if needed)
-            img_bytes = frame["observation"][self.spec.primary_image_key]
-
-            def parse_all_objects_and_transform(objects_json_bytes, img_bytes_tensor):
-                """Parse all objects and transform bbox coordinates for letterbox."""
-                if not objects_json_bytes.numpy():
-                    return b"", b""
-
-                try:
-                    objects = json.loads(objects_json_bytes.numpy().decode("utf-8"))
-                    if not objects:
-                        return b"", b""
-
-                    # Use shared format_bbox_caption function
-                    prompt_labels, caption = format_bbox_caption(
-                        objects=objects,
-                        orig_w=orig_w,
-                        orig_h=orig_h,
-                        target_w=target_w,
-                        target_h=target_h,
-                        apply_letterbox=True,
-                    )
-
-                    return prompt_labels.encode("utf-8"), caption.encode("utf-8")
-
-                except Exception as e:
-                    logging.warning(f"Error parsing objects JSON: {e}")
-                    return b"", b""
-
-            prompt_labels, caption = tf.py_function(
-                parse_all_objects_and_transform,
-                [objects_json, img_bytes],
-                [tf.string, tf.string],
+            # Split on tab to get labels and caption (pre-formatted during table construction)
+            parts = tf.strings.split(formatted, sep="\t")
+            # Handle edge case where split might not produce 2 parts
+            labels = tf.cond(
+                tf.shape(parts)[0] >= 1,
+                lambda: parts[0],
+                lambda: tf.constant("", dtype=tf.string),
             )
-            prompt_labels.set_shape([])
-            caption.set_shape([])
+            caption = tf.cond(
+                tf.shape(parts)[0] >= 2,
+                lambda: parts[1],
+                lambda: tf.constant("", dtype=tf.string),
+            )
 
-            frame["object_labels"] = prompt_labels
+            frame["object_labels"] = labels
             frame["bbox_caption"] = caption
-            frame["has_bbox"] = has_annotations
 
             return frame
 
-        self.dataset = self.dataset.frame_map(lookup_all_objects, num_parallel_calls=self.num_parallel_calls)
+        self.dataset = self.dataset.frame_map(lookup_formatted_caption, num_parallel_calls=self.num_parallel_calls)
 
-        # Filter out frames without annotations
-        def has_valid_bbox(frame):
-            return tf.logical_and(
-                frame["has_bbox"],
-                tf.strings.length(frame["bbox_caption"]) > 0,
-            )
+        # Filter out any invalid entries (shouldn't happen with pre-filtering, but safety check)
+        def has_valid_caption(frame):
+            return tf.strings.length(frame["bbox_caption"]) > 0
 
-        self.dataset = self.dataset.filter(has_valid_bbox)
+        self.dataset = self.dataset.filter(has_valid_caption)
 
         # Convert to final VQA format
         def finalize_vqa(frame):
@@ -450,11 +445,16 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.dataset = self.dataset.filter(has_valid_qa)
 
     def _build_frame_objects_table(self):
-        """Build a lookup table from episode_path--frame_idx to list of objects."""
+        """Build a lookup table from episode_path--frame_idx to pre-formatted caption."""
+        # DROID wrist image size
+        orig_w, orig_h = 320, 180
+        target_h, target_w = self.config.resize_resolution
         return build_frame_objects_table(
             bbox_annotations_dir=self.bbox_annotations_dir,
             key_extractor=droid_key_extractor,
             dataset_name=self.dataset_name,
+            orig_size=(orig_w, orig_h),
+            target_size=(target_w, target_h),
         )
 
     def get_dataset_name(self) -> str:

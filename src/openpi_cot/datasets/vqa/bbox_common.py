@@ -367,20 +367,28 @@ def build_frame_objects_table(
     bbox_annotations_dir: str,
     key_extractor: callable,
     dataset_name: str = "",
+    orig_size: tuple[int, int] = (256, 256),
+    target_size: tuple[int, int] = (224, 224),
 ) -> "tf.lookup.StaticHashTable":
-    """Build a lookup table from key--frame_idx to list of objects.
+    """Build a lookup table from key--frame_idx to pre-formatted (labels, caption) strings.
 
     This function reads JSONL annotation files and builds a TensorFlow lookup table
-    that maps frame identifiers to their object annotations.
+    that maps frame identifiers to pre-formatted prompt labels and bbox captions.
+    The bbox coordinates are pre-transformed for letterbox and converted to loc tokens.
+
+    This eliminates the need for tf.py_function during iteration.
 
     Args:
         bbox_annotations_dir: Directory containing JSONL annotation files
         key_extractor: Function that takes episode_data dict and returns the key string
                       (e.g., uuid or episode_path). Should return None to skip entries.
         dataset_name: Optional dataset name for logging
+        orig_size: Original image (width, height) for letterbox transformation
+        target_size: Target image (width, height) for letterbox transformation
 
     Returns:
-        tf.lookup.StaticHashTable mapping "key--frame_idx" to JSON-serialized objects list
+        tf.lookup.StaticHashTable mapping "key--frame_idx" to "labels\\tcaption" string
+        The value is tab-separated: first part is comma-separated labels, second is bbox caption
     """
     import json
     import logging
@@ -391,7 +399,10 @@ def build_frame_objects_table(
     log_prefix = f" for {dataset_name}" if dataset_name else ""
     logging.info(f"Building frame objects lookup table{log_prefix}...")
 
-    frame_to_objects = {}
+    orig_w, orig_h = orig_size
+    target_w, target_h = target_size
+
+    frame_to_formatted = {}
 
     jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
 
@@ -429,28 +440,42 @@ def build_frame_objects_table(
                             continue
 
                         # Normalize bbox (bbox values are in 0-1000 range in JSONL)
-                        y_min = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
-                        x_min = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
-                        y_max = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
-                        x_max = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
+                        y_min_raw = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
+                        x_min_raw = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
+                        y_max_raw = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
+                        x_max_raw = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
 
                         objects_list.append({
                             "label": obj_label,
-                            "bbox": [x_min, y_min, x_max, y_max],
+                            "bbox": [x_min_raw, y_min_raw, x_max_raw, y_max_raw],
                         })
 
                     if objects_list:
-                        if key in frame_to_objects:
-                            frame_to_objects[key].extend(objects_list)
-                        else:
-                            frame_to_objects[key] = objects_list
+                        # Pre-format the caption using shared function
+                        prompt_labels, caption = format_bbox_caption(
+                            objects=objects_list,
+                            orig_w=orig_w,
+                            orig_h=orig_h,
+                            target_w=target_w,
+                            target_h=target_h,
+                            apply_letterbox=True,
+                        )
+
+                        if prompt_labels and caption:
+                            # Store as tab-separated: "labels\tcaption"
+                            if key in frame_to_formatted:
+                                # Merge with existing (shouldn't happen often)
+                                existing = frame_to_formatted[key]
+                                existing_labels, existing_caption = existing.split("\t", 1)
+                                merged_labels = existing_labels + ", " + prompt_labels
+                                merged_caption = existing_caption + " ; " + caption
+                                frame_to_formatted[key] = f"{merged_labels}\t{merged_caption}"
+                            else:
+                                frame_to_formatted[key] = f"{prompt_labels}\t{caption}"
 
     # Convert to lookup table
-    keys = []
-    values = []
-    for k, v in frame_to_objects.items():
-        keys.append(k)
-        values.append(json.dumps(v))
+    keys = list(frame_to_formatted.keys())
+    values = list(frame_to_formatted.values())
 
     logging.info(f"Built frame objects table with {len(keys)} entries{log_prefix}")
 
@@ -500,3 +525,45 @@ def oxe_key_extractor(episode_data: dict) -> str | None:
     OXE datasets use a 'uuid' field directly in the JSONL.
     """
     return episode_data.get("uuid", "") or None
+
+
+def build_annotated_keys_set(
+    bbox_annotations_dir: str,
+    key_extractor: callable,
+) -> set[str]:
+    """Build a set of keys (uuids or episode_paths) that have bbox annotations.
+
+    This is used for trajectory-level filtering to skip entire trajectories
+    that have no annotated frames, which significantly speeds up iteration.
+
+    Args:
+        bbox_annotations_dir: Directory containing JSONL annotation files
+        key_extractor: Function that takes episode_data dict and returns the key string
+
+    Returns:
+        Set of keys that have at least one annotated frame
+    """
+    import json
+    import os
+
+    import tensorflow as tf
+
+    annotated_keys = set()
+
+    jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
+
+    for jsonl_file in jsonl_files:
+        with tf.io.gfile.GFile(jsonl_file, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    episode_data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                episode_key = key_extractor(episode_data)
+                if episode_key:
+                    annotated_keys.add(episode_key)
+
+    return annotated_keys

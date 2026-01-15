@@ -5,7 +5,6 @@ that loads robot trajectories with object bounding box annotations from JSONL fi
 and formats them as VQA samples asking "where is the <object>".
 """
 
-import json
 import logging
 import os
 from abc import ABC, abstractmethod
@@ -21,8 +20,8 @@ from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
     BBOX_PROMPT_PARTS,
+    build_annotated_keys_set,
     build_frame_objects_table,
-    format_bbox_caption,
     oxe_key_extractor,
     sample_prompt_tf,
 )
@@ -315,6 +314,30 @@ class OXEBoundingBoxDataset(ABC):
 
     def apply_restructure(self):
         """Restructure trajectory data into VQA-style bbox samples."""
+        # OPTIMIZATION: Build set of UUIDs with annotations and filter trajectories first
+        # This skips entire trajectories without any bbox annotations
+        annotated_uuids = build_annotated_keys_set(
+            self.bbox_annotations_dir, oxe_key_extractor
+        )
+        logging.info(f"Found {len(annotated_uuids)} trajectories with bbox annotations")
+
+        if annotated_uuids:
+            # Build a lookup table for fast trajectory-level filtering
+            annotated_uuids_table = tf.lookup.StaticHashTable(
+                tf.lookup.KeyValueTensorInitializer(
+                    tf.constant(list(annotated_uuids), dtype=tf.string),
+                    tf.constant([True] * len(annotated_uuids), dtype=tf.bool),
+                ),
+                default_value=tf.constant(False, dtype=tf.bool),
+            )
+
+            def has_any_annotations(traj):
+                """Filter trajectories that have at least one annotated frame."""
+                uuid = traj["uuid"][0]  # UUID is repeated for all frames
+                return annotated_uuids_table.lookup(uuid)
+
+            self.dataset = self.dataset.filter(has_any_annotations)
+
         primary_image_key = self.get_primary_image_key()
 
         def restructure(traj):
@@ -346,77 +369,50 @@ class OXEBoundingBoxDataset(ABC):
 
     def apply_frame_filters(self):
         """Filter and expand frames to create final VQA samples."""
-        # Build a lookup table that maps uuid--frame_idx to a list of objects
-        frame_to_objects = self._build_frame_objects_table()
+        # Build a lookup table that maps uuid--frame_idx to pre-formatted "labels\tcaption"
+        frame_to_formatted = self._build_frame_objects_table()
 
-        # Target resolution for letterbox transformation
-        target_h, target_w = self.config.resize_resolution
-        orig_w, orig_h = self.get_original_image_size()
-
-        def lookup_all_objects(frame):
-            """Look up ALL objects for this frame and generate caption with all bboxes."""
-            # Create lookup key: uuid--frame_idx
+        # Filter frames using pure TF lookup (fast) - only keep frames with annotations
+        def has_bbox_annotation(frame):
+            """Fast filter using pure TF lookup."""
             lookup_key = tf.strings.join([frame["uuid"], "--", frame["frame_idx"]])
+            formatted = frame_to_formatted.lookup(lookup_key)
+            return tf.strings.length(formatted) > 0
 
-            # Look up the serialized list of objects
-            objects_json = frame_to_objects.lookup(lookup_key)
+        self.dataset = self.dataset.filter(has_bbox_annotation)
 
-            # Check if we have annotations
-            has_annotations = tf.strings.length(objects_json) > 0
+        # Extract pre-formatted labels and caption from lookup table (pure TF, no py_function)
+        def lookup_formatted_caption(frame):
+            """Look up pre-formatted labels and caption - pure TensorFlow, no py_function."""
+            lookup_key = tf.strings.join([frame["uuid"], "--", frame["frame_idx"]])
+            formatted = frame_to_formatted.lookup(lookup_key)
 
-            # Get image bytes for potential dimension check (if needed)
-            img_bytes = frame["observation"][self.spec.primary_image_key]
-
-            def parse_all_objects_and_transform(objects_json_bytes, img_bytes_tensor):
-                """Parse all objects and transform bbox coordinates for letterbox."""
-                if not objects_json_bytes.numpy():
-                    return b"", b""
-
-                try:
-                    objects = json.loads(objects_json_bytes.numpy().decode("utf-8"))
-                    if not objects:
-                        return b"", b""
-
-                    # Use shared format_bbox_caption function
-                    prompt_labels, caption = format_bbox_caption(
-                        objects=objects,
-                        orig_w=orig_w,
-                        orig_h=orig_h,
-                        target_w=target_w,
-                        target_h=target_h,
-                        apply_letterbox=True,
-                    )
-
-                    return prompt_labels.encode("utf-8"), caption.encode("utf-8")
-
-                except Exception as e:
-                    logging.warning(f"Error parsing objects JSON: {e}")
-                    return b"", b""
-
-            prompt_labels, caption = tf.py_function(
-                parse_all_objects_and_transform,
-                [objects_json, img_bytes],
-                [tf.string, tf.string],
+            # Split on tab to get labels and caption (pre-formatted during table construction)
+            parts = tf.strings.split(formatted, sep="\t")
+            # Handle edge case where split might not produce 2 parts
+            labels = tf.cond(
+                tf.shape(parts)[0] >= 1,
+                lambda: parts[0],
+                lambda: tf.constant("", dtype=tf.string),
             )
-            prompt_labels.set_shape([])
-            caption.set_shape([])
+            caption = tf.cond(
+                tf.shape(parts)[0] >= 2,
+                lambda: parts[1],
+                lambda: tf.constant("", dtype=tf.string),
+            )
 
-            frame["object_labels"] = prompt_labels
+            frame["object_labels"] = labels
             frame["bbox_caption"] = caption
-            frame["has_bbox"] = has_annotations
 
             return frame
 
-        self.dataset = self.dataset.frame_map(lookup_all_objects, num_parallel_calls=self.num_parallel_calls)
+        self.dataset = self.dataset.frame_map(lookup_formatted_caption, num_parallel_calls=self.num_parallel_calls)
 
-        # Filter out frames without annotations
-        def has_valid_bbox(frame):
-            return tf.logical_and(
-                frame["has_bbox"],
-                tf.strings.length(frame["bbox_caption"]) > 0,
-            )
+        # Filter out any invalid entries (shouldn't happen with pre-filtering, but safety check)
+        def has_valid_caption(frame):
+            return tf.strings.length(frame["bbox_caption"]) > 0
 
-        self.dataset = self.dataset.filter(has_valid_bbox)
+        self.dataset = self.dataset.filter(has_valid_caption)
 
         # Convert to final VQA format
         def finalize_vqa(frame):
@@ -461,11 +457,15 @@ class OXEBoundingBoxDataset(ABC):
         self.dataset = self.dataset.filter(has_valid_qa)
 
     def _build_frame_objects_table(self):
-        """Build a lookup table from uuid--frame_idx to list of objects."""
+        """Build a lookup table from uuid--frame_idx to pre-formatted caption."""
+        orig_w, orig_h = self.get_original_image_size()
+        target_h, target_w = self.config.resize_resolution
         return build_frame_objects_table(
             bbox_annotations_dir=self.bbox_annotations_dir,
             key_extractor=oxe_key_extractor,
             dataset_name=self.dataset_name,
+            orig_size=(orig_w, orig_h),
+            target_size=(target_w, target_h),
         )
 
     def get_num_transitions(self) -> int:
