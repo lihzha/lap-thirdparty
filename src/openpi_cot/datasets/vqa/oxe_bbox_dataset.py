@@ -813,7 +813,7 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
 
     def get_original_image_size(self) -> tuple[int, int]:
         # Bridge uses 256x256 images
-        return (256, 256)
+        return (480, 640)
 
     def use_target_only(self) -> bool:
         # Use only target objects to filter out potentially noisy annotations
