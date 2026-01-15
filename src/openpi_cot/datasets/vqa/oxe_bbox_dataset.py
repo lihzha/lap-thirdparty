@@ -510,7 +510,7 @@ class MolmoActBoundingBoxDataset(OXEBoundingBoxDataset):
         return "molmoact_dataset"
 
     def get_primary_image_key(self) -> str:
-        return "image"
+        return "first_view_image"
 
     def get_original_image_size(self) -> tuple[int, int]:
         # MolmoAct uses 256x256 images
