@@ -402,7 +402,7 @@ class OXEBoundingBoxDataset(ABC):
         self.dataset = self.dataset.filter(has_bbox_annotation)
 
         # Sample objects and format caption using pure TensorFlow operations
-        max_objects = 2
+        max_objects = 1000
 
         def lookup_and_sample_objects(frame):
             """Look up objects, sample if needed, and format caption using pure TF."""
@@ -599,4 +599,4 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
 
     def use_target_only(self) -> bool:
         # Use only target objects to filter out potentially noisy annotations
-        return True
+        return False
