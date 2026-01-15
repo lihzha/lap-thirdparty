@@ -207,6 +207,15 @@ class OXEBoundingBoxDataset(ABC):
     def episode_id_key(self) -> str:
         return "episode_id"
 
+    def get_frame_offset(self) -> int:
+        """Return the frame offset to account for frames removed by transforms.
+        
+        Some datasets (like Bridge V2) have transforms that remove the first frame.
+        This offset is added to frame indices when looking up bbox annotations.
+        For example, if offset=1, processed frame 0 maps to JSONL frame 1.
+        """
+        return 0
+
     def _get_bbox_annotations_dir(self, config) -> str:
         """Build path to bbox annotations directory."""
         bbox_dir_name = self.get_bbox_annotations_dir_name()
@@ -343,6 +352,7 @@ class OXEBoundingBoxDataset(ABC):
             self.dataset = self.dataset.filter(has_any_annotations)
 
         primary_image_key = self.get_primary_image_key()
+        frame_offset = self.get_frame_offset()
 
         def restructure(traj):
             """Convert trajectory to VQA bbox format."""
@@ -352,7 +362,9 @@ class OXEBoundingBoxDataset(ABC):
             primary_img = traj["observation"][primary_image_key]
 
             # Create frame indices as strings
-            frame_indices = tf.as_string(tf.range(traj_len))
+            # Apply frame_offset to account for frames removed by transforms
+            # e.g., if transform removes first frame, offset=1 so processed frame 0 -> JSONL frame 1
+            frame_indices = tf.as_string(tf.range(traj_len) + frame_offset)
 
             return {
                 "observation": {
@@ -513,8 +525,8 @@ class MolmoActBoundingBoxDataset(OXEBoundingBoxDataset):
         return "first_view_image"
 
     def get_original_image_size(self) -> tuple[int, int]:
-        # MolmoAct uses 256x256 images
-        return (256, 256)
+        # MolmoAct stores images at 224x224 (resized in dataset builder)
+        return (224, 224)
 
 
 class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
@@ -522,6 +534,16 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
 
     Uses the bridge_v2_oxe dataset from OXE with bbox annotations from JSONL files.
     """
+
+    @property
+    def episode_id_key(self) -> str:
+        # Bridge V2 uses episode_index, not episode_id
+        return "episode_index"
+
+    def get_frame_offset(self) -> int:
+        # Bridge V2 transform removes the first frame, so offset by 1
+        # Processed frame 0 corresponds to original frame 1 in the JSONL annotations
+        return 1
 
     def get_dataset_name(self) -> str:
         return "bridge_bbox"

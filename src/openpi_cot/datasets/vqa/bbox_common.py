@@ -797,15 +797,23 @@ def droid_key_extractor(episode_data: dict) -> str | None:
 
 
 def oxe_key_extractor(episode_data: dict) -> str | None:
-    """Extract episode_id key from OXE JSONL entry.
+    """Extract episode identifier key from OXE JSONL entry.
 
-    Uses episode_metadata.episode_id which exists in both JSONL and trajectory metadata.
+    Tries episode_metadata.episode_id first, then falls back to episode_metadata.episode_index.
+    This handles both datasets that use episode_id (some OXE datasets) and those that use
+    episode_index (MolmoAct, Bridge V2).
 
-    Returns the episode_id as string or None if not found.
+    Returns the episode identifier as string or None if not found.
     """
-    episode_id = episode_data.get("episode_metadata", {}).get("episode_id")
+    episode_metadata = episode_data.get("episode_metadata", {})
+    # Try episode_id first (standard RLDS naming)
+    episode_id = episode_metadata.get("episode_id")
     if episode_id is not None:
         return str(episode_id)
+    # Fall back to episode_index (used by MolmoAct, Bridge V2, etc.)
+    episode_index = episode_metadata.get("episode_index")
+    if episode_index is not None:
+        return str(episode_index)
     return None
 
 
