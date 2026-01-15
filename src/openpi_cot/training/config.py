@@ -1161,7 +1161,6 @@ _CONFIGS = [
             action_dim=7,
             action_horizon=16,
             max_token_len=220,
-            prompt_format="pi05_notime",
         ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
@@ -1189,8 +1188,6 @@ _CONFIGS = [
         base_name="gemma3_combined_cot",
         devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
         model=pi_cot_config.PiCoTConfig(
-            pi05=True,
-            discrete_state_input=True,
             action_dim=7,
             action_horizon=16,
             enable_action_training=False,
@@ -1198,7 +1195,6 @@ _CONFIGS = [
             max_token_len=800,  # Gemma3 needs ~600+ tokens (512 image + prompt + reasoning)
             paligemma_variant="gemma3_4b",
             action_expert_variant="gemma3_300m",
-            prompt_format="pi05_notime",
             use_pan_and_scan=False,
         ),
         data_config_class=RLDSCoTDataConfig,
@@ -1237,10 +1233,7 @@ _CONFIGS = [
             action_dim=7,
             action_horizon=16,
             max_token_len=220,
-            pi05=True,
-            discrete_state_input=True,
             use_fast=True,
-            prompt_format="pi05_notime",
         ),
         # model=pi0_fast.Pi0FASTConfig(action_dim=8, action_horizon=10),
         data_config_class=RLDSCoTDataConfig,
