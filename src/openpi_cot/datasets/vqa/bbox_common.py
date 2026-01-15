@@ -415,6 +415,11 @@ def build_frame_objects_table(
     target_w, target_h = target_size
 
     frame_to_objects = {}
+    
+    # Counters for filtered bboxes
+    total_bboxes = 0
+    invalid_bbox_count = 0
+    missing_label_count = 0
 
     jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
 
@@ -447,10 +452,15 @@ def build_frame_objects_table(
 
                     objects_list = []
                     for obj in all_objects:
+                        total_bboxes += 1
                         obj_label = obj.get("label", "")
                         bbox = obj.get("bbox", [])
 
-                        if not obj_label or len(bbox) < 4:
+                        if not obj_label:
+                            missing_label_count += 1
+                            continue
+                        if len(bbox) != 4:
+                            invalid_bbox_count += 1
                             continue
 
                         # Normalize bbox (bbox values are in 0-1000 range in JSONL)
@@ -485,6 +495,11 @@ def build_frame_objects_table(
         values.append(json.dumps(v))
 
     logging.info(f"Built frame objects table with {len(keys)} entries{log_prefix}")
+    logging.info(f"  Total bboxes processed: {total_bboxes}{log_prefix}")
+    if invalid_bbox_count > 0:
+        logging.warning(f"  Filtered {invalid_bbox_count} bboxes with invalid coordinate count (not 4){log_prefix}")
+    if missing_label_count > 0:
+        logging.warning(f"  Filtered {missing_label_count} bboxes with missing labels{log_prefix}")
 
     if not keys:
         # Return table with dummy entry (TF doesn't allow empty tables)
@@ -687,6 +702,12 @@ def build_frame_objects_table_v2(
     target_w, target_h = target_size
 
     frame_to_objects = {}
+    
+    # Counters for filtered bboxes
+    total_bboxes = 0
+    invalid_bbox_count = 0
+    missing_label_count = 0
+    skipped_non_target = 0
 
     jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
 
@@ -719,15 +740,21 @@ def build_frame_objects_table_v2(
 
                     objects_list = []
                     for obj in all_objects:
+                        total_bboxes += 1
                         obj_label = obj.get("label", "")
                         bbox = obj.get("bbox", [])
                         is_target = obj.get("is_target", False)
 
-                        if not obj_label or len(bbox) < 4:
+                        if not obj_label:
+                            missing_label_count += 1
+                            continue
+                        if len(bbox) != 4:
+                            invalid_bbox_count += 1
                             continue
 
                         # Skip non-target objects if target_only is enabled
                         if target_only and not is_target:
+                            skipped_non_target += 1
                             continue
 
                         # Normalize bbox (bbox values are in 0-1000 range in JSONL)
@@ -762,6 +789,13 @@ def build_frame_objects_table_v2(
         values.append(";".join(v))
 
     logging.info(f"Built frame objects table (v2) with {len(keys)} entries{log_prefix}")
+    logging.info(f"  Total bboxes processed: {total_bboxes}{log_prefix}")
+    if invalid_bbox_count > 0:
+        logging.warning(f"  Filtered {invalid_bbox_count} bboxes with invalid coordinate count (not 4){log_prefix}")
+    if missing_label_count > 0:
+        logging.warning(f"  Filtered {missing_label_count} bboxes with missing labels{log_prefix}")
+    if skipped_non_target > 0:
+        logging.info(f"  Skipped {skipped_non_target} non-target bboxes (target_only={target_only}){log_prefix}")
     
     # Debug: Log sample keys to help diagnose mismatches
     if keys:
@@ -912,6 +946,11 @@ def build_frame_objects_table_v2_direction(
     target_w, target_h = target_size
 
     frame_to_objects = {}
+    
+    # Counters for filtered bboxes
+    total_bboxes = 0
+    invalid_bbox_count = 0
+    missing_label_count = 0
 
     jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
 
@@ -944,10 +983,15 @@ def build_frame_objects_table_v2_direction(
 
                     objects_list = []
                     for obj in all_objects:
+                        total_bboxes += 1
                         obj_label = obj.get("label", "")
                         bbox = obj.get("bbox", [])
 
-                        if not obj_label or len(bbox) < 4:
+                        if not obj_label:
+                            missing_label_count += 1
+                            continue
+                        if len(bbox) != 4:
+                            invalid_bbox_count += 1
                             continue
 
                         # Normalize bbox (bbox values are in 0-1000 range in JSONL)
@@ -984,6 +1028,11 @@ def build_frame_objects_table_v2_direction(
         values.append(";".join(v))
 
     logging.info(f"Built frame objects direction table with {len(keys)} entries{log_prefix}")
+    logging.info(f"  Total bboxes processed: {total_bboxes}{log_prefix}")
+    if invalid_bbox_count > 0:
+        logging.warning(f"  Filtered {invalid_bbox_count} bboxes with invalid coordinate count (not 4){log_prefix}")
+    if missing_label_count > 0:
+        logging.warning(f"  Filtered {missing_label_count} bboxes with missing labels{log_prefix}")
 
     if not keys:
         # Return table with dummy entry (TF doesn't allow empty tables)
