@@ -369,16 +369,14 @@ def build_frame_objects_table(
     dataset_name: str = "",
     orig_size: tuple[int, int] = (256, 256),
     target_size: tuple[int, int] = (224, 224),
-    max_objects: int = 2,
-    seed: int = 42,
 ) -> "tf.lookup.StaticHashTable":
-    """Build a lookup table from key--frame_idx to pre-formatted (labels, caption) strings.
+    """Build a lookup table from key--frame_idx to JSON-serialized objects with pre-transformed bboxes.
 
     This function reads JSONL annotation files and builds a TensorFlow lookup table
-    that maps frame identifiers to pre-formatted prompt labels and bbox captions.
-    The bbox coordinates are pre-transformed for letterbox and converted to loc tokens.
+    that maps frame identifiers to JSON-serialized object lists. The bbox coordinates
+    are pre-transformed for letterbox at table building time.
 
-    This eliminates the need for tf.py_function during iteration.
+    Sampling of objects (if > max_objects) happens at query time via tf.py_function.
 
     Args:
         bbox_annotations_dir: Directory containing JSONL annotation files
@@ -387,17 +385,14 @@ def build_frame_objects_table(
         dataset_name: Optional dataset name for logging
         orig_size: Original image (width, height) for letterbox transformation
         target_size: Target image (width, height) for letterbox transformation
-        max_objects: Maximum number of objects to include per frame (randomly sampled if more)
-        seed: Random seed for reproducible object sampling
 
     Returns:
-        tf.lookup.StaticHashTable mapping "key--frame_idx" to "labels\\tcaption" string
-        The value is tab-separated: first part is comma-separated labels, second is bbox caption
+        tf.lookup.StaticHashTable mapping "key--frame_idx" to JSON-serialized objects list
+        Each object has 'label' and 'bbox' (already letterbox-transformed, normalized 0-1)
     """
     import json
     import logging
     import os
-    import random
 
     import tensorflow as tf
 
@@ -407,14 +402,13 @@ def build_frame_objects_table(
     orig_w, orig_h = orig_size
     target_w, target_h = target_size
 
-    # Create a random generator with the given seed for reproducible sampling
-    rng = random.Random(seed)
-
-    frame_to_formatted = {}
+    frame_to_objects = {}
 
     jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
 
     for jsonl_file in jsonl_files:
+        if "merged" in jsonl_file:
+            continue
         with tf.io.gfile.GFile(jsonl_file, "r") as f:
             for line in f:
                 if not line.strip():
@@ -453,43 +447,30 @@ def build_frame_objects_table(
                         y_max_raw = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
                         x_max_raw = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
 
+                        # Pre-apply letterbox transformation
+                        x_min, y_min, x_max, y_max = transform_bbox_for_letterbox(
+                            x_min_raw, y_min_raw, x_max_raw, y_max_raw,
+                            orig_w, orig_h, target_w, target_h,
+                        )
+
                         objects_list.append({
                             "label": obj_label,
-                            "bbox": [x_min_raw, y_min_raw, x_max_raw, y_max_raw],
+                            "bbox": [x_min, y_min, x_max, y_max],
                         })
 
                     if objects_list:
-                        # Randomly sample max_objects if there are more
-                        if len(objects_list) > max_objects:
-                            # Use deterministic seed per key for reproducibility
-                            rng.seed(hash(key) + seed)
-                            objects_list = rng.sample(objects_list, max_objects)
+                        # Store as JSON - sampling happens at query time
+                        if key in frame_to_objects:
+                            frame_to_objects[key].extend(objects_list)
+                        else:
+                            frame_to_objects[key] = objects_list
 
-                        # Pre-format the caption using shared function
-                        prompt_labels, caption = format_bbox_caption(
-                            objects=objects_list,
-                            orig_w=orig_w,
-                            orig_h=orig_h,
-                            target_w=target_w,
-                            target_h=target_h,
-                            apply_letterbox=True,
-                        )
-
-                        if prompt_labels and caption:
-                            # Store as tab-separated: "labels\tcaption"
-                            if key in frame_to_formatted:
-                                # Merge with existing (shouldn't happen often)
-                                existing = frame_to_formatted[key]
-                                existing_labels, existing_caption = existing.split("\t", 1)
-                                merged_labels = existing_labels + ", " + prompt_labels
-                                merged_caption = existing_caption + " ; " + caption
-                                frame_to_formatted[key] = f"{merged_labels}\t{merged_caption}"
-                            else:
-                                frame_to_formatted[key] = f"{prompt_labels}\t{caption}"
-
-    # Convert to lookup table
-    keys = list(frame_to_formatted.keys())
-    values = list(frame_to_formatted.values())
+    # Convert to lookup table with JSON-serialized values
+    keys = []
+    values = []
+    for k, v in frame_to_objects.items():
+        keys.append(k)
+        values.append(json.dumps(v))
 
     logging.info(f"Built frame objects table with {len(keys)} entries{log_prefix}")
 
@@ -509,6 +490,275 @@ def build_frame_objects_table(
             tf.constant(values, dtype=tf.string),
         ),
         default_value=tf.constant(b"", dtype=tf.string),
+    )
+
+
+def sample_and_format_objects(
+    objects_json: bytes,
+    max_objects: int = 2,
+    seed: int | None = None,
+) -> tuple[bytes, bytes]:
+    """Sample objects and format them into prompt labels and caption.
+
+    This function is meant to be called via tf.py_function during iteration.
+
+    Args:
+        objects_json: JSON-serialized list of objects with 'label' and 'bbox'
+        max_objects: Maximum number of objects to include (randomly sampled if more)
+        seed: Random seed for sampling (if None, uses true randomness)
+
+    Returns:
+        Tuple of (prompt_labels, caption) as bytes
+    """
+    import json
+    import random
+
+    if not objects_json:
+        return b"", b""
+
+    try:
+        objects = json.loads(objects_json.decode("utf-8"))
+        if not objects:
+            return b"", b""
+
+        # Randomly sample max_objects if there are more
+        if len(objects) > max_objects:
+            if seed is not None:
+                rng = random.Random(seed)
+                objects = rng.sample(objects, max_objects)
+            else:
+                objects = random.sample(objects, max_objects)
+
+        # Build prompt with all object labels
+        labels = [obj["label"] for obj in objects]
+        unique_labels = list(dict.fromkeys(labels))  # Preserve order, remove duplicates
+        prompt_labels = ", ".join(unique_labels)
+
+        # Build caption with all bboxes (already letterbox-transformed)
+        caption_parts = []
+        for obj in objects:
+            label = obj["label"]
+            bbox = obj["bbox"]  # [x_min, y_min, x_max, y_max] already transformed
+            loc_str = bbox_to_loc_tokens(bbox[0], bbox[1], bbox[2], bbox[3])
+            caption_parts.append(f"{loc_str} {label}")
+
+        caption = " ; ".join(caption_parts)
+
+        return prompt_labels.encode("utf-8"), caption.encode("utf-8")
+
+    except Exception:
+        return b"", b""
+
+
+def sample_and_format_objects_tf(
+    objects_data: tf.Tensor,
+    max_objects: int = 2,
+    seed_pair: tuple[int, tf.Tensor] | None = None,
+) -> tuple[tf.Tensor, tf.Tensor]:
+    """Sample objects and format them into prompt labels and caption (pure TensorFlow).
+
+    This function uses pure TensorFlow operations, avoiding py_function overhead.
+    The input format is a pipe-delimited string: "label1|loc_tokens1;label2|loc_tokens2;..."
+    where loc_tokens is already formatted as "<loc...><loc...><loc...><loc...>".
+
+    Args:
+        objects_data: tf.string tensor with pipe-delimited objects data
+        max_objects: Maximum number of objects to include (randomly sampled if more)
+        seed_pair: Tuple of (base_seed, hash_value) for stateless random sampling
+
+    Returns:
+        Tuple of (prompt_labels, caption) as tf.string tensors
+    """
+    # Handle empty input
+    is_empty = tf.equal(tf.strings.length(objects_data), 0)
+
+    def empty_result():
+        return tf.constant(""), tf.constant("")
+
+    def process_objects():
+        # Split by semicolon to get individual objects
+        objects = tf.strings.split(objects_data, ";")
+        num_objects = tf.shape(objects)[0]
+
+        # Sample indices if we have more than max_objects
+        def sample_indices():
+            # Use stateless shuffle to get random permutation, then take first max_objects
+            if seed_pair is not None:
+                indices = tf.range(num_objects)
+                shuffled = tf.random.stateless_shuffle(indices, seed=seed_pair)
+                return shuffled[:max_objects]
+            else:
+                indices = tf.range(num_objects)
+                shuffled = tf.random.shuffle(indices)
+                return shuffled[:max_objects]
+
+        def all_indices():
+            return tf.range(num_objects)
+
+        selected_indices = tf.cond(
+            num_objects > max_objects,
+            sample_indices,
+            all_indices,
+        )
+
+        # Gather selected objects
+        selected_objects = tf.gather(objects, selected_indices)
+
+        # Split each object into label and loc_tokens
+        def split_object(obj):
+            parts = tf.strings.split(obj, "|")
+            # parts[0] is label, parts[1] is loc_tokens
+            label = parts[0]
+            loc_tokens = parts[1]
+            return label, loc_tokens
+
+        labels_and_locs = tf.map_fn(
+            split_object,
+            selected_objects,
+            fn_output_signature=(tf.TensorSpec([], tf.string), tf.TensorSpec([], tf.string)),
+        )
+        labels = labels_and_locs[0]
+        loc_tokens = labels_and_locs[1]
+
+        # Build prompt_labels: unique labels joined by ", "
+        # For simplicity, we join all labels (duplicates will be included)
+        # A true unique would require py_function, but for small max_objects this is acceptable
+        prompt_labels = tf.strings.reduce_join(labels, separator=", ")
+
+        # Build caption: "loc_tokens label" joined by " ; "
+        # tf.strings.join with separator joins corresponding elements: loc_tokens[i] + " " + labels[i]
+        caption_parts = tf.strings.join([loc_tokens, labels], separator=" ")
+        caption = tf.strings.reduce_join(caption_parts, separator=" ; ")
+
+        return prompt_labels, caption
+
+    return tf.cond(is_empty, empty_result, process_objects)
+
+
+def build_frame_objects_table_v2(
+    bbox_annotations_dir: str,
+    key_extractor: callable,
+    dataset_name: str = "",
+    orig_size: tuple[int, int] = (256, 256),
+    target_size: tuple[int, int] = (224, 224),
+) -> "tf.lookup.StaticHashTable":
+    """Build a lookup table from key--frame_idx to pipe-delimited objects string.
+
+    This version stores data in a TF-parseable format instead of JSON, enabling
+    pure TensorFlow operations for sampling and formatting.
+
+    Format: "label1|<loc...>;label2|<loc...>;..."
+
+    Args:
+        bbox_annotations_dir: Directory containing JSONL annotation files
+        key_extractor: Function that takes episode_data dict and returns the key string
+        dataset_name: Optional dataset name for logging
+        orig_size: Original image (width, height) for letterbox transformation
+        target_size: Target image (width, height) for letterbox transformation
+
+    Returns:
+        tf.lookup.StaticHashTable mapping "key--frame_idx" to pipe-delimited objects string
+    """
+    import json
+    import logging
+    import os
+
+    import tensorflow as tf
+
+    log_prefix = f" for {dataset_name}" if dataset_name else ""
+    logging.info(f"Building frame objects lookup table (v2){log_prefix}...")
+
+    orig_w, orig_h = orig_size
+    target_w, target_h = target_size
+
+    frame_to_objects = {}
+
+    jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
+
+    for jsonl_file in jsonl_files:
+        if "merged" in jsonl_file:
+            continue
+        with tf.io.gfile.GFile(jsonl_file, "r") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    episode_data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                # Use the provided key extractor to get the lookup key
+                episode_key = key_extractor(episode_data)
+                if not episode_key:
+                    continue
+
+                labels = episode_data.get("labels", [])
+                for label_entry in labels:
+                    frame_idx = label_entry.get("frame")
+                    all_objects = label_entry.get("all_objects", [])
+
+                    if frame_idx is None or not all_objects:
+                        continue
+
+                    key = f"{episode_key}--{frame_idx}"
+
+                    objects_list = []
+                    for obj in all_objects:
+                        obj_label = obj.get("label", "")
+                        bbox = obj.get("bbox", [])
+
+                        if not obj_label or len(bbox) < 4:
+                            continue
+
+                        # Normalize bbox (bbox values are in 0-1000 range in JSONL)
+                        y_min_raw = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
+                        x_min_raw = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
+                        y_max_raw = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
+                        x_max_raw = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
+
+                        # Pre-apply letterbox transformation
+                        x_min, y_min, x_max, y_max = transform_bbox_for_letterbox(
+                            x_min_raw, y_min_raw, x_max_raw, y_max_raw,
+                            orig_w, orig_h, target_w, target_h,
+                        )
+
+                        # Pre-compute loc tokens
+                        loc_tokens = bbox_to_loc_tokens(x_min, y_min, x_max, y_max)
+
+                        # Store as "label|loc_tokens"
+                        objects_list.append(f"{obj_label}|{loc_tokens}")
+
+                    if objects_list:
+                        if key in frame_to_objects:
+                            frame_to_objects[key].extend(objects_list)
+                        else:
+                            frame_to_objects[key] = objects_list
+
+    # Convert to lookup table with semicolon-delimited values
+    keys = []
+    values = []
+    for k, v in frame_to_objects.items():
+        keys.append(k)
+        values.append(";".join(v))
+
+    logging.info(f"Built frame objects table (v2) with {len(keys)} entries{log_prefix}")
+
+    if not keys:
+        # Return table with dummy entry (TF doesn't allow empty tables)
+        return tf.lookup.StaticHashTable(
+            tf.lookup.KeyValueTensorInitializer(
+                tf.constant(["__dummy_key__"], dtype=tf.string),
+                tf.constant([""], dtype=tf.string),
+            ),
+            default_value=tf.constant("", dtype=tf.string),
+        )
+
+    return tf.lookup.StaticHashTable(
+        tf.lookup.KeyValueTensorInitializer(
+            tf.constant(keys, dtype=tf.string),
+            tf.constant(values, dtype=tf.string),
+        ),
+        default_value=tf.constant("", dtype=tf.string),
     )
 
 

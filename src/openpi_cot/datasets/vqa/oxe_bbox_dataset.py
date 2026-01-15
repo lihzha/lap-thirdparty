@@ -21,8 +21,9 @@ from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
     BBOX_PROMPT_PARTS,
     build_annotated_keys_set,
-    build_frame_objects_table,
+    build_frame_objects_table_v2,
     oxe_key_extractor,
+    sample_and_format_objects_tf,
     sample_prompt_tf,
 )
 
@@ -368,36 +369,35 @@ class OXEBoundingBoxDataset(ABC):
 
     def apply_frame_filters(self):
         """Filter and expand frames to create final VQA samples."""
-        # Build a lookup table that maps episode_id--frame_idx to pre-formatted "labels\tcaption"
-        frame_to_formatted = self._build_frame_objects_table()
+        # Build a lookup table that maps episode_id--frame_idx to pipe-delimited objects
+        frame_to_objects = self._build_frame_objects_table()
 
         # Filter frames using pure TF lookup (fast) - only keep frames with annotations
         def has_bbox_annotation(frame):
             """Fast filter using pure TF lookup."""
             lookup_key = tf.strings.join([frame["episode_id"], "--", frame["frame_idx"]])
-            formatted = frame_to_formatted.lookup(lookup_key)
-            return tf.strings.length(formatted) > 0
+            objects_data = frame_to_objects.lookup(lookup_key)
+            return tf.strings.length(objects_data) > 0
 
         self.dataset = self.dataset.filter(has_bbox_annotation)
 
-        # Extract pre-formatted labels and caption from lookup table (pure TF, no py_function)
-        def lookup_formatted_caption(frame):
-            """Look up pre-formatted labels and caption - pure TensorFlow, no py_function."""
-            lookup_key = tf.strings.join([frame["episode_id"], "--", frame["frame_idx"]])
-            formatted = frame_to_formatted.lookup(lookup_key)
+        # Sample objects and format caption using pure TensorFlow operations
+        max_objects = 2
 
-            # Split on tab to get labels and caption (pre-formatted during table construction)
-            parts = tf.strings.split(formatted, sep="\t")
-            # Handle edge case where split might not produce 2 parts
-            labels = tf.cond(
-                tf.shape(parts)[0] >= 1,
-                lambda: parts[0],
-                lambda: tf.constant("", dtype=tf.string),
-            )
-            caption = tf.cond(
-                tf.shape(parts)[0] >= 2,
-                lambda: parts[1],
-                lambda: tf.constant("", dtype=tf.string),
+        def lookup_and_sample_objects(frame):
+            """Look up objects, sample if needed, and format caption using pure TF."""
+            lookup_key = tf.strings.join([frame["episode_id"], "--", frame["frame_idx"]])
+            objects_data = frame_to_objects.lookup(lookup_key)
+
+            # Create seed for reproducible sampling based on frame identity
+            seed_key = tf.strings.join([frame["trajectory_id"], "_sample_", frame["frame_idx"]])
+            seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
+            seed_hash_int = tf.cast(seed_hash, tf.int32)
+            seed_pair = (self.seed, seed_hash_int)
+
+            # Use pure TensorFlow sampling and formatting
+            labels, caption = sample_and_format_objects_tf(
+                objects_data, max_objects=max_objects, seed_pair=seed_pair
             )
 
             frame["object_labels"] = labels
@@ -405,9 +405,9 @@ class OXEBoundingBoxDataset(ABC):
 
             return frame
 
-        self.dataset = self.dataset.frame_map(lookup_formatted_caption, num_parallel_calls=self.num_parallel_calls)
+        self.dataset = self.dataset.frame_map(lookup_and_sample_objects, num_parallel_calls=self.num_parallel_calls)
 
-        # Filter out any invalid entries (shouldn't happen with pre-filtering, but safety check)
+        # Filter out any invalid entries (e.g., JSON parse errors)
         def has_valid_caption(frame):
             return tf.strings.length(frame["bbox_caption"]) > 0
 
@@ -456,17 +456,15 @@ class OXEBoundingBoxDataset(ABC):
         self.dataset = self.dataset.filter(has_valid_qa)
 
     def _build_frame_objects_table(self):
-        """Build a lookup table from episode_id--frame_idx to pre-formatted caption."""
+        """Build a lookup table from episode_id--frame_idx to pipe-delimited objects."""
         orig_w, orig_h = self.get_original_image_size()
         target_h, target_w = self.config.resize_resolution
-        return build_frame_objects_table(
+        return build_frame_objects_table_v2(
             bbox_annotations_dir=self.bbox_annotations_dir,
             key_extractor=oxe_key_extractor,
             dataset_name=self.dataset_name,
             orig_size=(orig_w, orig_h),
             target_size=(target_w, target_h),
-            max_objects=2,
-            seed=self.seed,
         )
 
     def get_num_transitions(self) -> int:
