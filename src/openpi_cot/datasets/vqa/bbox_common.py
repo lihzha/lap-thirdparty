@@ -582,15 +582,16 @@ def sample_and_format_objects_tf(
 
         # Sample indices if we have more than max_objects
         def sample_indices():
-            # Use stateless shuffle to get random permutation, then take first max_objects
+            # Generate random values and argsort to get a random permutation
             if seed_pair is not None:
-                indices = tf.range(num_objects)
-                shuffled = tf.random.stateless_shuffle(indices, seed=seed_pair)
-                return shuffled[:max_objects]
+                random_vals = tf.random.stateless_uniform(
+                    [num_objects], seed=seed_pair, dtype=tf.float32
+                )
             else:
-                indices = tf.range(num_objects)
-                shuffled = tf.random.shuffle(indices)
-                return shuffled[:max_objects]
+                random_vals = tf.random.uniform([num_objects], dtype=tf.float32)
+            # argsort gives indices that would sort the random values = random permutation
+            shuffled = tf.argsort(random_vals)
+            return shuffled[:max_objects]
 
         def all_indices():
             return tf.range(num_objects)
