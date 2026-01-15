@@ -18,7 +18,18 @@ if TYPE_CHECKING:
 
 
 # Registry of VQA dataset names
-VQA_DATASET_NAMES: set[str] = {"coco_captions", "vqa", "pixmo_cap", "pixmo_point", "lvis", "paco_lvis", "paco_ego4d", "droid_bbox"}
+VQA_DATASET_NAMES: set[str] = {
+    "coco_captions",
+    "vqa",
+    "pixmo_cap",
+    "pixmo_point",
+    "lvis",
+    "paco_lvis",
+    "paco_ego4d",
+    "droid_bbox",
+    "molmoact_bbox",
+    "bridge_bbox",
+}
 
 
 def ensure_dldataset(ds, is_flattened=False):

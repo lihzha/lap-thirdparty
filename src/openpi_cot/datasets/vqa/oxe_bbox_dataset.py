@@ -1,12 +1,14 @@
-"""DROID Bounding Box dataset implementation for VQA training.
+"""OXE Bounding Box dataset implementation for VQA training.
 
-This dataset loads DROID robot trajectories with object bounding box annotations
-from JSONL files and formats them as VQA samples asking "where is the <object>".
+This module provides bbox dataset classes for OXE datasets (molmoact, bridge)
+that loads robot trajectories with object bounding box annotations from JSONL files
+and formats them as VQA samples asking "where is the <object>".
 """
 
 import json
 import logging
 import os
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar
 
 import dlimp as dl
@@ -14,65 +16,64 @@ import jax
 import numpy as np
 import tensorflow as tf
 
-from openpi_cot.datasets.base_dataset import SingleCoTDataset
-from openpi_cot.datasets.utils.dataset_utils import print_memory_usage
+from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
 from openpi_cot.datasets.utils.helpers import NormalizationType
-from openpi_cot.datasets.utils.helpers import extract_episode_path_from_file_path
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
-from openpi_cot.datasets.vqa.vqa_base import ensure_dldataset
 
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
 
-# Bounding box prompts - same format as LVIS/PACO
-DROID_BBOX_PROMPT_PARTS = [
-    # ("Show me where the ", " is in the image using a bounding box."),
-    # ("Draw a bounding box around the ", " in the image."),
-    # ("Please provide a bounding box for the ", " in this image."),
-    # ("Locate the ", " in the image by drawing a bounding box."),
-    # ("mark the ", " with a bounding box."),
-    # ("Identify the ", " in the image by bounding it."),
-    # ("Find the ", " and draw a bounding box around it."),
-    # ("Highlight the ", " with a bounding box."),
-    # ("Can you draw a bounding box around the ", "?"),
-    # ("Where is the ", " in the image? Show it with a bounding box."),
-    # ("Indicate the ", " by marking a bounding box."),
-    # ("If there is a ", " in the image, draw a bounding box around it."),
-    # ("If any ", " is present, show one bounding box."),
-    # ("Show me one ", " in the image by drawing a bounding box."),
-    # ("Please locate the ", " using a bounding box."),
-    # ("Detect the ", " and provide its bounding box."),
-    # ("Find a ", " in the picture and draw a bounding box around it."),
-    # ("Bounding box task: draw a box around the ", "."),
-    # ("Object: ", ". Instruction: Draw a bounding box around the object."),
-    # ("Look for the ", " and mark it with a bounding box."),
-    # ("Help me find the ", " by drawing a bounding box around it."),
-    # ("Show me ", " using a bounding box."),
-    # ("For ", " in the image, draw a bounding box."),
-    # ("Indicate ", " with a bounding box."),
-    # ("Please show the region containing the ", " using a bounding box."),
-    # ("point out the ", " by drawing a bounding box."),
-    # ("Locate a ", " and provide bounding box."),
-    # ("Draw a bounding box around all the ", "."),
-    # ("Find and outline the ", " with a bounding box."),
-    # ("Mark ", " using bounding box."),
-    ("Pick up the ", ", predict where it is relative to the robot."),
-    ("Move to the ", ", predict where it is relative to the robot."),
-    ("Move near to the ", ", predict where it is relative to the robot."),
-    ("Pick up the ", ", predict where it is in the end-effector frame."),
-    ("Move to the ", ", predict where it is in the end-effector frame."),
-    ("Move near to the ", ", predict where it is in the end-effector frame."),
-    ("Pick up the ", ", predict where it is in the robot base frame."),
-    ("Move to the ", ", predict where it is in the robot base frame."),
-    ("Move near to the ", ", predict where it is in the robot base frame."),
+# Bounding box prompts - same format as LVIS/PACO/DROID
+BBOX_PROMPT_PARTS = [
+    ("Show me where the ", " is in the image using a bounding box."),
+    ("Draw a bounding box around the ", " in the image."),
+    ("Please provide a bounding box for the ", " in this image."),
+    ("Locate the ", " in the image by drawing a bounding box."),
+    ("mark the ", " with a bounding box."),
+    ("Identify the ", " in the image by bounding it."),
+    ("Find the ", " and draw a bounding box around it."),
+    ("Highlight the ", " with a bounding box."),
+    ("Can you draw a bounding box around the ", "?"),
+    ("Where is the ", " in the image? Show it with a bounding box."),
+    ("Indicate the ", " by marking a bounding box."),
+    ("If there is a ", " in the image, draw a bounding box around it."),
+    ("If any ", " is present, show one bounding box."),
+    ("Show me one ", " in the image by drawing a bounding box."),
+    ("Please locate the ", " using a bounding box."),
+    ("Detect the ", " and provide its bounding box."),
+    ("Find a ", " in the picture and draw a bounding box around it."),
+    ("Bounding box task: draw a box around the ", "."),
+    ("Object: ", ". Instruction: Draw a bounding box around the object."),
+    ("Look for the ", " and mark it with a bounding box."),
+    ("Help me find the ", " by drawing a bounding box around it."),
+    ("Show me ", " using a bounding box."),
+    ("For ", " in the image, draw a bounding box."),
+    ("Indicate ", " with a bounding box."),
+    ("Please show the region containing the ", " using a bounding box."),
+    ("point out the ", " by drawing a bounding box."),
+    ("Locate a ", " and provide bounding box."),
+    ("Draw a bounding box around all the ", "."),
+    ("Find and outline the ", " with a bounding box."),
+    ("Mark ", " using bounding box."),
+    ("Pick up the ", ", predict where it is in the image."),
+    ("Move to the ", ", predict where it is in the image."),
 ]
 
 
-class DroidBoundingBoxDataset(SingleCoTDataset):
-    """DROID dataset with bounding box annotations for VQA training.
+class OXEBoundingBoxDataset(ABC):
+    """Base class for OXE datasets with bounding box annotations for VQA training.
 
-    This dataset loads DROID trajectories and bbox annotations from JSONL files,
-    creating VQA samples that ask "where is the <object>" with bbox answers.
+    This class provides common functionality for loading OXE trajectories
+    and bbox annotations from JSONL files, creating VQA samples that ask
+    "where is the <object>" with bbox answers.
+
+    Subclasses must implement:
+    - get_dataset_name(): Return the dataset name string
+    - get_bbox_annotations_dir_name(): Return the bbox annotations directory name
+    - get_oxe_dataset_name(): Return the OXE dataset name for loading
+    - get_primary_image_key(): Return the key for the primary image in observations
+    - get_original_image_size(): Return (width, height) of original images for bbox normalization
+    - extract_uuid_from_traj(): Extract UUID from trajectory metadata for lookup
     """
 
     spec: ClassVar[CoTRldsDatasetSpec] = CoTRldsDatasetSpec()
@@ -109,7 +110,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.config = config
         self.seed = seed
         self.want_val = split == "val"
-        self.dataset_name = "droid_bbox"
+        self.dataset_name = self.get_dataset_name()
         self.action_dim = action_dim
         self.state_dim = state_dim
         self.vis_dataset = bool(config.vis_dataset)
@@ -119,9 +120,17 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.action_horizon = action_horizon
         self.want_full_determinism = config.want_full_determinism
         self.val_fraction = getattr(self.config, "val_fraction", 0.02)
+        self.data_dir = data_dir
 
         # VQA-specific settings
         self.control_frequency = 1  # Single frame, no temporal control
+
+        # Get dataset-specific config
+        oxe_dataset_name = self.get_oxe_dataset_name()
+        self.dataset_kwargs = load_dataset_kwargs(
+            oxe_dataset_name, data_dir, load_camera_views=("primary", "wrist", "wrist_right")
+        )
+        self.standardize_fn = self.dataset_kwargs.get("standardize_fn")
 
         # Configure TensorFlow with no GPU/TPU devices
         tf.config.set_visible_devices([], "GPU")
@@ -133,53 +142,15 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         tf.random.set_seed(self.seed)
 
         # Build path to bbox annotations directory
-        # Try both possible directory name patterns
-        if self.spec.lang_action_dir_name in config.language_action_dir:
-            self.bbox_annotations_dir = config.language_action_dir.replace(
-                self.spec.lang_action_dir_name, "droid-bbox-annotations"
-            )
-        elif self.spec.lang_action_dir_name_base in config.language_action_dir:
-            self.bbox_annotations_dir = config.language_action_dir.replace(
-                self.spec.lang_action_dir_name_base, "droid-bbox-annotations"
-            )
-        else:
-            # Fallback: try to construct path from parent directory
-            parent_dir = os.path.dirname(config.language_action_dir.rstrip("/"))
-            self.bbox_annotations_dir = os.path.join(parent_dir, "droid-bbox-annotations")
-
+        self.bbox_annotations_dir = self._get_bbox_annotations_dir(config)
         logging.info(f"Loading bbox annotations from: {self.bbox_annotations_dir}")
 
-        # Build lookup tables
-        if hash_tables is not None:
-            self.ep_table = hash_tables.get("ep_table")
-        else:
-            if self.spec.lang_action_dir_name in config.language_action_dir:
-                metadata_path = config.language_action_dir.replace(
-                    self.spec.lang_action_dir_name, self.spec.metadata_path_name
-                )
-            elif self.spec.lang_action_dir_name_base in config.language_action_dir:
-                metadata_path = config.language_action_dir.replace(
-                    self.spec.lang_action_dir_name_base, self.spec.metadata_path_name
-                )
-            else:
-                raise ValueError(f"Unknown language action directory: {config.language_action_dir}")
-
-            self.ep_table = self.build_lookup_table(metadata_path)
-
-            if standalone:
-                self.hash_tables = {
-                    "ep_table": self.ep_table,
-                }
-
         # Build RLDS dataset
-        self.builder = self.build_dataset_builder(config.droid_dataset_name, data_dir)
+        self.builder = self.build_dataset_builder(oxe_dataset_name, data_dir)
         self.dataset = self.build_dataset(self.builder)
 
-        # Apply trajectory identifier
+        # Apply trajectory identifier (OXE-style: hash-based)
         self.get_traj_identifier()
-
-        # # Apply trajectory filters (only keep episodes with bbox annotations)
-        # self.apply_traj_filters(action_key="action")
 
         # Split train/val
         self.split_val(split_seed=seed)
@@ -232,29 +203,62 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 aug_wrist_image=getattr(config, "aug_wrist_image", True),
             )
 
-    def _episode_id_from_traj(self, traj, ep_table):
-        """Lookup episode_id from trajectory metadata using regex extraction."""
-        file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
-        episode_path = extract_episode_path_from_file_path(file_path)
-        return ep_table.lookup(episode_path)
+    # ========== Abstract methods to be implemented by subclasses ==========
 
-    def build_lookup_table(self, metadata_path):
-        """Build episode-path to episode-ID lookup table."""
-        with tf.io.gfile.GFile(f"{metadata_path}/{self.spec.episode_id_to_path_file}", "r") as fp:
-            episode_id_to_path = json.load(fp)
-        episode_path_to_id = {v: k for k, v in episode_id_to_path.items()}
+    @abstractmethod
+    def get_dataset_name(self) -> str:
+        """Return dataset name for metadata (e.g., 'molmoact_bbox', 'bridge_bbox')."""
+        raise NotImplementedError
 
-        keys = tf.constant(list(episode_path_to_id.keys()), dtype=tf.string)
-        values = tf.constant(list(episode_path_to_id.values()), dtype=tf.string)
-        ep_table = tf.lookup.StaticHashTable(
-            tf.lookup.KeyValueTensorInitializer(keys, values),
-            default_value=self.spec.default_ep_value,
-        )
-        print_memory_usage("After building ep_table")
-        return ep_table
+    @abstractmethod
+    def get_bbox_annotations_dir_name(self) -> str:
+        """Return the bbox annotations directory name (e.g., 'molmoact-bbox-annotations')."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_oxe_dataset_name(self) -> str:
+        """Return the OXE dataset name for loading (e.g., 'molmoact_dataset', 'bridge_v2_oxe')."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_primary_image_key(self) -> str:
+        """Return the key for primary image in observations (e.g., 'image', 'image_0')."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_original_image_size(self) -> tuple[int, int]:
+        """Return (width, height) of original images for bbox normalization."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def extract_uuid_from_traj(self, traj) -> tf.Tensor:
+        """Extract UUID from trajectory metadata for JSONL lookup.
+
+        The UUID should match the format in the JSONL annotations file.
+        Returns a tf.string tensor.
+        """
+        raise NotImplementedError
+
+    # ========== Common methods ==========
+
+    def _get_bbox_annotations_dir(self, config) -> str:
+        """Build path to bbox annotations directory."""
+        bbox_dir_name = self.get_bbox_annotations_dir_name()
+        if self.spec.lang_action_dir_name in config.language_action_dir:
+            return config.language_action_dir.replace(
+                self.spec.lang_action_dir_name, bbox_dir_name
+            )
+        elif self.spec.lang_action_dir_name_base in config.language_action_dir:
+            return config.language_action_dir.replace(
+                self.spec.lang_action_dir_name_base, bbox_dir_name
+            )
+        else:
+            # Fallback: try to construct path from parent directory
+            parent_dir = os.path.dirname(config.language_action_dir.rstrip("/"))
+            return os.path.join(parent_dir, bbox_dir_name)
 
     def build_dataset_builder(self, ds_name, data_dir):
-        """Build TFDS builder for DROID."""
+        """Build TFDS builder for OXE dataset."""
         import tensorflow_datasets as tfds
 
         return tfds.builder(ds_name, data_dir=data_dir)
@@ -294,30 +298,35 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         return opts
 
     def get_traj_identifier(self):
-        """Add trajectory_id to each trajectory."""
+        """Add trajectory_id to each trajectory using OXE-style hash-based identifier."""
 
         def _get_traj_identifier(traj):
-            episode_id = self._episode_id_from_traj(traj, self.ep_table)
-            traj["trajectory_id"] = tf.fill([tf.shape(traj["action"])[0]], episode_id)
+            # Apply standardization function if provided
+            if self.standardize_fn is not None:
+                traj = self.standardize_fn(traj)
+
+            traj_len = tf.shape(traj["action"])[0]
+            max_steps = 128
+            action_for_hash = tf.cond(
+                max_steps >= traj_len,
+                lambda: traj["action"],
+                lambda: tf.concat([traj["action"][:64], traj["action"][-64:]], axis=0),
+            )
+            serialized_action = tf.io.serialize_tensor(action_for_hash)
+            name_tensor = tf.constant(self.dataset_name, dtype=tf.string)
+            sep1 = tf.constant("::", dtype=tf.string)
+            sep2 = tf.constant("-", dtype=tf.string)
+            to_hash = tf.strings.join([name_tensor, sep1, serialized_action])
+            hashed = tf.strings.to_hash_bucket_strong(to_hash, 2147483647, key=[self.seed, 1337])
+            traj_uid = tf.strings.join([name_tensor, sep2, tf.strings.as_string(hashed)])
+            traj["trajectory_id"] = tf.repeat(traj_uid, traj_len)
+
+            # Also extract UUID for bbox lookup
+            traj["uuid"] = tf.repeat(self.extract_uuid_from_traj(traj), traj_len)
+
             return traj
 
         self.dataset = self.dataset.traj_map(_get_traj_identifier, self.num_parallel_calls)
-
-    def apply_traj_filters(self, action_key):
-        """Filter trajectories to only keep those with bbox annotations."""
-
-        # Filter out empty trajectories
-        def _non_empty(traj):
-            return tf.greater(tf.shape(traj[action_key])[0], 0)
-
-        self.dataset = self.dataset.filter(_non_empty)
-
-        # Filter to only keep successful trajectories
-        def _path_ok(traj):
-            file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
-            return tf.strings.regex_full_match(file_path, ".*success.*")
-
-        self.dataset = self.dataset.filter(_path_ok)
 
     def split_val(self, split_seed):
         """Split dataset into train/val."""
@@ -335,21 +344,14 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
     def apply_restructure(self):
         """Restructure trajectory data into VQA-style bbox samples."""
+        primary_image_key = self.get_primary_image_key()
 
         def restructure(traj):
             """Convert trajectory to VQA bbox format."""
-            # Get file_path directly from metadata
-            file_path = traj["traj_metadata"]["episode_metadata"]["file_path"]
-
             traj_len = tf.shape(traj["action"])[0]
-            episode_id = traj["trajectory_id"][0]
 
-            # Extract episode path from file_path
-            # Example file_path: gs://xembodiment_data/r2d2/r2d2-data-full/ILIAD/success/2023-04-21/.../trajectory.h5
-            episode_path = extract_episode_path_from_file_path(file_path[0])
-
-            # Use wrist image for bbox annotations
-            primary_img = traj["observation"]["wrist_image_left"]
+            # Get primary image from observations
+            primary_img = traj["observation"][primary_image_key]
 
             # Create frame indices as strings
             frame_indices = tf.as_string(tf.range(traj_len))
@@ -361,7 +363,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                     "state": tf.zeros([traj_len, self.state_dim], dtype=tf.float32),
                 },
                 "trajectory_id": traj["trajectory_id"],
-                "episode_path": tf.fill([traj_len], episode_path),
+                "uuid": traj["uuid"],
                 "frame_idx": frame_indices,
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
             }
@@ -373,16 +375,17 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
     def apply_frame_filters(self):
         """Filter and expand frames to create final VQA samples."""
-        # Build a lookup table that maps episode_path--frame_idx to a list of objects
+        # Build a lookup table that maps uuid--frame_idx to a list of objects
         frame_to_objects = self._build_frame_objects_table()
 
         # Target resolution for letterbox transformation
         target_h, target_w = self.config.resize_resolution
+        orig_w, orig_h = self.get_original_image_size()
 
         def lookup_all_objects(frame):
             """Look up ALL objects for this frame and generate caption with all bboxes."""
-            # Create lookup key: episode_path--frame_idx
-            lookup_key = tf.strings.join([frame["episode_path"], "--", frame["frame_idx"]])
+            # Create lookup key: uuid--frame_idx
+            lookup_key = tf.strings.join([frame["uuid"], "--", frame["frame_idx"]])
 
             # Look up the serialized list of objects
             objects_json = frame_to_objects.lookup(lookup_key)
@@ -390,8 +393,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             # Check if we have annotations
             has_annotations = tf.strings.length(objects_json) > 0
 
-            # Get image dimensions for letterbox transformation
-            # The image is still encoded at this point, so we need to decode to get dimensions
+            # Get image bytes for potential dimension check (if needed)
             img_bytes = frame["observation"][self.spec.primary_image_key]
 
             def parse_all_objects_and_transform(objects_json_bytes, img_bytes_tensor):
@@ -404,24 +406,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                     if not objects:
                         return b"", b""
 
-                    # Decode image to get original dimensions
-                    img_data = img_bytes_tensor.numpy()
-                    if len(img_data) == 0:
-                        return b"", b""
-
-                    # # Use TensorFlow to decode and get shape
-                    # import io
-                    # from PIL import Image
-                    # try:
-                    #     img = Image.open(io.BytesIO(img_data))
-                    #     orig_w, orig_h = img.size
-                    # except Exception:
-                    #     # Default to common DROID wrist image size
-                    #     orig_w, orig_h = 640, 480
-                    orig_w, orig_h = 320, 180
-
                     # Compute letterbox transformation parameters
-                    # Same logic as _tf_resize_with_pad
                     ratio = max(orig_w / target_w, orig_h / target_h)
                     resized_w = int(orig_w / ratio)
                     resized_h = int(orig_h / ratio)
@@ -441,7 +426,6 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                         bbox = obj["bbox"]  # [x_min, y_min, x_max, y_max] normalized 0-1
 
                         # Transform bbox coordinates for letterbox
-                        # Original coords are normalized (0-1), need to transform to letterboxed space
                         x_min = bbox[0] * (resized_w / target_w) + (pad_w / target_w)
                         y_min = bbox[1] * (resized_h / target_h) + (pad_h / target_h)
                         x_max = bbox[2] * (resized_w / target_w) + (pad_w / target_w)
@@ -499,7 +483,6 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         # Convert to final VQA format
         def finalize_vqa(frame):
             """Create final VQA sample with prompt and caption."""
-            # Generate prompt asking about all objects
             labels = frame["object_labels"]
             caption = frame["bbox_caption"]
 
@@ -508,14 +491,14 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
             seed_hash_int = tf.cast(seed_hash, tf.int32)
 
-            num_prompts = len(DROID_BBOX_PROMPT_PARTS)
+            num_prompts = len(BBOX_PROMPT_PARTS)
             prompt_idx = tf.random.stateless_uniform(
                 [], seed=[self.seed, seed_hash_int], minval=0, maxval=num_prompts, dtype=tf.int32
             )
 
             # Create branches for each prompt template
             def make_prompt_fn(idx):
-                prefix, suffix = DROID_BBOX_PROMPT_PARTS[idx]
+                prefix, suffix = BBOX_PROMPT_PARTS[idx]
 
                 def fn():
                     return tf.strings.join([prefix, labels, suffix])
@@ -555,12 +538,11 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.dataset = self.dataset.filter(has_valid_qa)
 
     def _build_frame_objects_table(self):
-        """Build a lookup table from episode_path--frame_idx to list of objects."""
-        logging.info("Building frame objects lookup table...")
-        import re
+        """Build a lookup table from uuid--frame_idx to list of objects."""
+        logging.info(f"Building frame objects lookup table for {self.dataset_name}...")
 
         frame_to_objects = {}
-        sample_keys_logged = 0
+        orig_w, orig_h = self.get_original_image_size()
 
         jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
 
@@ -574,17 +556,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                     except json.JSONDecodeError:
                         continue
 
-                    file_path = episode_data.get("episode_metadata", {}).get("file_path", "")
-                    if not file_path:
-                        continue
-
-                    # Extract episode path using the same logic as extract_episode_path_from_file_path
-                    # Remove prefix up to r2d2-data or r2d2-data-full
-                    rel = re.sub(r"^.*r2d2-data(?:-full)?/", "", file_path)
-                    # Remove /trajectory... suffix
-                    episode_path = re.sub(r"/trajectory.*$", "", rel)
-
-                    if not episode_path:
+                    uuid = episode_data.get("uuid", "")
+                    if not uuid:
                         continue
 
                     labels = episode_data.get("labels", [])
@@ -595,7 +568,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                         if frame_idx is None or not all_objects:
                             continue
 
-                        key = f"{episode_path}--{frame_idx}"
+                        key = f"{uuid}--{frame_idx}"
 
                         objects_list = []
                         for obj in all_objects:
@@ -605,7 +578,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                             if not obj_label or len(bbox) < 4:
                                 continue
 
-                            # Normalize bbox
+                            # Normalize bbox (bbox values are in 0-1000 range in JSONL)
+                            # Need to convert to 0-1 normalized coordinates
                             y_min = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
                             x_min = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
                             y_max = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
@@ -629,7 +603,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             keys.append(k)
             values.append(json.dumps(v))
 
-        logging.info(f"Built frame objects table with {len(keys)} entries")
+        logging.info(f"Built frame objects table with {len(keys)} entries for {self.dataset_name}")
 
         if not keys:
             # Return table with dummy entry (TF doesn't allow empty tables)
@@ -649,44 +623,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             default_value=tf.constant(b"", dtype=tf.string),
         )
 
-    # def bbox_to_text(self, bbox: tf.Tensor) -> tf.Tensor:
-    #     """Convert bbox to formatted text representation using paligemma loc tokens.
-
-    #     Args:
-    #         bbox: Tensor of shape [4] with normalized coordinates [x_min, y_min, x_max, y_max]
-    #               where coordinates are in range [0, 1].
-
-    #     Returns:
-    #         Formatted string in PaLiGemma2 bbox format: "<loc_ymin><loc_xmin><loc_ymax><loc_xmax>".
-    #     """
-    #     x_min = bbox[0]
-    #     y_min = bbox[1]
-    #     x_max = bbox[2]
-    #     y_max = bbox[3]
-
-    #     # Convert to paligemma loc token indices (0-1023)
-    #     N = 1024
-    #     y_min_idx = tf.cast(tf.round(y_min * (N - 1)), tf.int32)
-    #     x_min_idx = tf.cast(tf.round(x_min * (N - 1)), tf.int32)
-    #     y_max_idx = tf.cast(tf.round(y_max * (N - 1)), tf.int32)
-    #     x_max_idx = tf.cast(tf.round(x_max * (N - 1)), tf.int32)
-
-    #     # Format as loc tokens in PaLiGemma2 order: y_min, x_min, y_max, x_max
-    #     y_min_token = tf.strings.join(["<loc", tf.strings.as_string(y_min_idx, width=4, fill="0"), ">"])
-    #     x_min_token = tf.strings.join(["<loc", tf.strings.as_string(x_min_idx, width=4, fill="0"), ">"])
-    #     y_max_token = tf.strings.join(["<loc", tf.strings.as_string(y_max_idx, width=4, fill="0"), ">"])
-    #     x_max_token = tf.strings.join(["<loc", tf.strings.as_string(x_max_idx, width=4, fill="0"), ">"])
-
-    #     # Join in PaLiGemma2 order: y_min, x_min, y_max, x_max
-    #     return tf.strings.join([y_min_token, x_min_token, y_max_token, x_max_token])
-
-    def get_dataset_name(self) -> str:
-        """Return dataset name for metadata."""
-        return "droid_bbox"
-
     def get_num_transitions(self) -> int:
         """Return approximate number of transitions."""
-        # Estimate based on typical DROID dataset size
         return 100000
 
     def __iter__(self):
@@ -702,3 +640,160 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
     def __len__(self):
         return self.dataset_statistics["state"].num_transitions
+
+
+class MolmoActBoundingBoxDataset(OXEBoundingBoxDataset):
+    """MolmoAct dataset with bounding box annotations for VQA training.
+
+    Uses the molmoact_dataset from OXE with bbox annotations from JSONL files.
+    """
+
+    def get_dataset_name(self) -> str:
+        return "molmoact_bbox"
+
+    def get_bbox_annotations_dir_name(self) -> str:
+        return "molmoact-bbox-annotations"
+
+    def get_oxe_dataset_name(self) -> str:
+        return "molmoact_dataset"
+
+    def get_primary_image_key(self) -> str:
+        return "image"
+
+    def get_original_image_size(self) -> tuple[int, int]:
+        # MolmoAct uses 256x256 images
+        return (256, 256)
+
+    def extract_uuid_from_traj(self, traj) -> tf.Tensor:
+        """Extract UUID from MolmoAct trajectory metadata.
+
+        MolmoAct UUID format from JSONL:
+        gs://pi0-cot/OXE/molmoact_dataset/1.0.0/molmoact_dataset-train.tfrecord-00000-of-00512::episode_0
+
+        The dlimp library stores the source tfrecord file in traj_metadata._source_file
+        and episode index in episode_metadata or as _source_episode_idx.
+        """
+        # Try to extract source file and episode index from traj_metadata
+        if "traj_metadata" in traj:
+            traj_meta = traj["traj_metadata"]
+
+            # Method 1: Use _source_file and _source_episode_idx if available (dlimp standard)
+            if "_source_file" in traj_meta and "_source_episode_idx" in traj_meta:
+                source_file = traj_meta["_source_file"]
+                episode_idx = traj_meta["_source_episode_idx"]
+                if isinstance(source_file, tf.Tensor) and len(source_file.shape) > 0:
+                    source_file = source_file[0]
+                if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
+                    episode_idx = episode_idx[0]
+                return tf.strings.join([
+                    source_file,
+                    tf.constant("::episode_", dtype=tf.string),
+                    tf.strings.as_string(episode_idx)
+                ])
+
+            # Method 2: Use episode_metadata if available
+            if "episode_metadata" in traj_meta:
+                episode_meta = traj_meta["episode_metadata"]
+                # Some datasets have episode_id or episode_index
+                episode_idx = None
+                if "episode_index" in episode_meta:
+                    episode_idx = episode_meta["episode_index"]
+                elif "episode_id" in episode_meta:
+                    episode_idx = episode_meta["episode_id"]
+
+                if episode_idx is not None:
+                    if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
+                        episode_idx = episode_idx[0]
+                    # Construct UUID using dataset name and episode index
+                    # This won't match the exact GCS path but provides a unique key
+                    return tf.strings.join([
+                        tf.constant(f"gs://pi0-cot/OXE/{self.get_oxe_dataset_name()}/::episode_", dtype=tf.string),
+                        tf.strings.as_string(episode_idx)
+                    ])
+
+        # Fallback: construct a unique ID from the trajectory actions
+        action_sample = traj["action"][0]
+        serialized = tf.io.serialize_tensor(action_sample)
+        hash_val = tf.strings.to_hash_bucket_fast(serialized, 2147483647)
+        return tf.strings.join([
+            tf.constant("molmoact-fallback-", dtype=tf.string),
+            tf.strings.as_string(hash_val)
+        ])
+
+
+class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
+    """Bridge dataset with bounding box annotations for VQA training.
+
+    Uses the bridge_v2_oxe dataset from OXE with bbox annotations from JSONL files.
+    """
+
+    def get_dataset_name(self) -> str:
+        return "bridge_bbox"
+
+    def get_bbox_annotations_dir_name(self) -> str:
+        return "bridge-bbox-annotations"
+
+    def get_oxe_dataset_name(self) -> str:
+        return "bridge_v2_oxe"
+
+    def get_primary_image_key(self) -> str:
+        return "image_0"
+
+    def get_original_image_size(self) -> tuple[int, int]:
+        # Bridge uses 256x256 images
+        return (256, 256)
+
+    def extract_uuid_from_traj(self, traj) -> tf.Tensor:
+        """Extract UUID from Bridge trajectory metadata.
+
+        Bridge UUID format from JSONL:
+        gs://pi0-cot/OXE/bridge_v2_oxe/1.0.0/bridge_dataset-train.tfrecord-00000-of-01024::episode_0
+
+        The dlimp library stores the source tfrecord file in traj_metadata._source_file
+        and episode index in episode_metadata or as _source_episode_idx.
+        """
+        # Try to extract source file and episode index from traj_metadata
+        if "traj_metadata" in traj:
+            traj_meta = traj["traj_metadata"]
+
+            # Method 1: Use _source_file and _source_episode_idx if available (dlimp standard)
+            if "_source_file" in traj_meta and "_source_episode_idx" in traj_meta:
+                source_file = traj_meta["_source_file"]
+                episode_idx = traj_meta["_source_episode_idx"]
+                if isinstance(source_file, tf.Tensor) and len(source_file.shape) > 0:
+                    source_file = source_file[0]
+                if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
+                    episode_idx = episode_idx[0]
+                return tf.strings.join([
+                    source_file,
+                    tf.constant("::episode_", dtype=tf.string),
+                    tf.strings.as_string(episode_idx)
+                ])
+
+            # Method 2: Use episode_metadata if available
+            if "episode_metadata" in traj_meta:
+                episode_meta = traj_meta["episode_metadata"]
+                # Some datasets have episode_id or episode_index
+                episode_idx = None
+                if "episode_index" in episode_meta:
+                    episode_idx = episode_meta["episode_index"]
+                elif "episode_id" in episode_meta:
+                    episode_idx = episode_meta["episode_id"]
+
+                if episode_idx is not None:
+                    if isinstance(episode_idx, tf.Tensor) and len(episode_idx.shape) > 0:
+                        episode_idx = episode_idx[0]
+                    # Construct UUID using dataset name and episode index
+                    return tf.strings.join([
+                        tf.constant(f"gs://pi0-cot/OXE/{self.get_oxe_dataset_name()}/::episode_", dtype=tf.string),
+                        tf.strings.as_string(episode_idx)
+                    ])
+
+        # Fallback: construct a unique ID from the trajectory actions
+        action_sample = traj["action"][0]
+        serialized = tf.io.serialize_tensor(action_sample)
+        hash_val = tf.strings.to_hash_bucket_fast(serialized, 2147483647)
+        return tf.strings.join([
+            tf.constant("bridge-fallback-", dtype=tf.string),
+            tf.strings.as_string(hash_val)
+        ])

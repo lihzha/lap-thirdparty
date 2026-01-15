@@ -13,6 +13,8 @@ from openpi_cot.datasets.robot.oxe_datasets import DobbeCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import LiberoCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import NavigationCoTDataset
 from openpi_cot.datasets.robot.oxe_datasets import SingleOXECoTDataset
+from openpi_cot.datasets.vqa.oxe_bbox_dataset import BridgeBoundingBoxDataset
+from openpi_cot.datasets.vqa.oxe_bbox_dataset import MolmoActBoundingBoxDataset
 from openpi_cot.datasets.utils.data_utils import allocate_threads
 from openpi_cot.datasets.utils.data_utils import pprint_data_mixture
 from openpi_cot.datasets.utils.dataset_utils import prepare_batched_dataset
@@ -191,6 +193,16 @@ class OXECoTDatasets:
                 # Update hash tables if not already set
                 if self.hash_tables is None and hasattr(ds, "hash_tables"):
                     self.hash_tables = ds.hash_tables
+            elif dataset_name == "bridge_bbox":
+                ds = BridgeBoundingBoxDataset(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
+            elif dataset_name == "molmoact_bbox":
+                ds = MolmoActBoundingBoxDataset(
+                    dataset_name=dataset_name,
+                    **kwargs,
+                )
             else:
                 ds = SingleOXECoTDataset(
                     dataset_name=dataset_name,

@@ -245,6 +245,8 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "paco_lvis": [("paco_lvis", 1.0)],
     "paco_ego4d": [("paco_ego4d", 1.0)],
     "droid_bbox": [("droid_bbox", 1.0)],
+    "bridge_bbox": [("bridge_bbox", 1.0)],
+    "molmoact_bbox": [("molmoact_bbox", 1.0)],
     "droid_100": [("droid_100", 1.0)],
     "test_mixture": [("droid_bbox", 3.0), ("fmb", 1.0)]
 }
