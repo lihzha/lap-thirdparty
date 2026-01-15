@@ -5,7 +5,14 @@ This script loads bridge data from gs://pi0-cot/OXE/bridge_v2_oxe and visualizes
 the bounding box annotations from the corresponding JSONL file.
 
 Usage:
-    python scripts/vis_bridge_bbox.py [--num-episodes 10] [--save-video output.mp4]
+    # Interactive viewer (local)
+    python scripts/vis_bridge_bbox.py
+    
+    # Log to wandb
+    python scripts/vis_bridge_bbox.py --wandb --wandb-project bridge-bbox-vis
+    
+    # Save frames locally
+    python scripts/vis_bridge_bbox.py --save-dir ./output_frames
 """
 
 import argparse
@@ -15,10 +22,16 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
 import numpy as np
 import tensorflow_datasets as tfds
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 
 def load_bbox_annotations(jsonl_path: str) -> dict[str, dict]:
@@ -629,6 +642,227 @@ def save_annotated_frames(
     print(f"Saved annotated frames to {output_dir}")
 
 
+def create_grid_image(images: list[np.ndarray], cols: int = 4) -> np.ndarray:
+    """Create a grid image from a list of images.
+    
+    Args:
+        images: List of images (H, W, 3)
+        cols: Number of columns in the grid
+        
+    Returns:
+        Grid image as numpy array
+    """
+    if not images:
+        return np.zeros((256, 256, 3), dtype=np.uint8)
+    
+    n = len(images)
+    rows = (n + cols - 1) // cols
+    
+    # Get consistent size from first image
+    h, w = images[0].shape[:2]
+    
+    # Create empty grid
+    grid = np.zeros((rows * h, cols * w, 3), dtype=np.uint8)
+    
+    for i, img in enumerate(images):
+        row = i // cols
+        col = i % cols
+        # Resize if needed
+        if img.shape[:2] != (h, w):
+            img = cv2.resize(img, (w, h))
+        grid[row * h:(row + 1) * h, col * w:(col + 1) * w] = img
+    
+    return grid
+
+
+def log_to_wandb(
+    episodes: list,
+    annotations: dict,
+    max_episodes: int = 50,
+    images_per_log: int = 16,
+):
+    """Log annotated frames to wandb.
+    
+    Args:
+        episodes: List of episodes
+        annotations: Bbox annotations
+        max_episodes: Maximum episodes to process
+        images_per_log: Number of images per wandb log entry
+    """
+    if wandb is None:
+        print("wandb not installed. Install with: pip install wandb")
+        return
+    
+    # Build UUID to episode index mapping
+    uuid_to_ep = {}
+    for uuid in annotations:
+        _, _, ep_idx = parse_uuid(uuid)
+        if ep_idx < len(episodes):
+            uuid_to_ep[uuid] = ep_idx
+    
+    # Collect all annotated images
+    all_images = []
+    all_captions = []
+    
+    processed = 0
+    for uuid, ep_idx in uuid_to_ep.items():
+        if processed >= max_episodes:
+            break
+        
+        annot = annotations[uuid]
+        episode_data = extract_episode_data(episodes[ep_idx], ep_idx)
+        
+        if len(episode_data['images']) == 0:
+            continue
+        
+        labels = annot.get("labels", [])
+        task = annot.get("task", "")
+        
+        for label_data in labels:
+            frame_idx = label_data["frame"]
+            if frame_idx >= len(episode_data['images']):
+                continue
+            
+            img = episode_data['images'][frame_idx].copy()
+            target_object = label_data.get("target_object", "")
+            
+            # Draw all bboxes
+            for obj in label_data.get("all_objects", []):
+                bbox = obj.get("bbox", [])
+                obj_label = obj.get("label", "")
+                is_target = obj.get("is_target", None)
+                if len(bbox) == 4:
+                    img = draw_bbox_on_image(img, bbox, obj_label, is_target)
+            
+            all_images.append(img)
+            caption = f"Ep{ep_idx} F{frame_idx}: {task[:40]}... Target: {target_object}"
+            all_captions.append(caption)
+        
+        processed += 1
+        if processed % 10 == 0:
+            print(f"Processed {processed} episodes...")
+    
+    print(f"Collected {len(all_images)} annotated frames")
+    
+    # Log images in batches
+    batch_idx = 0
+    for i in range(0, len(all_images), images_per_log):
+        batch_images = all_images[i:i + images_per_log]
+        batch_captions = all_captions[i:i + images_per_log]
+        
+        # Create grid for this batch
+        grid = create_grid_image(batch_images, cols=4)
+        
+        # Log individual images with captions
+        wandb_images = [
+            wandb.Image(img, caption=cap) 
+            for img, cap in zip(batch_images, batch_captions)
+        ]
+        
+        # Log to wandb
+        wandb.log({
+            "bbox_vis/grid": wandb.Image(grid, caption=f"Batch {batch_idx}"),
+            "bbox_vis/images": wandb_images,
+            "batch_idx": batch_idx,
+        })
+        
+        batch_idx += 1
+        print(f"Logged batch {batch_idx} ({len(batch_images)} images)")
+    
+    print(f"Finished logging {len(all_images)} images in {batch_idx} batches")
+
+
+def log_episodes_to_wandb(
+    episodes: list,
+    annotations: dict,
+    max_episodes: int = 50,
+):
+    """Log episode summaries to wandb (one log per episode with all annotated frames).
+    
+    Args:
+        episodes: List of episodes
+        annotations: Bbox annotations
+        max_episodes: Maximum episodes to process
+    """
+    if wandb is None:
+        print("wandb not installed. Install with: pip install wandb")
+        return
+    
+    # Build UUID to episode index mapping
+    uuid_to_ep = {}
+    for uuid in annotations:
+        _, _, ep_idx = parse_uuid(uuid)
+        if ep_idx < len(episodes):
+            uuid_to_ep[uuid] = ep_idx
+    
+    processed = 0
+    for uuid, ep_idx in sorted(uuid_to_ep.items(), key=lambda x: x[1]):
+        if processed >= max_episodes:
+            break
+        
+        annot = annotations[uuid]
+        episode_data = extract_episode_data(episodes[ep_idx], ep_idx)
+        
+        if len(episode_data['images']) == 0:
+            continue
+        
+        labels = annot.get("labels", [])
+        task = annot.get("task", "")
+        
+        if not labels:
+            continue
+        
+        # Collect annotated frames for this episode
+        episode_images = []
+        episode_captions = []
+        
+        for label_data in labels:
+            frame_idx = label_data["frame"]
+            if frame_idx >= len(episode_data['images']):
+                continue
+            
+            img = episode_data['images'][frame_idx].copy()
+            target_object = label_data.get("target_object", "")
+            
+            # Draw all bboxes
+            for obj in label_data.get("all_objects", []):
+                bbox = obj.get("bbox", [])
+                obj_label = obj.get("label", "")
+                is_target = obj.get("is_target", None)
+                if len(bbox) == 4:
+                    img = draw_bbox_on_image(img, bbox, obj_label, is_target)
+            
+            episode_images.append(img)
+            n_objects = len(label_data.get("all_objects", []))
+            episode_captions.append(f"F{frame_idx}: Target={target_object} ({n_objects} objects)")
+        
+        if not episode_images:
+            continue
+        
+        # Create grid for this episode
+        grid = create_grid_image(episode_images, cols=min(3, len(episode_images)))
+        
+        # Log individual images with captions
+        wandb_images = [
+            wandb.Image(img, caption=cap) 
+            for img, cap in zip(episode_images, episode_captions)
+        ]
+        
+        # Log to wandb
+        wandb.log({
+            "episode/grid": wandb.Image(grid, caption=f"Episode {ep_idx}: {task}"),
+            "episode/frames": wandb_images,
+            "episode/task": task,
+            "episode/num_frames": len(episode_images),
+            "episode/idx": ep_idx,
+        }, step=processed)
+        
+        processed += 1
+        print(f"[{processed}/{max_episodes}] Logged episode {ep_idx}: {task[:50]}...")
+    
+    print(f"Finished logging {processed} episodes")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Visualize Bridge dataset with bbox annotations')
     parser.add_argument('--data-dir', type=str, 
@@ -645,6 +879,22 @@ def main():
                         help='Directory to save annotated frames')
     parser.add_argument('--episode-idx', type=int, default=None,
                         help='Visualize a specific episode index')
+    
+    # Wandb arguments
+    parser.add_argument('--wandb', action='store_true',
+                        help='Log visualizations to wandb')
+    parser.add_argument('--wandb-project', type=str, default='bridge-bbox-vis',
+                        help='Wandb project name (default: bridge-bbox-vis)')
+    parser.add_argument('--wandb-entity', type=str, default=None,
+                        help='Wandb entity/team name')
+    parser.add_argument('--wandb-run-name', type=str, default=None,
+                        help='Wandb run name (default: auto-generated)')
+    parser.add_argument('--wandb-mode', type=str, default='online',
+                        choices=['online', 'offline', 'disabled'],
+                        help='Wandb mode (default: online)')
+    parser.add_argument('--per-episode', action='store_true',
+                        help='Log one entry per episode (instead of batched)')
+    
     args = parser.parse_args()
     
     # Get annotations path
@@ -659,11 +909,39 @@ def main():
     # Load annotations
     annotations = load_bbox_annotations(str(annotations_path))
     
+    # Initialize wandb if requested
+    if args.wandb:
+        if wandb is None:
+            print("Error: wandb not installed. Install with: pip install wandb")
+            return
+        
+        # Use non-interactive backend for headless environments
+        matplotlib.use('Agg')
+        
+        run_name = args.wandb_run_name or f"bridge-bbox-{args.max_episodes}ep"
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=run_name,
+            mode=args.wandb_mode,
+            config={
+                "data_dir": args.data_dir,
+                "annotations": str(annotations_path),
+                "max_episodes": args.max_episodes,
+                "split": args.split,
+                "num_annotations": len(annotations),
+            },
+        )
+        print(f"Initialized wandb run: {wandb.run.name}")
+        print(f"View at: {wandb.run.get_url()}")
+    
     # Load dataset
     episodes = load_bridge_dataset(args.data_dir, args.split, args.max_episodes)
     
     if len(episodes) == 0:
         print("No episodes loaded!")
+        if args.wandb and wandb.run:
+            wandb.finish()
         return
     
     # Extract tfrecord prefix from annotations for UUID matching
@@ -672,7 +950,15 @@ def main():
     tfrecord_prefix = base_path
     print(f"Using tfrecord prefix: {tfrecord_prefix}")
     
-    if args.save_dir:
+    if args.wandb:
+        # Log to wandb
+        if args.per_episode:
+            log_episodes_to_wandb(episodes, annotations, args.max_episodes)
+        else:
+            log_to_wandb(episodes, annotations, args.max_episodes)
+        wandb.finish()
+        print("Wandb logging complete!")
+    elif args.save_dir:
         save_annotated_frames(episodes, annotations, args.save_dir, args.max_episodes)
     elif args.episode_idx is not None:
         if args.episode_idx >= len(episodes):
