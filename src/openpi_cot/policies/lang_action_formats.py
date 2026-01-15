@@ -136,7 +136,7 @@ class VLA0ActionFormat(LanguageActionFormat):
     serialized as space-separated text. This enables using standard language modeling
     loss without any architectural modifications.
 
-    Example output: "<523 127 890 512 512 512 500>" for a 7D action
+    Example output: "523 127 890 512 512 512 500" for a 7D action
 
     Reference: "VLA-0: Building State-of-the-Art VLAs with Zero Modification"
     """
@@ -162,7 +162,7 @@ class VLA0ActionFormat(LanguageActionFormat):
                      Shape: [action_horizon, action_dim] or [action_dim]
 
         Returns:
-            VLA0 format string: "<int1 int2 int3 ...>"
+            VLA0 format string: "int1 int2 int3 ..." (space-separated integers)
         """
         actions = np.asarray(actions, dtype=float)
         if actions.ndim == 1:
@@ -173,9 +173,9 @@ class VLA0ActionFormat(LanguageActionFormat):
         discretized = np.round((actions + 1.0) / 2.0 * self.num_bins).astype(int)
         discretized = np.clip(discretized, 0, self.num_bins)
 
-        # Flatten and serialize
+        # Flatten and serialize as space-separated integers (no delimiters per VLA-0 paper)
         flat = discretized.flatten()
-        return "<" + " ".join(map(str, flat)) + ">"
+        return " ".join(map(str, flat))
 
     def parse_language_to_deltas(
         self,
@@ -186,7 +186,7 @@ class VLA0ActionFormat(LanguageActionFormat):
         """Parse VLA0 text format back to continuous actions.
 
         Args:
-            reasoning: VLA0 format string like "<523 127 890 512 512 512 500>"
+            reasoning: VLA0 format string like "523 127 890 512 512 512 500" (space-separated integers)
             initial_state: Not used for VLA0 (actions are absolute, not relative)
 
         Returns:
@@ -196,15 +196,13 @@ class VLA0ActionFormat(LanguageActionFormat):
         if isinstance(reasoning, list):
             reasoning = " ".join(reasoning)
 
-        # Extract integers from <...> format
-        match = re.search(r"<([\d\s]+)>", reasoning)
-        if not match:
-            # Return zeros if parsing fails
+        # Extract all integers from the string (space-separated, no delimiters)
+        try:
+            ints = [int(x) for x in reasoning.split()]
+        except ValueError:
             return np.zeros(6, dtype=float), None
 
-        try:
-            ints = [int(x) for x in match.group(1).split()]
-        except ValueError:
+        if not ints:
             return np.zeros(6, dtype=float), None
 
         # Convert back to continuous [-1, 1]
@@ -231,7 +229,7 @@ class VLA0ActionFormat(LanguageActionFormat):
         """Parse VLA0 text format to full action array.
 
         Args:
-            reasoning: VLA0 format string like "<523 127 890 512 512 512 500>"
+            reasoning: VLA0 format string like "523 127 890 512 512 512 500" (space-separated integers)
 
         Returns:
             Actions array of shape [action_horizon, action_dim] in [-1, 1] range
@@ -239,15 +237,15 @@ class VLA0ActionFormat(LanguageActionFormat):
         if isinstance(reasoning, list):
             reasoning = " ".join(reasoning)
 
-        # Extract integers from <...> format
-        match = re.search(r"<([\d\s]+)>", reasoning)
-        if not match:
-            logging.info(f"No match found for VLA0 format: {reasoning}")
+        # Extract all integers from the string (space-separated, no delimiters)
+        try:
+            ints = [int(x) for x in reasoning.split()]
+        except ValueError:
+            logging.info(f"Failed to parse VLA0 format: {reasoning}")
             return np.zeros((self.action_horizon, self.action_dim), dtype=float)
 
-        try:
-            ints = [int(x) for x in match.group(1).split()]
-        except ValueError:
+        if not ints:
+            logging.info(f"No integers found in VLA0 format: {reasoning}")
             return np.zeros((self.action_horizon, self.action_dim), dtype=float)
 
         # Convert back to continuous [-1, 1]
@@ -333,7 +331,7 @@ VLA0_FORMAT = VLA0ActionFormat(
 VLA0_CHUNKED_FORMAT = VLA0ActionFormat(
     name="vla0_chunked",
     num_bins=1000,
-    action_horizon=16,
+    action_horizon=10,
     action_dim=7,
 )
 

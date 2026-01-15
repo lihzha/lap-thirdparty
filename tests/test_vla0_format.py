@@ -37,17 +37,17 @@ class TestVLA0ActionFormat:
         # Test with zeros (should map to 500)
         actions = np.zeros((1, 7))
         result = fmt.summarize_actions(actions)
-        assert result == "<500 500 500 500 500 500 500>"
+        assert result == "500 500 500 500 500 500 500"
 
         # Test with -1 (should map to 0)
         actions = np.full((1, 7), -1.0)
         result = fmt.summarize_actions(actions)
-        assert result == "<0 0 0 0 0 0 0>"
+        assert result == "0 0 0 0 0 0 0"
 
         # Test with +1 (should map to 1000)
         actions = np.full((1, 7), 1.0)
         result = fmt.summarize_actions(actions)
-        assert result == "<1000 1000 1000 1000 1000 1000 1000>"
+        assert result == "1000 1000 1000 1000 1000 1000 1000"
 
     def test_summarize_multi_step(self):
         """Test summarizing multi-step actions."""
@@ -56,7 +56,7 @@ class TestVLA0ActionFormat:
         # Test with zeros (should produce 14 values all at 500)
         actions = np.zeros((2, 7))
         result = fmt.summarize_actions(actions)
-        expected = "<" + " ".join(["500"] * 14) + ">"
+        expected = " ".join(["500"] * 14)
         assert result == expected
 
     def test_summarize_1d_input(self):
@@ -66,25 +66,25 @@ class TestVLA0ActionFormat:
         # 1D input should be treated as single timestep
         actions = np.zeros(7)
         result = fmt.summarize_actions(actions)
-        assert result == "<500 500 500 500 500 500 500>"
+        assert result == "500 500 500 500 500 500 500"
 
     def test_parse_single_step(self):
         """Test parsing single-step VLA0 format."""
         fmt = VLA0ActionFormat(num_bins=1000, action_horizon=1, action_dim=7)
 
         # Parse center values (500 -> 0.0)
-        text = "<500 500 500 500 500 500 500>"
+        text = "500 500 500 500 500 500 500"
         actions = fmt.parse_to_full_actions(text)
         assert actions.shape == (1, 7)
         np.testing.assert_array_almost_equal(actions, np.zeros((1, 7)), decimal=2)
 
         # Parse min values (0 -> -1.0)
-        text = "<0 0 0 0 0 0 0>"
+        text = "0 0 0 0 0 0 0"
         actions = fmt.parse_to_full_actions(text)
         np.testing.assert_array_almost_equal(actions, np.full((1, 7), -1.0), decimal=2)
 
         # Parse max values (1000 -> 1.0)
-        text = "<1000 1000 1000 1000 1000 1000 1000>"
+        text = "1000 1000 1000 1000 1000 1000 1000"
         actions = fmt.parse_to_full_actions(text)
         np.testing.assert_array_almost_equal(actions, np.full((1, 7), 1.0), decimal=2)
 
@@ -93,7 +93,7 @@ class TestVLA0ActionFormat:
         fmt = VLA0ActionFormat(num_bins=1000, action_horizon=2, action_dim=7)
 
         # Parse 14 values (2 timesteps x 7 dims)
-        text = "<" + " ".join(["500"] * 14) + ">"
+        text = " ".join(["500"] * 14)
         actions = fmt.parse_to_full_actions(text)
         assert actions.shape == (2, 7)
         np.testing.assert_array_almost_equal(actions, np.zeros((2, 7)), decimal=2)
@@ -137,19 +137,19 @@ class TestVLA0ActionFormat:
         text = fmt.summarize_actions(actions)
 
         # 2.0 clips to 1.0 -> 1000, -2.0 clips to -1.0 -> 0
-        assert "<1000 0" in text
+        assert text.startswith("1000 0")
 
     def test_parse_invalid_format(self):
         """Test parsing invalid format returns zeros."""
         fmt = VLA0ActionFormat(num_bins=1000, action_horizon=1, action_dim=7)
 
-        # Invalid format (no angle brackets)
-        text = "500 500 500 500 500 500 500"
+        # Empty string
+        text = ""
         actions = fmt.parse_to_full_actions(text)
         np.testing.assert_array_equal(actions, np.zeros((1, 7)))
 
-        # Empty string
-        text = ""
+        # Non-numeric string
+        text = "abc def"
         actions = fmt.parse_to_full_actions(text)
         np.testing.assert_array_equal(actions, np.zeros((1, 7)))
 
@@ -157,7 +157,7 @@ class TestVLA0ActionFormat:
         """Test the legacy parse_language_to_deltas interface."""
         fmt = VLA0ActionFormat(num_bins=1000, action_horizon=1, action_dim=7)
 
-        text = "<500 500 500 500 500 500 750>"
+        text = "500 500 500 500 500 500 750"
         movement, gripper = fmt.parse_language_to_deltas(text)
 
         # Movement should be first 6 dims

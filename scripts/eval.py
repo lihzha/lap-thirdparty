@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from jax.experimental import multihost_utils as mh
 import numpy as np
 from openpi.models import model as _model
+from openpi.models.model import Observation
 import openpi.shared.array_typing as at
 from openpi.training import optimizer as _optimizer
 from rail_tpu_utils import prevent_cross_region
@@ -321,6 +322,39 @@ class TrainLossEvaluator:
         return loss, metrics
 
 
+class ValidationLossEvaluator:
+    """Validation loss evaluator that exactly matches train.py's ValidationStepRunner."""
+
+    def __init__(self, config: _config.TrainConfig):
+        self.config = config
+
+    @at.typecheck
+    def __call__(
+        self,
+        rng: at.KeyArrayLike,
+        state: training_utils.TrainState,
+        batch: tuple[CoTObservation | Observation, _model.Actions],
+    ) -> dict[str, at.Array]:
+        model = nnx.merge(state.model_def, state.params)
+        model.eval()
+
+        eval_rng = jax.random.fold_in(rng, state.step)
+        observation, actions = batch
+
+        # Call compute_loss to get per-sample metrics for dataset tracking
+        # Note: We use the model in eval mode but request per-sample metrics by passing train=True
+        # This is to enable dataset-level tracking during validation
+        # Pass verbose_mode=True to enable detailed metrics for validation
+        verbose_mode = self.config.model.verbose_mode
+        val_loss, val_metrics = model.compute_loss(
+            eval_rng, observation, actions, train=False, verbose_mode=verbose_mode
+        )
+
+        val_metrics["val_loss"] = val_loss
+
+        return val_metrics
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
@@ -502,6 +536,22 @@ def main(config: _config.TrainConfig):
         results.update({"eval/train_loss/loss": float(loss)})
         for key, value in metrics.items():
             results[f"eval/train_loss/{key}"] = float(value)
+
+    # Validation loss evaluation (matches train.py's ValidationStepRunner exactly)
+    if config.eval_mode == "val_loss":
+        logging.info("Running validation loss evaluation (matching train.py)...")
+        val_results = evaluate_validation_loss(
+            config,
+            eval_rng,
+            train_state,
+            train_state_sharding,
+            data_loader,
+            mesh,
+            data_sharding,
+            replicated_sharding,
+            num_eval_batches,
+        )
+        results.update(val_results)
 
     # Log final results
     logging.info("=" * 80)
@@ -758,6 +808,75 @@ def evaluate_loss(
 
             loss, metrics = peval_step(eval_rng, train_state, batch)
     return loss, metrics
+
+
+def evaluate_validation_loss(
+    config: _config.TrainConfig,
+    eval_rng: at.KeyArrayLike,
+    train_state: training_utils.TrainState,
+    train_state_sharding,
+    data_loader,
+    mesh,
+    data_sharding,
+    replicated_sharding,
+    num_eval_batches: int,
+) -> dict[str, float]:
+    """Evaluate validation loss, matching train.py's ValidationStepRunner exactly."""
+    evaluator = ValidationLossEvaluator(config)
+    pval_step = jax.jit(
+        evaluator,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=replicated_sharding,
+    )
+
+    data_iter = iter(data_loader)
+    val_infos = []
+
+    pbar = tqdm.tqdm(
+        range(num_eval_batches),
+        total=num_eval_batches,
+        dynamic_ncols=True,
+        desc="Validation loss evaluation",
+        disable=(jax.process_index() != 0),
+    )
+
+    with sharding.set_mesh(mesh):
+        for batch_idx in pbar:
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                logging.info(f"Reached end of dataset at batch {batch_idx}")
+                break
+
+            val_info = pval_step(eval_rng, train_state, batch)
+            val_infos.append(val_info)
+
+            # Update progress bar with running loss
+            if val_infos and (batch_idx + 1) % 10 == 0:
+                recent_losses = [float(jax.device_get(info["val_loss"])) for info in val_infos[-min(10, len(val_infos)) :]]
+                pbar.set_postfix({"val_loss": f"{np.mean(recent_losses):.4f}"})
+
+    # Aggregate metrics across all batches
+    results = {}
+    if val_infos:
+        # Get all metric keys from the first batch
+        metric_keys = val_infos[0].keys()
+
+        for key in metric_keys:
+            # Skip non-scalar metrics
+            values = []
+            for info in val_infos:
+                if key in info:
+                    val = jax.device_get(info[key])
+                    # Only aggregate scalar values
+                    if np.isscalar(val) or (hasattr(val, "shape") and val.shape == ()):
+                        values.append(float(val))
+            if values:
+                results[f"eval/val_loss/{key}"] = float(np.mean(values))
+
+    results["eval/val_loss/num_batches"] = len(val_infos)
+
+    return results
 
 
 def evaluate_token_visualization(
