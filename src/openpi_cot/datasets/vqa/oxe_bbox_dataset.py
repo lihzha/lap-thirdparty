@@ -532,6 +532,223 @@ class OXEBoundingBoxDataset(ABC):
         logging.info(f"Sample JSONL file_paths (keys): {list(jsonl_episode_ids)[:3]}")
         logging.info(f"Sample JSONL lookup keys: {jsonl_keys[:5]}")
 
+    def debug_frame_collisions(self):
+        """Debug helper to detect frame collisions and key mapping issues in JSONL.
+        
+        This method analyzes the JSONL annotations to find:
+        1. Episodes where the same frame index appears multiple times
+        2. Key collisions where different episodes map to the same lookup key
+        3. Frame index distribution per episode
+        """
+        import json
+        from collections import defaultdict
+        
+        logging.info(f"=== Analyzing JSONL bbox annotations for {self.dataset_name} ===")
+        logging.info(f"Annotations dir: {self.bbox_annotations_dir}")
+        
+        jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
+        logging.info(f"Found {len(jsonl_files)} JSONL files")
+        
+        # Track all lookup keys and their sources
+        key_to_sources: dict[str, list[tuple[str, str, int]]] = defaultdict(list)
+        # Track frame indices per episode
+        episode_frame_indices: dict[str, list[int]] = defaultdict(list)
+        # Track episodes per file_path
+        file_path_counts: dict[str, int] = defaultdict(int)
+        
+        total_episodes = 0
+        total_frames = 0
+        
+        for jsonl_file in jsonl_files:
+            if "merged" in jsonl_file:
+                continue
+            file_basename = os.path.basename(jsonl_file)
+            with tf.io.gfile.GFile(jsonl_file, "r") as f:
+                for line_num, line in enumerate(f):
+                    if not line.strip():
+                        continue
+                    try:
+                        episode_data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    
+                    total_episodes += 1
+                    episode_key = oxe_key_extractor(episode_data)
+                    if not episode_key:
+                        continue
+                    
+                    file_path_counts[episode_key] += 1
+                    
+                    labels = episode_data.get("labels", [])
+                    for label_entry in labels:
+                        frame_idx = label_entry.get("frame")
+                        all_objects = label_entry.get("all_objects", [])
+                        
+                        if frame_idx is None or not all_objects:
+                            continue
+                        
+                        total_frames += 1
+                        lookup_key = f"{episode_key}--{frame_idx}"
+                        key_to_sources[lookup_key].append((file_basename, episode_key, frame_idx))
+                        episode_frame_indices[episode_key].append(frame_idx)
+        
+        logging.info(f"Total episodes in JSONL: {total_episodes}")
+        logging.info(f"Total annotated frames: {total_frames}")
+        logging.info(f"Unique episode keys (file_paths): {len(file_path_counts)}")
+        
+        # Check for duplicate episode keys (same file_path appearing multiple times)
+        duplicate_episodes = {k: v for k, v in file_path_counts.items() if v > 1}
+        if duplicate_episodes:
+            logging.warning(f"Found {len(duplicate_episodes)} episode keys appearing multiple times:")
+            for ep_key, count in list(duplicate_episodes.items())[:5]:
+                logging.warning(f"  {ep_key}: appears {count} times")
+        else:
+            logging.info("No duplicate episode keys found (good)")
+        
+        # Check for lookup key collisions (same episode_key--frame_idx from different sources)
+        collisions = {k: v for k, v in key_to_sources.items() if len(v) > 1}
+        if collisions:
+            logging.warning(f"Found {len(collisions)} lookup key collisions:")
+            for lookup_key, sources in list(collisions.items())[:10]:
+                logging.warning(f"  Key '{lookup_key}' has {len(sources)} entries:")
+                for src in sources[:3]:
+                    logging.warning(f"    from file={src[0]}, episode={src[1][:50]}..., frame={src[2]}")
+        else:
+            logging.info("No lookup key collisions found (good)")
+        
+        # Check for duplicate frame indices within same episode
+        episodes_with_dup_frames = {}
+        for ep_key, frames in episode_frame_indices.items():
+            if len(frames) != len(set(frames)):
+                from collections import Counter
+                frame_counts = Counter(frames)
+                dups = {f: c for f, c in frame_counts.items() if c > 1}
+                episodes_with_dup_frames[ep_key] = dups
+        
+        if episodes_with_dup_frames:
+            logging.warning(f"Found {len(episodes_with_dup_frames)} episodes with duplicate frame indices:")
+            for ep_key, dups in list(episodes_with_dup_frames.items())[:5]:
+                logging.warning(f"  Episode {ep_key[:60]}...")
+                logging.warning(f"    Duplicate frames: {dups}")
+        else:
+            logging.info("No duplicate frame indices within episodes (good)")
+        
+        # Show frame index statistics
+        all_frame_indices = []
+        for frames in episode_frame_indices.values():
+            all_frame_indices.extend(frames)
+        
+        if all_frame_indices:
+            logging.info(f"Frame index range: {min(all_frame_indices)} to {max(all_frame_indices)}")
+            logging.info(f"Sample frame indices from first 3 episodes:")
+            for i, (ep_key, frames) in enumerate(list(episode_frame_indices.items())[:3]):
+                sorted_frames = sorted(frames)
+                logging.info(f"  Episode {i+1} ({ep_key[:50]}...): frames {sorted_frames[:10]}{'...' if len(sorted_frames) > 10 else ''}")
+        
+        return {
+            "total_episodes": total_episodes,
+            "total_frames": total_frames,
+            "unique_episode_keys": len(file_path_counts),
+            "duplicate_episodes": len(duplicate_episodes),
+            "lookup_key_collisions": len(collisions),
+            "episodes_with_dup_frames": len(episodes_with_dup_frames),
+        }
+
+    def debug_frame_mapping_samples(self, num_samples: int = 5):
+        """Debug helper to show actual frame mapping from trajectory to JSONL.
+        
+        This samples from the dataset pipeline and shows:
+        1. The episode_id and frame_idx used for lookup
+        2. Whether the lookup key was found in the JSONL table
+        3. The objects returned for that frame
+        
+        Call this BEFORE the dataset is batched/shuffled for clearer output.
+        """
+        import json
+        
+        logging.info(f"=== Sampling frame mappings for {self.dataset_name} ===")
+        logging.info(f"Frame offset: {self.get_frame_offset()}")
+        
+        # Build the frame objects table to check lookups
+        frame_to_objects = self._build_frame_objects_table()
+        
+        # Create a simple dataset that shows the mapping before final VQA conversion
+        # We need to get samples after restructure but before finalization
+        frame_offset = self.get_frame_offset()
+        primary_image_key = self.get_primary_image_key()
+        
+        # Build a fresh dataset to sample from
+        builder = self.build_dataset_builder(self.get_oxe_dataset_name(), self.data_dir)
+        sample_ds = dl.DLataset.from_rlds(builder, split="all", shuffle=False, num_parallel_reads=1)
+        
+        # Apply standardization and get episode info
+        standardize_fn = self.standardize_fn
+        
+        def extract_debug_info(traj):
+            if standardize_fn is not None:
+                traj = standardize_fn(traj)
+            
+            traj_len = tf.shape(traj["action"])[0]
+            file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+            
+            # Get first few frame indices (after offset)
+            frame_indices = tf.range(tf.minimum(traj_len, 10)) + frame_offset
+            
+            return {
+                "file_path": file_path,
+                "traj_len_after_transform": traj_len,
+                "frame_indices_for_lookup": frame_indices,
+                "raw_frame_0_shape": tf.shape(traj["observation"][primary_image_key][0]),
+            }
+        
+        sample_ds = sample_ds.traj_map(extract_debug_info, num_parallel_calls=1)
+        
+        # Take a few samples
+        samples_seen = 0
+        for sample in sample_ds.take(num_samples):
+            samples_seen += 1
+            file_path = sample["file_path"].numpy().decode("utf-8")
+            traj_len = sample["traj_len_after_transform"].numpy()
+            frame_indices = sample["frame_indices_for_lookup"].numpy()
+            
+            logging.info(f"\n--- Sample {samples_seen} ---")
+            logging.info(f"  file_path (episode_id): {file_path}")
+            logging.info(f"  traj_len after transform: {traj_len}")
+            logging.info(f"  First frame indices for lookup (with offset {frame_offset}): {frame_indices.tolist()}")
+            
+            # Check which lookup keys exist in the table
+            found_frames = []
+            missing_frames = []
+            for frame_idx in frame_indices:
+                lookup_key = f"{file_path}--{frame_idx}"
+                result = frame_to_objects.lookup(tf.constant(lookup_key, dtype=tf.string))
+                result_str = result.numpy().decode("utf-8")
+                if result_str:
+                    found_frames.append(frame_idx)
+                    if len(found_frames) <= 2:  # Show first 2 found
+                        # Parse and show object labels
+                        objects = result_str.split(";")
+                        labels = [obj.split("|")[0] for obj in objects if "|" in obj]
+                        logging.info(f"    Frame {frame_idx}: FOUND - objects: {labels[:5]}{'...' if len(labels) > 5 else ''}")
+                else:
+                    missing_frames.append(frame_idx)
+            
+            logging.info(f"  Found in JSONL: {len(found_frames)} frames {found_frames[:5]}")
+            logging.info(f"  Missing from JSONL: {len(missing_frames)} frames {missing_frames[:5]}")
+            
+            # Also check what frames ARE in the JSONL for this episode
+            # by searching for keys starting with this file_path
+            jsonl_frame_indices = []
+            for test_frame in range(100):  # Check first 100 possible frames
+                test_key = f"{file_path}--{test_frame}"
+                test_result = frame_to_objects.lookup(tf.constant(test_key, dtype=tf.string))
+                if test_result.numpy().decode("utf-8"):
+                    jsonl_frame_indices.append(test_frame)
+            
+            logging.info(f"  All JSONL frames for this episode: {jsonl_frame_indices[:20]}{'...' if len(jsonl_frame_indices) > 20 else ''}")
+        
+        logging.info(f"\nTotal samples examined: {samples_seen}")
+
     def __iter__(self):
         assert self.standalone, "This dataset is not standalone"
         it = self.dataset.as_numpy_iterator()
