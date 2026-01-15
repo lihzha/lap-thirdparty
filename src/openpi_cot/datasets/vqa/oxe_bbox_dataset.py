@@ -456,7 +456,7 @@ class OXEBoundingBoxDataset(ABC):
         self.dataset = self.dataset.filter(has_valid_qa)
 
     def _build_frame_objects_table(self):
-        """Build a lookup table from uuid--frame_idx to pre-formatted caption."""
+        """Build a lookup table from episode_id--frame_idx to pre-formatted caption."""
         orig_w, orig_h = self.get_original_image_size()
         target_h, target_w = self.config.resize_resolution
         return build_frame_objects_table(
@@ -465,6 +465,8 @@ class OXEBoundingBoxDataset(ABC):
             dataset_name=self.dataset_name,
             orig_size=(orig_w, orig_h),
             target_size=(target_w, target_h),
+            max_objects=2,
+            seed=self.seed,
         )
 
     def get_num_transitions(self) -> int:

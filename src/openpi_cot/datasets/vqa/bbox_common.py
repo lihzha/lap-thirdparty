@@ -369,6 +369,8 @@ def build_frame_objects_table(
     dataset_name: str = "",
     orig_size: tuple[int, int] = (256, 256),
     target_size: tuple[int, int] = (224, 224),
+    max_objects: int = 2,
+    seed: int = 42,
 ) -> "tf.lookup.StaticHashTable":
     """Build a lookup table from key--frame_idx to pre-formatted (labels, caption) strings.
 
@@ -385,6 +387,8 @@ def build_frame_objects_table(
         dataset_name: Optional dataset name for logging
         orig_size: Original image (width, height) for letterbox transformation
         target_size: Target image (width, height) for letterbox transformation
+        max_objects: Maximum number of objects to include per frame (randomly sampled if more)
+        seed: Random seed for reproducible object sampling
 
     Returns:
         tf.lookup.StaticHashTable mapping "key--frame_idx" to "labels\\tcaption" string
@@ -393,6 +397,7 @@ def build_frame_objects_table(
     import json
     import logging
     import os
+    import random
 
     import tensorflow as tf
 
@@ -401,6 +406,9 @@ def build_frame_objects_table(
 
     orig_w, orig_h = orig_size
     target_w, target_h = target_size
+
+    # Create a random generator with the given seed for reproducible sampling
+    rng = random.Random(seed)
 
     frame_to_formatted = {}
 
@@ -451,6 +459,12 @@ def build_frame_objects_table(
                         })
 
                     if objects_list:
+                        # Randomly sample max_objects if there are more
+                        if len(objects_list) > max_objects:
+                            # Use deterministic seed per key for reproducibility
+                            rng.seed(hash(key) + seed)
+                            objects_list = rng.sample(objects_list, max_objects)
+
                         # Pre-format the caption using shared function
                         prompt_labels, caption = format_bbox_caption(
                             objects=objects_list,

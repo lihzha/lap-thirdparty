@@ -455,6 +455,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             dataset_name=self.dataset_name,
             orig_size=(orig_w, orig_h),
             target_size=(target_w, target_h),
+            max_objects=2,
+            seed=self.seed,
         )
 
     def get_dataset_name(self) -> str:
