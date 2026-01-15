@@ -212,6 +212,14 @@ class OXEBoundingBoxDataset(ABC):
         """
         return 0
 
+    def use_target_only(self) -> bool:
+        """Return whether to use only is_target=True objects from annotations.
+        
+        If True, only objects marked as target in the JSONL will be included.
+        This can filter out potentially noisy annotations.
+        """
+        return False
+
     def _get_bbox_annotations_dir(self, config) -> str:
         """Build path to bbox annotations directory."""
         bbox_dir_name = self.get_bbox_annotations_dir_name()
@@ -477,6 +485,7 @@ class OXEBoundingBoxDataset(ABC):
             dataset_name=self.dataset_name,
             orig_size=(orig_w, orig_h),
             target_size=(target_w, target_h),
+            target_only=self.use_target_only(),
         )
 
     def get_num_transitions(self) -> int:
@@ -587,3 +596,7 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
     def get_original_image_size(self) -> tuple[int, int]:
         # Bridge uses 256x256 images
         return (256, 256)
+
+    def use_target_only(self) -> bool:
+        # Use only target objects to filter out potentially noisy annotations
+        return True

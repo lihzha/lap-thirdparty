@@ -654,6 +654,7 @@ def build_frame_objects_table_v2(
     dataset_name: str = "",
     orig_size: tuple[int, int] = (256, 256),
     target_size: tuple[int, int] = (224, 224),
+    target_only: bool = False,
 ) -> "tf.lookup.StaticHashTable":
     """Build a lookup table from key--frame_idx to pipe-delimited objects string.
 
@@ -668,6 +669,7 @@ def build_frame_objects_table_v2(
         dataset_name: Optional dataset name for logging
         orig_size: Original image (width, height) for letterbox transformation
         target_size: Target image (width, height) for letterbox transformation
+        target_only: If True, only include objects where is_target is True
 
     Returns:
         tf.lookup.StaticHashTable mapping "key--frame_idx" to pipe-delimited objects string
@@ -719,8 +721,13 @@ def build_frame_objects_table_v2(
                     for obj in all_objects:
                         obj_label = obj.get("label", "")
                         bbox = obj.get("bbox", [])
+                        is_target = obj.get("is_target", False)
 
                         if not obj_label or len(bbox) < 4:
+                            continue
+
+                        # Skip non-target objects if target_only is enabled
+                        if target_only and not is_target:
                             continue
 
                         # Normalize bbox (bbox values are in 0-1000 range in JSONL)

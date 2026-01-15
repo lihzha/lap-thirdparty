@@ -543,8 +543,8 @@ class Attention(nn.Module):
         q = apply_rope(q, positions=positions, base_frequency=rope_base)
         k = apply_rope(k, positions=positions, base_frequency=rope_base)
 
-        # Scale query
-        q *= config.head_dim ** -0.5
+        # Scale query (cast scalar to preserve dtype)
+        q = q * jnp.asarray(config.head_dim ** -0.5, dtype=dtype)
 
         # Should still be half-precision here
         assert q.dtype == k.dtype == v.dtype == dtype
