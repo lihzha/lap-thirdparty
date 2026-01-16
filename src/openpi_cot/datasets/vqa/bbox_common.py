@@ -49,27 +49,57 @@ BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
     ("Move to the ", ", predict where it is in the image."),
 ]
 
-# Robot-specific bounding box prompts (for robot manipulation tasks)
-ROBOT_BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
+# =============================================================================
+# ROBOT BBOX PROMPT PARTS (full combinations)
+# =============================================================================
+
+# Base action phrases (part 1) for robot bbox prompts
+_ROBOT_BBOX_PART1: list[str] = [
     # Pick/grasp actions
-    ("Pick up the ", ", predict where it is relative to the robot."),
-    ("Grasp the ", ", predict where it is in the image."),
-    ("Grab the ", ", show its location with a bounding box."),
-    ("Pick the ", " and place it elsewhere. First, locate it."),
+    "Pick up the ",
+    "Grasp the ",
+    "Grab the ",
+    "Pick the ",
     # Move/reach actions
-    ("Move to the ", ", predict where it is relative to the robot."),
-    ("Move near to the ", ", predict where it is relative to the robot."),
-    ("Reach for the ", ", predict where it is in the end-effector frame."),
-    ("Move the gripper to the ", ", predict where it is relative to the robot."),
-    ("Navigate to the ", ", predict where it is relative to the robot."),
+    "Move to the ",
+    "Move near to the ",
+    "Reach for the ",
+    "Move the gripper to the ",
+    "Navigate to the ",
     # Place/put actions
-    ("Place the object on the ", ", predict where it is relative to the robot."),
-    ("Put the item near the ", ", predict where it is in the end-effector frame."),
-    ("Stack the object on the ", ", predict where it is relative to the robot."),
+    "Place the object on the ",
+    "Put the item near the ",
+    "Stack the object on the ",
     # Push/pull/slide actions
-    ("Push the ", " forward, predict where it is in the end-effector frame."),
-    ("Pull the ", " toward you, predict where it is in the end-effector frame."),
-    ("Slide the ", " to the side, predict where it is in the end-effector frame."),
+    "Push the ",
+    "Pull the ",
+    "Slide the ",
+]
+
+# Part 2 variants for different coordinate frames
+_ROBOT_BBOX_PART2_IMAGE: str = ", predict where it is in the image."
+_ROBOT_BBOX_PART2_ROBOT_BASE: str = ", predict where it is in the robot base frame."
+_ROBOT_BBOX_PART2_EE: str = ", predict where it is in the end-effector frame."
+
+# Full combination: all part1 x all part2 variants
+ROBOT_BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
+    (p1, p2)
+    for p1 in _ROBOT_BBOX_PART1
+    for p2 in [_ROBOT_BBOX_PART2_IMAGE, _ROBOT_BBOX_PART2_ROBOT_BASE, _ROBOT_BBOX_PART2_EE]
+]
+
+# OXE-specific: robot base frame + image (no end-effector frame)
+ROBOT_BBOX_PROMPT_PARTS_OXE: list[tuple[str, str]] = [
+    (p1, p2)
+    for p1 in _ROBOT_BBOX_PART1
+    for p2 in [_ROBOT_BBOX_PART2_IMAGE, _ROBOT_BBOX_PART2_ROBOT_BASE]
+]
+
+# End-effector specific: end-effector frame + image (for DROID, PACO, LVIS, etc.)
+ROBOT_BBOX_PROMPT_PARTS_EE: list[tuple[str, str]] = [
+    (p1, p2)
+    for p1 in _ROBOT_BBOX_PART1
+    for p2 in [_ROBOT_BBOX_PART2_IMAGE, _ROBOT_BBOX_PART2_EE]
 ]
 
 # Direction classification prompts (for directional VQA tasks)
@@ -81,15 +111,41 @@ DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
     ("Which direction from the center is the ", " in this image?"),
 ]
 
-# Robot-specific direction prompts (for DROID wrist camera)
+# =============================================================================
+# ROBOT DIRECTION PROMPT PARTS (full combinations)
+# =============================================================================
+
+# Base action phrases (part 1) for robot direction prompts
+_ROBOT_DIRECTION_PART1: list[str] = [
+    "Pick up the ",
+    "Move to the ",
+    "Move near to the ",
+    "Reach the ",
+    "Grasp the ",
+    "Navigate to the ",
+]
+
+# Part 2 variants for different coordinate frames
+_ROBOT_DIRECTION_PART2_EE: str = ", predict the robot's action in the end-effector frame."
+_ROBOT_DIRECTION_PART2_ROBOT_BASE: str = ", predict the robot's action in the robot base frame."
+
+# Full combination: all part1 x all part2 variants
 ROBOT_DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
-    ("Pick up the ", ", predict the robot's action."),
-    ("Move to the ", ", predict which direction should the end-effector go."),
-    ("Move near to the ", ", predict the robot's action."),
-    ("Pick up the ", ", predict the robot's action."),
-    ("Reach the ", ", predict the robot's action."),
-    ("Grasp the ", ", predict the robot's action."),
-    ("Navigate to the ", ", predict the robot's action."),
+    (p1, p2)
+    for p1 in _ROBOT_DIRECTION_PART1
+    for p2 in [_ROBOT_DIRECTION_PART2_EE, _ROBOT_DIRECTION_PART2_ROBOT_BASE]
+]
+
+# OXE-specific: robot base frame only
+ROBOT_DIRECTION_PROMPT_PARTS_OXE: list[tuple[str, str]] = [
+    (p1, _ROBOT_DIRECTION_PART2_ROBOT_BASE)
+    for p1 in _ROBOT_DIRECTION_PART1
+]
+
+# End-effector specific: end-effector frame only (for DROID, etc.)
+ROBOT_DIRECTION_PROMPT_PARTS_EE: list[tuple[str, str]] = [
+    (p1, _ROBOT_DIRECTION_PART2_EE)
+    for p1 in _ROBOT_DIRECTION_PART1
 ]
 
 

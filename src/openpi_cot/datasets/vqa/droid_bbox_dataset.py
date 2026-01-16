@@ -19,8 +19,8 @@ from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.helpers import extract_episode_path_from_file_path
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
-    ROBOT_BBOX_PROMPT_PARTS,
-    ROBOT_DIRECTION_PROMPT_PARTS,
+    ROBOT_BBOX_PROMPT_PARTS_EE,
+    ROBOT_DIRECTION_PROMPT_PARTS_EE,
     build_annotated_keys_set,
     build_frame_objects_table_v2,
     build_frame_objects_table_v2_direction,
@@ -417,7 +417,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.dataset = self.dataset.filter(has_valid_caption)
 
         # Convert to final VQA format
-        prompt_parts = ROBOT_DIRECTION_PROMPT_PARTS if self.directional else ROBOT_BBOX_PROMPT_PARTS
+        prompt_parts = ROBOT_DIRECTION_PROMPT_PARTS_EE if self.directional else ROBOT_BBOX_PROMPT_PARTS_EE
 
         def finalize_vqa(frame):
             """Create final VQA sample with prompt and caption."""

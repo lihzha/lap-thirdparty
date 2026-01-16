@@ -451,6 +451,8 @@ class TokenizeFASTCoTInputs(DataTransformFn):
     - Creates appropriate masks for training
 
     Similar to upstream TokenizeFASTInputs but with support for language actions.
+    For VQA and prediction samples, includes the language_actions (answer) tokens
+    in the loss mask so they contribute to training.
     """
 
     tokenizer: FASTTokenizer
@@ -475,6 +477,10 @@ class TokenizeFASTCoTInputs(DataTransformFn):
         time_horizon_seconds = data.pop("time_horizon_seconds", None)
         frame_description = data.pop("frame_description", "end-effector frame")
 
+        # Get language_actions (contains VQA answer or prediction answer)
+        # Similar to TokenizePromptAndReasoning pattern
+        language_actions = data.pop("language_actions", None)
+
         # Get state type if available
         state_type = data.pop("state_type", None)
         if state_type is not None and not isinstance(state_type, str):
@@ -492,6 +498,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             prompt=prompt,
             state=state,
             actions=actions,
+            language_actions=language_actions,
             state_type=state_type,
             is_vqa_sample=is_vqa_sample,
             is_prediction_sample=is_prediction_sample,
@@ -506,7 +513,6 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             "tokenized_prompt_mask": token_mask,
             "tokenized_langact_mask": ar_mask,
             "token_loss_mask": loss_mask,
-            # "token_ar_mask": ar_mask.astype(np.int32),
         }
 
 

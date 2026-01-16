@@ -19,7 +19,7 @@ from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
 from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
-    ROBOT_BBOX_PROMPT_PARTS,
+    ROBOT_BBOX_PROMPT_PARTS_OXE,
     bridge_key_extractor,
     build_annotated_keys_set,
     build_frame_objects_table_v2,
@@ -469,7 +469,7 @@ class OXEBoundingBoxDataset(ABC):
             seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
             seed_hash_int = tf.cast(seed_hash, tf.int32)
 
-            prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS, labels, (self.seed, seed_hash_int))
+            prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS_OXE, labels, (self.seed, seed_hash_int))
 
             # Create final output
             return {

@@ -5,7 +5,7 @@ import tensorflow_datasets as tfds
 
 from openpi_cot.datasets.vqa.bbox_common import (
     DIRECTION_PROMPT_PARTS,
-    ROBOT_BBOX_PROMPT_PARTS,
+    ROBOT_BBOX_PROMPT_PARTS_EE,
     bbox_to_text_tf,
     direction_from_bbox_tf,
     sample_prompt_tf,
@@ -77,7 +77,7 @@ class PacoLvis(BaseVQADataset):
         bbox = example["annotations"]["bbox"][0]
 
         # Sample a prompt using the shared helper
-        prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS, category_name, (self.seed, image_id_hash))
+        prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS_EE, category_name, (self.seed, image_id_hash))
 
         # With 50% probability, use direction caption instead of bbox
         dir_seed = (self.seed + 7919, image_id_hash)

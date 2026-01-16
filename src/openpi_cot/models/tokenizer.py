@@ -602,6 +602,7 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         prompt: str,
         state: np.ndarray,
         actions: np.ndarray | None = None,
+        language_actions: str | None = None,
         state_type: str | None = None,
         *,
         is_vqa_sample: bool = False,
@@ -610,56 +611,80 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         state_dropout: float = 0.0,
         clip_action: bool = False,
         frame_description: str = "end-effector frame",
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Tokenize prompt, language actions (if any), state, and actions for FAST model.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize prompt and actions for FAST model.
 
-        This method combines CoT-style reasoning with FAST-style action token prediction:
-        - First tokenizes prompt + language actions (optional)
-        - Then appends state and action representations as tokens
-        - Creates appropriate masks for training
+        For VQA and prediction samples: uses the same logic as PaligemmaCoTTokenizer.tokenize_cot
+        (no action tokens, just language tokens with proper loss masks).
+
+        For regular robot samples: uses FAST-style action token prediction.
 
         Args:
             prompt: Task description
             state: Current state vector
             actions: Action sequence (optional, None during inference)
-            language_actions: Language description of actions (optional)
+            language_actions: Language description of actions / VQA answer / prediction answer
             state_type: Type of state representation
             is_vqa_sample: Whether this is a VQA sample
             is_prediction_sample: Whether this is a prediction sample
+            time_horizon_seconds: Time horizon for robot tasks
+            state_dropout: Probability of dropping state info
+            clip_action: Whether to clip actions to [-3, 3]
+            frame_description: Description of the coordinate frame
 
         Returns:
             (tokens, token_mask, ar_mask, loss_mask)
-            - tokens: Token IDs including prompt, language actions, state, and actions
+            - tokens: Token IDs
             - token_mask: Mask for valid (non-padding) tokens
-            - ar_mask: Autoregressive mask (0=prefix attention, 1=causal)
+            - ar_mask: Autoregressive mask (False=prefix attention, True=causal)
             - loss_mask: Mask for tokens that contribute to loss
         """
-        # Resolve prompt format
-        if is_prediction_sample:
-            fmt = self._prediction_format
-        elif is_vqa_sample:
-            fmt = self._vqa_format
-        else:
-            fmt = self._prompt_format
+        # For VQA and prediction samples, use the parent's tokenize_cot logic
+        # This ensures they are processed exactly the same way as non-FAST training
+        if is_vqa_sample or is_prediction_sample:
+            # Call parent's tokenize_cot - returns (tokens, attn_mask, reasoning_mask, number_mask, direction_mask, token_loss_mask)
+            tokens, attn_mask, reasoning_mask, _number_mask, _direction_mask, token_loss_mask = super().tokenize_cot(
+                prompt=prompt,
+                reasoning=language_actions,
+                state=state,
+                state_type=state_type,
+                is_vqa_sample=is_vqa_sample,
+                is_prediction_sample=is_prediction_sample,
+                time_horizon_seconds=time_horizon_seconds,
+                frame_description=frame_description,
+                state_dropout=state_dropout,
+            )
+            # Map outputs to FAST format:
+            # - token_mask = attn_mask
+            # - ar_mask = reasoning_mask (marks which tokens are autoregressive/causal)
+            # - loss_mask = token_loss_mask AND reasoning_mask (loss only on reasoning tokens)
+            ar_mask = reasoning_mask if reasoning_mask is not None else np.zeros(len(tokens), dtype=bool)
+            loss_mask = token_loss_mask if token_loss_mask is not None else np.ones(len(tokens), dtype=bool)
+            if reasoning_mask is not None:
+                loss_mask = np.logical_and(loss_mask, reasoning_mask)
 
-        # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
+            return (tokens, attn_mask, ar_mask, loss_mask)
+
+        # For regular robot samples, use FAST action token logic
+        fmt = self._prompt_format
+
         formatted_prompt = fmt.format_prompt(
             prompt,
             state,
             state_type,
-            time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
+            time_horizon_seconds=time_horizon_seconds,
             state_dropout=state_dropout,
             frame_description=frame_description,
         )
 
         # Tokenize prompt
         pad_id = self._tokenizer.pad_id()
-
         prefix_tokens = self._tokenizer.encode(formatted_prompt, add_bos=True, add_eos=False)
 
+        # Append action tokens for robot samples
         if actions is not None:
             if clip_action:
-                actions = np.clip(actions, -3.0, 3.0)  # Ensure actions are within expected range
+                actions = np.clip(actions, -3.0, 3.0)
             action_tokens = self._fast_tokenizer(actions[None])[0]
             action_tokens_in_pg = self._act_tokens_to_paligemma_tokens(action_tokens)
             postfix_tokens = action_tokens_in_pg.tolist() + self._tokenizer.encode("|", add_eos=True)
