@@ -179,7 +179,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     use_wrist_image: bool = True
     wrist_image_dropout_prob: float = 0.0
     # One of {"droid", "oxe", "combined"}; used by the RLDS loader switch.
-    dataset_type: Literal["droid", "oxe", "combined"] = "droid"
+    dataset_type: Literal["droid", "oxe", "combined"] = "oxe"
     state_encoding: StateEncoding = StateEncoding.POS_EULER
     action_encoding: ActionEncoding = ActionEncoding.EEF_POS
     # Normalization type for actions and proprioceptive state.

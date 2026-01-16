@@ -422,13 +422,19 @@ def extract_all_embeddings(
     # Get tokenizer from data_loader for decoding dataset names
     tokenizer = data_loader.tokenizer
     
-    # JIT compile the extraction function
-    @jax.jit
-    def extract_fn(obs):
-        return extractor.extract(obs, embedding_type)
+    # Create output sharding (replicated so we can easily fetch to CPU)
+    replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    
+    # Create a JIT-compiled extraction function with proper output sharding
+    def _extract_impl(observation):
+        return extractor.extract(observation, embedding_type)
+    
+    # We'll compile after seeing the first batch to get proper input shardings
+    extract_fn = None
     
     data_iter = iter(data_loader)
     collected = 0
+    first_batch = True
     
     pbar = tqdm.tqdm(
         total=num_samples,
@@ -445,21 +451,49 @@ def extract_all_embeddings(
             
             observation, _ = batch
             
-            # Extract embeddings
-            embeddings = extract_fn(observation)
-            embeddings_np = np.array(jax.device_get(embeddings))
+            # Get local batch for dataset names (before extraction)
+            tokenized_names = None
+            if hasattr(observation, 'tokenized_dataset_name') and observation.tokenized_dataset_name is not None:
+                tokenized_names = training_utils.to_local_array(observation.tokenized_dataset_name)
+            
+            # Create JIT function on first batch with proper input sharding structure
+            if extract_fn is None:
+                # Build input sharding that matches observation structure
+                def get_sharding(x):
+                    if hasattr(x, 'shape') and len(x.shape) > 0:
+                        return data_sharding
+                    return replicated_sharding
+                
+                in_shardings = jax.tree_util.tree_map(get_sharding, observation)
+                
+                extract_fn = jax.jit(
+                    _extract_impl,
+                    in_shardings=in_shardings,
+                    out_shardings=replicated_sharding,
+                )
+                logger.info("JIT-compiled extraction function")
+            
+            # Extract embeddings with JIT-compiled function
+            try:
+                embeddings = extract_fn(observation)
+            except Exception as e:
+                if first_batch:
+                    logger.warning(f"JIT extraction failed, falling back to direct extraction: {e}")
+                # Fallback: run without JIT
+                embeddings = _extract_impl(observation)
+            
+            first_batch = False
+            
+            # Convert to numpy - replicated sharding should make this straightforward
+            embeddings_np = np.asarray(embeddings)
             batch_size = embeddings_np.shape[0]
             
             # Get dataset names from the batch
             dataset_names = ["unknown"] * batch_size
             
-            # Try to get dataset names from tokenized_dataset_name in observation
-            if hasattr(observation, 'tokenized_dataset_name') and observation.tokenized_dataset_name is not None:
-                tokenized_names = np.array(training_utils.to_local_array(observation.tokenized_dataset_name))
-                if tokenizer is not None:
-                    dataset_names = decode_dataset_names(tokenized_names, tokenizer)
-                else:
-                    logger.warning("No tokenizer available, cannot decode dataset names")
+            if tokenized_names is not None and tokenizer is not None:
+                tokenized_names_np = np.asarray(tokenized_names)
+                dataset_names = decode_dataset_names(tokenized_names_np, tokenizer)
             
             # Store results
             for i in range(batch_size):
