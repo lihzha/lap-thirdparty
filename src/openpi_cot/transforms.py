@@ -92,6 +92,8 @@ class TokenizePromptAndReasoning(DataTransformFn):
             "tokenized_prompt_mask": pad_mask,  # kept for compatibility with upstream
             "tokenized_langact_mask": reasoning_mask,
             "token_loss_mask": token_loss_mask,
+            "tokenized_dataset_name": tokenized_dataset_name,
+            
         }
 
         if self.verbose_mode:
@@ -100,7 +102,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
                     "critical_token_mask": critical_mask,
                     "number_token_mask": numeric_mask,
                     "direction_token_mask": direction_mask,
-                    "tokenized_dataset_name": tokenized_dataset_name,
                 }
             )
 
@@ -480,6 +481,19 @@ class TokenizeFASTCoTInputs(DataTransformFn):
         # Get language_actions (contains VQA answer or prediction answer)
         # Similar to TokenizePromptAndReasoning pattern
         language_actions = data.pop("language_actions", None)
+        
+        dataset_name = data.pop("dataset_name", None)  # if None, inference
+        if dataset_name is not None:
+            tokenized_dataset_name = self.tokenizer._tokenizer.encode(dataset_name)
+            pad_id = self.tokenizer._tokenizer.pad_id()
+            tokenized_dataset_name = [pad_id] * (
+                self.dataset_name_pad_len - len(tokenized_dataset_name)
+            ) + tokenized_dataset_name
+            tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
+        else:
+            pad_id = self.tokenizer._tokenizer.pad_id()
+            tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len
+            tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
 
         # Get state type if available
         state_type = data.pop("state_type", None)
@@ -513,6 +527,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             "tokenized_prompt_mask": token_mask,
             "tokenized_langact_mask": ar_mask,
             "token_loss_mask": loss_mask,
+            "tokenized_dataset_name": tokenized_dataset_name,
         }
 
 
