@@ -102,9 +102,19 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
         initial_state: State vector containing initial EEF pose
                        Expected format: [x, y, z, qx, qy, qz, qw, ...]
                        or [x, y, z, roll, pitch, yaw, ...]
+        dataset_name: Name of the dataset (used for dataset-specific transforms)
+        needs_wrist_rotation: Whether the wrist image was rotated 180 degrees
 
     Returns:
         Transformed actions in EEF frame with same shape as input
+        
+    Dataset-specific transformations (notation: "A -> B" means current A should become B):
+        - bridge, taco_play: y -> -y, z -> -z (default)
+        - jaco_play: +x -> +y, -y -> -x, +z -> -z → [x,y,z] -> [y, x, -z]
+        - furniture_bench: yz rotation flipped
+        - utaustin_mutex: yz rotation flipped
+        - fmb: yz rotation flipped
+        - berkeley_autolab_ur5: +x -> +y, +y -> -x, y rotation flipped → [x,y,z] -> [-y, x, z]
     """
     actions = np.asarray(actions, dtype=float)
     initial_state = np.asarray(initial_state, dtype=float)
@@ -112,41 +122,56 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     assert actions.ndim == 1
     transformed_actions = actions.copy()
 
-    # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
-    # euler = initial_state[3:6]
-    # initial_rotation = R.from_euler("xyz", euler).as_matrix()
     rot6d = initial_state[3:9]
     initial_rotation = rot6d_to_rotmat(rot6d)
 
     # Get rotation matrix: base -> EEF
     R_base_to_eef = initial_rotation.T  # Transpose to get EEF <- base
 
+    # Transform position from base frame to EEF frame
     delta_pos_base = actions[:3]
     delta_pos_eef = R_base_to_eef @ delta_pos_base
-    # Apply additional transformation: y -> -y, z -> -z
-    # if needs_wrist_rotation:
+
     delta_pos_eef[1] = -delta_pos_eef[1]
     delta_pos_eef[2] = -delta_pos_eef[2]
+
+    # Dataset-specific position transformations
+    if "jaco_play" in dataset_name:
+        # jaco_play: +x -> +y, -y -> -x, +z -> -z
+        # [x, y, z] -> [y, x, -z]
+        delta_pos_eef = np.array([delta_pos_eef[1], delta_pos_eef[0], -delta_pos_eef[2]])
+    elif "berkeley_autolab_ur5" in dataset_name:
+        # berkeley_autolab: +x -> +y, +y -> -x
+        # [x, y, z] -> [-y, x, z]
+        delta_pos_eef = np.array([-delta_pos_eef[1], delta_pos_eef[0], delta_pos_eef[2]])
+        
+
     transformed_actions[:3] = delta_pos_eef
 
+    # Transform rotation from base frame to EEF frame
     delta_rot_base = actions[3:6]  # [roll, pitch, yaw] in radians
-    # Convert euler angles to rotation matrix
     R_delta_base = R.from_euler("xyz", delta_rot_base).as_matrix()
-    # Transform to EEF frame: R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
     R_delta_eef = R_base_to_eef @ R_delta_base @ R_base_to_eef.T
-    # Convert back to euler angles
     delta_rot_eef = R.from_matrix(R_delta_eef).as_euler("xyz")
-   
-    # Apply additional transformation: y -> -y, z -> -z to rotation as well
     if not needs_wrist_rotation:
         delta_rot_eef[1] = -delta_rot_eef[1]
         delta_rot_eef[2] = -delta_rot_eef[2]
+        
+    # Dataset-specific rotation transformations
+    if "furniture_bench_dataset_converted_externally_to_rlds" in dataset_name or "austin" in dataset_name or "fmb" in dataset_name or "viola" in dataset_name:
+        # yz rotation flipped (pitch and yaw negated)
+        delta_rot_eef[1] = -delta_rot_eef[1]  # pitch
+        delta_rot_eef[2] = -delta_rot_eef[2]  # yaw
+    elif "berkeley_autolab_ur5" in dataset_name:
+        # y rotation flipped (pitch negated)
+        delta_rot_eef[1] = -delta_rot_eef[1]  # pitch
+
     transformed_actions[3:6] = delta_rot_eef
 
     return transformed_actions
 
 
-def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndarray) -> np.ndarray:
+def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndarray, dataset_name: str = "") -> np.ndarray:
     """Transform actions from end effector frame to base frame (inverse of transform_actions_to_eef_frame).
 
     Args:
@@ -156,17 +181,22 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
         initial_state: State vector containing initial EEF pose
                        Expected format: [x, y, z, qx, qy, qz, qw, ...]
                        or [x, y, z, roll, pitch, yaw, ...]
+        dataset_name: Name of the dataset (used for dataset-specific inverse transforms)
 
     Returns:
         Transformed actions in base frame with same shape as input
+        
+    Dataset-specific inverse transformations:
+        - bridge, taco_play: y -> -y, z -> -z (default, self-inverse)
+        - jaco_play: [x,y,z] -> [y, x, -z] (self-inverse: swap x/y, negate z)
+        - furniture_bench, utaustin_mutex, fmb: yz rotation unflipped
+        - berkeley_autolab_ur5: [x,y,z] -> [y, -x, z], y rotation unflipped
     """
     actions = np.asarray(actions, dtype=float)
     initial_state = np.asarray(initial_state, dtype=float)
     if len(initial_state.shape) == 2:
         assert initial_state.shape[0] == 1
         initial_state = initial_state[0]
-    # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
-    # assert len(initial_state.shape) == 1 and initial_state[7] == 0, "Only supporting euler angle now"
 
     if actions.ndim == 1:
         actions = actions[None, :]
@@ -174,9 +204,6 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     transformed_actions = actions.copy()
 
     # Extract initial EEF orientation from state
-    # Try to detect if state contains quaternions (length 7+) or euler angles (length 6+)
-
-    # Assume euler angle format: [x, y, z, roll, pitch, yaw, ...]
     if len(initial_state) == 7:
         euler = initial_state[3:6]
         initial_rotation = R.from_euler("xyz", euler).as_matrix()
@@ -190,18 +217,42 @@ def transform_actions_from_eef_frame(actions: np.ndarray, initial_state: np.ndar
     # Transform translation deltas from EEF frame to base frame
     for i in range(len(transformed_actions)):
         delta_pos_eef = actions[i, :3].copy()
-        # Apply inverse transformation: y -> -y, z -> -z (same as forward since it's a sign flip)
-        delta_pos_eef[1] = -delta_pos_eef[1]
-        delta_pos_eef[2] = -delta_pos_eef[2]
+
+        # Dataset-specific inverse position transformations
+        if "jaco_play" in dataset_name:
+            # Inverse of [x,y,z] -> [y,x,-z] is [y,x,-z] (self-inverse)
+            delta_pos_eef = np.array([delta_pos_eef[1], delta_pos_eef[0], -delta_pos_eef[2]])
+        elif "berkeley_autolab" in dataset_name:
+            # Inverse of [x,y,z] -> [-y,x,z] is [y,-x,z]
+            delta_pos_eef = np.array([delta_pos_eef[1], -delta_pos_eef[0], delta_pos_eef[2]])
+        else:
+            # Default inverse: y -> -y, z -> -z (self-inverse)
+            delta_pos_eef[1] = -delta_pos_eef[1]
+            delta_pos_eef[2] = -delta_pos_eef[2]
+
         delta_pos_base = R_eef_to_base @ delta_pos_eef
         transformed_actions[i, :3] = delta_pos_base
 
         # Transform rotation deltas from EEF frame to base frame
         if actions.shape[-1] >= 6:
             delta_rot_eef = actions[i, 3:6].copy()  # [roll, pitch, yaw] in radians
-            # Apply inverse transformation: y -> -y, z -> -z
-            delta_rot_eef[1] = -delta_rot_eef[1]
-            delta_rot_eef[2] = -delta_rot_eef[2]
+
+            # Dataset-specific inverse rotation transformations
+            if "furniture_bench" in dataset_name or "utaustin" in dataset_name or "fmb" in dataset_name:
+                # Inverse of yz rotation flip (self-inverse)
+                delta_rot_eef[1] = -delta_rot_eef[1]  # pitch
+                delta_rot_eef[2] = -delta_rot_eef[2]  # yaw
+            elif "berkeley_autolab" in dataset_name:
+                # Inverse of y rotation flip (self-inverse)
+                delta_rot_eef[1] = -delta_rot_eef[1]  # pitch
+            elif "jaco_play" in dataset_name:
+                # jaco_play: no additional rotation flip
+                pass
+            else:
+                # Default inverse: y -> -y, z -> -z (self-inverse)
+                delta_rot_eef[1] = -delta_rot_eef[1]
+                delta_rot_eef[2] = -delta_rot_eef[2]
+
             # Convert euler angles to rotation matrix
             R_delta_eef = R.from_euler("xyz", delta_rot_eef).as_matrix()
             # Transform to base frame: R_delta_base = R_eef_to_base @ R_delta_eef @ R_eef_to_base.T
