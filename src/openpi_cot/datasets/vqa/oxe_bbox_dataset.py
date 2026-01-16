@@ -20,6 +20,7 @@ from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
     ROBOT_BBOX_PROMPT_PARTS,
+    bridge_key_extractor,
     build_annotated_keys_set,
     build_frame_objects_table_v2,
     count_annotated_frames,
@@ -221,6 +222,14 @@ class OXEBoundingBoxDataset(ABC):
         """
         return False
 
+    def get_key_extractor(self) -> callable:
+        """Return the key extractor function for matching trajectories to JSONL annotations.
+        
+        Subclasses can override this to use a different key extraction strategy.
+        By default, uses file_path as the key (oxe_key_extractor).
+        """
+        return oxe_key_extractor
+
     def _get_bbox_annotations_dir(self, config) -> str:
         """Build path to bbox annotations directory."""
         bbox_dir_name = self.get_bbox_annotations_dir_name()
@@ -277,6 +286,22 @@ class OXEBoundingBoxDataset(ABC):
         opts.experimental_threading.private_threadpool_size = int(max(16, psutil.cpu_count(logical=True)))
         return opts
 
+    def build_episode_key_tf(self, traj) -> tf.Tensor:
+        """Build the episode key from trajectory metadata for bbox lookup.
+        
+        Subclasses can override this to use different key formats.
+        By default, uses just file_path as the key.
+        
+        Args:
+            traj: Trajectory dict containing traj_metadata
+            
+        Returns:
+            tf.string tensor with the episode key
+        """
+        # Default: use file_path as the key
+        file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+        return file_path
+
     def get_traj_identifier(self):
         """Add trajectory_id to each trajectory using OXE-style hash-based identifier."""
 
@@ -301,11 +326,9 @@ class OXEBoundingBoxDataset(ABC):
             traj_uid = tf.strings.join([name_tensor, sep2, tf.strings.as_string(hashed)])
             traj["trajectory_id"] = tf.repeat(traj_uid, traj_len)
 
-            # Extract file_path for bbox lookup - this is unique across all episodes
-            # even when combining datasets (e.g., MolmoAct household + tabletop)
-            # episode_metadata is stored per-step, so take the first element
-            file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
-            traj["episode_id"] = tf.repeat(file_path, traj_len)
+            # Build episode key for bbox lookup using the dataset-specific method
+            episode_key = self.build_episode_key_tf(traj)
+            traj["episode_id"] = tf.repeat(episode_key, traj_len)
 
             return traj
 
@@ -329,8 +352,9 @@ class OXEBoundingBoxDataset(ABC):
         """Restructure trajectory data into VQA-style bbox samples."""
         # OPTIMIZATION: Build set of episode_ids with annotations and filter trajectories first
         # This skips entire trajectories without any bbox annotations
+        key_extractor = self.get_key_extractor()
         annotated_episode_ids = build_annotated_keys_set(
-            self.bbox_annotations_dir, oxe_key_extractor
+            self.bbox_annotations_dir, key_extractor
         )
         logging.info(f"Found {len(annotated_episode_ids)} trajectories with bbox annotations")
 
@@ -482,7 +506,7 @@ class OXEBoundingBoxDataset(ABC):
         target_h, target_w = self.config.resize_resolution
         return build_frame_objects_table_v2(
             bbox_annotations_dir=self.bbox_annotations_dir,
-            key_extractor=oxe_key_extractor,
+            key_extractor=self.get_key_extractor(),
             dataset_name=self.dataset_name,
             orig_size=(orig_w, orig_h),
             target_size=(target_w, target_h),
@@ -493,17 +517,20 @@ class OXEBoundingBoxDataset(ABC):
         """Return number of transitions computed from JSONL annotation files."""
         if not hasattr(self, "_num_transitions"):
             self._num_transitions = count_annotated_frames(
-                self.bbox_annotations_dir, oxe_key_extractor
+                self.bbox_annotations_dir, self.get_key_extractor()
             )
         return self._num_transitions
 
     def debug_key_mismatch(self, num_samples: int = 5):
-        """Debug helper to compare file_path keys between trajectory and JSONL.
+        """Debug helper to compare episode keys between trajectory and JSONL.
         
         Call this method to inspect sample keys from the JSONL annotations.
-        The key is now file_path which should be unique across all episodes.
+        Uses the dataset-specific key extractor (file_path for MolmoAct,
+        file_path::episode_id for Bridge).
         """
         import json
+        
+        key_extractor = self.get_key_extractor()
         
         # Get sample keys from JSONL
         jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
@@ -520,7 +547,7 @@ class OXEBoundingBoxDataset(ABC):
                         continue
                     try:
                         episode_data = json.loads(line)
-                        episode_key = oxe_key_extractor(episode_data)
+                        episode_key = key_extractor(episode_data)
                         if episode_key:
                             jsonl_episode_ids.add(episode_key)
                             labels = episode_data.get("labels", [])
@@ -534,7 +561,7 @@ class OXEBoundingBoxDataset(ABC):
                     except json.JSONDecodeError:
                         continue
         
-        logging.info(f"Sample JSONL file_paths (keys): {list(jsonl_episode_ids)[:3]}")
+        logging.info(f"Sample JSONL episode keys: {list(jsonl_episode_ids)[:3]}")
         logging.info(f"Sample JSONL lookup keys: {jsonl_keys[:5]}")
 
     def debug_frame_collisions(self):
@@ -548,8 +575,11 @@ class OXEBoundingBoxDataset(ABC):
         import json
         from collections import defaultdict
         
+        key_extractor = self.get_key_extractor()
+        
         logging.info(f"=== Analyzing JSONL bbox annotations for {self.dataset_name} ===")
         logging.info(f"Annotations dir: {self.bbox_annotations_dir}")
+        logging.info(f"Using key extractor: {key_extractor.__name__}")
         
         jsonl_files = tf.io.gfile.glob(os.path.join(self.bbox_annotations_dir, "*.jsonl"))
         logging.info(f"Found {len(jsonl_files)} JSONL files")
@@ -558,8 +588,8 @@ class OXEBoundingBoxDataset(ABC):
         key_to_sources: dict[str, list[tuple[str, str, int]]] = defaultdict(list)
         # Track frame indices per episode
         episode_frame_indices: dict[str, list[int]] = defaultdict(list)
-        # Track episodes per file_path
-        file_path_counts: dict[str, int] = defaultdict(int)
+        # Track episodes per episode_key
+        episode_key_counts: dict[str, int] = defaultdict(int)
         
         total_episodes = 0
         total_frames = 0
@@ -578,11 +608,11 @@ class OXEBoundingBoxDataset(ABC):
                         continue
                     
                     total_episodes += 1
-                    episode_key = oxe_key_extractor(episode_data)
+                    episode_key = key_extractor(episode_data)
                     if not episode_key:
                         continue
                     
-                    file_path_counts[episode_key] += 1
+                    episode_key_counts[episode_key] += 1
                     
                     labels = episode_data.get("labels", [])
                     for label_entry in labels:
@@ -599,10 +629,10 @@ class OXEBoundingBoxDataset(ABC):
         
         logging.info(f"Total episodes in JSONL: {total_episodes}")
         logging.info(f"Total annotated frames: {total_frames}")
-        logging.info(f"Unique episode keys (file_paths): {len(file_path_counts)}")
+        logging.info(f"Unique episode keys: {len(episode_key_counts)}")
         
-        # Check for duplicate episode keys (same file_path appearing multiple times)
-        duplicate_episodes = {k: v for k, v in file_path_counts.items() if v > 1}
+        # Check for duplicate episode keys (same key appearing multiple times)
+        duplicate_episodes = {k: v for k, v in episode_key_counts.items() if v > 1}
         if duplicate_episodes:
             logging.warning(f"Found {len(duplicate_episodes)} episode keys appearing multiple times:")
             for ep_key, count in list(duplicate_episodes.items())[:5]:
@@ -653,7 +683,7 @@ class OXEBoundingBoxDataset(ABC):
         return {
             "total_episodes": total_episodes,
             "total_frames": total_frames,
-            "unique_episode_keys": len(file_path_counts),
+            "unique_episode_keys": len(episode_key_counts),
             "duplicate_episodes": len(duplicate_episodes),
             "lookup_key_collisions": len(collisions),
             "episodes_with_dup_frames": len(episodes_with_dup_frames),
@@ -796,6 +826,10 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
     """Bridge dataset with bounding box annotations for VQA training.
 
     Uses the bridge_v2_oxe dataset from OXE with bbox annotations from JSONL files.
+    
+    For Bridge dataset, the episode key is a composite of file_path AND episode_id
+    because one file (e.g., out.npy) can contain multiple episodes.
+    Key format: "{file_path}::{episode_id}"
     """
 
     def get_frame_offset(self) -> int:
@@ -823,3 +857,24 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
     def use_target_only(self) -> bool:
         # Use only target objects to filter out potentially noisy annotations
         return False
+
+    def get_key_extractor(self) -> callable:
+        """Return Bridge-specific key extractor that uses file_path::episode_id."""
+        return bridge_key_extractor
+
+    def build_episode_key_tf(self, traj) -> tf.Tensor:
+        """Build composite episode key from file_path and episode_id.
+        
+        For Bridge dataset, one file can contain multiple episodes, so we need
+        both file_path AND episode_id to uniquely identify an episode.
+        
+        Key format: "{file_path}::{episode_id}"
+        """
+        file_path = traj["traj_metadata"]["episode_metadata"]["file_path"][0]
+        episode_id = traj["traj_metadata"]["episode_metadata"]["episode_id"][0]
+        
+        # Convert episode_id to string and join with file_path
+        episode_id_str = tf.strings.as_string(episode_id)
+        composite_key = tf.strings.join([file_path, "::", episode_id_str])
+        
+        return composite_key

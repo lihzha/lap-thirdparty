@@ -918,6 +918,26 @@ def oxe_key_extractor(episode_data: dict) -> str | None:
     return None
 
 
+def bridge_key_extractor(episode_data: dict) -> str | None:
+    """Extract episode identifier key from Bridge JSONL entry.
+
+    Uses both file_path AND episode_id as the unique key because for Bridge dataset,
+    one file (e.g., out.npy) can contain multiple episodes. The episode_id identifies
+    which episode within that file.
+
+    Key format: "{file_path}::{episode_id}"
+
+    Returns the composite key or None if required fields are not found.
+    """
+    episode_metadata = episode_data.get("episode_metadata", {})
+    file_path = episode_metadata.get("file_path")
+    episode_id = episode_metadata.get("episode_id")
+    
+    if file_path is not None and episode_id is not None:
+        return f"{file_path}::{episode_id}"
+    return None
+
+
 def count_annotated_frames(
     bbox_annotations_dir: str,
     key_extractor: callable,
