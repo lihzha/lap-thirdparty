@@ -836,7 +836,7 @@ class BridgeBoundingBoxDataset(OXEBoundingBoxDataset):
         # Bridge V2 transform removes the first frame (all-zero action).
         # JSONL annotations were made on raw data, so frame indices need offset by 1.
         # Processed frame 0 -> JSONL frame 1, processed frame 1 -> JSONL frame 2, etc.
-        return 1
+        return 0
 
     def get_dataset_name(self) -> str:
         return "bridge_bbox"

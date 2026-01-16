@@ -606,10 +606,12 @@ def sample_and_format_objects_tf(
     and direction is like "move forward", "move left", etc.
 
     With probability direction_prob, the caption will use direction instead of loc_tokens.
+    When using direction caption, only ONE object is sampled (direction refers to single object).
+    When using bbox caption, up to max_objects are sampled.
 
     Args:
         objects_data: tf.string tensor with pipe-delimited objects data
-        max_objects: Maximum number of objects to include (randomly sampled if more)
+        max_objects: Maximum number of objects to include for bbox caption (randomly sampled if more)
         seed_pair: Tuple of (base_seed, hash_value) for stateless random sampling
         direction_prob: Probability of using direction caption instead of bbox (default 0.5)
 
@@ -627,24 +629,34 @@ def sample_and_format_objects_tf(
         objects = tf.strings.split(objects_data, ";")
         num_objects = tf.shape(objects)[0]
 
-        # Sample indices if we have more than max_objects
+        # First, decide whether to use direction or bbox caption
+        if seed_pair is not None:
+            dir_seed = (seed_pair[0] + 7919, seed_pair[1])
+            use_direction = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < direction_prob
+        else:
+            use_direction = tf.random.uniform([], dtype=tf.float32) < direction_prob
+
+        # Determine how many objects to sample based on caption type
+        # Direction caption: always 1 object
+        # Bbox caption: up to max_objects
+        effective_max = tf.cond(use_direction, lambda: 1, lambda: max_objects)
+
+        # Sample indices
         def sample_indices():
-            # Generate random values and argsort to get a random permutation
             if seed_pair is not None:
                 random_vals = tf.random.stateless_uniform(
                     [num_objects], seed=seed_pair, dtype=tf.float32
                 )
             else:
                 random_vals = tf.random.uniform([num_objects], dtype=tf.float32)
-            # argsort gives indices that would sort the random values = random permutation
             shuffled = tf.argsort(random_vals)
-            return shuffled[:max_objects]
+            return shuffled[:effective_max]
 
         def all_indices():
-            return tf.range(num_objects)
+            return tf.range(tf.minimum(num_objects, effective_max))
 
         selected_indices = tf.cond(
-            num_objects > max_objects,
+            num_objects > effective_max,
             sample_indices,
             all_indices,
         )
@@ -655,7 +667,6 @@ def sample_and_format_objects_tf(
         # Split each object into label, loc_tokens, and direction
         def split_object(obj):
             parts = tf.strings.split(obj, "|")
-            # parts[0] is label, parts[1] is loc_tokens, parts[2] is direction
             label = parts[0]
             loc_tokens = parts[1]
             # Handle both old format (2 parts) and new format (3 parts)
@@ -679,36 +690,25 @@ def sample_and_format_objects_tf(
         loc_tokens = labels_locs_dirs[1]
         directions = labels_locs_dirs[2]
 
-        # Build prompt_labels: unique labels joined by ", "
-        # For simplicity, we join all labels (duplicates will be included)
-        # A true unique would require py_function, but for small max_objects this is acceptable
-        prompt_labels = tf.strings.reduce_join(labels, separator=", ")
-
-        # Decide whether to use direction or loc_tokens for caption (50% probability)
-        if seed_pair is not None:
-            # Use a different seed for direction choice
-            dir_seed = (seed_pair[0] + 7919, seed_pair[1])
-            use_direction = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < direction_prob
-        else:
-            use_direction = tf.random.uniform([], dtype=tf.float32) < direction_prob
-
         # Check if we have valid direction data (non-empty)
         has_direction = tf.greater(tf.strings.length(directions[0]), 0)
-        use_direction = tf.logical_and(use_direction, has_direction)
+        use_direction_final = tf.logical_and(use_direction, has_direction)
 
-        def bbox_caption():
+        def bbox_result():
+            # Build prompt_labels from all sampled labels
+            prompt_labels = tf.strings.reduce_join(labels, separator=", ")
             # Build caption: "loc_tokens label" joined by " ; "
             caption_parts = tf.strings.join([loc_tokens, labels], separator=" ")
-            return tf.strings.reduce_join(caption_parts, separator=" ; ")
+            caption = tf.strings.reduce_join(caption_parts, separator=" ; ")
+            return prompt_labels, caption
 
-        def direction_caption():
-            # For direction, just return the direction of the first object
-            # This is consistent with direction-only mode behavior
-            return directions[0]
+        def direction_result():
+            # For direction, use only the first (and only) sampled object
+            prompt_labels = labels[0]
+            caption = directions[0]
+            return prompt_labels, caption
 
-        caption = tf.cond(use_direction, direction_caption, bbox_caption)
-
-        return prompt_labels, caption
+        return tf.cond(use_direction_final, direction_result, bbox_result)
 
     return tf.cond(is_empty, empty_result, process_objects)
 
