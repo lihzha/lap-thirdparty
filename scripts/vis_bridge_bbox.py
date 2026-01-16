@@ -34,24 +34,36 @@ except ImportError:
     wandb = None
 
 
-def load_bbox_annotations(jsonl_path: str) -> dict[str, dict]:
+def load_bbox_annotations(jsonl_path: str) -> tuple[dict[str, dict], dict[str, dict]]:
     """Load bounding box annotations from JSONL file.
     
     Args:
         jsonl_path: Path to the JSONL file with bbox annotations
         
     Returns:
-        Dictionary mapping UUID to annotation data
+        Tuple of:
+        - Dictionary mapping UUID to annotation data
+        - Dictionary mapping file_path to annotation data (for matching)
     """
     annotations = {}
+    filepath_to_annot = {}
+    
     with open(jsonl_path, "r") as f:
         for line in f:
             if line.strip():
                 data = json.loads(line)
                 uuid = data["uuid"]
                 annotations[uuid] = data
+                
+                # Also index by file_path for matching
+                episode_metadata = data.get("episode_metadata", {})
+                file_path = episode_metadata.get("file_path", "")
+                if file_path:
+                    filepath_to_annot[file_path] = data
+    
     print(f"Loaded {len(annotations)} bbox annotations from {jsonl_path}")
-    return annotations
+    print(f"  - {len(filepath_to_annot)} unique file_paths for matching")
+    return annotations, filepath_to_annot
 
 
 def parse_uuid(uuid: str) -> tuple[str, str, int]:
@@ -353,26 +365,18 @@ def visualize_episode_with_bbox(
 
 def create_interactive_viewer(
     episodes: list,
-    annotations: dict,
+    filepath_to_annot: dict,
     data_dir: str,
-    tfrecord_prefix: str,
 ):
     """Create an interactive matplotlib viewer for the dataset with bboxes.
     
     Args:
         episodes: List of episode data
-        annotations: Bbox annotations dictionary
+        filepath_to_annot: Bbox annotations indexed by file_path
         data_dir: Dataset directory path
-        tfrecord_prefix: Prefix for constructing UUIDs
     """
     current_episode_idx = [0]
     current_frame = [0]
-    
-    # Build UUID lookup
-    def make_uuid(tfrecord_idx: int, episode_idx: int) -> str:
-        # Format: gs://pi0-cot/OXE/bridge_v2_oxe/1.0.0/bridge_dataset-train.tfrecord-00000-of-01024::episode_0
-        tfrecord_file = f"bridge_dataset-train.tfrecord-{tfrecord_idx:05d}-of-01024"
-        return f"{tfrecord_prefix}/{tfrecord_file}::episode_{episode_idx}"
     
     # Load first episode
     n_episodes = len(episodes)
@@ -418,20 +422,16 @@ def create_interactive_viewer(
                                         fontsize=9, verticalalignment='top',
                                         fontfamily='monospace')
     
-    def get_current_uuid():
-        # Try to find matching UUID in annotations
-        ep_idx = current_episode_idx[0]
-        # Search through annotations for matching episode
-        for uuid in annotations:
-            _, _, annot_ep_idx = parse_uuid(uuid)
-            if annot_ep_idx == ep_idx:
-                return uuid
-        return None
+    def get_current_annotation():
+        """Get annotation for current episode using file_path matching."""
+        data = episode_data[0]
+        file_path = data.get('file_path', '')
+        return filepath_to_annot.get(file_path)
     
-    def get_frame_annotation(uuid: str, frame_idx: int) -> dict | None:
-        if uuid not in annotations:
+    def get_frame_annotation(annot: dict | None, frame_idx: int) -> dict | None:
+        if annot is None:
             return None
-        for label in annotations[uuid].get("labels", []):
+        for label in annot.get("labels", []):
             if label.get("frame") == frame_idx:
                 return label
         return None
@@ -439,15 +439,16 @@ def create_interactive_viewer(
     def update_display():
         data = episode_data[0]
         frame = current_frame[0]
-        uuid = get_current_uuid()
+        annot = get_current_annotation()
+        file_path = data.get('file_path', '')
         
         # Get image for this frame
         if frame < len(data['images']):
             img = data['images'][frame].copy()
             
             # Draw bboxes if we have annotations for this frame
-            if uuid:
-                frame_annot = get_frame_annotation(uuid, frame)
+            if annot:
+                frame_annot = get_frame_annotation(annot, frame)
                 if frame_annot:
                     for obj in frame_annot.get("all_objects", []):
                         bbox = obj.get("bbox", [])
@@ -462,19 +463,20 @@ def create_interactive_viewer(
             im_wrist.set_data(data['wrist_images'][frame])
         
         # Update info text
+        matched_str = "MATCHED" if annot else "NO MATCH"
         info_str = f"""Episode: {current_episode_idx[0] + 1}/{n_episodes}
 Frame: {frame}/{len(data['images']) - 1}
 
 Task: {data['language_instruction'][:50]}...
 
-UUID: {uuid or 'Not found'}"""
+file_path: ...{file_path[-40:] if len(file_path) > 40 else file_path}
+Status: {matched_str}"""
         info_text.set_text(info_str)
         
         # Update bbox info
         bbox_str = ""
-        if uuid:
-            annot = annotations.get(uuid, {})
-            frame_annot = get_frame_annotation(uuid, frame)
+        if annot:
+            frame_annot = get_frame_annotation(annot, frame)
             
             bbox_str = f"Annotations for episode:\n"
             bbox_str += f"  Task: {annot.get('task', 'N/A')}\n"
@@ -494,7 +496,7 @@ UUID: {uuid or 'Not found'}"""
             else:
                 bbox_str += f"Frame {frame}: No annotations"
         else:
-            bbox_str = "No annotations found for this episode"
+            bbox_str = f"No annotations found for this episode\n\nfile_path: {file_path}"
         
         bbox_info_text.set_text(bbox_str)
         fig.canvas.draw_idle()
@@ -543,10 +545,10 @@ UUID: {uuid or 'Not found'}"""
     next_button = Button(ax_next, 'Next Ann')
     
     def goto_prev_annotated(event):
-        uuid = get_current_uuid()
-        if not uuid or uuid not in annotations:
+        annot = get_current_annotation()
+        if annot is None:
             return
-        labels = annotations[uuid].get("labels", [])
+        labels = annot.get("labels", [])
         annotated_frames = sorted([l["frame"] for l in labels])
         current = current_frame[0]
         
@@ -556,10 +558,10 @@ UUID: {uuid or 'Not found'}"""
                 return
     
     def goto_next_annotated(event):
-        uuid = get_current_uuid()
-        if not uuid or uuid not in annotations:
+        annot = get_current_annotation()
+        if annot is None:
             return
-        labels = annotations[uuid].get("labels", [])
+        labels = annot.get("labels", [])
         annotated_frames = sorted([l["frame"] for l in labels])
         current = current_frame[0]
         
@@ -581,7 +583,7 @@ UUID: {uuid or 'Not found'}"""
 
 def save_annotated_frames(
     episodes: list,
-    annotations: dict,
+    filepath_to_annot: dict,
     output_dir: str,
     max_episodes: int | None = None,
 ):
@@ -589,26 +591,28 @@ def save_annotated_frames(
     
     Args:
         episodes: List of episodes
-        annotations: Bbox annotations
+        filepath_to_annot: Bbox annotations indexed by file_path
         output_dir: Directory to save images
         max_episodes: Maximum episodes to process
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # Build UUID to episode index mapping
-    uuid_to_ep = {}
-    for uuid in annotations:
-        _, _, ep_idx = parse_uuid(uuid)
-        if ep_idx < len(episodes):
-            uuid_to_ep[uuid] = ep_idx
-    
     processed = 0
-    for uuid, ep_idx in uuid_to_ep.items():
+    matched = 0
+    
+    for ep_idx, episode in enumerate(episodes):
         if max_episodes and processed >= max_episodes:
             break
         
-        annot = annotations[uuid]
-        episode_data = extract_episode_data(episodes[ep_idx], ep_idx)
+        episode_data = extract_episode_data(episode, ep_idx)
+        file_path = episode_data.get('file_path', '')
+        
+        # Match by file_path
+        annot = filepath_to_annot.get(file_path)
+        if annot is None:
+            continue
+        
+        matched += 1
         
         if len(episode_data['images']) == 0:
             continue
@@ -637,9 +641,9 @@ def save_annotated_frames(
         
         processed += 1
         if processed % 10 == 0:
-            print(f"Processed {processed} episodes...")
+            print(f"Processed {processed} episodes (matched {matched})...")
     
-    print(f"Saved annotated frames to {output_dir}")
+    print(f"Saved annotated frames to {output_dir} ({matched} episodes matched)")
 
 
 def create_grid_image(images: list[np.ndarray], cols: int = 4) -> np.ndarray:
@@ -677,7 +681,7 @@ def create_grid_image(images: list[np.ndarray], cols: int = 4) -> np.ndarray:
 
 def log_to_wandb(
     episodes: list,
-    annotations: dict,
+    filepath_to_annot: dict,
     max_episodes: int = 50,
     images_per_log: int = 16,
 ):
@@ -685,7 +689,7 @@ def log_to_wandb(
     
     Args:
         episodes: List of episodes
-        annotations: Bbox annotations
+        filepath_to_annot: Bbox annotations indexed by file_path
         max_episodes: Maximum episodes to process
         images_per_log: Number of images per wandb log entry
     """
@@ -693,24 +697,26 @@ def log_to_wandb(
         print("wandb not installed. Install with: pip install wandb")
         return
     
-    # Build UUID to episode index mapping
-    uuid_to_ep = {}
-    for uuid in annotations:
-        _, _, ep_idx = parse_uuid(uuid)
-        if ep_idx < len(episodes):
-            uuid_to_ep[uuid] = ep_idx
-    
     # Collect all annotated images
     all_images = []
     all_captions = []
     
     processed = 0
-    for uuid, ep_idx in uuid_to_ep.items():
+    matched = 0
+    
+    for ep_idx, episode in enumerate(episodes):
         if processed >= max_episodes:
             break
         
-        annot = annotations[uuid]
-        episode_data = extract_episode_data(episodes[ep_idx], ep_idx)
+        episode_data = extract_episode_data(episode, ep_idx)
+        file_path = episode_data.get('file_path', '')
+        
+        # Match by file_path
+        annot = filepath_to_annot.get(file_path)
+        if annot is None:
+            continue
+        
+        matched += 1
         
         if len(episode_data['images']) == 0:
             continue
@@ -774,34 +780,36 @@ def log_to_wandb(
 
 def log_episodes_to_wandb(
     episodes: list,
-    annotations: dict,
+    filepath_to_annot: dict,
     max_episodes: int = 50,
 ):
     """Log episode summaries to wandb (one log per episode with all annotated frames).
     
     Args:
         episodes: List of episodes
-        annotations: Bbox annotations
+        filepath_to_annot: Bbox annotations indexed by file_path
         max_episodes: Maximum episodes to process
     """
     if wandb is None:
         print("wandb not installed. Install with: pip install wandb")
         return
     
-    # Build UUID to episode index mapping
-    uuid_to_ep = {}
-    for uuid in annotations:
-        _, _, ep_idx = parse_uuid(uuid)
-        if ep_idx < len(episodes):
-            uuid_to_ep[uuid] = ep_idx
-    
     processed = 0
-    for uuid, ep_idx in sorted(uuid_to_ep.items(), key=lambda x: x[1]):
+    matched = 0
+    
+    for ep_idx, episode in enumerate(episodes):
         if processed >= max_episodes:
             break
         
-        annot = annotations[uuid]
-        episode_data = extract_episode_data(episodes[ep_idx], ep_idx)
+        episode_data = extract_episode_data(episode, ep_idx)
+        file_path = episode_data.get('file_path', '')
+        
+        # Match by file_path
+        annot = filepath_to_annot.get(file_path)
+        if annot is None:
+            continue
+        
+        matched += 1
         
         if len(episode_data['images']) == 0:
             continue
@@ -906,8 +914,8 @@ def main():
     else:
         annotations_path = project_root / args.annotations
     
-    # Load annotations
-    annotations = load_bbox_annotations(str(annotations_path))
+    # Load annotations (returns both uuid-indexed and filepath-indexed dicts)
+    annotations, filepath_to_annot = load_bbox_annotations(str(annotations_path))
     
     # Initialize wandb if requested
     if args.wandb:
@@ -930,6 +938,7 @@ def main():
                 "max_episodes": args.max_episodes,
                 "split": args.split,
                 "num_annotations": len(annotations),
+                "num_filepath_entries": len(filepath_to_annot),
             },
         )
         print(f"Initialized wandb run: {wandb.run.name}")
@@ -944,42 +953,34 @@ def main():
             wandb.finish()
         return
     
-    # Extract tfrecord prefix from annotations for UUID matching
-    first_uuid = list(annotations.keys())[0]
-    base_path, _, _ = parse_uuid(first_uuid)
-    tfrecord_prefix = base_path
-    print(f"Using tfrecord prefix: {tfrecord_prefix}")
-    
     if args.wandb:
-        # Log to wandb
+        # Log to wandb (use filepath_to_annot for matching)
         if args.per_episode:
-            log_episodes_to_wandb(episodes, annotations, args.max_episodes)
+            log_episodes_to_wandb(episodes, filepath_to_annot, args.max_episodes)
         else:
-            log_to_wandb(episodes, annotations, args.max_episodes)
+            log_to_wandb(episodes, filepath_to_annot, args.max_episodes)
         wandb.finish()
         print("Wandb logging complete!")
     elif args.save_dir:
-        save_annotated_frames(episodes, annotations, args.save_dir, args.max_episodes)
+        save_annotated_frames(episodes, filepath_to_annot, args.save_dir, args.max_episodes)
     elif args.episode_idx is not None:
         if args.episode_idx >= len(episodes):
             print(f"Episode index {args.episode_idx} out of range (max: {len(episodes) - 1})")
             return
         
-        # Find UUID for this episode
-        uuid = None
-        for u in annotations:
-            _, _, ep_idx = parse_uuid(u)
-            if ep_idx == args.episode_idx:
-                uuid = u
-                break
+        # Extract episode and match by file_path
+        episode_data = extract_episode_data(episodes[args.episode_idx], args.episode_idx)
+        file_path = episode_data.get('file_path', '')
+        annot = filepath_to_annot.get(file_path)
         
-        if uuid:
-            episode_data = extract_episode_data(episodes[args.episode_idx], args.episode_idx)
+        if annot:
+            uuid = annot.get('uuid', f'matched_by_filepath:{file_path}')
             visualize_episode_with_bbox(episode_data, annotations, uuid)
         else:
             print(f"No annotations found for episode {args.episode_idx}")
+            print(f"  file_path: {file_path}")
     else:
-        create_interactive_viewer(episodes, annotations, args.data_dir, tfrecord_prefix)
+        create_interactive_viewer(episodes, filepath_to_annot, args.data_dir)
 
 
 if __name__ == '__main__':
