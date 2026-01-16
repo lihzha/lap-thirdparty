@@ -140,8 +140,9 @@ def transform_actions_to_eef_frame(actions: np.ndarray, initial_state: np.ndarra
     # Convert back to euler angles
     delta_rot_eef = R.from_matrix(R_delta_eef).as_euler("xyz")
     # Apply additional transformation: y -> -y, z -> -z to rotation as well
-    delta_rot_eef[1] = delta_rot_eef[1]
-    delta_rot_eef[2] = delta_rot_eef[2]
+    if not need_flip_ee_frame:
+        delta_rot_eef[1] = - delta_rot_eef[1]
+        delta_rot_eef[2] = - delta_rot_eef[2]
     transformed_actions[3:6] = delta_rot_eef
 
     return transformed_actions

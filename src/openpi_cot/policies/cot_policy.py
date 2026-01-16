@@ -116,7 +116,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                     if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
                         wrist_image = np.zeros_like(base_image)
                     actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
-                    if actual_apply_rotation != need_flip_ee_frame:
+                    # if actual_apply_rotation != need_flip_ee_frame:
+                    #     need_flip_ee_frame = True
+                    if needs_wrist_rotation:
                         need_flip_ee_frame = True
                     add_image(wrist_image, apply_rotation=actual_apply_rotation, random_mask_prob=self.random_mask_prob)
                 else:
@@ -126,7 +128,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
                 if key in data["observation"]:
                     image = parse_image(data["observation"][key])
                     actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
-                    if actual_apply_rotation != need_flip_ee_frame:
+                    # if actual_apply_rotation != need_flip_ee_frame:
+                    #     need_flip_ee_frame = True
+                    if needs_wrist_rotation:
                         need_flip_ee_frame = True
                     add_image(image, apply_rotation=actual_apply_rotation)
                 else:
