@@ -869,6 +869,7 @@ def compare_cross_embodiment(
     split: str = "train",
     seed: int = 42,
     batch_size: int | None = None,
+    separate_tsne: bool = False,
 ) -> dict[str, dict[str, float]]:
     """Compare cross-embodiment transfer across multiple models with shared t-SNE.
     
@@ -876,7 +877,8 @@ def compare_cross_embodiment(
     1. Extracts embeddings from each model for both training mix AND target dataset
     2. Combines ALL embeddings together
     3. Runs t-SNE once on the combined set (so distances are comparable)
-    4. Creates visualizations comparing cross-embodiment transfer
+    4. Optionally runs t-SNE separately for each model and plots side-by-side
+    5. Creates visualizations comparing cross-embodiment transfer
     
     Args:
         model_configs: List of (config_name, exp_name, checkpoint_step) tuples
@@ -889,6 +891,7 @@ def compare_cross_embodiment(
         split: Data split to use
         seed: Random seed
         batch_size: Override batch size
+        separate_tsne: If True, also run t-SNE separately per model and plot side-by-side
         
     Returns:
         Dictionary mapping model names to their distance metrics
@@ -1085,6 +1088,64 @@ def compare_cross_embodiment(
         embedding_type=embedding_type,
         reduction_method=reduction_method,
     )
+    
+    # --- Separate t-SNE per model (side-by-side comparison) ---
+    if separate_tsne:
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Running separate {reduction_method} for each model...")
+        logger.info(f"{'='*60}")
+        
+        # Run t-SNE separately for each model
+        separate_embeddings_2d = {}
+        separate_metrics = {}
+        
+        for model_name, data in model_embeddings.items():
+            # Combine this model's train + target embeddings
+            model_all_emb = np.vstack([data["train_embeddings"], data["target_embeddings"]])
+            model_labels = (
+                ["train"] * len(data["train_embeddings"]) + 
+                ["target"] * len(data["target_embeddings"])
+            )
+            
+            logger.info(f"Running {reduction_method} for {model_name} ({len(model_all_emb)} samples)...")
+            emb_2d = reduce_dimensions(model_all_emb, method=reduction_method)
+            
+            # Compute centroids in this model's 2D space
+            train_mask = np.array([l == "train" for l in model_labels])
+            target_mask = np.array([l == "target" for l in model_labels])
+            
+            train_centroid_2d = np.mean(emb_2d[train_mask], axis=0)
+            target_centroid_2d = np.mean(emb_2d[target_mask], axis=0)
+            dist_2d = float(np.linalg.norm(target_centroid_2d - train_centroid_2d))
+            
+            separate_embeddings_2d[model_name] = {
+                "embeddings_2d": emb_2d,
+                "labels": model_labels,
+                "train_names": data["train_names"],
+                "target_names": data["target_names"],
+            }
+            
+            separate_metrics[model_name] = {
+                "train_centroid_2d": train_centroid_2d.tolist(),
+                "target_centroid_2d": target_centroid_2d.tolist(),
+                "target_to_train_dist_2d": dist_2d,
+            }
+            
+            logger.info(f"  {model_name}: dist_2d = {dist_2d:.2f}")
+        
+        # Plot side-by-side
+        plot_separate_tsne_side_by_side(
+            separate_embeddings_2d=separate_embeddings_2d,
+            separate_metrics=separate_metrics,
+            target_dataset=target_dataset,
+            output_path=output_path,
+            embedding_type=embedding_type,
+            reduction_method=reduction_method,
+        )
+        
+        # Save separate t-SNE metrics
+        with open(output_path / f"separate_tsne_metrics_{target_dataset}.json", "w") as f:
+            json.dump(separate_metrics, f, indent=2)
     
     # Save raw data
     np.savez(
@@ -1334,6 +1395,200 @@ def plot_cross_embodiment_comparison(
     logger.info(f"Saved visualization plots to {output_path}")
 
 
+def plot_separate_tsne_side_by_side(
+    separate_embeddings_2d: dict[str, dict],
+    separate_metrics: dict[str, dict],
+    target_dataset: str,
+    output_path: Path,
+    embedding_type: str,
+    reduction_method: str,
+):
+    """Plot separate t-SNE for each model side-by-side.
+    
+    Each model gets its own t-SNE, allowing comparison of the *shape* and *structure*
+    of embeddings rather than absolute positions.
+    
+    Args:
+        separate_embeddings_2d: Dict mapping model_name to {"embeddings_2d", "labels", ...}
+        separate_metrics: Dict mapping model_name to metrics including centroids and distances
+        target_dataset: Target dataset name
+        output_path: Output directory
+        embedding_type: Embedding type used
+        reduction_method: Reduction method used
+    """
+    model_names = list(separate_embeddings_2d.keys())
+    n_models = len(model_names)
+    
+    if n_models == 0:
+        logger.warning("No models to plot for separate t-SNE")
+        return
+    
+    # --- Main side-by-side plot ---
+    fig, axes = plt.subplots(1, n_models, figsize=(7 * n_models, 6))
+    if n_models == 1:
+        axes = [axes]
+    
+    for ax, model_name in zip(axes, model_names):
+        data = separate_embeddings_2d[model_name]
+        emb_2d = data["embeddings_2d"]
+        labels = data["labels"]
+        
+        # Masks
+        train_mask = np.array([l == "train" for l in labels])
+        target_mask = np.array([l == "target" for l in labels])
+        
+        # Plot training points (blue)
+        ax.scatter(
+            emb_2d[train_mask, 0],
+            emb_2d[train_mask, 1],
+            c='steelblue',
+            marker='o',
+            alpha=0.5,
+            s=40,
+            label='Training Mix',
+        )
+        
+        # Plot target points (red stars)
+        ax.scatter(
+            emb_2d[target_mask, 0],
+            emb_2d[target_mask, 1],
+            c='crimson',
+            marker='*',
+            alpha=0.8,
+            s=120,
+            label=f'Target ({target_dataset})',
+            edgecolors='darkred',
+            linewidths=0.5,
+        )
+        
+        # Plot centroids and line
+        metrics = separate_metrics[model_name]
+        train_centroid = metrics["train_centroid_2d"]
+        target_centroid = metrics["target_centroid_2d"]
+        dist = metrics["target_to_train_dist_2d"]
+        
+        # Train centroid (large blue X)
+        ax.scatter(
+            train_centroid[0], train_centroid[1],
+            c='steelblue', marker='X', s=300,
+            edgecolors='black', linewidths=2,
+            label='Train Centroid', zorder=10,
+        )
+        
+        # Target centroid (large red X)
+        ax.scatter(
+            target_centroid[0], target_centroid[1],
+            c='crimson', marker='X', s=300,
+            edgecolors='darkred', linewidths=2,
+            label='Target Centroid', zorder=10,
+        )
+        
+        # Connecting line
+        ax.plot(
+            [train_centroid[0], target_centroid[0]],
+            [train_centroid[1], target_centroid[1]],
+            'k--', linewidth=2.5, alpha=0.7, zorder=5,
+        )
+        
+        # Distance annotation
+        mid_point = [
+            (train_centroid[0] + target_centroid[0]) / 2,
+            (train_centroid[1] + target_centroid[1]) / 2
+        ]
+        ax.annotate(
+            f'd = {dist:.1f}',
+            xy=mid_point,
+            fontsize=12,
+            fontweight='bold',
+            ha='center',
+            va='bottom',
+            color='black',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8),
+        )
+        
+        # Title with distance
+        ax.set_title(
+            f"{model_name[:40]}\n(2D Distance: {dist:.2f})",
+            fontsize=11,
+            fontweight='bold',
+        )
+        ax.set_xlabel("Dimension 1", fontsize=10)
+        ax.set_ylabel("Dimension 2", fontsize=10)
+        ax.legend(fontsize=8, loc='upper right')
+        ax.grid(True, alpha=0.3)
+    
+    plt.suptitle(
+        f"Separate {reduction_method.upper()} per Model: Train vs Target ({target_dataset})\n"
+        f"Embedding: {embedding_type}",
+        fontsize=13,
+        fontweight='bold',
+    )
+    plt.tight_layout()
+    plt.savefig(
+        output_path / f"separate_tsne_side_by_side_{embedding_type}_{reduction_method}.png",
+        dpi=150, bbox_inches='tight'
+    )
+    plt.close()
+    
+    # --- Comparison bar chart for separate t-SNE distances ---
+    fig, ax = plt.subplots(figsize=(max(8, 3 * n_models), 5))
+    
+    sorted_models = sorted(separate_metrics.items(), key=lambda x: x[1]["target_to_train_dist_2d"])
+    names = [m[0][:35] for m in sorted_models]
+    distances = [m[1]["target_to_train_dist_2d"] for m in sorted_models]
+    
+    # Color gradient: green (best) to red (worst)
+    colors = plt.cm.RdYlGn_r(np.linspace(0.2, 0.8, len(distances)))
+    
+    bars = ax.bar(names, distances, color=colors, edgecolor='black', linewidth=1.5)
+    
+    # Value labels
+    for bar, dist in zip(bars, distances):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.3,
+            f'{dist:.1f}',
+            ha='center',
+            va='bottom',
+            fontsize=11,
+            fontweight='bold',
+        )
+    
+    ax.set_xlabel("Model", fontsize=12)
+    ax.set_ylabel(f"Train→Target Distance (Separate {reduction_method.upper()})", fontsize=12)
+    ax.set_title(
+        f"Cross-Embodiment Transfer Comparison (Separate {reduction_method.upper()})\n"
+        f"Target: {target_dataset} | Lower = Better Transfer",
+        fontsize=12,
+        fontweight='bold',
+    )
+    ax.tick_params(axis='x', rotation=30)
+    
+    # Ranking annotation
+    if len(sorted_models) >= 2:
+        best = sorted_models[0][0][:20]
+        worst = sorted_models[-1][0][:20]
+        improvement = (distances[-1] - distances[0]) / distances[-1] * 100 if distances[-1] > 0 else 0
+        ax.annotate(
+            f"Best: {best}\nWorst: {worst}\nImprovement: {improvement:.0f}%",
+            xy=(0.98, 0.95),
+            xycoords='axes fraction',
+            fontsize=9,
+            ha='right',
+            va='top',
+            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9),
+        )
+    
+    plt.tight_layout()
+    plt.savefig(
+        output_path / f"separate_tsne_bar_{embedding_type}_{reduction_method}.png",
+        dpi=150, bbox_inches='tight'
+    )
+    plt.close()
+    
+    logger.info(f"Saved separate t-SNE plots to {output_path}")
+
+
 def plot_model_comparison(
     all_results: dict[str, dict],
     output_dir: Path,
@@ -1487,6 +1742,8 @@ def main():
     compare_target_parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
     compare_target_parser.add_argument("--seed", type=int, default=42)
     compare_target_parser.add_argument("--batch_size", type=int, default=None)
+    compare_target_parser.add_argument("--separate_tsne", action="store_true",
+                                       help="Run t-SNE separately for each model and plot side-by-side (in addition to shared t-SNE)")
     
     args = parser.parse_args()
     
@@ -1571,6 +1828,7 @@ def main():
             split=args.split,
             seed=args.seed,
             batch_size=args.batch_size,
+            separate_tsne=args.separate_tsne,
         )
 
 
