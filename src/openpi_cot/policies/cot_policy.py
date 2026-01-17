@@ -20,15 +20,8 @@ from openpi_cot.policies.utils import summarize_bimanual_numeric_actions
 from openpi_cot.policies.utils import summarize_numeric_actions
 from openpi_cot.policies.utils import transform_actions_to_eef_frame
 
-# Datasets that need wrist camera rotation by 180 degrees
-DATASETS_REQUIRING_WRIST_ROTATION = {
-    # "taco_play",
-    "droid",
-    "furniture_bench_dataset_converted_externally_to_rlds",
-    "berkeley_fanuc_manipulation",
-    "berkeley_autolab_ur5",
-    "fmb",
-}
+# Note: DATASETS_REQUIRING_WRIST_ROTATION has been moved to
+# openpi_cot.datasets.utils.helpers and rotation is now applied at dataset level
 
 
 # during inference, inputs need to be converted to the same encoding as the model first, normalize, and then convert to robot-acceptable encoding.
@@ -50,6 +43,8 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     stateless_gripper: bool = True
     random_base_prob: float = 0.0
     random_mask_prob: float = 0.0
+    # DEPRECATED: not_rotate_wrist_prob is now handled at dataset level in prepare_batched_dataset
+    # This parameter is kept for backward compatibility but has no effect
     not_rotate_wrist_prob: float = 0.0
 
     def __post_init__(self):
@@ -92,67 +87,54 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         self,
         data: dict,
         base_image: np.ndarray,
-        needs_wrist_rotation: bool,
         is_prediction_sample: bool,
         pred_use_primary: bool,
         is_vqa_sample: bool = False,
     ) -> tuple[list[np.ndarray], list[np.bool_]]:
+        """Collect images for model input.
+        
+        Note: Wrist image rotation is now handled at the dataset level in restructure functions.
+        This method no longer applies rotation - images are already rotated if needed.
+        """
         images: list[np.ndarray] = []
         image_masks: list[np.bool_] = []
 
-        def add_image(image: np.ndarray, apply_rotation: bool, random_mask_prob: float = 0.0) -> None:
+        def add_image(image: np.ndarray, random_mask_prob: float = 0.0) -> None:
             image_mask = self._image_mask(image, random_mask_prob=random_mask_prob)
-            if apply_rotation and image_mask:
-                image = np.rot90(image, k=2)
             images.append(image)
             image_masks.append(image_mask)
-        
-        need_flip_ee_frame = False
 
         if not is_prediction_sample:
-            add_image(base_image, apply_rotation=False)
+            add_image(base_image)
             for key in IMAGE_KEYS[1:]:
                 if key in data["observation"]:
                     wrist_image = parse_image(data["observation"][key])
                     # Skip random operations for VQA samples - they need deterministic processing
                     if not is_vqa_sample and self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
                         wrist_image = np.zeros_like(base_image)
-                    if is_vqa_sample:
-                        actual_apply_rotation = False
-                    else:
-                        actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
-                    # if actual_apply_rotation != need_flip_ee_frame:
-                    #     need_flip_ee_frame = True
-                    if actual_apply_rotation:
-                        need_flip_ee_frame = True
                     # Skip random_mask_prob for VQA samples
                     effective_random_mask_prob = 0.0 if is_vqa_sample else self.random_mask_prob
-                    add_image(wrist_image, apply_rotation=actual_apply_rotation, random_mask_prob=effective_random_mask_prob)
+                    add_image(wrist_image, random_mask_prob=effective_random_mask_prob)
                 else:
                     effective_random_mask_prob = 0.0 if is_vqa_sample else self.random_mask_prob
-                    add_image(np.zeros_like(base_image), apply_rotation=False, random_mask_prob=effective_random_mask_prob)
+                    add_image(np.zeros_like(base_image), random_mask_prob=effective_random_mask_prob)
         elif not pred_use_primary:
             for key in IMAGE_KEYS:
                 if key in data["observation"]:
                     image = parse_image(data["observation"][key])
-                    actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
-                    # if actual_apply_rotation != need_flip_ee_frame:
-                    #     need_flip_ee_frame = True
-                    if actual_apply_rotation:
-                        need_flip_ee_frame = True
-                    add_image(image, apply_rotation=actual_apply_rotation)
+                    add_image(image)
                 else:
-                    add_image(np.zeros_like(base_image), apply_rotation=False)
+                    add_image(np.zeros_like(base_image))
         else:
-            add_image(base_image, apply_rotation=False)
+            add_image(base_image)
             for key in IMAGE_KEYS[1:]:
                 if key in data["observation"]:
                     wrist_image = parse_image(data["observation"][key])
-                    add_image(wrist_image, apply_rotation=False)
+                    add_image(wrist_image)
                 else:
-                    add_image(np.zeros_like(base_image), apply_rotation=False)
+                    add_image(np.zeros_like(base_image))
 
-        return images, image_masks, need_flip_ee_frame
+        return images, image_masks
 
     def _prepare_inputs(self, data: dict) -> dict:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST, ModelType.PI0_FAST}
@@ -163,13 +145,13 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             raise ValueError("Base image missing from observation")
 
         dataset_name = self._dataset_name(data)
-        needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
         is_prediction_sample = data.get("is_prediction_sample", False)
         pred_use_primary = data.get("pred_use_primary", False)
         is_vqa_sample = data.get("is_vqa_sample", False)
 
-        images, image_masks, need_flip_ee_frame = self._collect_images(
-            data, base_image, needs_wrist_rotation, is_prediction_sample, pred_use_primary, is_vqa_sample
+        # Note: Wrist image rotation is now handled at the dataset level
+        images, image_masks = self._collect_images(
+            data, base_image, is_prediction_sample, pred_use_primary, is_vqa_sample
         )
 
         if self.model_type == ExtendedModelType.PI_FAST:
@@ -217,10 +199,14 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             inputs["actions"] = np.array(actions)
 
         inputs["is_prediction_sample"] = is_prediction_sample
-        return inputs, need_flip_ee_frame
+        
+        # Get rotation_applied flag from data (set by decode function at dataset level)
+        # This indicates whether wrist image rotation was actually applied
+        rotation_applied = data.get("rotation_applied", False)
+        return inputs, rotation_applied
 
     def _summarize_language_actions(
-        self, data: dict, lang_action_key: str, initial_state: np.ndarray = None, dataset_name=None, need_flip_ee_frame=False
+        self, data: dict, lang_action_key: str, initial_state: np.ndarray = None, dataset_name=None, rotation_applied=False
     ) -> tuple[str | None, str]:
         language_actions = data[lang_action_key]
         is_bimanual: bool = data.get("is_bimanual", False)
@@ -233,8 +219,9 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             use_eef_frame = use_eef_frame and has_wrist_image and random.random() < self.random_base_prob
 
         # Transform to EEF frame if requested
+        # rotation_applied indicates whether wrist image was rotated at dataset level
         if use_eef_frame:
-            language_actions = transform_actions_to_eef_frame(language_actions, initial_state, dataset_name, need_flip_ee_frame)
+            language_actions = transform_actions_to_eef_frame(language_actions, initial_state, dataset_name, rotation_applied)
             frame_description = "end-effector frame"
         if is_bimanual:
             summed = summarize_bimanual_numeric_actions(
@@ -267,7 +254,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         # lihan: always name base image as "exterior_image_1_left", though it should come from the camera which language action is annotated.
         # Extract initial state for EEF frame transformation
 
-        inputs, need_flip_ee_frame = self._prepare_inputs(data)
+        inputs, rotation_applied = self._prepare_inputs(data)
         # Check if this is a VQA dataset (e.g., coco_captions, vqa)
         dataset_name = self._dataset_name(data)
 
@@ -323,7 +310,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             initial_state = np.asarray(data["raw_state"])
 
             inputs["language_actions"], inputs["frame_description"] = self._summarize_language_actions(
-                data, "language_actions", initial_state, dataset_name=dataset_name, need_flip_ee_frame=need_flip_ee_frame
+                data, "language_actions", initial_state, dataset_name=dataset_name, rotation_applied=rotation_applied
             )
             if self.use_rough_scale:
                 inputs["language_actions"] = describe_language_action_scale(inputs["language_actions"])

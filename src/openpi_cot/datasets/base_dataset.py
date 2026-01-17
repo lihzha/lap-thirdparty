@@ -169,6 +169,7 @@ class SingleCoTDataset:
                 wrist_image_right_key=self.spec.wrist_image_right_key,
                 aggressive_aug=getattr(config, "aggressive_aug", False),
                 aug_wrist_image=getattr(config, "aug_wrist_image", True),
+                not_rotate_wrist_prob=getattr(config, "not_rotate_wrist_prob", 0.0),
             )
 
     def build_dataset_builder(self, ds_name, data_dir):

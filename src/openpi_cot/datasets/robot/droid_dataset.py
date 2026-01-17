@@ -162,6 +162,8 @@ class DroidCoTDataset(SingleCoTDataset):
                 "passes_filter": passes_filter,
                 "is_navigation": tf.fill([traj_len], tf.constant(False)),
                 "has_wrist_image": tf.fill([traj_len], tf.constant(True)),
+                # DROID requires wrist camera rotation by 180 degrees
+                "needs_wrist_rotation": tf.fill([traj_len], tf.constant(True)),
             }
 
             if self.use_wrist_image:

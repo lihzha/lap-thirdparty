@@ -16,15 +16,19 @@ import numpy as np
 import tensorflow as tf
 
 from openpi_cot.datasets.utils.data_utils import load_dataset_kwargs
+from openpi_cot.datasets.utils.helpers import DATASETS_REQUIRING_WRIST_ROTATION
 from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.specs import CoTRldsDatasetSpec
 from openpi_cot.datasets.vqa.bbox_common import (
     ROBOT_BBOX_PROMPT_PARTS_OXE,
+    ROBOT_DIRECTION_PROMPT_PARTS_OXE,
     bridge_key_extractor,
     build_annotated_keys_set,
     build_frame_objects_table_v2,
+    build_frame_objects_table_v2_direction,
     count_annotated_frames,
     oxe_key_extractor,
+    sample_and_format_objects_direction_tf,
     sample_and_format_objects_tf,
     sample_prompt_tf,
 )
@@ -73,6 +77,8 @@ class OXEBoundingBoxDataset(ABC):
         enable_prediction_training: bool = False,
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
+        directional: bool = False,
+        direction_slope: float = 2.0,
     ):
         if num_parallel_calls == -1 or num_parallel_reads == -1:
             total_threads = len(os.sched_getaffinity(0))
@@ -84,6 +90,8 @@ class OXEBoundingBoxDataset(ABC):
         self.config = config
         self.seed = seed
         self.want_val = split == "val"
+        self.directional = directional
+        self.direction_slope = direction_slope
         self.dataset_name = self.get_dataset_name()
         self.action_dim = action_dim
         self.state_dim = state_dim
@@ -98,6 +106,10 @@ class OXEBoundingBoxDataset(ABC):
 
         # VQA-specific settings
         self.control_frequency = 1  # Single frame, no temporal control
+        
+        # Check if this dataset requires wrist camera rotation
+        oxe_dataset_name = self.get_oxe_dataset_name()
+        self._needs_wrist_rotation = any(ds in oxe_dataset_name for ds in DATASETS_REQUIRING_WRIST_ROTATION)
 
         # Get dataset-specific config
         oxe_dataset_name = self.get_oxe_dataset_name()
@@ -175,6 +187,7 @@ class OXEBoundingBoxDataset(ABC):
                 wrist_image_right_key=self.spec.wrist_image_right_key,
                 aggressive_aug=getattr(config, "aggressive_aug", False),
                 aug_wrist_image=getattr(config, "aug_wrist_image", True),
+                not_rotate_wrist_prob=getattr(config, "not_rotate_wrist_prob", 0.0),
             )
 
     # ========== Abstract methods to be implemented by subclasses ==========
@@ -205,6 +218,15 @@ class OXEBoundingBoxDataset(ABC):
         raise NotImplementedError
 
     # ========== Common methods ==========
+    
+    def get_wrist_image_key(self) -> str | None:
+        """Return the key for wrist image in observations.
+        
+        Default implementation looks up from dataset kwargs.
+        Subclasses can override to specify a different key or return None if no wrist image.
+        """
+        image_obs_keys = self.dataset_kwargs.get("image_obs_keys", {})
+        return image_obs_keys.get("wrist")
     
     def get_frame_offset(self) -> int:
         """Return the frame offset to account for frames removed by transforms.
@@ -383,6 +405,9 @@ class OXEBoundingBoxDataset(ABC):
 
         primary_image_key = self.get_primary_image_key()
         frame_offset = self.get_frame_offset()
+        wrist_image_key = self.get_wrist_image_key()
+        use_directional = self.directional
+        needs_wrist_rotation = self._needs_wrist_rotation
 
         def restructure(traj):
             """Convert trajectory to VQA bbox format."""
@@ -390,6 +415,15 @@ class OXEBoundingBoxDataset(ABC):
 
             # Get primary image from observations
             primary_img = traj["observation"][primary_image_key]
+
+            # For directional mode: use both primary and wrist images like robot samples
+            # For bbox-only mode: use primary image only, no wrist slot
+            if use_directional and wrist_image_key is not None:
+                wrist_img = traj["observation"].get(wrist_image_key)
+                if wrist_img is None:
+                    wrist_img = tf.repeat("", traj_len)
+            else:
+                wrist_img = tf.repeat("", traj_len)
 
             # Create frame indices as strings
             # Apply frame_offset to account for frames removed by transforms
@@ -399,13 +433,15 @@ class OXEBoundingBoxDataset(ABC):
             return {
                 "observation": {
                     self.spec.primary_image_key: primary_img,
-                    self.spec.wrist_image_key: tf.repeat("", traj_len),
+                    self.spec.wrist_image_key: wrist_img,
                     "state": tf.zeros([traj_len, self.state_dim], dtype=tf.float32),
                 },
                 "trajectory_id": traj["trajectory_id"],
                 "episode_id": traj["episode_id"],
                 "frame_idx": frame_indices,
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
+                # Track if this dataset requires wrist camera rotation
+                "needs_wrist_rotation": tf.fill([traj_len], tf.constant(needs_wrist_rotation)),
             }
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
@@ -429,6 +465,7 @@ class OXEBoundingBoxDataset(ABC):
 
         # Sample objects and format caption using pure TensorFlow operations
         max_objects = 1000
+        use_directional = self.directional
 
         def lookup_and_sample_objects(frame):
             """Look up objects, sample if needed, and format caption using pure TF."""
@@ -442,9 +479,15 @@ class OXEBoundingBoxDataset(ABC):
             seed_pair = (self.seed, seed_hash_int)
 
             # Use pure TensorFlow sampling and formatting
-            labels, caption = sample_and_format_objects_tf(
-                objects_data, max_objects=max_objects, seed_pair=seed_pair
-            )
+            if use_directional:
+                # Direction mode always samples 1 object
+                labels, caption = sample_and_format_objects_direction_tf(
+                    objects_data, seed_pair=seed_pair
+                )
+            else:
+                labels, caption = sample_and_format_objects_tf(
+                    objects_data, max_objects=max_objects, seed_pair=seed_pair
+                )
 
             frame["object_labels"] = labels
             frame["bbox_caption"] = caption
@@ -459,6 +502,13 @@ class OXEBoundingBoxDataset(ABC):
 
         self.dataset = self.dataset.filter(has_valid_caption)
 
+        # Select prompt parts based on mode
+        # OXE bbox uses robot base frame (not end-effector) for directional
+        prompt_parts = ROBOT_DIRECTION_PROMPT_PARTS_OXE if use_directional else ROBOT_BBOX_PROMPT_PARTS_OXE
+        
+        # For directional mode, has wrist image if wrist key is available
+        has_wrist = use_directional and self.get_wrist_image_key() is not None
+
         # Convert to final VQA format
         def finalize_vqa(frame):
             """Create final VQA sample with prompt and caption."""
@@ -470,7 +520,7 @@ class OXEBoundingBoxDataset(ABC):
             seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
             seed_hash_int = tf.cast(seed_hash, tf.int32)
 
-            prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS_OXE, labels, (self.seed, seed_hash_int))
+            prompt = sample_prompt_tf(prompt_parts, labels, (self.seed, seed_hash_int))
 
             # Create final output
             # Get VQA dataset ID for per-dataset metrics tracking
@@ -490,7 +540,8 @@ class OXEBoundingBoxDataset(ABC):
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
                 "raw_state": tf.zeros([self.state_dim], dtype=tf.float32),
                 "is_navigation": tf.constant(False, dtype=tf.bool),
-                "has_wrist_image": tf.constant(False, dtype=tf.bool),
+                "has_wrist_image": tf.constant(has_wrist, dtype=tf.bool),
+                "needs_wrist_rotation": frame["needs_wrist_rotation"],
                 "vqa_dataset_id": tf.constant(vqa_dataset_id, dtype=tf.int32),
                 "actions": tf.zeros([self.action_horizon, self.action_dim], dtype=tf.float32),
                 "language_actions": tf.zeros([7], dtype=tf.float32),
@@ -510,6 +561,17 @@ class OXEBoundingBoxDataset(ABC):
         """Build a lookup table from episode_id--frame_idx to pipe-delimited objects."""
         orig_w, orig_h = self.get_original_image_size()
         target_h, target_w = self.config.resize_resolution
+        
+        if self.directional:
+            return build_frame_objects_table_v2_direction(
+                bbox_annotations_dir=self.bbox_annotations_dir,
+                key_extractor=self.get_key_extractor(),
+                dataset_name=self.dataset_name,
+                orig_size=(orig_w, orig_h),
+                target_size=(target_w, target_h),
+                direction_slope=self.direction_slope,
+            )
+        
         return build_frame_objects_table_v2(
             bbox_annotations_dir=self.bbox_annotations_dir,
             key_extractor=self.get_key_extractor(),

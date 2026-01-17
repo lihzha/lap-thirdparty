@@ -3,6 +3,72 @@
 import tensorflow as tf
 
 
+def tf_rotate_180(image: tf.Tensor) -> tf.Tensor:
+    """Rotate image by 180 degrees (equivalent to np.rot90(image, k=2)).
+    
+    Args:
+        image: Image tensor of shape [H, W, C] or [T, H, W, C]
+        
+    Returns:
+        Rotated image tensor with same shape
+    """
+    # tf.image.rot90 with k=2 rotates 180 degrees
+    # Handle both single image [H, W, C] and batched [T, H, W, C] cases
+    if len(image.shape) == 4:
+        # Batched case [T, H, W, C]
+        return tf.map_fn(lambda img: tf.image.rot90(img, k=2), image)
+    else:
+        # Single image [H, W, C]
+        return tf.image.rot90(image, k=2)
+
+
+def tf_maybe_rotate_180(
+    image: tf.Tensor,
+    should_rotate: tf.Tensor,
+    seed_pair: tuple[int, int] | None = None,
+    not_rotate_prob: float = 0.0,
+) -> tuple[tf.Tensor, tf.Tensor]:
+    """Conditionally rotate image by 180 degrees with optional randomization.
+    
+    Args:
+        image: Image tensor of shape [H, W, C] or [T, H, W, C]
+        should_rotate: Boolean tensor indicating if dataset requires rotation
+        seed_pair: Optional (seed1, seed2) for reproducible random decision
+        not_rotate_prob: Probability of NOT rotating even when should_rotate=True
+        
+    Returns:
+        Tuple of (rotated_image, did_rotate_bool) where did_rotate_bool indicates
+        if rotation was actually applied (for downstream EEF frame adjustments)
+    """
+    def do_rotate():
+        if not_rotate_prob > 0.0 and seed_pair is not None:
+            # Use stateless random for reproducibility
+            rand_val = tf.random.stateless_uniform([], seed=seed_pair, dtype=tf.float32)
+            skip_rotation = rand_val < not_rotate_prob
+            return tf.cond(
+                skip_rotation,
+                lambda: (image, tf.constant(False)),
+                lambda: (tf_rotate_180(image), tf.constant(True)),
+            )
+        elif not_rotate_prob > 0.0:
+            # Use regular random
+            rand_val = tf.random.uniform([], dtype=tf.float32)
+            skip_rotation = rand_val < not_rotate_prob
+            return tf.cond(
+                skip_rotation,
+                lambda: (image, tf.constant(False)),
+                lambda: (tf_rotate_180(image), tf.constant(True)),
+            )
+        else:
+            # Always rotate
+            return (tf_rotate_180(image), tf.constant(True))
+    
+    def no_rotate():
+        return (image, tf.constant(False))
+    
+    return tf.cond(should_rotate, do_rotate, no_rotate)
+
+
 def _tf_aggressive_augment_wrist(image: tf.Tensor, seed: tf.Tensor | None = None) -> tf.Tensor:
     """Apply aggressive augmentation to wrist images BEFORE padding.
 
@@ -168,6 +234,8 @@ def make_decode_images_fn(
     resize_to: tuple[int, int] | None = (224, 224),
     aggressive_aug: bool = False,
     aug_wrist_image: bool = True,
+    not_rotate_wrist_prob: float = 0.0,
+    seed: int = 0,
 ):
     """Return a frame_map function that decodes encoded image bytes to uint8 tensors.
     Preserves aspect ratio, pads symmetrically, and returns the original dtype semantics
@@ -182,6 +250,9 @@ def make_decode_images_fn(
             This mirrors the logic from preprocess_observation_aggressive and
             makes cropping more effective since it operates on original images.
         aug_wrist_image: If True and aggressive_aug is True, augment wrist images.
+        not_rotate_wrist_prob: Probability of NOT rotating wrist images even when
+            rotation is required (samples with needs_wrist_rotation=True).
+        seed: Random seed for reproducible rotation decisions.
     """
 
     def _tf_resize_with_pad(image: tf.Tensor, target_h: int, target_w: int) -> tf.Tensor:
@@ -284,8 +355,43 @@ def make_decode_images_fn(
             )
 
         primary_img, wrist_img = tf.cond(is_droid, decode_with_aug, decode_without_aug)
+        
+        # Apply wrist image rotation if sample requires it
+        # This is used for DROID and other datasets with inverted wrist cameras
+        needs_rotation = traj.get("needs_wrist_rotation", tf.constant(False, dtype=tf.bool))
+        
+        # Track whether rotation was actually applied (for EEF frame adjustment in cot_policy)
+        rotation_applied = tf.constant(False, dtype=tf.bool)
+        
+        def maybe_rotate_wrist(img):
+            """Apply 180-degree rotation with probability (1 - not_rotate_wrist_prob)."""
+            if not_rotate_wrist_prob > 0.0:
+                # Use random decision
+                skip_rotation = tf.random.uniform([], dtype=tf.float32) < not_rotate_wrist_prob
+                rotated_img = tf.cond(
+                    skip_rotation,
+                    lambda: img,
+                    lambda: tf_rotate_180(img),
+                )
+                did_rotate = tf.logical_not(skip_rotation)
+                return rotated_img, did_rotate
+            else:
+                # Always rotate
+                return tf_rotate_180(img), tf.constant(True, dtype=tf.bool)
+        
+        def no_rotate(img):
+            return img, tf.constant(False, dtype=tf.bool)
+        
+        wrist_img, rotation_applied = tf.cond(
+            needs_rotation,
+            lambda: maybe_rotate_wrist(wrist_img),
+            lambda: no_rotate(wrist_img),
+        )
+        
         traj["observation"][primary_key] = primary_img
         traj["observation"][wrist_key] = wrist_img
+        # Track whether rotation was applied for EEF frame adjustment
+        traj["rotation_applied"] = rotation_applied
         # traj["observation"][wrist_right_key] = _decode_single(traj["observation"][wrist_right_key])
 
         return traj

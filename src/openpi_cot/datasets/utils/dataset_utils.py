@@ -136,6 +136,7 @@ def prepare_batched_dataset(
     wrist_image_right_key=None,
     aggressive_aug: bool = False,
     aug_wrist_image: bool = True,
+    not_rotate_wrist_prob: float = 0.0,
 ):
     """Prepare a batched dataset with optional aggressive augmentation.
 
@@ -157,6 +158,8 @@ def prepare_batched_dataset(
             Only applied during training (when want_val=False) and only for samples
             where dataset_name contains "droid".
         aug_wrist_image: If True and aggressive_aug is True, augment wrist images.
+        not_rotate_wrist_prob: Probability of NOT rotating wrist images for samples
+            that have needs_wrist_rotation=True. Set to 0.0 for validation.
     """
     # Apply standard pipeline operations
     if (not want_val) and shuffle and max_samples is None:
@@ -172,6 +175,8 @@ def prepare_batched_dataset(
     # Only apply aggressive augmentation during training (not validation)
     # Per-sample check for "droid" in dataset_name is done inside make_decode_images_fn
     apply_aggressive_aug = aggressive_aug and (not want_val)
+    # Only apply random rotation skip during training (not validation)
+    effective_not_rotate_prob = not_rotate_wrist_prob if not want_val else 0.0
 
     decode_fn = make_decode_images_fn(
         primary_key=primary_image_key,
@@ -180,6 +185,8 @@ def prepare_batched_dataset(
         resize_to=resize_resolution,
         aggressive_aug=apply_aggressive_aug,
         aug_wrist_image=aug_wrist_image,
+        not_rotate_wrist_prob=effective_not_rotate_prob,
+        seed=seed,
     )
     num_parallel_calls = tf.data.AUTOTUNE
     dataset = dataset.frame_map(decode_fn, num_parallel_calls)

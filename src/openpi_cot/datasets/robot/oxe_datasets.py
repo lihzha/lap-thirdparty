@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import tensorflow as tf
 
 from openpi_cot.datasets.base_dataset import SingleCoTDataset
+from openpi_cot.datasets.utils.helpers import DATASETS_REQUIRING_WRIST_ROTATION
 from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.datasets.utils.helpers import state_encoding_to_type
 
@@ -36,6 +37,9 @@ class SingleOXECoTDataset(SingleCoTDataset):
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
     ):
+        # Check if this dataset requires wrist camera rotation
+        self._needs_wrist_rotation = any(ds in dataset_name for ds in DATASETS_REQUIRING_WRIST_ROTATION)
+        
         super().__init__(
             dataset_name=dataset_name,
             data_dir=data_dir,
@@ -109,6 +113,8 @@ class SingleOXECoTDataset(SingleCoTDataset):
                 "raw_state": tf.identity(new_obs["state"]),
                 "is_navigation": tf.fill([traj_len], tf.constant(False)),
                 "has_wrist_image": tf.fill([traj_len], tf.constant(self.has_wrist_image)),
+                # Whether this dataset requires wrist camera rotation by 180 degrees
+                "needs_wrist_rotation": tf.fill([traj_len], tf.constant(self._needs_wrist_rotation)),
             }
 
             return traj
@@ -262,6 +268,8 @@ class NavigationCoTDataset(SingleOXECoTDataset):
                 "raw_state": tf.identity(new_obs["state"]),
                 "is_navigation": tf.fill([traj_len], tf.constant(True)),
                 "has_wrist_image": tf.fill([traj_len], tf.constant(False)),
+                # Navigation datasets don't have wrist images, but include for consistency
+                "needs_wrist_rotation": tf.fill([traj_len], tf.constant(False)),
             }
 
             return traj
@@ -323,6 +331,8 @@ class LiberoCoTDataset(SingleOXECoTDataset):
                 "raw_state": tf.identity(new_obs["state"]),
                 "is_navigation": tf.fill([traj_len], tf.constant(False)),
                 "has_wrist_image": tf.fill([traj_len], tf.constant(True)),
+                # LIBERO doesn't require wrist rotation
+                "needs_wrist_rotation": tf.fill([traj_len], tf.constant(self._needs_wrist_rotation)),
             }
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)

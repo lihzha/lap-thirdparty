@@ -5,6 +5,17 @@ import numpy as np
 import tensorflow as tf
 
 
+# Datasets that need wrist camera rotation by 180 degrees
+# These datasets have wrist cameras mounted upside-down relative to the convention
+DATASETS_REQUIRING_WRIST_ROTATION: set[str] = {
+    "droid",
+    "furniture_bench_dataset_converted_externally_to_rlds",
+    "berkeley_fanuc_manipulation",
+    "berkeley_autolab_ur5",
+    "fmb",
+}
+
+
 # Note: Both DROID and OXE use roll-pitch-yaw convention (extrinsic XYZ).
 # Note: quaternion is in xyzw order.
 # Defines Proprioceptive State Encoding Schemes

@@ -199,6 +199,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 wrist_image_right_key=self.spec.wrist_image_right_key,
                 aggressive_aug=getattr(config, "aggressive_aug", False),
                 aug_wrist_image=getattr(config, "aug_wrist_image", True),
+                not_rotate_wrist_prob=getattr(config, "not_rotate_wrist_prob", 0.0),
             )
 
     def _episode_id_from_traj(self, traj, ep_table):
@@ -331,6 +332,9 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
             self.dataset = self.dataset.filter(has_any_annotations)
 
+        # Capture class attribute for use inside TF function
+        use_directional = self.directional
+
         def restructure(traj):
             """Convert trajectory to VQA bbox format."""
             # Get file_path directly from metadata
@@ -342,8 +346,25 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             # Example file_path: gs://xembodiment_data/r2d2/r2d2-data-full/ILIAD/success/2023-04-21/.../trajectory.h5
             episode_path = extract_episode_path_from_file_path(file_path[0])
 
-            # Use wrist image for bbox annotations
-            primary_img = traj["observation"]["wrist_image_left"]
+            # For directional mode: use both exterior (primary) and wrist images like robot samples
+            # For bbox-only mode: use wrist image as primary, no wrist slot
+            if use_directional:
+                # Use exterior image as primary, wrist image as wrist (will be rotated)
+                # Randomly sample one of the two exterior images (left cameras from stereo pairs)
+                random_val = tf.random.stateless_uniform(
+                    shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(traj["trajectory_id"][0], 2147483647)]
+                )
+                exterior_img = tf.cond(
+                    random_val > 0.5,
+                    lambda: traj["observation"][self.spec.images_list[0]],
+                    lambda: traj["observation"][self.spec.images_list[1]],
+                )
+                primary_img = exterior_img
+                wrist_img = traj["observation"]["wrist_image_left"]
+            else:
+                # Use wrist image as primary for bbox annotations (close-up view of objects)
+                primary_img = traj["observation"]["wrist_image_left"]
+                wrist_img = tf.repeat("", traj_len)
 
             # Create frame indices as strings
             frame_indices = tf.as_string(tf.range(traj_len))
@@ -351,13 +372,15 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             return {
                 "observation": {
                     self.spec.primary_image_key: primary_img,
-                    self.spec.wrist_image_key: tf.repeat("", traj_len),
+                    self.spec.wrist_image_key: wrist_img,
                     "state": tf.zeros([traj_len, self.state_dim], dtype=tf.float32),
                 },
                 "trajectory_id": traj["trajectory_id"],
                 "episode_path": tf.fill([traj_len], episode_path),
                 "frame_idx": frame_indices,
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
+                # DROID requires wrist camera rotation by 180 degrees
+                "needs_wrist_rotation": tf.fill([traj_len], tf.constant(True)),
             }
 
         self.dataset = self.dataset.traj_map(restructure, self.num_parallel_calls)
@@ -438,6 +461,10 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             dataset_name_str = self.get_dataset_name()
             vqa_dataset_id = VQA_DATASET_ID_MAP.get(dataset_name_str, 0)
             
+            # For directional mode: has wrist image (like robot samples)
+            # For bbox-only mode: no wrist image (using wrist as primary for close-up)
+            has_wrist = use_directional
+            
             return {
                 "observation": frame["observation"],
                 "prompt": prompt,
@@ -451,7 +478,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
                 "raw_state": tf.zeros([self.state_dim], dtype=tf.float32),
                 "is_navigation": tf.constant(False, dtype=tf.bool),
-                "has_wrist_image": tf.constant(False, dtype=tf.bool),
+                "has_wrist_image": tf.constant(has_wrist, dtype=tf.bool),
+                "needs_wrist_rotation": frame["needs_wrist_rotation"],
                 "vqa_dataset_id": tf.constant(vqa_dataset_id, dtype=tf.int32),
                 "actions": tf.zeros([self.action_horizon, self.action_dim], dtype=tf.float32),
                 "language_actions": tf.zeros([7], dtype=tf.float32),

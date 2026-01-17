@@ -83,11 +83,18 @@ class EmbeddingResult:
     sample_indices: list[int]  # [num_samples] - for debugging/tracking
     
 
-def init_tpu(config: _config.TrainConfig):
+def init_tpu(config: _config.TrainConfig, fsdp_devices_override: int | None = None):
     """Initialize TPU/GPU runtime.
     
     Note: JAX distributed should be initialized before this function is called.
     See initialize_distributed() which should be called at program start.
+    
+    Args:
+        config: Training config
+        fsdp_devices_override: If provided, override config.fsdp_devices
+        
+    Returns:
+        Effective FSDP devices to use
     """
     if "local" in config.name:
         os.environ["CURL_CA_BUNDLE"] = "/etc/pki/tls/certs/ca-bundle.crt"
@@ -103,21 +110,25 @@ def init_tpu(config: _config.TrainConfig):
     if _is_tpu_runtime() and str(data_dir).startswith("gs://"):
         prevent_cross_region(data_dir, data_dir)
     
+    # Use override if provided, otherwise use config value
+    fsdp_devices = fsdp_devices_override if fsdp_devices_override is not None else config.fsdp_devices
+    
     # Determine effective FSDP devices
     process_count = jax.process_count()
     local_devices = jax.local_device_count()
     global_devices = jax.device_count()
     logger.info(f"Devices: local={local_devices}, global={global_devices}, processes={process_count}")
+    logger.info(f"FSDP devices: config={config.fsdp_devices}, override={fsdp_devices_override}, using={fsdp_devices}")
     
     if process_count == 1:
-        target = min(config.fsdp_devices, local_devices)
+        target = min(fsdp_devices, local_devices)
         effective_fsdp = 1
         for d in range(target, 0, -1):
             if global_devices % d == 0:
                 effective_fsdp = d
                 break
     else:
-        effective_fsdp = config.fsdp_devices
+        effective_fsdp = fsdp_devices
     
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
     return effective_fsdp
@@ -764,6 +775,7 @@ def compare_models(
     split: str = "train",
     seed: int = 42,
     batch_size: int | None = None,
+    fsdp_devices: int | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compare embodiment embeddings across multiple models.
     
@@ -775,6 +787,7 @@ def compare_models(
         split: Data split to use
         seed: Random seed
         batch_size: Override batch size
+        fsdp_devices: Override FSDP devices (default: use config value)
         
     Returns:
         Dictionary mapping model names to their distance metrics
@@ -787,7 +800,7 @@ def compare_models(
     first_config_name, first_exp_name, _ = model_configs[0]
     first_config = _config.get_config(first_config_name)
     first_config = dataclasses.replace(first_config, exp_name=first_exp_name)
-    effective_fsdp = init_tpu(first_config)
+    effective_fsdp = init_tpu(first_config, fsdp_devices_override=fsdp_devices)
     
     for config_name, exp_name, step in model_configs:
         model_name = f"{config_name}_{exp_name}_step{step or 'latest'}"
@@ -870,6 +883,7 @@ def compare_cross_embodiment(
     seed: int = 42,
     batch_size: int | None = None,
     separate_tsne: bool = False,
+    fsdp_devices: int | None = None,
 ) -> dict[str, dict[str, float]]:
     """Compare cross-embodiment transfer across multiple models with shared t-SNE.
     
@@ -892,6 +906,7 @@ def compare_cross_embodiment(
         seed: Random seed
         batch_size: Override batch size
         separate_tsne: If True, also run t-SNE separately per model and plot side-by-side
+        fsdp_devices: Override FSDP devices (default: use config value)
         
     Returns:
         Dictionary mapping model names to their distance metrics
@@ -907,7 +922,7 @@ def compare_cross_embodiment(
     first_config_name, first_exp_name, _ = model_configs[0]
     first_config = _config.get_config(first_config_name)
     first_config = dataclasses.replace(first_config, exp_name=first_exp_name)
-    effective_fsdp = init_tpu(first_config)
+    effective_fsdp = init_tpu(first_config, fsdp_devices_override=fsdp_devices)
     
     for config_name, exp_name, step in model_configs:
         model_name = f"{exp_name}_step{step or 'latest'}"
@@ -1706,6 +1721,8 @@ def main():
     single_parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
     single_parser.add_argument("--seed", type=int, default=42)
     single_parser.add_argument("--batch_size", type=int, default=None)
+    single_parser.add_argument("--fsdp_devices", type=int, default=None,
+                              help="Override FSDP devices (default: use config value)")
     # Target dataset arguments
     single_parser.add_argument("--target_dataset", type=str, default=None,
                               help="Target dataset name to compare against (e.g., 'bridge_v2_oxe', 'fmb')")
@@ -1723,6 +1740,8 @@ def main():
     compare_parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
     compare_parser.add_argument("--seed", type=int, default=42)
     compare_parser.add_argument("--batch_size", type=int, default=None)
+    compare_parser.add_argument("--fsdp_devices", type=int, default=None,
+                               help="Override FSDP devices (default: use config value)")
     
     # Multi-model cross-embodiment comparison (with shared t-SNE)
     compare_target_parser = subparsers.add_parser(
@@ -1745,6 +1764,8 @@ def main():
     compare_target_parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
     compare_target_parser.add_argument("--seed", type=int, default=42)
     compare_target_parser.add_argument("--batch_size", type=int, default=None)
+    compare_target_parser.add_argument("--fsdp_devices", type=int, default=None,
+                                       help="Override FSDP devices (default: use config value)")
     compare_target_parser.add_argument("--separate_tsne", action="store_true",
                                        help="Run t-SNE separately for each model and plot side-by-side (in addition to shared t-SNE)")
     
@@ -1767,6 +1788,8 @@ def main():
             parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
             parser.add_argument("--seed", type=int, default=42)
             parser.add_argument("--batch_size", type=int, default=None)
+            parser.add_argument("--fsdp_devices", type=int, default=None,
+                               help="Override FSDP devices (default: use config value)")
             # Target dataset arguments
             parser.add_argument("--target_dataset", type=str, default=None,
                                help="Target dataset name to compare against (e.g., 'bridge_v2_oxe', 'fmb')")
@@ -1801,6 +1824,7 @@ def main():
             split=args.split,
             seed=args.seed,
             batch_size=args.batch_size,
+            fsdp_devices=args.fsdp_devices,
         )
     
     elif args.command == "compare_target":
@@ -1832,6 +1856,7 @@ def main():
             seed=args.seed,
             batch_size=args.batch_size,
             separate_tsne=args.separate_tsne,
+            fsdp_devices=args.fsdp_devices,
         )
 
 
@@ -1868,8 +1893,9 @@ def run_single_model(args):
     logger.info(f"Config: {config.name}")
     logger.info(f"Checkpoint dir: {config.checkpoint_dir}")
     
-    # Initialize runtime
-    effective_fsdp = init_tpu(config)
+    # Initialize runtime (with optional fsdp_devices override)
+    fsdp_override = getattr(args, 'fsdp_devices', None)
+    effective_fsdp = init_tpu(config, fsdp_devices_override=fsdp_override)
     
     # Load checkpoint
     train_state, data_sharding, mesh = load_checkpoint(
