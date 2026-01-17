@@ -516,6 +516,304 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         return self._tokenizer.encode(text, add_bos=add_bos, add_eos=add_eos)
 
 
+class Gemma3FASTTokenizer(Gemma3CoTTokenizer):
+    """Tokenizer for Gemma3-based models with FAST action tokens.
+    
+    Combines Gemma3 image/text prompt processing with FAST action token handling.
+    Uses Gemma3 IT format for prompts and images, but FAST action tokens for robot actions.
+    """
+    
+    def __init__(
+        self,
+        fast_tokenizer_path: str,
+        max_len: int = 800,
+        prompt_format: Literal[
+            "pi05",
+            "pi0",
+            "vqa",
+            "coordinate_system",
+            "schema_compact",
+            "schema_compact_with_rotation",
+            "schema_compact_bimanual",
+            "schema_compact_bimanual_with_rotation",
+            "schema_compact_named_params",
+            "verbose_state",
+            "grouped_state",
+            "grouped_state_verbose",
+            "no_state",
+            "pi05_notime",
+            "pi05_notime_ori",
+            "pi05_notime_nostate",
+            "vla0",
+            "vla0_chunked",
+        ]
+        | PromptFormat = "pi05",
+        prediction_format: Literal["default", "grouped"] | PromptFormat = "default",
+        reasoning_mask_prob: float = 0.0,
+        tokenizer_name: str = "google/gemma-3-4b-it",
+        num_image_tokens: int = 256,
+        num_images: int = 2,
+        tokenizer_model_path: str | None = None,
+        fast_skip_tokens: int = 128,  # Skip tokens in Gemma3 vocab for FAST action tokens
+    ):
+        # Initialize Gemma3 tokenizer (parent class)
+        super().__init__(
+            max_len=max_len,
+            prompt_format=prompt_format,
+            prediction_format=prediction_format,
+            reasoning_mask_prob=reasoning_mask_prob,
+            tokenizer_name=tokenizer_name,
+            num_image_tokens=num_image_tokens,
+            num_images=num_images,
+            tokenizer_model_path=tokenizer_model_path,
+        )
+        
+        # Initialize FAST tokenizer
+        self._fast_skip_tokens = fast_skip_tokens
+        logging.info(f"Loading FAST tokenizer from: {fast_tokenizer_path}")
+        self._fast_tokenizer = AutoProcessor.from_pretrained(fast_tokenizer_path, trust_remote_code=True)
+    
+    def _act_tokens_to_gemma3_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
+        """Map FAST action tokens to Gemma3 vocabulary space.
+        
+        Maps FAST tokens to the end of Gemma3 vocab, similar to how FASTTokenizer
+        maps to PaliGemma vocab, but using Gemma3's vocab size.
+        
+        Args:
+            tokens: FAST action token IDs
+            
+        Returns:
+            Token IDs in Gemma3 vocabulary space
+        """
+        if isinstance(tokens, list):
+            tokens = np.array(tokens)
+        vocab_size = self._tokenizer.vocab_size()
+        # Map to end of vocab, skipping reserved tokens
+        return vocab_size - 1 - self._fast_skip_tokens - tokens
+    
+    def _gemma3_tokens_to_act_tokens(self, tokens: np.ndarray | list[int]) -> np.ndarray:
+        """Map Gemma3 vocabulary tokens back to FAST action tokens.
+        
+        Reverse mapping of _act_tokens_to_gemma3_tokens.
+        
+        Args:
+            tokens: Token IDs in Gemma3 vocabulary space (should be action tokens)
+            
+        Returns:
+            FAST action token IDs
+        """
+        if isinstance(tokens, list):
+            tokens = np.array(tokens)
+        vocab_size = self._tokenizer.vocab_size()
+        # Reverse mapping: f = vocab_size - 1 - fast_skip_tokens - g
+        return vocab_size - 1 - self._fast_skip_tokens - tokens
+    
+    def tokenize_fast_cot(
+        self,
+        prompt: str,
+        state: np.ndarray,
+        actions: np.ndarray | None = None,
+        language_actions: str | None = None,
+        state_type: str | None = None,
+        *,
+        is_vqa_sample: bool = False,
+        is_prediction_sample: bool = False,
+        time_horizon_seconds: float | None = None,
+        state_dropout: float = 0.0,
+        clip_action: bool = False,
+        frame_description: str = "end-effector frame",
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Tokenize prompt and actions for Gemma3 FAST model.
+        
+        For VQA and prediction samples: uses Gemma3 IT format with language reasoning
+        (same as Gemma3CoTTokenizer.tokenize_cot).
+        
+        For regular robot samples: uses Gemma3 IT format for prompt/images, but FAST
+        action tokens instead of language reasoning.
+        
+        Args:
+            prompt: Task description
+            state: Current state vector
+            actions: Action sequence (optional, None during inference)
+            language_actions: Language description of actions / VQA answer / prediction answer
+            state_type: Type of state representation
+            is_vqa_sample: Whether this is a VQA sample
+            is_prediction_sample: Whether this is a prediction sample
+            time_horizon_seconds: Time horizon for robot tasks
+            state_dropout: Probability of dropping state info
+            clip_action: Whether to clip actions to [-3, 3]
+            frame_description: Description of the coordinate frame
+            
+        Returns:
+            (tokens, token_mask, ar_mask, loss_mask)
+            - tokens: Token IDs
+            - token_mask: Mask for valid (non-padding) tokens
+            - ar_mask: Autoregressive mask (False=prefix attention, True=causal)
+            - loss_mask: Mask for tokens that contribute to loss
+        """
+        # For VQA and prediction samples, use Gemma3 IT format with language reasoning
+        if is_vqa_sample or is_prediction_sample:
+            tokens, attn_mask, reasoning_mask, _number_mask, _direction_mask, token_loss_mask = super().tokenize_cot(
+                prompt=prompt,
+                reasoning=language_actions,
+                state=state,
+                state_type=state_type,
+                is_vqa_sample=is_vqa_sample,
+                is_prediction_sample=is_prediction_sample,
+                time_horizon_seconds=time_horizon_seconds,
+                frame_description=frame_description,
+                state_dropout=state_dropout,
+            )
+            # Map outputs to FAST format:
+            # - token_mask = attn_mask
+            # - ar_mask = reasoning_mask (marks which tokens are autoregressive/causal)
+            # - loss_mask = token_loss_mask AND reasoning_mask (loss only on reasoning tokens)
+            ar_mask = reasoning_mask if reasoning_mask is not None else np.zeros(len(tokens), dtype=bool)
+            loss_mask = token_loss_mask if token_loss_mask is not None else np.ones(len(tokens), dtype=bool)
+            if reasoning_mask is not None:
+                loss_mask = np.logical_and(loss_mask, reasoning_mask)
+            
+            return (tokens, attn_mask, ar_mask, loss_mask)
+        
+        # For regular robot samples, use Gemma3 IT format for prompt/images + FAST action tokens
+        # Resolve prompt format
+        fmt = self._prompt_format
+        
+        # Format the prompt
+        formatted_prompt = fmt.format_prompt(
+            prompt,
+            state,
+            state_type,
+            time_horizon_seconds=time_horizon_seconds,
+            frame_description=frame_description,
+            state_dropout=state_dropout,
+        )
+        
+        # Build Gemma3 IT format prefix: <bos><start_of_turn>user\n[system]\n\n[images]\n[prompt]<end_of_turn>\n<start_of_turn>model\n
+        image_tokens = self._build_image_placeholder()
+        
+        # System message for robot context
+        system_message = "You are a helpful robot assistant."
+        system_encoded = self._tokenizer.encode(system_message, add_bos=False, add_eos=False)
+        
+        # Encode the prompt
+        prompt_encoded = self._tokenizer.encode(formatted_prompt, add_bos=False, add_eos=False)
+        
+        # Build user turn: <bos><start_of_turn>user\n[system]\n\n[images]\n[prompt]<end_of_turn>\n
+        prefix_tokens = (
+            [self.bos_token_id] +
+            self._build_user_turn_start() +
+            system_encoded +
+            [self.newline_token_id, self.newline_token_id] +
+            image_tokens +
+            [self.newline_token_id] +
+            prompt_encoded +
+            self._build_user_turn_end()
+        )
+        
+        # Build model turn start: <start_of_turn>model\n
+        prefix_tokens = prefix_tokens + self._build_model_turn_start()
+        
+        # Append FAST action tokens for robot samples
+        if actions is not None:
+            if clip_action:
+                actions = np.clip(actions, -3.0, 3.0)
+            action_tokens = self._fast_tokenizer(actions[None])[0]
+            action_tokens_in_gemma3 = self._act_tokens_to_gemma3_tokens(action_tokens)
+            # Add action tokens + <end_of_turn> + <eos>
+            postfix_tokens = action_tokens_in_gemma3.tolist() + self._build_model_turn_end() + [self.eos_token_id]
+        else:
+            postfix_tokens = []
+        
+        tokens = prefix_tokens + postfix_tokens
+        token_mask = [True] * len(tokens)
+        ar_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
+        loss_mask = [False] * len(prefix_tokens) + [True] * len(postfix_tokens)
+        
+        if len(tokens) > self._max_len:
+            logging.warning(
+                f"Token length ({len(tokens)}) exceeds max length ({self._max_len}), truncating. "
+                "Consider increasing the `max_token_len` in your model config."
+            )
+            tokens = tokens[: self._max_len]
+            token_mask = token_mask[: self._max_len]
+            ar_mask = ar_mask[: self._max_len]
+            loss_mask = loss_mask[: self._max_len]
+        
+        # Right pad to max length
+        pad_id = self._tokenizer.pad_id() if hasattr(self._tokenizer, 'pad_id') else 0
+        pad_count = self._max_len - len(tokens)
+        if pad_count > 0:
+            tokens = tokens + [pad_id] * pad_count
+            token_mask = token_mask + [False] * pad_count
+            ar_mask = ar_mask + [False] * pad_count
+            loss_mask = loss_mask + [False] * pad_count
+        
+        return (
+            np.asarray(tokens, dtype=np.int32),
+            np.asarray(token_mask),
+            np.asarray(ar_mask),
+            np.asarray(loss_mask),
+        )
+    
+    def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
+        """Extract actions from decoded tokens.
+        
+        Args:
+            tokens: Token IDs from model output
+            action_horizon: Number of action steps
+            action_dim: Dimension of each action
+            
+        Returns:
+            Extracted action sequence
+        """
+        # Convert to list for easier manipulation
+        if tokens.ndim > 1:
+            tokens = tokens[0]
+        tokens = tokens.tolist()
+        
+        # Find the start of model turn (after <start_of_turn>model\n)
+        # The action tokens come after model turn start and before <end_of_turn>
+        model_turn_start = self._build_model_turn_start()
+        start_idx = None
+        for i in range(len(tokens) - len(model_turn_start) + 1):
+            if tokens[i:i+len(model_turn_start)] == model_turn_start:
+                start_idx = i + len(model_turn_start)
+                break
+        
+        if start_idx is None:
+            # Couldn't find model turn start, return zeros
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+        
+        # Find the end of model turn (<end_of_turn>)
+        end_turn_tokens = self._build_model_turn_end()
+        end_idx = None
+        for i in range(start_idx, len(tokens) - len(end_turn_tokens) + 1):
+            if tokens[i:i+len(end_turn_tokens)] == end_turn_tokens:
+                end_idx = i
+                break
+        
+        if end_idx is None:
+            # Couldn't find end of turn, use end of sequence
+            end_idx = len(tokens)
+        
+        # Extract action tokens (between model turn start and end)
+        action_token_ids = np.array(tokens[start_idx:end_idx], dtype=np.int32)
+        
+        if len(action_token_ids) == 0:
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+        
+        # Map from Gemma3 vocab back to FAST tokens
+        # Note: This will work for action tokens, but may produce invalid FAST tokens
+        # for regular text tokens. The FAST tokenizer should handle this gracefully.
+        fast_action_tokens = self._gemma3_tokens_to_act_tokens(action_token_ids)
+        
+        # Decode using FAST tokenizer
+        return self._fast_tokenizer.decode(
+            [fast_action_tokens.tolist()], time_horizon=action_horizon, action_dim=action_dim
+        )[0]
+
+
 class FASTTokenizer(PaligemmaCoTTokenizer):
     def __init__(self, fast_tokenizer_path: str, **kwargs):
         super().__init__(**kwargs)

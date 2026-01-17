@@ -358,12 +358,9 @@ def make_decode_images_fn(
         
         # Apply wrist image rotation if sample requires it
         # This is used for DROID and other datasets with inverted wrist cameras
-        # BUT: Skip rotation for prediction samples
         needs_rotation = traj.get("needs_wrist_rotation", tf.constant(False, dtype=tf.bool))
         is_prediction_sample = traj.get("is_prediction_sample", tf.constant(False, dtype=tf.bool))
-        
-        # Only rotate if needs_rotation is True AND it's not a prediction sample
-        should_rotate = tf.logical_and(needs_rotation, tf.logical_not(is_prediction_sample))
+        pred_use_primary = traj.get("pred_use_primary", tf.constant(False, dtype=tf.bool))
         
         # Track whether rotation was actually applied (for EEF frame adjustment in cot_policy)
         rotation_applied = tf.constant(False, dtype=tf.bool)
@@ -387,10 +384,42 @@ def make_decode_images_fn(
         def no_rotate(img):
             return img, tf.constant(False, dtype=tf.bool)
         
-        wrist_img, rotation_applied = tf.cond(
-            should_rotate,
-            lambda: maybe_rotate_wrist(wrist_img),
-            lambda: no_rotate(wrist_img),
+        # Rotation logic:
+        # - For prediction samples using wrist camera: rotate both primary and wrist if needs_rotation
+        # - For prediction samples using primary camera: don't rotate
+        # - For non-prediction samples: rotate wrist if needs_rotation
+        def handle_prediction_wrist():
+            # Prediction sample using wrist camera: rotate both primary and wrist
+            if needs_rotation:
+                rotated_primary, _ = maybe_rotate_wrist(primary_img)
+                rotated_wrist, did_rotate = maybe_rotate_wrist(wrist_img)
+                return rotated_primary, rotated_wrist, did_rotate
+            else:
+                return primary_img, wrist_img, tf.constant(False, dtype=tf.bool)
+        
+        def handle_prediction_primary():
+            # Prediction sample using primary camera: don't rotate
+            return primary_img, wrist_img, tf.constant(False, dtype=tf.bool)
+        
+        def handle_regular():
+            # Regular sample: rotate wrist if needs_rotation
+            if needs_rotation:
+                rotated_wrist, did_rotate = maybe_rotate_wrist(wrist_img)
+                return primary_img, rotated_wrist, did_rotate
+            else:
+                return primary_img, wrist_img, tf.constant(False, dtype=tf.bool)
+        
+        # Determine which handler to use
+        is_pred_wrist = tf.logical_and(is_prediction_sample, tf.logical_not(pred_use_primary))
+        is_pred_primary = tf.logical_and(is_prediction_sample, pred_use_primary)
+        
+        primary_img, wrist_img, rotation_applied = tf.case(
+            [
+                (is_pred_wrist, handle_prediction_wrist),
+                (is_pred_primary, handle_prediction_primary),
+            ],
+            default=handle_regular,
+            exclusive=True,
         )
         
         traj["observation"][primary_key] = primary_img
