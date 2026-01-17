@@ -390,10 +390,24 @@ def make_decode_images_fn(
         # - For non-prediction samples: rotate wrist if needs_rotation
         def handle_prediction_wrist():
             # Prediction sample using wrist camera: rotate both primary and wrist
+            # Use the same rotation decision for both images
             if needs_rotation:
-                rotated_primary, _ = maybe_rotate_wrist(primary_img)
-                rotated_wrist, did_rotate = maybe_rotate_wrist(wrist_img)
-                return rotated_primary, rotated_wrist, did_rotate
+                if not_rotate_wrist_prob > 0.0:
+                    # Use a single random decision for both images
+                    skip_rotation = tf.random.uniform([], dtype=tf.float32) < not_rotate_wrist_prob
+                    def rotate_both():
+                        return tf_rotate_180(primary_img), tf_rotate_180(wrist_img), tf.constant(True, dtype=tf.bool)
+                    def no_rotate_both():
+                        return primary_img, wrist_img, tf.constant(False, dtype=tf.bool)
+                    rotated_primary, rotated_wrist, did_rotate = tf.cond(
+                        skip_rotation,
+                        no_rotate_both,
+                        rotate_both,
+                    )
+                    return rotated_primary, rotated_wrist, did_rotate
+                else:
+                    # Always rotate both
+                    return tf_rotate_180(primary_img), tf_rotate_180(wrist_img), tf.constant(True, dtype=tf.bool)
             else:
                 return primary_img, wrist_img, tf.constant(False, dtype=tf.bool)
         
