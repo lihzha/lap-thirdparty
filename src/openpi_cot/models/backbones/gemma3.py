@@ -49,7 +49,7 @@ KVCache: TypeAlias = tuple[
 # Configuration & Factory
 # ============================================================================
 
-Variant = Literal["gemma3_300m", "gemma3_1b", "gemma3_4b", "gemma3_12b"]
+Variant = Literal["gemma3_300m", "gemma3_1b", "gemma3_4b", "gemma3_12b", "gemma3_300m_26"]
 
 
 @dataclasses.dataclass
@@ -163,6 +163,24 @@ def get_config(variant: Variant) -> Config:
             head_dim=256,
             vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=34,
+            sliding_window_size=512,
+            sliding_window_pattern=6,
+            rope_local_base_freq=10000.0,
+            rope_global_base_freq=1000000.0,
+            use_qk_norm=True,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            transpose_gating_einsum=True,
+        )
+    if variant == "gemma3_300m_26":
+        return Config(
+            width=768,
+            hidden_dim=768 * 4,
+            num_heads=8,
+            num_kv_heads=4,
+            head_dim=256,
+            vocab_size=GEMMA3_VOCAB_SIZE,
+            num_layers=26,
             sliding_window_size=512,
             sliding_window_pattern=6,
             rope_local_base_freq=10000.0,
