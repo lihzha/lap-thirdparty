@@ -357,6 +357,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 class CoTOutputs(upstream_transforms.DataTransformFn):
     # Optional decoding schema for parsing language actions to numeric actions
     language_action_format: LanguageActionFormat | str | None = None
+    # Optional norm_stats for VLA0 format unnormalization
+    # VLA0 outputs actions in normalized [-1, 1] space that need unnormalization
+    norm_stats: dict | None = None
+    normalization_type: str = "bounds_q99"
 
     def __post_init__(self):
         """Resolve string schema name to LanguageActionFormat instance."""
@@ -365,6 +369,59 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
         ):
             schema = get_language_action_format(self.language_action_format)
             object.__setattr__(self, "language_action_format", schema)
+
+    def _unnormalize_vla0_actions(self, actions: np.ndarray) -> np.ndarray:
+        """Unnormalize VLA0 actions from [-1, 1] to physical space."""
+        if self.norm_stats is None:
+            return actions
+        
+        actions_stats = self.norm_stats.get("actions")
+        if actions_stats is None:
+            return actions
+        
+        if self.normalization_type == "bounds_q99":
+            q01 = getattr(actions_stats, "q01", None)
+            q99 = getattr(actions_stats, "q99", None)
+            if q01 is None or q99 is None:
+                return actions
+            # Unnormalize from [-1, 1] to original space
+            # actions in [-1, 1] -> (actions + 1) / 2 * (q99 - q01) + q01
+            q01 = np.asarray(q01)
+            q99 = np.asarray(q99)
+            # Handle dimension mismatch - only unnormalize dims that have stats
+            dim = min(q01.shape[-1], actions.shape[-1])
+            unnormed = (actions[..., :dim] + 1.0) / 2.0 * (q99[..., :dim] - q01[..., :dim] + 1e-6) + q01[..., :dim]
+            if actions.shape[-1] > dim:
+                # Keep extra dims as-is (e.g., already normalized gripper)
+                unnormed = np.concatenate([unnormed, actions[..., dim:]], axis=-1)
+            return unnormed
+        elif self.normalization_type in ("bounds", "normal"):
+            # Handle other normalization types if needed
+            if self.normalization_type == "bounds":
+                min_val = getattr(actions_stats, "min", None)
+                max_val = getattr(actions_stats, "max", None)
+                if min_val is None or max_val is None:
+                    return actions
+                min_val = np.asarray(min_val)
+                max_val = np.asarray(max_val)
+                dim = min(min_val.shape[-1], actions.shape[-1])
+                unnormed = (actions[..., :dim] + 1.0) / 2.0 * (max_val[..., :dim] - min_val[..., :dim] + 1e-8) + min_val[..., :dim]
+                if actions.shape[-1] > dim:
+                    unnormed = np.concatenate([unnormed, actions[..., dim:]], axis=-1)
+                return unnormed
+            else:  # normal
+                mean = getattr(actions_stats, "mean", None)
+                std = getattr(actions_stats, "std", None)
+                if mean is None or std is None:
+                    return actions
+                mean = np.asarray(mean)
+                std = np.asarray(std)
+                dim = min(mean.shape[-1], actions.shape[-1])
+                unnormed = actions[..., :dim] * (std[..., :dim] + 1e-6) + mean[..., :dim]
+                if actions.shape[-1] > dim:
+                    unnormed = np.concatenate([unnormed, actions[..., dim:]], axis=-1)
+                return unnormed
+        return actions
 
     def __call__(self, data: dict) -> dict:
         # Get actions and reasoning from data
@@ -384,6 +441,8 @@ class CoTOutputs(upstream_transforms.DataTransformFn):
 
             if isinstance(self.language_action_format, VLA0ActionFormat):
                 actions = self.language_action_format.parse_to_full_actions(reasoning)
+                # VLA0 actions are in normalized [-1, 1] space, unnormalize them
+                actions = self._unnormalize_vla0_actions(actions)
                 return {"actions": actions, "reasoning": reasoning}
             # Fallback for generic VLA0-style format
             movement, gripper_action = self.language_action_format.parse_language_to_deltas(reasoning)

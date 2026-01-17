@@ -152,25 +152,49 @@ def create_trained_policy(
 
         norm_stats = _checkpoints.load_norm_stats(checkpoint_dir / "assets", data_config.asset_id)
 
+    # Build output transforms, handling VLA0 format specially
+    # VLA0 outputs are in normalized [-1, 1] space and need unnormalization
+    normalization_type = getattr(data_config, "action_proprio_normalization_type", "normal")
+    language_action_format_name = getattr(data_config, "language_action_format_name", None)
+    is_vla0 = language_action_format_name is not None and "vla0" in language_action_format_name
+    
+    if is_vla0:
+        # For VLA0: replace CoTOutputs with one that has norm_stats for unnormalization
+        from openpi_cot.policies.cot_policy import CoTOutputs
+        
+        # Build output transforms, replacing CoTOutputs with norm_stats-aware version
+        output_transforms_list = list(data_config.model_transforms.outputs)
+        # Unnormalize is skipped for VLA0 since CoTOutputs handles it
+        # Add data transforms outputs, replacing CoTOutputs with norm_stats-aware version
+        for transform in data_config.data_transforms.outputs:
+            if isinstance(transform, CoTOutputs):
+                output_transforms_list.append(CoTOutputs(
+                    language_action_format=transform.language_action_format,
+                    norm_stats=norm_stats,
+                    normalization_type=str(normalization_type.value) if hasattr(normalization_type, 'value') else str(normalization_type),
+                ))
+            else:
+                output_transforms_list.append(transform)
+        output_transforms_list.extend(repack_transforms.outputs)
+    else:
+        # For non-VLA0: use standard transform order
+        output_transforms_list = [
+            *data_config.model_transforms.outputs,
+            transforms.Unnormalize(norm_stats, normalization_type=normalization_type),
+            *data_config.data_transforms.outputs,
+            *repack_transforms.outputs,
+        ]
+
     return _policy.Policy(
         model,
         transforms=[
             *repack_transforms.inputs,
             up_transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
-            transforms.Normalize(
-                norm_stats, normalization_type=getattr(data_config, "action_proprio_normalization_type", "normal")
-            ),
+            transforms.Normalize(norm_stats, normalization_type=normalization_type),
             *data_config.model_transforms.inputs,
         ],
-        output_transforms=[
-            *data_config.model_transforms.outputs,
-            transforms.Unnormalize(
-                norm_stats, normalization_type=getattr(data_config, "action_proprio_normalization_type", "normal")
-            ),
-            *data_config.data_transforms.outputs,
-            *repack_transforms.outputs,
-        ],
+        output_transforms=output_transforms_list,
         sample_kwargs=sample_kwargs,
         metadata=train_config.policy_metadata,
         is_pytorch=False,

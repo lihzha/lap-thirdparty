@@ -28,7 +28,7 @@ class TestVLA0ActionFormat:
         vla0_chunked = get_language_action_format("vla0_chunked")
         assert vla0_chunked is not None
         assert vla0_chunked.style == "vla0"
-        assert vla0_chunked.action_horizon == 16
+        assert vla0_chunked.action_horizon == 10  # VLA0 chunked uses 10-step horizon
 
     def test_summarize_single_step(self):
         """Test summarizing single-step actions."""
@@ -185,7 +185,7 @@ class TestVLA0Integration:
 
         fmt = get_language_action_format("vla0_chunked")
         assert isinstance(fmt, VLA0ActionFormat)
-        assert fmt.action_horizon == 16
+        assert fmt.action_horizon == 10  # VLA0 chunked uses 10-step horizon
 
     def test_predefined_formats(self):
         """Test the predefined VLA0 format instances."""
@@ -196,8 +196,83 @@ class TestVLA0Integration:
 
         assert VLA0_CHUNKED_FORMAT.name == "vla0_chunked"
         assert VLA0_CHUNKED_FORMAT.num_bins == 1000
-        assert VLA0_CHUNKED_FORMAT.action_horizon == 16
+        assert VLA0_CHUNKED_FORMAT.action_horizon == 10  # VLA0 chunked uses 10-step horizon
         assert VLA0_CHUNKED_FORMAT.action_dim == 7
+
+
+class TestVLA0Unnormalization:
+    """Test VLA0 action unnormalization in CoTOutputs."""
+
+    def test_cot_outputs_unnormalize_vla0(self):
+        """Test that CoTOutputs unnormalizes VLA0 actions correctly."""
+        from openpi_cot.policies.cot_policy import CoTOutputs
+        from openpi.shared.normalize import NormStats
+
+        # Create mock norm_stats with q01/q99 for bounds_q99 normalization
+        q01 = np.array([0.0, 0.0, 0.0, -3.14, -3.14, -3.14, 0.0])
+        q99 = np.array([1.0, 1.0, 1.0, 3.14, 3.14, 3.14, 1.0])
+        actions_stats = NormStats(
+            mean=np.zeros(7),
+            std=np.ones(7),
+            min=q01,
+            max=q99,
+            q01=q01,
+            q99=q99,
+        )
+        norm_stats = {"actions": actions_stats}
+
+        # Create CoTOutputs with VLA0 format and norm_stats
+        cot_outputs = CoTOutputs(
+            language_action_format="vla0_chunked",
+            norm_stats=norm_stats,
+            normalization_type="bounds_q99",
+        )
+
+        # Create mock reasoning (VLA0 format: space-separated integers)
+        # "500" maps to 0.0 in normalized space, which should unnormalize to middle of q01-q99 range
+        reasoning = " ".join(["500"] * 70)  # 10 timesteps * 7 dims
+        data = {"reasoning": reasoning}
+
+        result = cot_outputs(data)
+
+        # Actions should be unnormalized
+        assert "actions" in result
+        actions = result["actions"]
+        assert actions.shape == (10, 7)
+
+        # For bins=1000, token 500 -> normalized value = 500/1000 * 2 - 1 = 0.0
+        # Unnormalized: (0 + 1) / 2 * (q99 - q01) + q01 = 0.5 * range + q01
+        # For dims 0-2: 0.5 * 1.0 + 0.0 = 0.5
+        # For dims 3-5: 0.5 * 6.28 - 3.14 = 0.0
+        # For dim 6: 0.5 * 1.0 + 0.0 = 0.5
+        expected_translation = 0.5
+        expected_rotation = 0.0
+        expected_gripper = 0.5
+
+        np.testing.assert_array_almost_equal(actions[:, :3], expected_translation, decimal=2)
+        np.testing.assert_array_almost_equal(actions[:, 3:6], expected_rotation, decimal=2)
+        np.testing.assert_array_almost_equal(actions[:, 6], expected_gripper, decimal=2)
+
+    def test_cot_outputs_no_unnormalize_without_norm_stats(self):
+        """Test that CoTOutputs returns normalized actions when norm_stats is None."""
+        from openpi_cot.policies.cot_policy import CoTOutputs
+
+        # Create CoTOutputs without norm_stats
+        cot_outputs = CoTOutputs(
+            language_action_format="vla0_chunked",
+            norm_stats=None,
+        )
+
+        # Create mock reasoning
+        reasoning = " ".join(["500"] * 70)
+        data = {"reasoning": reasoning}
+
+        result = cot_outputs(data)
+
+        # Actions should still be in normalized [-1, 1] space
+        actions = result["actions"]
+        # Token 500 -> 0.0 in normalized space
+        np.testing.assert_array_almost_equal(actions, np.zeros((10, 7)), decimal=2)
 
 
 if __name__ == "__main__":
