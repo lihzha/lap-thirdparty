@@ -75,6 +75,14 @@ class DeviceConfig:
         )
         return f"{base}/cache"
 
+    def get_gemma3_tokenizer_path(self) -> str:
+        """Get Gemma3 tokenizer model path, deriving from cache dir."""
+        return f"{self.get_cache_dir()}/gemma3-tokenizer.model"
+
+    def get_gemma3_params_path(self) -> str:
+        """Get Gemma3 model params path, deriving from cache dir."""
+        return f"{self.get_cache_dir()}/gemma3-4b-it"
+
 
 # Centralized device registry
 DEVICE_CONFIGS = {
@@ -222,6 +230,9 @@ class CoTDataConfig(upstream_config.DataConfig):
     ### OXE fields (used when dataset_type == "oxe" or "combined")
     data_mix: str | None = "oxe_magic_soup"
 
+    ### Gemma3 tokenizer path (device-specific, set via create_multi_device_configs)
+    gemma3_tokenizer_path: str | None = None
+
 
 @dataclasses.dataclass(frozen=True)
 class ModelTransformFactory(upstream_config.ModelTransformFactory):
@@ -231,21 +242,36 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
     prediction_format: str = "default"
     include_outputs: bool = True  # Toggle output transforms (e.g., detokenization)
     fast_tokenizer_path: str = "physical-intelligence/fast"  # KarlP/fast_droid_specialist
+    gemma3_tokenizer_path: str | None = None  # Device-specific Gemma3 tokenizer path
+
+    def _create_tokenizer(self, model_config: pi_cot_config.PiCoTConfig, reasoning_mask_prob: float):
+        """Create the appropriate tokenizer based on model variant."""
+        if "gemma3" in model_config.paligemma_variant:
+            kwargs = {
+                "max_len": model_config.max_token_len,
+                "prompt_format": self.prompt_format,
+                "prediction_format": self.prediction_format,
+                "reasoning_mask_prob": reasoning_mask_prob,
+            }
+            if self.gemma3_tokenizer_path:
+                kwargs["tokenizer_model_path"] = self.gemma3_tokenizer_path
+            return Gemma3CoTTokenizer(**kwargs)
+        else:
+            return PaligemmaCoTTokenizer(
+                model_config.max_token_len,
+                prompt_format=self.prompt_format,
+                prediction_format=self.prediction_format,
+                reasoning_mask_prob=reasoning_mask_prob,
+            )
 
     def __call__(self, model_config: _model.BaseModelConfig) -> upstream_transforms.Group:
         if model_config.model_type == ModelType.PI_COT:
             assert isinstance(model_config, pi_cot_config.PiCoTConfig)
             outputs = []
-            tok_cls = PaligemmaCoTTokenizer if "gemma3" not in model_config.paligemma_variant else Gemma3CoTTokenizer
             if self.include_outputs:
                 outputs = [
                     DetokenizeReasoning(
-                        tok_cls(
-                            model_config.max_token_len,
-                            prompt_format=self.prompt_format,
-                            prediction_format=self.prediction_format,
-                            reasoning_mask_prob=0,
-                        )
+                        self._create_tokenizer(model_config, reasoning_mask_prob=0)
                     )
                 ]
             return upstream_transforms.Group(
@@ -253,12 +279,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                     upstream_transforms.InjectDefaultPrompt(self.default_prompt),
                     # upstream_transforms.ResizeImages(224, 224),
                     TokenizePromptAndReasoning(
-                        tok_cls(
-                            model_config.max_token_len,
-                            prompt_format=self.prompt_format,
-                            prediction_format=self.prediction_format,
-                            reasoning_mask_prob=model_config.reasoning_mask_prob,
-                        ),
+                        self._create_tokenizer(model_config, reasoning_mask_prob=model_config.reasoning_mask_prob),
                         discrete_state_input=model_config.discrete_state_input,
                         verbose_mode=model_config.verbose_mode,
                         state_dropout=model_config.state_dropout,
@@ -405,6 +426,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
+            gemma3_tokenizer_path=base_cfg.gemma3_tokenizer_path,
         )(model_config)
 
 
@@ -434,6 +456,7 @@ class RawActionDataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
+            gemma3_tokenizer_path=base_cfg.gemma3_tokenizer_path,
         )(model_config)
 
 
@@ -459,6 +482,7 @@ class VQADataConfig(BaseCoTDataConfigFactory):
         return ModelTransformFactory(
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
+            gemma3_tokenizer_path=base_cfg.gemma3_tokenizer_path,
         )(model_config)
 
 
@@ -490,6 +514,7 @@ class LiberoFinetuneDataConfig(BaseCoTDataConfigFactory):
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
             include_outputs=False,  # Libero doesn't need output detokenization
+            gemma3_tokenizer_path=base_cfg.gemma3_tokenizer_path,
         )(model_config)
 
 
@@ -521,6 +546,7 @@ class LiberoCoTDataConfig(BaseCoTDataConfigFactory):
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
             include_outputs=True,  # Libero doesn't need output detokenization
+            gemma3_tokenizer_path=base_cfg.gemma3_tokenizer_path,
         )(model_config)
 
 
@@ -552,6 +578,7 @@ class PlanningDataConfig(BaseCoTDataConfigFactory):
             prompt_format=model_config.prompt_format,
             prediction_format=model_config.prediction_format,
             include_outputs=False,  # Planning doesn't need output detokenization
+            gemma3_tokenizer_path=base_cfg.gemma3_tokenizer_path,
         )(model_config)
 
 
@@ -1016,6 +1043,9 @@ def create_multi_device_configs(
             data_kwargs["rlds_data_dir"] = device_cfg.rlds_data_dir
         if "language_action_dir" not in data_kwargs:
             data_kwargs["language_action_dir"] = device_cfg.get_language_action_dir()
+        # Set device-specific Gemma3 tokenizer path
+        if "gemma3_tokenizer_path" not in data_kwargs:
+            data_kwargs["gemma3_tokenizer_path"] = device_cfg.get_gemma3_tokenizer_path()
 
         # Build train config with device-specific settings
         train_kwargs = {

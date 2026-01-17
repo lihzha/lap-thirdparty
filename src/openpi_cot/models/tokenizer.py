@@ -236,6 +236,9 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
     
     Uses the Gemma3 tokenizer with different special tokens and image placeholders.
     """
+
+    # Default tokenizer model path (can be overridden via tokenizer_model_path parameter)
+    DEFAULT_TOKENIZER_MODEL_PATH = "gs://pi0-cot/cache/gemma3-tokenizer.model"
     
     def __init__(
         self,
@@ -266,14 +269,17 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         tokenizer_name: str = "google/gemma-3-4b-it",
         num_image_tokens: int = 256,  # 4096 patches / 16 (4x4 pooling) = 256
         num_images: int = 2,  # Number of images (base + wrist)
+        tokenizer_model_path: str | None = None,  # Device-specific tokenizer model path
     ):
         # Don't call super().__init__ as we want to use a different tokenizer
         self.reasoning_mask_prob = reasoning_mask_prob
         logging.info(f"Using Gemma3 tokenizer from {tokenizer_name}")
         logging.info(f"Use reasoning_mask_prob: {self.reasoning_mask_prob}")
         
-        # Load Gemma3 tokenizer from HuggingFace
-        path = download.maybe_download("gs://pi0-cot/cache/gemma3-tokenizer.model", gs={"token": "anon"})
+        # Load Gemma3 tokenizer from specified path or default
+        tokenizer_path = tokenizer_model_path or self.DEFAULT_TOKENIZER_MODEL_PATH
+        logging.info(f"Loading Gemma3 tokenizer model from: {tokenizer_path}")
+        path = download.maybe_download(tokenizer_path, gs={"token": "anon"})
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
         self._max_len = max_len
