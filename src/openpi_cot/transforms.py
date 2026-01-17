@@ -459,6 +459,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
     tokenizer: FASTTokenizer
     discrete_state_input: bool = True
     state_dropout: float = 0.0
+    dataset_name_pad_len: int = 100
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
