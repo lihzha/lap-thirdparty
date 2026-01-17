@@ -27,6 +27,7 @@ from openpi_cot.datasets.vqa.bbox_common import (
     count_annotated_frames,
     droid_key_extractor,
     rotate_bbox_loc_tokens_180_tf,
+    rotate_direction_180_tf,
     sample_and_format_objects_direction_tf,
     sample_and_format_objects_tf,
     sample_prompt_tf,
@@ -456,12 +457,17 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 )
                 return tf.strings.reduce_join(rotated_parts, separator=" ; ")
             
-            # Only rotate bbox coordinates for non-directional samples (bbox samples)
-            # Directional samples don't need bbox rotation
+            # Rotate caption based on sample type
+            def rotate_directional_caption():
+                # For directional samples, rotate the direction label
+                return rotate_direction_180_tf(caption)
+            
+            # For directional samples: rotate direction label
+            # For bbox samples: rotate bbox coordinates
             final_caption = tf.cond(
                 is_directional,
-                lambda: caption,  # Keep original for directional
-                lambda: rotate_caption(),  # Rotate for bbox samples
+                lambda: rotate_directional_caption(),  # Rotate direction for directional samples
+                lambda: rotate_caption(),  # Rotate bbox coordinates for bbox samples
             )
 
             frame["object_labels"] = labels

@@ -313,6 +313,60 @@ def rotate_bbox_loc_tokens_180_tf(loc_tokens: tf.Tensor, num_bins: int = 1024) -
     return tf.cond(is_empty, lambda: loc_tokens, extract_numbers)
 
 
+def rotate_direction_180_tf(direction: tf.Tensor) -> tf.Tensor:
+    """Rotate direction string by 180 degrees.
+    
+    For a 180-degree rotation:
+    - "forward" -> "back"
+    - "back" -> "forward"
+    - "left" -> "right"
+    - "right" -> "left"
+    - "left and forward" -> "right and back"
+    - "right and forward" -> "left and back"
+    - "left and back" -> "right and forward"
+    - "right and back" -> "left and forward"
+    
+    Also handles "move " prefix: "move forward" -> "move back"
+    
+    Args:
+        direction: tf.string tensor with direction (e.g., "move forward", "left and back")
+        
+    Returns:
+        tf.string tensor with rotated direction
+    """
+    # Check if direction has "move " prefix
+    has_move_prefix = tf.strings.regex_full_match(direction, r"move .*")
+    
+    def remove_prefix():
+        return tf.strings.regex_replace(direction, r"^move ", "")
+    
+    def add_prefix(d):
+        return tf.strings.join(["move ", d])
+    
+    direction_no_prefix = tf.cond(has_move_prefix, remove_prefix, lambda: direction)
+    
+    # Rotate using string replacements (works for both simple and compound)
+    # Replace left <-> right and forward <-> back
+    # First replace left/right with placeholders to avoid double replacement
+    rotated = tf.strings.regex_replace(direction_no_prefix, r"\bleft\b", "__LEFT_PLACEHOLDER__")
+    rotated = tf.strings.regex_replace(rotated, r"\bright\b", "left")
+    rotated = tf.strings.regex_replace(rotated, r"__LEFT_PLACEHOLDER__", "right")
+    
+    # Replace forward/back
+    rotated = tf.strings.regex_replace(rotated, r"\bforward\b", "__FORWARD_PLACEHOLDER__")
+    rotated = tf.strings.regex_replace(rotated, r"\bback\b", "forward")
+    rotated = tf.strings.regex_replace(rotated, r"__FORWARD_PLACEHOLDER__", "back")
+    
+    # Add back "move " prefix if it was there
+    final_direction = tf.cond(
+        has_move_prefix,
+        lambda: add_prefix(rotated),
+        lambda: rotated,
+    )
+    
+    return final_direction
+
+
 # =============================================================================
 # PROMPT SAMPLING HELPERS
 # =============================================================================
