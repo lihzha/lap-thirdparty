@@ -96,10 +96,14 @@ def preprocess_observation(
     image_keys: Sequence[str] = IMAGE_KEYS,
     image_resolution: tuple[int, int] = _model.IMAGE_RESOLUTION,
     aug_wrist_image: bool = True,
+    enable_image_augmentation: bool = True,
     vqa_mask: at.Bool[jax.Array, "*b"] | None = None,
 ) -> CoTObservation:
     """Preprocess the observations by performing image augmentations (if train=True), resizing (if necessary), and
     filling in a default image mask (if necessary).
+    
+    Args:
+        enable_image_augmentation: When False, disables all image augmentation even during training.
     """
 
     # if not set(image_keys).issubset(observation.images):
@@ -120,7 +124,7 @@ def preprocess_observation(
             # Process each frame
             image = image_tools.resize_with_pad(image, *image_resolution)
 
-        if train:
+        if train and enable_image_augmentation:
             # Augmentation: apply to each frame independently
             # Flatten: [b*t, h, w, c]
             h_new, w_new = image_resolution

@@ -40,6 +40,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     use_fast: bool = False
 
     aug_wrist_image: bool = True
+    # When False, disables all image augmentation during training
+    enable_image_augmentation: bool = True
     # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
     # When False, only uses base_0_rgb and left_wrist_0_rgb to save memory
     use_bimanual: bool = False

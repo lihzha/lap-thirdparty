@@ -52,6 +52,7 @@ class PiCoT(_pi0.Pi0):
         self.pi05 = config.pi05
         self.verbose_mode = config.verbose_mode
         self.aug_wrist_image = config.aug_wrist_image
+        self.enable_image_augmentation = config.enable_image_augmentation
         self.image_keys = config.image_keys
         # Loss/control knobs
         self.enable_action_training = bool(config.enable_action_training)
@@ -405,6 +406,7 @@ class PiCoT(_pi0.Pi0):
             train=train,
             image_keys=self.image_keys,
             aug_wrist_image=self.aug_wrist_image,
+            enable_image_augmentation=self.enable_image_augmentation,
             vqa_mask=vqa_mask,
         )
 

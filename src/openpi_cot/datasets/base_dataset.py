@@ -496,6 +496,8 @@ class SingleCoTDataset:
             traj_len = tf.shape(traj["actions"])[0]
             traj["caption"] = tf.repeat(tf.constant("", dtype=tf.string), traj_len)
             traj["is_vqa_sample"] = tf.repeat(tf.constant(False, dtype=tf.bool), traj_len)
+            # Add vqa_dataset_id=0 for non-VQA robot datasets (for consistency when mixing with VQA)
+            traj["vqa_dataset_id"] = tf.repeat(tf.constant(0, dtype=tf.int32), traj_len)
             return traj
 
         self.dataset = self.dataset.traj_map(common, self.num_parallel_calls)
