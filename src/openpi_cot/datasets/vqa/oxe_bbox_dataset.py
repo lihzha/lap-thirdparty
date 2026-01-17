@@ -534,12 +534,16 @@ class OXEBoundingBoxDataset(ABC):
             
             # For directional samples: use both primary and wrist images (like robot samples)
             # For bbox samples: use only primary image (keep legacy behavior)
-            has_wrist = is_directional and wrist_image_key is not None
+            # has_wrist is True if sample is directional AND wrist image key is available
+            has_wrist_cond = tf.logical_and(
+                is_directional,
+                tf.constant(wrist_image_key is not None, dtype=tf.bool)
+            )
             
             # For non-directional samples, set wrist image to empty
             observation = frame["observation"]
             wrist_img = tf.cond(
-                is_directional and wrist_image_key is not None,
+                has_wrist_cond,
                 lambda: observation[self.spec.wrist_image_key],
                 lambda: tf.constant("", dtype=tf.string),
             )
@@ -563,7 +567,7 @@ class OXEBoundingBoxDataset(ABC):
                 "pred_use_primary": tf.constant(False, dtype=tf.bool),
                 "raw_state": tf.zeros([self.state_dim], dtype=tf.float32),
                 "is_navigation": tf.constant(False, dtype=tf.bool),
-                "has_wrist_image": tf.constant(has_wrist, dtype=tf.bool),
+                "has_wrist_image": has_wrist_cond,  # Already a tensor, don't wrap in tf.constant
                 "needs_wrist_rotation": frame["needs_wrist_rotation"],
                 "vqa_dataset_id": tf.constant(vqa_dataset_id, dtype=tf.int32),
                 "actions": tf.zeros([self.action_horizon, self.action_dim], dtype=tf.float32),
