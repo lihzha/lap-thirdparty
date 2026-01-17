@@ -1250,23 +1250,23 @@ def build_frame_objects_table_v2_direction(
 
 def sample_and_format_objects_direction_tf(
     objects_data: tf.Tensor,
-    max_objects: int = 2,
     seed_pair: tuple[int, tf.Tensor] | None = None,
 ) -> tuple[tf.Tensor, tf.Tensor]:
-    """Sample objects and format them for direction-based VQA (pure TensorFlow).
+    """Sample ONE object and format for direction-based VQA (pure TensorFlow).
 
     This function uses pure TensorFlow operations for direction-based output.
     The input format is a pipe-delimited string: "label1|direction1;label2|direction2;..."
 
+    Direction caption refers to a single object, so we always sample exactly 1 object.
+
     Args:
         objects_data: tf.string tensor with pipe-delimited objects data
-        max_objects: Maximum number of objects to include (randomly sampled if more)
         seed_pair: Tuple of (base_seed, hash_value) for stateless random sampling
 
     Returns:
-        Tuple of (prompt_labels, direction_caption) as tf.string tensors
-        - prompt_labels: comma-separated object labels for the prompt
-        - direction_caption: the direction string for the caption (just the direction)
+        Tuple of (prompt_label, direction_caption) as tf.string tensors
+        - prompt_label: single object label for the prompt
+        - direction_caption: the direction string for the caption (e.g., "move left")
     """
     # Handle empty input
     is_empty = tf.equal(tf.strings.length(objects_data), 0)
@@ -1279,52 +1279,28 @@ def sample_and_format_objects_direction_tf(
         objects = tf.strings.split(objects_data, ";")
         num_objects = tf.shape(objects)[0]
 
-        # Sample indices if we have more than max_objects
-        def sample_indices():
+        # Always sample exactly 1 object
+        def sample_one_index():
             if seed_pair is not None:
                 random_vals = tf.random.stateless_uniform(
                     [num_objects], seed=seed_pair, dtype=tf.float32
                 )
             else:
                 random_vals = tf.random.uniform([num_objects], dtype=tf.float32)
-            shuffled = tf.argsort(random_vals)
-            return shuffled[:max_objects]
+            # Get index of minimum random value (random selection of 1)
+            return tf.argmin(random_vals, output_type=tf.int32)
 
-        def all_indices():
-            return tf.range(num_objects)
+        selected_idx = sample_one_index()
 
-        selected_indices = tf.cond(
-            num_objects > max_objects,
-            sample_indices,
-            all_indices,
-        )
+        # Get the selected object
+        selected_object = objects[selected_idx]
 
-        # Gather selected objects
-        selected_objects = tf.gather(objects, selected_indices)
+        # Split into label and direction
+        parts = tf.strings.split(selected_object, "|")
+        label = parts[0]
+        direction = parts[1]
 
-        # Split each object into label and direction
-        def split_object(obj):
-            parts = tf.strings.split(obj, "|")
-            label = parts[0]
-            direction = parts[1]
-            return label, direction
-
-        labels_and_dirs = tf.map_fn(
-            split_object,
-            selected_objects,
-            fn_output_signature=(tf.TensorSpec([], tf.string), tf.TensorSpec([], tf.string)),
-        )
-        labels = labels_and_dirs[0]
-        directions = labels_and_dirs[1]
-
-        # Build prompt_labels: labels joined by ", "
-        prompt_labels = tf.strings.reduce_join(labels, separator=", ")
-
-        # For direction caption, we just use the first selected direction
-        # (similar to how PACO works with single objects)
-        direction_caption = directions[0]
-
-        return prompt_labels, direction_caption
+        return label, direction
 
     return tf.cond(is_empty, empty_result, process_objects)
 

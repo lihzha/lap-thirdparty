@@ -395,8 +395,9 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
             # Use pure TensorFlow sampling and formatting
             if use_directional:
+                # Direction mode always samples 1 object
                 labels, caption = sample_and_format_objects_direction_tf(
-                    objects_data, max_objects=max_objects, seed_pair=seed_pair
+                    objects_data, seed_pair=seed_pair
                 )
             else:
                 labels, caption = sample_and_format_objects_tf(

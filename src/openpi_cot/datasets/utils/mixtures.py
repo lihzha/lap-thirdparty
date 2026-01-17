@@ -147,7 +147,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     ],
     "oxe_magic_soup_magic_vqa": [
         # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
-        ("bc_z", 0.05),
+        ("bc_z", 1.0),
         ("droid", 2.0),
         ("fractal20220817_data", 1.0),
         ("bridge_v2_oxe", 1.0),

@@ -535,7 +535,7 @@ def reduce_dimensions(
     logger.info(f"Reducing dimensions with {method} from {embeddings.shape[1]} to {n_components}")
     
     if method == "tsne":
-        # Use max_iter for scikit-learn >= 1.2, fallback to n_iter for older versions
+        # Uspe max_iter for scikit-learn >= 1.2, fallback to n_iter for older versions
         tsne_kwargs = {
             "n_components": n_components,
             "perplexity": kwargs.get("perplexity", 30),
@@ -972,6 +972,11 @@ def main():
     single_parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
     single_parser.add_argument("--seed", type=int, default=42)
     single_parser.add_argument("--batch_size", type=int, default=None)
+    # Target dataset arguments
+    single_parser.add_argument("--target_dataset", type=str, default=None,
+                              help="Target dataset name to compare against (e.g., 'bridge_v2_oxe', 'fmb')")
+    single_parser.add_argument("--target_num_samples", type=int, default=None,
+                              help="Number of samples from target dataset (default: same as --num_samples)")
     
     # Multi-model comparison
     compare_parser = subparsers.add_parser("compare", help="Compare embeddings across multiple models")
@@ -1004,6 +1009,11 @@ def main():
             parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
             parser.add_argument("--seed", type=int, default=42)
             parser.add_argument("--batch_size", type=int, default=None)
+            # Target dataset arguments
+            parser.add_argument("--target_dataset", type=str, default=None,
+                               help="Target dataset name to compare against (e.g., 'bridge_v2_oxe', 'fmb')")
+            parser.add_argument("--target_num_samples", type=int, default=None,
+                               help="Number of samples from target dataset (default: same as --num_samples)")
             args = parser.parse_args()
         
         run_single_model(args)
@@ -1036,6 +1046,28 @@ def main():
         )
 
 
+def create_target_config(base_config: _config.TrainConfig, target_dataset: str) -> _config.TrainConfig:
+    """Create a config with the target dataset as the data_mix.
+    
+    Args:
+        base_config: Base training config
+        target_dataset: Target dataset name (e.g., 'bridge_v2_oxe', 'fmb')
+        
+    Returns:
+        Modified config with target dataset as data_mix
+    """
+    # Get the data config and modify the data_mix
+    data_config = base_config.data
+    
+    # Create new data config with target dataset as the mix
+    new_data_config = dataclasses.replace(data_config, data_mix=target_dataset)
+    
+    # Create new train config with the modified data config
+    new_config = dataclasses.replace(base_config, data=new_data_config)
+    
+    return new_config
+
+
 def run_single_model(args):
     """Run embedding extraction for a single model."""
     # Get config
@@ -1055,8 +1087,11 @@ def run_single_model(args):
         config, effective_fsdp, args.checkpoint_step
     )
     
-    # Create data loader
-    logger.info("Creating data loader...")
+    # Create embedding extractor
+    extractor = EmbeddingExtractor(train_state)
+    
+    # Create data loader for source/training data
+    logger.info("Creating source data loader...")
     data_loader = _data_loader.create_data_loader(
         config,
         sharding=data_sharding,
@@ -1065,12 +1100,9 @@ def run_single_model(args):
         seed=args.seed,
     )
     
-    # Create embedding extractor
-    extractor = EmbeddingExtractor(train_state)
-    
-    # Extract embeddings
-    logger.info(f"Extracting {args.embedding_type} embeddings...")
-    result = extract_all_embeddings(
+    # Extract embeddings from source data
+    logger.info(f"Extracting {args.embedding_type} embeddings from source data...")
+    source_result = extract_all_embeddings(
         extractor=extractor,
         data_loader=data_loader,
         embedding_type=args.embedding_type,
@@ -1079,21 +1111,88 @@ def run_single_model(args):
         mesh=mesh,
     )
     
-    logger.info(f"Extracted {len(result.embeddings)} embeddings")
-    logger.info(f"Unique datasets: {sorted(set(result.dataset_names))}")
+    logger.info(f"Extracted {len(source_result.embeddings)} source embeddings")
+    logger.info(f"Source datasets: {sorted(set(source_result.dataset_names))}")
+    
+    # Handle target dataset if specified
+    target_dataset = getattr(args, 'target_dataset', None)
+    target_result = None
+    
+    if target_dataset:
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Extracting embeddings from target dataset: {target_dataset}")
+        logger.info(f"{'='*60}")
+        
+        # Create config for target dataset
+        target_config = create_target_config(config, target_dataset)
+        
+        # Create data loader for target dataset
+        logger.info(f"Creating target data loader for {target_dataset}...")
+        target_data_loader = _data_loader.create_data_loader(
+            target_config,
+            sharding=data_sharding,
+            shuffle=True,
+            split=args.split,
+            seed=args.seed + 1,  # Different seed for variety
+        )
+        
+        # Determine number of target samples
+        target_num_samples = getattr(args, 'target_num_samples', None) or args.num_samples
+        
+        # Extract embeddings from target data
+        logger.info(f"Extracting {args.embedding_type} embeddings from target data...")
+        target_result = extract_all_embeddings(
+            extractor=extractor,
+            data_loader=target_data_loader,
+            embedding_type=args.embedding_type,
+            num_samples=target_num_samples,
+            data_sharding=data_sharding,
+            mesh=mesh,
+        )
+        
+        logger.info(f"Extracted {len(target_result.embeddings)} target embeddings")
+        
+        # Mark target samples with a special prefix for visualization
+        target_result = EmbeddingResult(
+            embeddings=target_result.embeddings,
+            dataset_names=[f"[TARGET] {name}" for name in target_result.dataset_names],
+            sample_indices=target_result.sample_indices,
+        )
+    
+    # Combine source and target results if target exists
+    if target_result is not None:
+        combined_embeddings = np.concatenate([source_result.embeddings, target_result.embeddings], axis=0)
+        combined_dataset_names = source_result.dataset_names + target_result.dataset_names
+        combined_sample_indices = source_result.sample_indices + [
+            i + len(source_result.sample_indices) for i in target_result.sample_indices
+        ]
+        result = EmbeddingResult(
+            embeddings=combined_embeddings,
+            dataset_names=combined_dataset_names,
+            sample_indices=combined_sample_indices,
+        )
+        logger.info(f"\nCombined total: {len(result.embeddings)} embeddings")
+    else:
+        result = source_result
+    
+    logger.info(f"Unique datasets in final result: {sorted(set(result.dataset_names))}")
     
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Save raw embeddings
+    save_name = f"embeddings_{args.embedding_type}"
+    if target_dataset:
+        save_name += f"_vs_{target_dataset}"
+    
     np.savez(
-        output_dir / f"embeddings_{args.embedding_type}.npz",
+        output_dir / f"{save_name}.npz",
         embeddings=result.embeddings,
         dataset_names=result.dataset_names,
         sample_indices=result.sample_indices,
     )
-    logger.info(f"Saved raw embeddings to {output_dir / f'embeddings_{args.embedding_type}.npz'}")
+    logger.info(f"Saved raw embeddings to {output_dir / f'{save_name}.npz'}")
     
     # Reduce dimensions
     embeddings_2d = reduce_dimensions(result.embeddings, method=args.reduction_method)
@@ -1101,8 +1200,33 @@ def run_single_model(args):
     # Compute metrics
     metrics = compute_distance_metrics(result)
     
+    # Add specific target-to-source distance metrics if target exists
+    if target_dataset:
+        target_mask = np.array([name.startswith("[TARGET]") for name in result.dataset_names])
+        source_mask = ~target_mask
+        
+        if np.any(target_mask) and np.any(source_mask):
+            target_centroid = np.mean(result.embeddings[target_mask], axis=0)
+            source_centroid = np.mean(result.embeddings[source_mask], axis=0)
+            
+            metrics["target_to_source_centroid_dist"] = float(
+                np.linalg.norm(target_centroid - source_centroid)
+            )
+            
+            # Compute per-source-dataset distances
+            source_names = [name for name, is_target in zip(result.dataset_names, target_mask) if not is_target]
+            source_embs = result.embeddings[source_mask]
+            
+            unique_source_datasets = sorted(set(source_names))
+            for src_dataset in unique_source_datasets:
+                src_mask = np.array([n == src_dataset for n in source_names])
+                if np.any(src_mask):
+                    src_centroid = np.mean(source_embs[src_mask], axis=0)
+                    dist = float(np.linalg.norm(target_centroid - src_centroid))
+                    metrics[f"target_to_{src_dataset}_dist"] = dist
+    
     # Save metrics
-    metrics_path = output_dir / f"metrics_{args.embedding_type}.json"
+    metrics_path = output_dir / f"metrics_{save_name}.json"
     with open(metrics_path, "w") as f:
         json.dump(metrics, f, indent=2)
     logger.info(f"Saved metrics to {metrics_path}")
@@ -1115,20 +1239,122 @@ def run_single_model(args):
         logger.info(f"{key}: {value:.4f}")
     
     # Create plots
+    title = f"Embodiment Embeddings ({args.embedding_type}, {args.reduction_method})"
+    if target_dataset:
+        title += f"\nTarget: {target_dataset}"
+    
     plot_embeddings(
         embeddings_2d=embeddings_2d,
         dataset_names=result.dataset_names,
-        output_path=str(output_dir / f"scatter_{args.embedding_type}_{args.reduction_method}.png"),
-        title=f"Embodiment Embeddings ({args.embedding_type}, {args.reduction_method})",
+        output_path=str(output_dir / f"scatter_{save_name}_{args.reduction_method}.png"),
+        title=title,
     )
     
     plot_distance_heatmap(
         metrics=metrics,
-        output_path=str(output_dir / f"heatmap_{args.embedding_type}.png"),
+        output_path=str(output_dir / f"heatmap_{save_name}.png"),
         title=f"Cross-Embodiment Distances ({args.embedding_type})",
     )
     
+    # Create additional plot highlighting target vs source if target exists
+    if target_dataset:
+        plot_target_vs_source(
+            embeddings_2d=embeddings_2d,
+            dataset_names=result.dataset_names,
+            output_path=str(output_dir / f"target_vs_source_{save_name}_{args.reduction_method}.png"),
+            target_dataset=target_dataset,
+        )
+    
     logger.info("Done!")
+
+
+def plot_target_vs_source(
+    embeddings_2d: np.ndarray,
+    dataset_names: list[str],
+    output_path: str,
+    target_dataset: str,
+):
+    """Create a scatter plot highlighting target vs source embeddings.
+    
+    Args:
+        embeddings_2d: 2D embeddings [num_samples, 2]
+        dataset_names: Dataset name for each sample
+        output_path: Path to save the figure
+        target_dataset: Name of the target dataset
+    """
+    fig, ax = plt.subplots(figsize=(12, 10))
+    
+    # Separate target and source samples
+    target_mask = np.array([name.startswith("[TARGET]") for name in dataset_names])
+    source_mask = ~target_mask
+    
+    # Plot source samples in gray
+    ax.scatter(
+        embeddings_2d[source_mask, 0],
+        embeddings_2d[source_mask, 1],
+        c='lightgray',
+        label='Source (training mix)',
+        alpha=0.4,
+        s=20,
+    )
+    
+    # Plot target samples in red with larger markers
+    ax.scatter(
+        embeddings_2d[target_mask, 0],
+        embeddings_2d[target_mask, 1],
+        c='red',
+        label=f'Target ({target_dataset})',
+        alpha=0.8,
+        s=50,
+        edgecolors='darkred',
+        linewidths=0.5,
+    )
+    
+    # Compute and plot centroids
+    if np.any(source_mask):
+        source_centroid = np.mean(embeddings_2d[source_mask], axis=0)
+        ax.scatter(
+            source_centroid[0], source_centroid[1],
+            c='blue', marker='X', s=200, label='Source centroid',
+            edgecolors='darkblue', linewidths=2,
+        )
+    
+    if np.any(target_mask):
+        target_centroid = np.mean(embeddings_2d[target_mask], axis=0)
+        ax.scatter(
+            target_centroid[0], target_centroid[1],
+            c='red', marker='X', s=200, label='Target centroid',
+            edgecolors='darkred', linewidths=2,
+        )
+        
+        # Draw line between centroids
+        if np.any(source_mask):
+            ax.plot(
+                [source_centroid[0], target_centroid[0]],
+                [source_centroid[1], target_centroid[1]],
+                'k--', linewidth=2, alpha=0.5,
+            )
+            # Add distance annotation
+            dist = np.linalg.norm(target_centroid - source_centroid)
+            mid_point = (source_centroid + target_centroid) / 2
+            ax.annotate(
+                f'd={dist:.2f}',
+                xy=mid_point,
+                fontsize=10,
+                ha='center',
+                va='bottom',
+            )
+    
+    ax.set_xlabel("Dimension 1")
+    ax.set_ylabel("Dimension 2")
+    ax.set_title(f"Target ({target_dataset}) vs Source Embeddings")
+    ax.legend(loc='upper right')
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    logger.info(f"Saved target vs source plot to {output_path}")
 
 
 if __name__ == "__main__":
