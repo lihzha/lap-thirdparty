@@ -41,6 +41,28 @@ SIGLIP_PATCH_SIZE = 14  # 14x14 pixel patches
 SIGLIP_NUM_PATCHES = 256  # Output tokens after pooling (16x16 grid)
 
 
+@jax.vmap
+def _left_to_right_align_with_image_mask(x, input_mask, attn_mask, image_mask):
+    """Converts input from left-align to right-aligned, including image_mask.
+    
+    Extension of pi0_fast.left_to_right_align that also handles image_mask.
+    """
+    assert x.ndim == 2
+    assert input_mask.ndim == 1
+    assert attn_mask.ndim == 2
+    assert image_mask.ndim == 1
+    assert x.shape[0] == input_mask.shape[0]
+    assert attn_mask.shape[0] == attn_mask.shape[1], attn_mask.shape
+    assert image_mask.shape[0] == input_mask.shape[0]
+    
+    seqlen = jnp.max(input_mask * jnp.arange(input_mask.shape[0])) + 1
+    x = jnp.roll(x, -seqlen, axis=0)
+    input_mask = jnp.roll(input_mask, -seqlen, axis=0)
+    attn_mask = jnp.roll(attn_mask, -seqlen, axis=(0, 1))
+    image_mask = jnp.roll(image_mask, -seqlen, axis=0)
+    return x, input_mask, attn_mask, image_mask
+
+
 class PiCoTGemma3(PiCoT):
     """Gemma3-specific PiCoT implementation.
     
@@ -372,6 +394,404 @@ class PiCoTGemma3(PiCoT):
         # Return True for images + prompt (non-langact), False for langact
         return jnp.logical_and(prefix_mask, jnp.logical_not(observation.tokenized_langact_mask))
 
-    # ============ Inherited from PiCoT ============
-    # compute_loss, sample_actions, sample_tokens are inherited from PiCoT
-    # since preprocess_observation defaults to (224, 224) image resolution
+    # ============ Override: compute_loss ============
+
+    @override
+    def compute_loss(
+        self,
+        rng: at.KeyArrayLike,
+        observation: CoTObservation | Observation,
+        actions: _model.Actions,
+        *,
+        train: bool = False,
+        stage_config: dict | None = None,
+        verbose_mode: bool | None = None,
+        return_augmented_images: bool = False,
+    ) -> dict[str, at.Array]:
+        """Compute loss with Gemma3's image_mask for bidirectional image attention."""
+        import openpi.models.pi0 as _pi0
+        from openpi_cot.models.model_adapter import preprocess_observation
+
+        preprocess_rng, _, noise_rng, time_rng = jax.random.split(rng, 4)
+
+        # Use passed verbose_mode if provided, otherwise use class attribute
+        effective_verbose_mode = verbose_mode if verbose_mode is not None else self.verbose_mode
+
+        # Determine batch size
+        batch_size = observation.tokenized_prompt.shape[0]
+
+        # Compute VQA mask first (before preprocessing) to skip augmentation for VQA samples
+        vqa_mask = None
+        if self.enable_vqa_training and hasattr(observation, "is_vqa_sample") and observation.is_vqa_sample is not None:
+            vqa_mask = jnp.asarray(observation.is_vqa_sample, dtype=bool)
+        pred_mask = None
+        if (
+            self.enable_prediction_training
+            and hasattr(observation, "is_prediction_sample")
+            and observation.is_prediction_sample is not None
+        ):
+            pred_mask = jnp.asarray(observation.is_prediction_sample, dtype=bool)
+
+        # Preprocess observation (will skip augmentation for VQA samples if vqa_mask is provided)
+        observation = preprocess_observation(
+            preprocess_rng,
+            observation,
+            train=train,
+            image_keys=self.image_keys,
+            aug_wrist_image=self.aug_wrist_image,
+            enable_image_augmentation=getattr(self, "enable_image_augmentation", False),
+            vqa_mask=vqa_mask,
+        )
+
+        # Store augmented images for later visualization (if requested)
+        augmented_images = observation.images if return_augmented_images else None
+
+        # Build prefix for langact/action losses (Gemma3 returns image_mask as 4th value)
+        prefix_tokens, prefix_mask, prefix_ar_mask, image_mask = self.embed_prefix(observation)
+
+        suffix_inputs = (
+            self.prepare_suffix(observation, actions, noise_rng, time_rng) if self.enable_action_training else None
+        )
+        prefix_mask_action = (
+            self._build_prefix_action_mask(prefix_mask, observation) if self.enable_action_training else prefix_mask
+        )
+        combined_mask = self._build_combined_attention_mask(
+            prefix_mask,
+            prefix_ar_mask,
+            prefix_mask_action,
+            suffix_inputs["suffix_mask"] if self.enable_action_training else None,
+            suffix_inputs["suffix_ar_mask"] if self.enable_action_training else None,
+        )
+        combined_positions = self._build_combined_positions(
+            prefix_mask, prefix_mask_action, suffix_inputs["suffix_mask"] if self.enable_action_training else None
+        )
+
+        # Extend image_mask to cover suffix tokens (action tokens are not images)
+        if self.enable_action_training:
+            suffix_len = suffix_inputs["suffix_tokens"].shape[1]
+            image_mask_extended = jnp.concatenate(
+                [image_mask, jnp.zeros((batch_size, suffix_len), dtype=bool)], axis=1
+            )
+        else:
+            image_mask_extended = image_mask
+
+        # Forward pass with image_mask for bidirectional image attention
+        pre_logits, _ = self.PaliGemma.llm(
+            embedded=[prefix_tokens, suffix_inputs["suffix_tokens"]]
+            if self.enable_action_training
+            else [prefix_tokens],
+            positions=combined_positions,
+            mask=combined_mask,
+            adarms_cond=[None, suffix_inputs["adarms_cond"]] if self.enable_action_training else [None],
+            image_mask=image_mask_extended,
+        )
+
+        metrics = {}
+        lang_per_sample_loss = jnp.zeros(batch_size, dtype=jnp.float32)
+        action_per_sample_loss = jnp.zeros(batch_size, dtype=jnp.float32)
+
+        if self.enable_langact_training:
+            combined_langact_mask = observation.sample_mask
+            lang_loss, lang_metrics = self._compute_language_loss(
+                observation,
+                pre_logits[0],
+                sample_mask=combined_langact_mask,
+                verbose_mode=effective_verbose_mode,
+            )
+            metrics.update(lang_metrics)
+
+            if self.enable_vqa_training or self.enable_prediction_training:
+                if vqa_mask is None:
+                    vqa_mask = jnp.zeros(batch_size, dtype=bool)
+                if pred_mask is None:
+                    pred_mask = jnp.zeros(batch_size, dtype=bool)
+                lang_mask = jnp.logical_not(jnp.logical_or(vqa_mask, pred_mask))
+
+                vqa_mask = jnp.logical_and(vqa_mask, combined_langact_mask)
+                pred_mask = jnp.logical_and(pred_mask, combined_langact_mask)
+                lang_mask = jnp.logical_and(lang_mask, combined_langact_mask)
+                num_active_samples = jnp.maximum(jnp.sum(combined_langact_mask), 1.0)
+                metrics["active_num_samples"] = jnp.sum(combined_langact_mask)
+                metrics["active_sample_portion"] = metrics["active_num_samples"] / jnp.maximum(batch_size, 1.0)
+                metrics["vqa_num_samples"] = jnp.sum(vqa_mask)
+                metrics["vqa_sample_portion"] = metrics["vqa_num_samples"] / num_active_samples
+                metrics["pred_num_samples"] = jnp.sum(pred_mask)
+                metrics["pred_sample_portion"] = metrics["pred_num_samples"] / num_active_samples
+                metrics["langact_num_samples"] = jnp.sum(lang_mask)
+                metrics["langact_sample_portion"] = metrics["langact_num_samples"] / num_active_samples
+
+                if self.enable_vqa_training:
+                    from openpi_cot.models.pi_cot import _compute_sample_specific_metrics, _compute_per_vqa_dataset_metrics
+                    from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_ID_TO_NAME
+                    metrics.update(
+                        _compute_sample_specific_metrics(
+                            per_sample_loss=lang_loss,
+                            lang_metrics=lang_metrics,
+                            sample_mask=vqa_mask,
+                            prefix="vqa_",
+                            verbose_mode=effective_verbose_mode,
+                        )
+                    )
+                    # Add per-VQA-dataset metrics if vqa_dataset_id is available
+                    if hasattr(observation, "vqa_dataset_id") and observation.vqa_dataset_id is not None:
+                        vqa_dataset_ids = jnp.asarray(observation.vqa_dataset_id, dtype=jnp.int32)
+                        metrics.update(
+                            _compute_per_vqa_dataset_metrics(
+                                per_sample_loss=lang_loss,
+                                vqa_dataset_ids=vqa_dataset_ids,
+                                vqa_mask=vqa_mask,
+                            )
+                        )
+                if self.enable_prediction_training:
+                    from openpi_cot.models.pi_cot import _compute_sample_specific_metrics
+                    metrics.update(
+                        _compute_sample_specific_metrics(
+                            per_sample_loss=lang_loss,
+                            lang_metrics=lang_metrics,
+                            sample_mask=pred_mask,
+                            prefix="pred_",
+                            verbose_mode=effective_verbose_mode,
+                        )
+                    )
+                from openpi_cot.models.pi_cot import _compute_sample_specific_metrics
+                metrics.update(
+                    _compute_sample_specific_metrics(
+                        per_sample_loss=lang_loss,
+                        lang_metrics=lang_metrics,
+                        sample_mask=lang_mask,
+                        prefix="langact_",
+                        verbose_mode=effective_verbose_mode,
+                    )
+                )
+
+                lang_per_sample_loss += (
+                    self.vqa_loss_weight * lang_loss * vqa_mask
+                    + self.prediction_loss_weight * lang_loss * pred_mask
+                    + self.language_loss_weight * lang_loss * lang_mask
+                )
+            else:
+                from openpi_cot.models.pi_cot import _compute_sample_specific_metrics
+                metrics.update(
+                    _compute_sample_specific_metrics(
+                        per_sample_loss=lang_loss,
+                        lang_metrics=lang_metrics,
+                        sample_mask=combined_langact_mask,
+                        prefix="langact_",
+                        verbose_mode=effective_verbose_mode,
+                    )
+                )
+                lang_per_sample_loss += self.language_loss_weight * lang_loss
+
+        if self.enable_action_training:
+            suffix_out = pre_logits[1]
+            action_loss, action_metrics = self._compute_action_loss(suffix_out, suffix_inputs["u_t"])
+            action_sample_mask = jnp.ones(batch_size, dtype=bool)
+            if vqa_mask is not None:
+                action_sample_mask = jnp.logical_and(action_sample_mask, jnp.logical_not(vqa_mask))
+            if pred_mask is not None:
+                action_sample_mask = jnp.logical_and(action_sample_mask, jnp.logical_not(pred_mask))
+            action_sample_mask_f = action_sample_mask.astype(jnp.float32)
+            action_per_sample_loss += self.action_loss_weight * action_loss * action_sample_mask_f
+            action_metrics["action_loss"] = jnp.sum(action_loss * action_sample_mask_f) / jnp.maximum(
+                jnp.sum(action_sample_mask_f), 1.0
+            )
+            metrics.update(action_metrics)
+
+        # Add main metrics to dict
+        total_per_sample_loss = lang_per_sample_loss + action_per_sample_loss
+        if effective_verbose_mode:
+            metrics["per_sample_loss"] = total_per_sample_loss
+
+        # Compute final loss with correct normalization
+        if self.enable_action_training:
+            action_term = jnp.sum(action_per_sample_loss) / jnp.maximum(jnp.sum(action_sample_mask_f), 1.0)
+            if self.enable_langact_training:
+                if observation.sample_mask is not None:
+                    num_active_samples = jnp.maximum(jnp.sum(observation.sample_mask), 1.0)
+                    lang_term = jnp.sum(lang_per_sample_loss) / num_active_samples
+                else:
+                    lang_term = jnp.mean(lang_per_sample_loss)
+            else:
+                lang_term = 0.0
+            final_loss = lang_term + action_term
+        elif self.enable_langact_training and observation.sample_mask is not None:
+            num_active_samples = jnp.maximum(jnp.sum(observation.sample_mask), 1.0)
+            final_loss = jnp.sum(total_per_sample_loss) / num_active_samples
+        else:
+            final_loss = jnp.mean(total_per_sample_loss)
+
+        # Add augmented images to metrics if requested
+        if augmented_images is not None:
+            metrics["augmented_images"] = augmented_images
+
+        return final_loss, metrics
+
+    # ============ Override: sample_actions ============
+
+    @override
+    def sample_actions(
+        self,
+        rng: at.KeyArrayLike,
+        observation: CoTObservation | Observation,
+        *,
+        num_steps: int | at.Int[at.Array, ""] = 10,
+        noise: at.Float[at.Array, "b ah ad"] | None = None,
+    ) -> _model.Actions:
+        """Sample actions with Gemma3's image_mask for bidirectional image attention."""
+        import openpi.models.pi0 as _pi0
+        from openpi_cot.models.model_adapter import preprocess_observation
+
+        observation = preprocess_observation(
+            None, observation, train=False, image_keys=self.image_keys, aug_wrist_image=self.aug_wrist_image
+        )
+        dt = -1.0 / num_steps
+        batch_size = observation.state.shape[0]
+        if noise is None:
+            noise = jax.random.normal(rng, (batch_size, self.action_horizon, self.action_dim))
+
+        # Embed prefix with image_mask (Gemma3 returns 4 values)
+        prefix_tokens, prefix_mask, prefix_ar_mask, image_mask = self.embed_prefix(observation)
+        prefix_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
+        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        
+        # Fill KV cache with prefix, passing image_mask
+        _, kv_cache = self.PaliGemma.llm(
+            [prefix_tokens, None],
+            mask=prefix_attn_mask,
+            positions=positions,
+            adarms_cond=[None, None],
+            image_mask=image_mask,
+        )
+
+        def step(carry):
+            x_t, time = carry
+            suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(
+                observation, x_t, jnp.broadcast_to(time, batch_size)
+            )
+            suffix_attn_mask = _pi0.make_attn_mask(suffix_mask, suffix_ar_mask)
+            prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
+            full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
+            assert full_attn_mask.shape == (
+                batch_size,
+                suffix_tokens.shape[1],
+                prefix_tokens.shape[1] + suffix_tokens.shape[1],
+            )
+            positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+
+            gemma_out, _ = self.PaliGemma.llm(
+                [None, suffix_tokens],
+                mask=full_attn_mask,
+                positions=positions,
+                kv_cache=kv_cache,
+                adarms_cond=[None, adarms_cond],
+                # Note: image_mask not needed here as KV cache already has image info
+            )
+            suffix_out = gemma_out[1]
+            assert gemma_out[0] is None
+            v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
+
+            return x_t + dt * v_t, time + dt
+
+        def cond(carry):
+            x_t, time = carry
+            return time >= -dt / 2
+
+        x_0, _ = jax.lax.while_loop(cond, step, (noise, 1.0))
+        return x_0
+
+    # ============ Override: sample_tokens ============
+
+    @override
+    def sample_tokens(
+        self,
+        rng: at.KeyArrayLike,
+        observation: _model.Observation,
+        *,
+        max_decoding_steps: int | at.Int[at.Array, ""] = 390,
+        temperature: float = 0.0,
+    ) -> _model.Actions:
+        """Sample tokens with Gemma3's image_mask for bidirectional image attention."""
+        import openpi.models.pi0 as _pi0
+        import openpi.models.pi0_fast as _pi0_fast
+        from openpi_cot.models.model_adapter import preprocess_observation
+
+        observation = preprocess_observation(
+            None,
+            observation,
+            train=False,
+            image_keys=list(observation.images.keys()),
+            aug_wrist_image=self.aug_wrist_image,
+        )
+
+        # Embed prefix with image_mask (Gemma3 returns 4 values)
+        prefix_token_embeddings, prefix_mask, prefix_ar_mask, image_mask = self.embed_prefix(observation)
+        prefix_attn_mask = _pi0.make_attn_mask(prefix_mask, prefix_ar_mask)
+
+        # Right-align sequences (including image_mask)
+        prefix_token_embeddings, prefix_mask, prefix_attn_mask, image_mask = _left_to_right_align_with_image_mask(
+            prefix_token_embeddings, prefix_mask, prefix_attn_mask, image_mask
+        )
+
+        prefill_size = prefix_token_embeddings.shape[1]
+        prefill_len = jnp.sum(prefix_mask, axis=-1)
+        prefix_start = prefill_size - prefill_len
+
+        # Fill KV cache with prefix, passing image_mask
+        prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
+        prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
+        pre_logits, kv_cache = self.PaliGemma.llm(
+            [prefix_token_embeddings, None] if self.enable_action_training else [prefix_token_embeddings],
+            mask=prefix_attn_mask,
+            positions=prefix_positions,
+            adarms_cond=[None, None] if self.enable_action_training else [None],
+            image_mask=image_mask,
+        )
+
+        # Prepare decoding
+        last_logit = self.PaliGemma.llm(pre_logits[0][:, -1:], method="decode")
+        output_tokens = jnp.zeros((last_logit.shape[0], max_decoding_steps), dtype=jnp.int32)
+
+        def step(carry):
+            rng, last_logit, output_tokens, cache, eos_mask, step = carry
+
+            rng, rng_step = jax.random.split(rng)
+            token = jax.lax.cond(
+                temperature > 0.0,
+                lambda _: jax.random.categorical(rng_step, last_logit / temperature, axis=-1).astype(jnp.int32),
+                lambda _: jnp.argmax(last_logit, axis=-1).astype(jnp.int32),
+                operand=None,
+            )
+            output_tokens = _pi0_fast.put_along_last_axis(
+                output_tokens, jnp.broadcast_to(step, (token.shape[0], 1)), token
+            )
+
+            eos_token = jnp.squeeze(token, axis=-1)
+            eos_mask = eos_mask | (eos_token == self.EOS_TOKEN)
+
+            token_embedding = self.PaliGemma.llm(token, method="embed")
+            positions = prefill_len[:, None] + step
+            mask = jnp.logical_and(
+                jnp.arange(prefill_size + max_decoding_steps)[None, None, :] >= prefix_start[:, None, None],
+                jnp.arange(prefill_size + max_decoding_steps)[None, None, :]
+                < (jnp.broadcast_to(prefill_size + step + 1, (prefix_start.shape[0], 1, 1))),
+            )
+            last_prelogit, kv_cache = self.PaliGemma.llm(
+                [token_embedding, None] if self.enable_action_training else [token_embedding],
+                mask=mask,
+                positions=positions,
+                kv_cache=cache,
+                adarms_cond=[None, None] if self.enable_action_training else [None],
+                # Note: image_mask not needed here as KV cache already has image info
+            )
+            last_logit = self.PaliGemma.llm(last_prelogit[0], method="decode")
+
+            return rng, last_logit, output_tokens, kv_cache, eos_mask, step + 1
+
+        def cond(carry):
+            _, _, _, _, eos_mask, step = carry
+            return (~jnp.all(eos_mask)) & (step < max_decoding_steps)
+
+        _, _, output_tokens, _, _, _ = jax.lax.while_loop(
+            cond, step, (rng, last_logit, output_tokens, kv_cache, jnp.zeros((last_logit.shape[0],), dtype=bool), 0)
+        )
+        return output_tokens

@@ -81,10 +81,10 @@ class CheckpointWeightLoader(WeightLoader):
                     download.ensure_commit_success(cache_candidate)
                     params_source = cache_candidate
                 except Exception:
-                    params_source = download.mirror_checkpoint_to_remote_cache(upstream)
+                    params_source = str(download.maybe_download(upstream))
             else:
                 # Not in cache yet; mirror upstream into cache to standardize layout.
-                params_source = download.mirror_checkpoint_to_remote_cache(params_path_str)
+                params_source = str(download.maybe_download(params_path_str))
         else:
             params_source = str(download.maybe_download(params_path_str))
 
