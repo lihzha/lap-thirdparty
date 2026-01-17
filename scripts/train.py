@@ -613,7 +613,10 @@ def main(config: _config.TrainConfig):
             # NOTE: We track pred_ and langact_ metrics separately for dataset-level stats
             log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
         
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
+        should_save = (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps
+        if config.additional_save_steps and step in config.additional_save_steps:
+            should_save = True
+        if should_save:
             checkpoint_manager = _checkpoints.save_state(
                 checkpoint_manager,
                 train_state,
@@ -730,7 +733,7 @@ def main(config: _config.TrainConfig):
 
         batch = next(data_iter)
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps:
+        if should_save:
             if config.model.enable_langact_training and config.use_validation and config.use_eval:
                 eval_checkpoint(
                     train_state,

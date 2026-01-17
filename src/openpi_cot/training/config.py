@@ -1060,6 +1060,8 @@ class TrainConfig(upstream_config.TrainConfig):
     lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=build_cosine_lr)
     num_train_steps: int = 100_000
     save_interval: int = 2500
+    # Additional steps at which to save checkpoints (beyond save_interval)
+    additional_save_steps: tuple[int, ...] | None = None
     log_interval: int = 50
     keep_period: int | None = 10000
     resume: bool = True
