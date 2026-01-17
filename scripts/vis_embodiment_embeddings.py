@@ -144,16 +144,7 @@ def load_checkpoint(
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
     
-    # Initialize checkpoint manager
-    checkpoint_manager, _ = _checkpoints.initialize_checkpoint_dir(
-        config.checkpoint_dir,
-        keep_period=config.keep_period,
-        overwrite=False,
-        resume=True,
-        async_enable=False,
-    )
-    
-    # Create optimizer and training state
+    # Create optimizer and training state shape
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
     ema_decay, ema_params_enabled = config.get_ema_init()
     
@@ -175,24 +166,43 @@ def load_checkpoint(
     train_state_shape = jax.eval_shape(init, rng)
     train_state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=False)
     
-    # Determine checkpoint step
-    available_steps = list(checkpoint_manager.all_steps())
-    logger.info(f"Available checkpoints: {available_steps}")
-    
-    if checkpoint_step is None:
-        checkpoint_step = checkpoint_manager.latest_step()
-        logger.info(f"Using latest checkpoint: {checkpoint_step}")
-    elif checkpoint_step not in available_steps:
-        raise ValueError(f"Step {checkpoint_step} not found. Available: {available_steps}")
-    
-    # Restore checkpoint
-    train_state = _checkpoints.restore_state(
-        checkpoint_manager,
-        train_state_shape,
-        data_loader=None,
-        step=checkpoint_step,
-        train_state_sharding=train_state_sharding,
-    )
+    # Try standard checkpoint loading first, fall back to simple PyTree loading
+    try:
+        # Initialize checkpoint manager (may fail if distributed not initialized)
+        checkpoint_manager, _ = _checkpoints.initialize_checkpoint_dir(
+            config.checkpoint_dir,
+            keep_period=config.keep_period,
+            overwrite=False,
+            resume=True,
+            async_enable=False,
+        )
+        
+        # Determine checkpoint step
+        available_steps = list(checkpoint_manager.all_steps())
+        logger.info(f"Available checkpoints: {available_steps}")
+        
+        if checkpoint_step is None:
+            checkpoint_step = checkpoint_manager.latest_step()
+            logger.info(f"Using latest checkpoint: {checkpoint_step}")
+        elif checkpoint_step not in available_steps:
+            raise ValueError(f"Step {checkpoint_step} not found. Available: {available_steps}")
+        
+        # Restore checkpoint
+        train_state = _checkpoints.restore_state(
+            checkpoint_manager,
+            train_state_shape,
+            data_loader=None,
+            step=checkpoint_step,
+            train_state_sharding=train_state_sharding,
+        )
+    except ValueError as e:
+        if "Distributed system is not available" in str(e):
+            logger.warning("Distributed system not available, using simple checkpoint loading")
+            train_state = _load_checkpoint_simple(
+                config, train_state_shape, train_state_sharding, checkpoint_step
+            )
+        else:
+            raise
     
     # Use EMA params if available
     if train_state.ema_params is not None:
@@ -202,6 +212,74 @@ def load_checkpoint(
     logger.info(f"Loaded checkpoint at step {train_state.step}")
     
     return train_state, data_sharding, mesh
+
+
+def _load_checkpoint_simple(
+    config: _config.TrainConfig,
+    train_state_shape: training_utils.TrainState,
+    train_state_sharding,
+    checkpoint_step: int | None = None,
+) -> training_utils.TrainState:
+    """Simple checkpoint loading without CheckpointManager (no distributed required)."""
+    import orbax.checkpoint as ocp
+    
+    checkpoint_dir = epath.Path(config.checkpoint_dir)
+    
+    # Find available checkpoints by listing directories
+    if str(checkpoint_dir).startswith("gs://"):
+        # GCS path - list using gcsfs or glob
+        import subprocess
+        result = subprocess.run(
+            ["gsutil", "ls", str(checkpoint_dir)],
+            capture_output=True, text=True
+        )
+        subdirs = [p.rstrip('/').split('/')[-1] for p in result.stdout.strip().split('\n') if p]
+    else:
+        # Local path
+        subdirs = [p.name for p in checkpoint_dir.iterdir() if p.is_dir()]
+    
+    # Filter to numeric step directories
+    available_steps = sorted([int(d) for d in subdirs if d.isdigit()])
+    logger.info(f"Available checkpoints (simple): {available_steps}")
+    
+    if checkpoint_step is None:
+        checkpoint_step = max(available_steps) if available_steps else None
+        logger.info(f"Using latest checkpoint: {checkpoint_step}")
+    
+    if checkpoint_step is None or checkpoint_step not in available_steps:
+        raise ValueError(f"Step {checkpoint_step} not found. Available: {available_steps}")
+    
+    step_dir = checkpoint_dir / str(checkpoint_step)
+    
+    # Try to load train_state or params
+    checkpointer = ocp.PyTreeCheckpointer()
+    
+    # Check what items are available
+    train_state_dir = step_dir / "train_state"
+    params_dir = step_dir / "params"
+    
+    if train_state_dir.exists():
+        logger.info(f"Loading train_state from {train_state_dir}")
+        restore_args = ocp.checkpoint_utils.construct_restore_args(train_state_shape)
+        train_state = checkpointer.restore(
+            train_state_dir,
+            item=train_state_shape,
+            restore_args=restore_args,
+        )
+    elif params_dir.exists():
+        logger.info(f"Loading params from {params_dir}")
+        # Load just params and construct train_state
+        restore_args = ocp.checkpoint_utils.construct_restore_args(train_state_shape.params)
+        params = checkpointer.restore(
+            params_dir,
+            item=train_state_shape.params,
+            restore_args=restore_args,
+        )
+        train_state = dataclasses.replace(train_state_shape, params=params, step=checkpoint_step)
+    else:
+        raise ValueError(f"No train_state or params found in {step_dir}")
+    
+    return train_state
 
 
 class EmbeddingExtractor:
@@ -2173,26 +2251,42 @@ def plot_target_vs_source(
 
 
 def initialize_distributed():
-    """Initialize JAX distributed system at program start (required for multi-host).
+    """Initialize JAX distributed system at program start.
     
     This must be called before any other JAX operations.
+    Orbax checkpoint manager requires this even on single-host setups.
     """
-    # Check environment variables that indicate multi-host setup
-    is_multi_host = (
-        os.environ.get("SLURM_JOB_ID") is not None
-        or os.environ.get("TPU_WORKER_ID") is not None
-        or os.environ.get("JAX_COORDINATOR_ADDRESS") is not None
-        or os.environ.get("CLOUD_TPU_TASK_ID") is not None
-    )
+    # Check if multi-host environment variables are set
+    has_coordinator = os.environ.get("JAX_COORDINATOR_ADDRESS") is not None
+    has_slurm = os.environ.get("SLURM_JOB_ID") is not None
+    has_tpu_worker = os.environ.get("TPU_WORKER_ID") is not None
+    has_cloud_tpu = os.environ.get("CLOUD_TPU_TASK_ID") is not None
     
-    if is_multi_host:
-        try:
+    is_multi_host = has_coordinator or has_slurm or has_tpu_worker or has_cloud_tpu
+    
+    try:
+        if is_multi_host:
+            # Multi-host: let JAX auto-detect from environment
             jax.distributed.initialize()
-            logger.info("Initialized JAX distributed system for multi-host")
-        except Exception as e:
-            logger.warning(f"Could not initialize JAX distributed: {e}")
-    else:
-        logger.info("Single-host mode, skipping distributed initialization")
+            logger.info("Initialized JAX distributed system (multi-host)")
+        else:
+            # Single-host: use local coordinator
+            # Find a free port for the coordinator
+            import socket
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', 0))
+                port = s.getsockname()[1]
+            
+            jax.distributed.initialize(
+                coordinator_address=f"localhost:{port}",
+                num_processes=1,
+                process_id=0,
+            )
+            logger.info(f"Initialized JAX distributed system (single-host mode, port={port})")
+    except Exception as e:
+        # May fail if already initialized
+        logger.warning(f"JAX distributed initialization note: {e}")
+        logger.info("Continuing (may already be initialized or not needed)")
 
 
 if __name__ == "__main__":
