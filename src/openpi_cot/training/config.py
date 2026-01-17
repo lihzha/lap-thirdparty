@@ -23,6 +23,7 @@ import openpi_cot.models.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
 from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import Gemma3CoTTokenizer
+from openpi_cot.models.tokenizer import Gemma3FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
@@ -255,6 +256,10 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
             }
             if self.gemma3_tokenizer_path:
                 kwargs["tokenizer_model_path"] = self.gemma3_tokenizer_path
+            # Check if FAST tokenizer is needed
+            if getattr(model_config, "use_fast", False):
+                kwargs["fast_tokenizer_path"] = self.fast_tokenizer_path
+                return Gemma3FASTTokenizer(**kwargs)
             return Gemma3CoTTokenizer(**kwargs)
         else:
             return PaligemmaCoTTokenizer(
@@ -289,17 +294,33 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                 outputs=outputs,
             )
         if model_config.model_type in (ModelType.PI_FAST, UpstreamModelType.PI0_FAST):
+            assert isinstance(model_config, pi_cot_config.PiCoTConfig)
+            # Create appropriate FAST tokenizer based on model variant
+            if "gemma3" in model_config.paligemma_variant:
+                # Use Gemma3FASTTokenizer for Gemma3 models
+                tokenizer_kwargs = {
+                    "fast_tokenizer_path": self.fast_tokenizer_path,
+                    "max_len": model_config.max_token_len,
+                    "prompt_format": self.prompt_format,
+                    "prediction_format": self.prediction_format,
+                }
+                if self.gemma3_tokenizer_path:
+                    tokenizer_kwargs["tokenizer_model_path"] = self.gemma3_tokenizer_path
+                fast_tokenizer = Gemma3FASTTokenizer(**tokenizer_kwargs)
+            else:
+                # Use regular FASTTokenizer for PaliGemma models
+                fast_tokenizer = FASTTokenizer(
+                    fast_tokenizer_path=self.fast_tokenizer_path,
+                    max_len=model_config.max_token_len,
+                    prompt_format=self.prompt_format,
+                    prediction_format=self.prediction_format,
+                )
             return upstream_transforms.Group(
                 inputs=[
                     upstream_transforms.InjectDefaultPrompt(self.default_prompt),
                     # upstream_transforms.ResizeImages(224, 224),
                     TokenizeFASTCoTInputs(
-                        FASTTokenizer(
-                            fast_tokenizer_path=self.fast_tokenizer_path,
-                            max_len=model_config.max_token_len,
-                            prompt_format=self.prompt_format,
-                            prediction_format=self.prediction_format,
-                        ),
+                        fast_tokenizer,
                         discrete_state_input=model_config.discrete_state_input,
                         state_dropout=model_config.state_dropout,
                     ),
@@ -307,12 +328,7 @@ class ModelTransformFactory(upstream_config.ModelTransformFactory):
                 ],
                 outputs=[
                     ExtractFASTActions(
-                        FASTTokenizer(
-                            fast_tokenizer_path=self.fast_tokenizer_path,
-                            max_len=model_config.max_token_len,
-                            prompt_format=self.prompt_format,
-                            prediction_format=self.prediction_format,
-                        ),
+                        fast_tokenizer,
                         action_horizon=model_config.action_horizon,
                         action_dim=model_config.action_dim,
                     )
