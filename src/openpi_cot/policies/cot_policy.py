@@ -139,10 +139,16 @@ class CoTInputs(upstream_transforms.DataTransformFn):
     def _prepare_inputs(self, data: dict) -> dict:
         assert self.model_type in {ExtendedModelType.PI_COT, ExtendedModelType.PI_FAST, ModelType.PI0_FAST}
         assert "observation" in data
-        assert IMAGE_KEYS[0] in data["observation"]
-        base_image = parse_image(data["observation"][IMAGE_KEYS[0]])
-        if base_image is None:
-            raise ValueError("Base image missing from observation")
+        # Base image may be empty for bbox samples that only use wrist image
+        base_image_raw = data["observation"].get(IMAGE_KEYS[0])
+        # Handle empty string (for bbox samples using only wrist image)
+        if isinstance(base_image_raw, (str, bytes)) and len(base_image_raw) == 0:
+            base_image = np.zeros((224, 224, 3), dtype=np.uint8)
+        else:
+            base_image = parse_image(base_image_raw)
+            if base_image is None:
+                # Create a zero image as fallback (will be masked out)
+                base_image = np.zeros((224, 224, 3), dtype=np.uint8)
 
         dataset_name = self._dataset_name(data)
         is_prediction_sample = data.get("is_prediction_sample", False)

@@ -406,7 +406,6 @@ class OXEBoundingBoxDataset(ABC):
         primary_image_key = self.get_primary_image_key()
         frame_offset = self.get_frame_offset()
         wrist_image_key = self.get_wrist_image_key()
-        use_directional = self.directional
         needs_wrist_rotation = self._needs_wrist_rotation
 
         def restructure(traj):
@@ -416,9 +415,9 @@ class OXEBoundingBoxDataset(ABC):
             # Get primary image from observations
             primary_img = traj["observation"][primary_image_key]
 
-            # For directional mode: use both primary and wrist images like robot samples
-            # For bbox-only mode: use primary image only, no wrist slot
-            if use_directional and wrist_image_key is not None:
+            # Always prepare wrist image if available (will be used for directional samples)
+            # For non-directional samples, wrist will be set to empty in finalize_vqa
+            if wrist_image_key is not None:
                 wrist_img = traj["observation"].get(wrist_image_key)
                 if wrist_img is None:
                     wrist_img = tf.repeat("", traj_len)
@@ -465,7 +464,7 @@ class OXEBoundingBoxDataset(ABC):
 
         # Sample objects and format caption using pure TensorFlow operations
         max_objects = 1000
-        use_directional = self.directional
+        direction_prob = 0.5  # Probability of using direction caption instead of bbox
 
         def lookup_and_sample_objects(frame):
             """Look up objects, sample if needed, and format caption using pure TF."""
@@ -478,19 +477,19 @@ class OXEBoundingBoxDataset(ABC):
             seed_hash_int = tf.cast(seed_hash, tf.int32)
             seed_pair = (self.seed, seed_hash_int)
 
+            # Determine if this sample is directional (same logic as sample_and_format_objects_tf)
+            dir_seed = (seed_pair[0] + 7919, seed_pair[1])
+            is_directional = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < direction_prob
+
             # Use pure TensorFlow sampling and formatting
-            if use_directional:
-                # Direction mode always samples 1 object
-                labels, caption = sample_and_format_objects_direction_tf(
-                    objects_data, seed_pair=seed_pair
-                )
-            else:
-                labels, caption = sample_and_format_objects_tf(
-                    objects_data, max_objects=max_objects, seed_pair=seed_pair
-                )
+            # Always use sample_and_format_objects_tf which handles both bbox and directional
+            labels, caption = sample_and_format_objects_tf(
+                objects_data, max_objects=max_objects, seed_pair=seed_pair, direction_prob=direction_prob
+            )
 
             frame["object_labels"] = labels
             frame["bbox_caption"] = caption
+            frame["is_directional"] = is_directional
 
             return frame
 
@@ -502,18 +501,21 @@ class OXEBoundingBoxDataset(ABC):
 
         self.dataset = self.dataset.filter(has_valid_caption)
 
-        # Select prompt parts based on mode
-        # OXE bbox uses robot base frame (not end-effector) for directional
-        prompt_parts = ROBOT_DIRECTION_PROMPT_PARTS_OXE if use_directional else ROBOT_BBOX_PROMPT_PARTS_OXE
-        
-        # For directional mode, has wrist image if wrist key is available
-        has_wrist = use_directional and self.get_wrist_image_key() is not None
-
         # Convert to final VQA format
         def finalize_vqa(frame):
             """Create final VQA sample with prompt and caption."""
             labels = frame["object_labels"]
             caption = frame["bbox_caption"]
+            is_directional = frame["is_directional"]
+            wrist_image_key = self.get_wrist_image_key()
+
+            # Select prompt parts based on whether sample is directional
+            # OXE bbox uses robot base frame (not end-effector) for directional
+            prompt_parts = tf.cond(
+                is_directional,
+                lambda: ROBOT_DIRECTION_PROMPT_PARTS_OXE,
+                lambda: ROBOT_BBOX_PROMPT_PARTS_OXE,
+            )
 
             # Sample a prompt template using the shared helper
             seed_key = tf.strings.join([frame["trajectory_id"], "_bbox_", frame["frame_idx"]])
@@ -527,8 +529,26 @@ class OXEBoundingBoxDataset(ABC):
             dataset_name_str = self.get_dataset_name()
             vqa_dataset_id = VQA_DATASET_ID_MAP.get(dataset_name_str, 0)
             
+            # For directional samples: use both primary and wrist images (like robot samples)
+            # For bbox samples: use only primary image (keep legacy behavior)
+            has_wrist = is_directional and wrist_image_key is not None
+            
+            # For non-directional samples, set wrist image to empty
+            observation = frame["observation"]
+            wrist_img = tf.cond(
+                is_directional and wrist_image_key is not None,
+                lambda: observation[self.spec.wrist_image_key],
+                lambda: tf.constant("", dtype=tf.string),
+            )
+            
+            final_observation = {
+                self.spec.primary_image_key: observation[self.spec.primary_image_key],
+                self.spec.wrist_image_key: wrist_img,
+                "state": observation["state"],
+            }
+            
             return {
-                "observation": frame["observation"],
+                "observation": final_observation,
                 "prompt": prompt,
                 "caption": caption,
                 "dataset_name": frame["dataset_name"],

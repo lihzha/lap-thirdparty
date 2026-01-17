@@ -26,6 +26,7 @@ from openpi_cot.datasets.vqa.bbox_common import (
     build_frame_objects_table_v2_direction,
     count_annotated_frames,
     droid_key_extractor,
+    rotate_bbox_loc_tokens_180_tf,
     sample_and_format_objects_direction_tf,
     sample_and_format_objects_tf,
     sample_prompt_tf,
@@ -332,9 +333,6 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
             self.dataset = self.dataset.filter(has_any_annotations)
 
-        # Capture class attribute for use inside TF function
-        use_directional = self.directional
-
         def restructure(traj):
             """Convert trajectory to VQA bbox format."""
             # Get file_path directly from metadata
@@ -346,25 +344,20 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             # Example file_path: gs://xembodiment_data/r2d2/r2d2-data-full/ILIAD/success/2023-04-21/.../trajectory.h5
             episode_path = extract_episode_path_from_file_path(file_path[0])
 
-            # For directional mode: use both exterior (primary) and wrist images like robot samples
-            # For bbox-only mode: use wrist image as primary, no wrist slot
-            if use_directional:
-                # Use exterior image as primary, wrist image as wrist (will be rotated)
-                # Randomly sample one of the two exterior images (left cameras from stereo pairs)
-                random_val = tf.random.stateless_uniform(
-                    shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(traj["trajectory_id"][0], 2147483647)]
-                )
-                exterior_img = tf.cond(
-                    random_val > 0.5,
-                    lambda: traj["observation"][self.spec.images_list[0]],
-                    lambda: traj["observation"][self.spec.images_list[1]],
-                )
-                primary_img = exterior_img
-                wrist_img = traj["observation"]["wrist_image_left"]
-            else:
-                # Use wrist image as primary for bbox annotations (close-up view of objects)
-                primary_img = traj["observation"]["wrist_image_left"]
-                wrist_img = tf.repeat("", traj_len)
+            # Always prepare both primary (exterior) and wrist images
+            # For directional samples: use both primary and wrist
+            # For bbox samples: use only wrist (set as wrist_img, not primary)
+            # Randomly sample one of the two exterior images (left cameras from stereo pairs)
+            random_val = tf.random.stateless_uniform(
+                shape=[], seed=[self.seed, tf.strings.to_hash_bucket_fast(traj["trajectory_id"][0], 2147483647)]
+            )
+            exterior_img = tf.cond(
+                random_val > 0.5,
+                lambda: traj["observation"][self.spec.images_list[0]],
+                lambda: traj["observation"][self.spec.images_list[1]],
+            )
+            primary_img = exterior_img
+            wrist_img = traj["observation"]["wrist_image_left"]
 
             # Create frame indices as strings
             frame_indices = tf.as_string(tf.range(traj_len))
@@ -379,7 +372,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 "episode_path": tf.fill([traj_len], episode_path),
                 "frame_idx": frame_indices,
                 "dataset_name": tf.fill([traj_len], tf.constant(self.dataset_name)),
-                # DROID requires wrist camera rotation by 180 degrees
+                # DROID requires wrist camera rotation by 180 degrees for ALL samples
                 "needs_wrist_rotation": tf.fill([traj_len], tf.constant(True)),
             }
 
@@ -404,7 +397,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
         # Sample objects and format caption using pure TensorFlow operations
         max_objects = 2
-        use_directional = self.directional
+        direction_prob = 0.5  # Probability of using direction caption instead of bbox
 
         def lookup_and_sample_objects(frame):
             """Look up objects, sample if needed, and format caption using pure TF."""
@@ -417,19 +410,63 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             seed_hash_int = tf.cast(seed_hash, tf.int32)
             seed_pair = (self.seed, seed_hash_int)
 
+            # Determine if this sample is directional (same logic as sample_and_format_objects_tf)
+            dir_seed = (seed_pair[0] + 7919, seed_pair[1])
+            is_directional = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < direction_prob
+
             # Use pure TensorFlow sampling and formatting
-            if use_directional:
-                # Direction mode always samples 1 object
-                labels, caption = sample_and_format_objects_direction_tf(
-                    objects_data, seed_pair=seed_pair
+            # Always use sample_and_format_objects_tf which handles both bbox and directional
+            labels, caption = sample_and_format_objects_tf(
+                objects_data, max_objects=max_objects, seed_pair=seed_pair, direction_prob=direction_prob
+            )
+
+            # For droid_bbox, rotate bbox coordinates to match rotated wrist image
+            # Split caption by " ; " to handle multiple bboxes
+            bbox_parts = tf.strings.split(caption, " ; ")
+            
+            def rotate_bbox_part(bbox_part: tf.Tensor) -> tf.Tensor:
+                """Rotate bbox coordinates in a single bbox part."""
+                # Split by space to separate loc tokens from label
+                parts = tf.strings.split(bbox_part, " ")
+                if tf.shape(parts)[0] < 1:
+                    return bbox_part
+                
+                loc_tokens = parts[0]
+                label = tf.cond(
+                    tf.shape(parts)[0] > 1,
+                    lambda: tf.strings.reduce_join(parts[1:], separator=" "),
+                    lambda: tf.constant("", dtype=tf.string),
                 )
-            else:
-                labels, caption = sample_and_format_objects_tf(
-                    objects_data, max_objects=max_objects, seed_pair=seed_pair
+                
+                # Rotate loc tokens
+                rotated_loc = rotate_bbox_loc_tokens_180_tf(loc_tokens)
+                
+                # Reconstruct: rotated_loc + " " + label
+                if tf.strings.length(label) > 0:
+                    return tf.strings.join([rotated_loc, label], separator=" ")
+                else:
+                    return rotated_loc
+            
+            # Rotate each bbox part (only for non-directional bbox samples)
+            def rotate_caption():
+                rotated_parts = tf.map_fn(
+                    rotate_bbox_part,
+                    bbox_parts,
+                    fn_output_signature=tf.TensorSpec([], tf.string),
                 )
+                return tf.strings.reduce_join(rotated_parts, separator=" ; ")
+            
+            # Only rotate bbox coordinates for non-directional samples (bbox samples)
+            # Directional samples don't need bbox rotation
+            final_caption = tf.cond(
+                is_directional,
+                lambda: caption,  # Keep original for directional
+                lambda: rotate_caption(),  # Rotate for bbox samples
+            )
 
             frame["object_labels"] = labels
-            frame["bbox_caption"] = caption
+            frame["bbox_caption"] = final_caption
+            frame["is_directional"] = is_directional
 
             return frame
 
@@ -441,13 +478,18 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
 
         self.dataset = self.dataset.filter(has_valid_caption)
 
-        # Convert to final VQA format
-        prompt_parts = ROBOT_DIRECTION_PROMPT_PARTS_EE if self.directional else ROBOT_BBOX_PROMPT_PARTS_EE
-
         def finalize_vqa(frame):
             """Create final VQA sample with prompt and caption."""
             labels = frame["object_labels"]
             caption = frame["bbox_caption"]
+            is_directional = frame["is_directional"]
+
+            # Select prompt parts based on whether sample is directional
+            prompt_parts = tf.cond(
+                is_directional,
+                lambda: ROBOT_DIRECTION_PROMPT_PARTS_EE,
+                lambda: ROBOT_BBOX_PROMPT_PARTS_EE,
+            )
 
             # Sample a prompt template using the shared helper
             seed_key = tf.strings.join([frame["trajectory_id"], "_bbox_", frame["frame_idx"]])
@@ -461,12 +503,27 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             dataset_name_str = self.get_dataset_name()
             vqa_dataset_id = VQA_DATASET_ID_MAP.get(dataset_name_str, 0)
             
-            # For directional mode: has wrist image (like robot samples)
-            # For bbox-only mode: no wrist image (using wrist as primary for close-up)
-            has_wrist = use_directional
+            # For directional samples: use both primary and wrist images (like robot samples)
+            # For bbox samples: use only wrist image (set as wrist_img, primary will be blank)
+            has_wrist = is_directional
+            
+            # For bbox samples, set primary image to empty string (use only wrist)
+            observation = frame["observation"]
+            primary_img = tf.cond(
+                is_directional,
+                lambda: observation[self.spec.primary_image_key],
+                lambda: tf.constant("", dtype=tf.string),
+            )
+            wrist_img = observation[self.spec.wrist_image_key]
+            
+            final_observation = {
+                self.spec.primary_image_key: primary_img,
+                self.spec.wrist_image_key: wrist_img,
+                "state": observation["state"],
+            }
             
             return {
-                "observation": frame["observation"],
+                "observation": final_observation,
                 "prompt": prompt,
                 "caption": caption,
                 "dataset_name": frame["dataset_name"],

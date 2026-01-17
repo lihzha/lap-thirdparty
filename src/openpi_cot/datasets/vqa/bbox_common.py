@@ -236,6 +236,83 @@ def bbox_coords_to_text_tf(
     return tf.strings.join([y_min_token, x_min_token, y_max_token, x_max_token])
 
 
+def rotate_bbox_loc_tokens_180_tf(loc_tokens: tf.Tensor, num_bins: int = 1024) -> tf.Tensor:
+    """Rotate bbox loc tokens by 180 degrees.
+    
+    For a 180-degree rotation, bbox coordinates transform as:
+    - new_x_min = 1 - x_max
+    - new_y_min = 1 - y_max
+    - new_x_max = 1 - x_min
+    - new_y_max = 1 - y_min
+    
+    Args:
+        loc_tokens: tf.string tensor with loc tokens in format:
+                    "<locYMIN><locXMIN><locYMAX><locXMAX>"
+        num_bins: Number of bins for quantization (default 1024)
+        
+    Returns:
+        tf.string tensor with rotated loc tokens: "<locNEW_YMIN><locNEW_XMIN><locNEW_YMAX><locNEW_XMAX>"
+    """
+    N = num_bins
+    
+    # Extract the 4 numbers from loc tokens using regex
+    # Pattern: <loc(\d{4})> repeated 4 times
+    # We'll extract each number, convert to coordinates, rotate, and reformat
+    
+    # Use regex to extract all 4-digit numbers
+    # This extracts: y_min_idx, x_min_idx, y_max_idx, x_max_idx
+    def extract_numbers():
+        # Use regex to find all <loc####> and extract numbers
+        # Replace <loc####> with just the number, separated by spaces
+        pattern = r"<loc(\d{4})>"
+        numbers_str = tf.strings.regex_replace(loc_tokens, pattern, r"\1 ")
+        # Remove trailing space and split
+        numbers_str = tf.strings.strip(numbers_str)
+        numbers = tf.strings.split(numbers_str, " ")
+        
+        # Parse to integers (should have 4 numbers)
+        y_min_idx = tf.strings.to_number(numbers[0], out_type=tf.int32)
+        x_min_idx = tf.strings.to_number(numbers[1], out_type=tf.int32)
+        y_max_idx = tf.strings.to_number(numbers[2], out_type=tf.int32)
+        x_max_idx = tf.strings.to_number(numbers[3], out_type=tf.int32)
+        
+        # Convert indices to normalized coordinates [0, 1]
+        y_min = tf.cast(y_min_idx, tf.float32) / (N - 1)
+        x_min = tf.cast(x_min_idx, tf.float32) / (N - 1)
+        y_max = tf.cast(y_max_idx, tf.float32) / (N - 1)
+        x_max = tf.cast(x_max_idx, tf.float32) / (N - 1)
+        
+        # Rotate 180 degrees
+        new_x_min = 1.0 - x_max
+        new_y_min = 1.0 - y_max
+        new_x_max = 1.0 - x_min
+        new_y_max = 1.0 - y_min
+        
+        # Convert back to indices
+        new_y_min_idx = tf.cast(tf.round(new_y_min * (N - 1)), tf.int32)
+        new_x_min_idx = tf.cast(tf.round(new_x_min * (N - 1)), tf.int32)
+        new_y_max_idx = tf.cast(tf.round(new_y_max * (N - 1)), tf.int32)
+        new_x_max_idx = tf.cast(tf.round(new_x_max * (N - 1)), tf.int32)
+        
+        # Clamp to valid range
+        new_y_min_idx = tf.clip_by_value(new_y_min_idx, 0, N - 1)
+        new_x_min_idx = tf.clip_by_value(new_x_min_idx, 0, N - 1)
+        new_y_max_idx = tf.clip_by_value(new_y_max_idx, 0, N - 1)
+        new_x_max_idx = tf.clip_by_value(new_x_max_idx, 0, N - 1)
+        
+        # Reformat as loc tokens
+        new_y_min_token = tf.strings.join(["<loc", tf.strings.as_string(new_y_min_idx, width=4, fill="0"), ">"])
+        new_x_min_token = tf.strings.join(["<loc", tf.strings.as_string(new_x_min_idx, width=4, fill="0"), ">"])
+        new_y_max_token = tf.strings.join(["<loc", tf.strings.as_string(new_y_max_idx, width=4, fill="0"), ">"])
+        new_x_max_token = tf.strings.join(["<loc", tf.strings.as_string(new_x_max_idx, width=4, fill="0"), ">"])
+        
+        return tf.strings.join([new_y_min_token, new_x_min_token, new_y_max_token, new_x_max_token])
+    
+    # Check if loc_tokens is empty
+    is_empty = tf.equal(tf.strings.length(loc_tokens), 0)
+    return tf.cond(is_empty, lambda: loc_tokens, extract_numbers)
+
+
 # =============================================================================
 # PROMPT SAMPLING HELPERS
 # =============================================================================
