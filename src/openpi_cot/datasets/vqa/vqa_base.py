@@ -314,7 +314,10 @@ class BaseVQADataset(SingleCoTDataset):
                 "raw_state": tf.zeros([self.state_dim], dtype=tf.float32),
                 "is_navigation": tf.constant(False, dtype=tf.bool),
                 "has_wrist_image": tf.constant(False, dtype=tf.bool),
+                "needs_wrist_rotation": tf.constant(False, dtype=tf.bool),  # Base VQA datasets don't use wrist images
                 "vqa_dataset_id": tf.constant(vqa_dataset_id, dtype=tf.int32),
+                "actions": tf.zeros([self.action_horizon, self.action_dim], dtype=tf.float32),
+                "language_actions": tf.zeros([7], dtype=tf.float32),
             }
 
             return output
