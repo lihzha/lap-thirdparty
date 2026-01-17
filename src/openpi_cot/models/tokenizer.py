@@ -178,7 +178,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         else:
             if not 0.0 <= self.reasoning_mask_prob <= 1.0:
                 raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {self.reasoning_mask_prob}")
-            if self.reasoning_mask_prob > 0.0 and end_idx > start_idx:
+            # Skip reasoning_mask_prob for VQA samples - they need stable loss
+            if self.reasoning_mask_prob > 0.0 and end_idx > start_idx and not is_vqa_sample:
                 reasoning_span_len = end_idx - start_idx
                 drop_mask = np.random.rand(reasoning_span_len) < self.reasoning_mask_prob
                 if np.any(drop_mask):
@@ -448,7 +449,8 @@ class Gemma3CoTTokenizer(PaligemmaCoTTokenizer):
         else:
             if not 0.0 <= self.reasoning_mask_prob <= 1.0:
                 raise ValueError(f"reasoning_mask_prob must be between 0.0 and 1.0, got {self.reasoning_mask_prob}")
-            if self.reasoning_mask_prob > 0.0 and end_idx > start_idx:
+            # Skip reasoning_mask_prob for VQA samples - they need stable loss
+            if self.reasoning_mask_prob > 0.0 and end_idx > start_idx and not is_vqa_sample:
                 reasoning_span_len = end_idx - start_idx
                 drop_mask = np.random.rand(reasoning_span_len) < self.reasoning_mask_prob
                 if np.any(drop_mask):

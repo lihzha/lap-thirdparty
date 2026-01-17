@@ -95,6 +95,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         needs_wrist_rotation: bool,
         is_prediction_sample: bool,
         pred_use_primary: bool,
+        is_vqa_sample: bool = False,
     ) -> tuple[list[np.ndarray], list[np.bool_]]:
         images: list[np.ndarray] = []
         image_masks: list[np.bool_] = []
@@ -113,16 +114,23 @@ class CoTInputs(upstream_transforms.DataTransformFn):
             for key in IMAGE_KEYS[1:]:
                 if key in data["observation"]:
                     wrist_image = parse_image(data["observation"][key])
-                    if self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
+                    # Skip random operations for VQA samples - they need deterministic processing
+                    if not is_vqa_sample and self.wrist_image_dropout_prob > 0.0 and np.random.rand() < float(self.wrist_image_dropout_prob):
                         wrist_image = np.zeros_like(base_image)
-                    actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
+                    if is_vqa_sample:
+                        actual_apply_rotation = False
+                    else:
+                        actual_apply_rotation = needs_wrist_rotation and not (np.random.rand() < self.not_rotate_wrist_prob)
                     # if actual_apply_rotation != need_flip_ee_frame:
                     #     need_flip_ee_frame = True
                     if actual_apply_rotation:
                         need_flip_ee_frame = True
-                    add_image(wrist_image, apply_rotation=actual_apply_rotation, random_mask_prob=self.random_mask_prob)
+                    # Skip random_mask_prob for VQA samples
+                    effective_random_mask_prob = 0.0 if is_vqa_sample else self.random_mask_prob
+                    add_image(wrist_image, apply_rotation=actual_apply_rotation, random_mask_prob=effective_random_mask_prob)
                 else:
-                    add_image(np.zeros_like(base_image), apply_rotation=False, random_mask_prob=self.random_mask_prob)
+                    effective_random_mask_prob = 0.0 if is_vqa_sample else self.random_mask_prob
+                    add_image(np.zeros_like(base_image), apply_rotation=False, random_mask_prob=effective_random_mask_prob)
         elif not pred_use_primary:
             for key in IMAGE_KEYS:
                 if key in data["observation"]:
@@ -158,9 +166,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         needs_wrist_rotation = any(ds_name in dataset_name for ds_name in DATASETS_REQUIRING_WRIST_ROTATION)
         is_prediction_sample = data.get("is_prediction_sample", False)
         pred_use_primary = data.get("pred_use_primary", False)
+        is_vqa_sample = data.get("is_vqa_sample", False)
 
         images, image_masks, need_flip_ee_frame = self._collect_images(
-            data, base_image, needs_wrist_rotation, is_prediction_sample, pred_use_primary
+            data, base_image, needs_wrist_rotation, is_prediction_sample, pred_use_primary, is_vqa_sample
         )
 
         if self.model_type == ExtendedModelType.PI_FAST:

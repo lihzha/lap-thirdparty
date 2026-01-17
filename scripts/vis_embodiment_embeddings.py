@@ -84,14 +84,11 @@ class EmbeddingResult:
     
 
 def init_tpu(config: _config.TrainConfig):
-    """Initialize TPU/GPU runtime."""
-    if (
-        ("v6" in config.name and config.fsdp_devices > 8)
-        or ("v4" in config.name and config.fsdp_devices > 4)
-        or ("v5" in config.name and config.fsdp_devices > 4)
-    ):
-        jax.distributed.initialize()
+    """Initialize TPU/GPU runtime.
     
+    Note: JAX distributed should be initialized before this function is called.
+    See initialize_distributed() which should be called at program start.
+    """
     if "local" in config.name:
         os.environ["CURL_CA_BUNDLE"] = "/etc/pki/tls/certs/ca-bundle.crt"
 
@@ -786,6 +783,12 @@ def compare_models(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
+    # Initialize runtime once using the first model's config
+    first_config_name, first_exp_name, _ = model_configs[0]
+    first_config = _config.get_config(first_config_name)
+    first_config = dataclasses.replace(first_config, exp_name=first_exp_name)
+    effective_fsdp = init_tpu(first_config)
+    
     for config_name, exp_name, step in model_configs:
         model_name = f"{config_name}_{exp_name}_step{step or 'latest'}"
         logger.info(f"\n{'='*60}")
@@ -799,10 +802,7 @@ def compare_models(
             if batch_size:
                 config = dataclasses.replace(config, batch_size=batch_size)
             
-            # Initialize runtime
-            effective_fsdp = init_tpu(config)
-            
-            # Load checkpoint
+            # Load checkpoint (using pre-computed effective_fsdp)
             train_state, data_sharding, mesh = load_checkpoint(config, effective_fsdp, step)
             
             # Create data loader
@@ -903,6 +903,12 @@ def compare_cross_embodiment(
     # Key: model_name, Value: {"train": embeddings, "target": embeddings, "train_names": [...], "target_names": [...]}
     model_embeddings = {}
     
+    # Initialize runtime once using the first model's config
+    first_config_name, first_exp_name, _ = model_configs[0]
+    first_config = _config.get_config(first_config_name)
+    first_config = dataclasses.replace(first_config, exp_name=first_exp_name)
+    effective_fsdp = init_tpu(first_config)
+    
     for config_name, exp_name, step in model_configs:
         model_name = f"{exp_name}_step{step or 'latest'}"
         logger.info(f"\n{'='*60}")
@@ -916,10 +922,7 @@ def compare_cross_embodiment(
             if batch_size:
                 config = dataclasses.replace(config, batch_size=batch_size)
             
-            # Initialize runtime (only once for first model)
-            effective_fsdp = init_tpu(config)
-            
-            # Load checkpoint
+            # Load checkpoint (using pre-computed effective_fsdp)
             train_state, data_sharding, mesh = load_checkpoint(config, effective_fsdp, step)
             
             # Create embedding extractor
@@ -2143,5 +2146,30 @@ def plot_target_vs_source(
     logger.info(f"Saved target vs source plot to {output_path}")
 
 
+def initialize_distributed():
+    """Initialize JAX distributed system at program start (required for multi-host).
+    
+    This must be called before any other JAX operations.
+    """
+    # Check environment variables that indicate multi-host setup
+    is_multi_host = (
+        os.environ.get("SLURM_JOB_ID") is not None
+        or os.environ.get("TPU_WORKER_ID") is not None
+        or os.environ.get("JAX_COORDINATOR_ADDRESS") is not None
+        or os.environ.get("CLOUD_TPU_TASK_ID") is not None
+    )
+    
+    if is_multi_host:
+        try:
+            jax.distributed.initialize()
+            logger.info("Initialized JAX distributed system for multi-host")
+        except Exception as e:
+            logger.warning(f"Could not initialize JAX distributed: {e}")
+    else:
+        logger.info("Single-host mode, skipping distributed initialization")
+
+
 if __name__ == "__main__":
+    # Initialize distributed BEFORE any JAX operations
+    initialize_distributed()
     main()
