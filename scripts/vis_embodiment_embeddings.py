@@ -858,6 +858,482 @@ def compare_models(
     return {name: res["metrics"] for name, res in all_results.items()}
 
 
+def compare_cross_embodiment(
+    model_configs: list[tuple[str, str, int | None]],  # (config_name, exp_name, step)
+    target_dataset: str,
+    embedding_type: EmbeddingType,
+    num_samples: int,
+    target_num_samples: int,
+    reduction_method: str,
+    output_dir: str,
+    split: str = "train",
+    seed: int = 42,
+    batch_size: int | None = None,
+) -> dict[str, dict[str, float]]:
+    """Compare cross-embodiment transfer across multiple models with shared t-SNE.
+    
+    This function:
+    1. Extracts embeddings from each model for both training mix AND target dataset
+    2. Combines ALL embeddings together
+    3. Runs t-SNE once on the combined set (so distances are comparable)
+    4. Creates visualizations comparing cross-embodiment transfer
+    
+    Args:
+        model_configs: List of (config_name, exp_name, checkpoint_step) tuples
+        target_dataset: Target dataset name to compare against
+        embedding_type: Type of embedding to extract
+        num_samples: Number of samples from training mix per model
+        target_num_samples: Number of samples from target dataset per model
+        reduction_method: Dimensionality reduction method (tsne/umap/pca)
+        output_dir: Output directory
+        split: Data split to use
+        seed: Random seed
+        batch_size: Override batch size
+        
+    Returns:
+        Dictionary mapping model names to their distance metrics
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Structure to hold all embeddings
+    # Key: model_name, Value: {"train": embeddings, "target": embeddings, "train_names": [...], "target_names": [...]}
+    model_embeddings = {}
+    
+    for config_name, exp_name, step in model_configs:
+        model_name = f"{exp_name}_step{step or 'latest'}"
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing model: {model_name}")
+        logger.info(f"{'='*60}")
+        
+        try:
+            # Get config
+            config = _config.get_config(config_name)
+            config = dataclasses.replace(config, exp_name=exp_name)
+            if batch_size:
+                config = dataclasses.replace(config, batch_size=batch_size)
+            
+            # Initialize runtime (only once for first model)
+            effective_fsdp = init_tpu(config)
+            
+            # Load checkpoint
+            train_state, data_sharding, mesh = load_checkpoint(config, effective_fsdp, step)
+            
+            # Create embedding extractor
+            extractor = EmbeddingExtractor(train_state)
+            
+            # --- Extract training mix embeddings ---
+            logger.info(f"Creating training data loader...")
+            train_data_loader = _data_loader.create_data_loader(
+                config,
+                sharding=data_sharding,
+                shuffle=True,
+                split=split,
+                seed=seed,
+            )
+            
+            logger.info(f"Extracting {embedding_type} embeddings from training mix...")
+            train_result = extract_all_embeddings(
+                extractor=extractor,
+                data_loader=train_data_loader,
+                embedding_type=embedding_type,
+                num_samples=num_samples,
+                data_sharding=data_sharding,
+                mesh=mesh,
+            )
+            logger.info(f"Extracted {len(train_result.embeddings)} training embeddings")
+            
+            # --- Extract target dataset embeddings ---
+            logger.info(f"Creating target data loader for {target_dataset}...")
+            target_config = create_target_config(config, target_dataset)
+            target_data_loader = _data_loader.create_data_loader(
+                target_config,
+                sharding=data_sharding,
+                shuffle=True,
+                split=split,
+                seed=seed + 1,
+            )
+            
+            logger.info(f"Extracting {embedding_type} embeddings from target dataset...")
+            target_result = extract_all_embeddings(
+                extractor=extractor,
+                data_loader=target_data_loader,
+                embedding_type=embedding_type,
+                num_samples=target_num_samples,
+                data_sharding=data_sharding,
+                mesh=mesh,
+            )
+            logger.info(f"Extracted {len(target_result.embeddings)} target embeddings")
+            
+            # Store results
+            model_embeddings[model_name] = {
+                "train_embeddings": train_result.embeddings,
+                "train_names": train_result.dataset_names,
+                "target_embeddings": target_result.embeddings,
+                "target_names": target_result.dataset_names,
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to process {model_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    if len(model_embeddings) == 0:
+        logger.error("No models processed successfully")
+        return {}
+    
+    # --- Combine all embeddings for shared t-SNE ---
+    logger.info(f"\n{'='*60}")
+    logger.info("Combining all embeddings for shared dimensionality reduction...")
+    logger.info(f"{'='*60}")
+    
+    all_embeddings = []
+    all_labels = []  # (model_name, "train"/"target")
+    all_dataset_names = []
+    
+    for model_name, data in model_embeddings.items():
+        # Add training embeddings
+        for i, emb in enumerate(data["train_embeddings"]):
+            all_embeddings.append(emb)
+            all_labels.append((model_name, "train"))
+            all_dataset_names.append(data["train_names"][i] if i < len(data["train_names"]) else "unknown")
+        
+        # Add target embeddings
+        for i, emb in enumerate(data["target_embeddings"]):
+            all_embeddings.append(emb)
+            all_labels.append((model_name, "target"))
+            all_dataset_names.append(data["target_names"][i] if i < len(data["target_names"]) else target_dataset)
+    
+    all_embeddings = np.stack(all_embeddings)
+    logger.info(f"Total embeddings: {len(all_embeddings)}")
+    
+    # --- Run dimensionality reduction once on combined data ---
+    logger.info(f"Running {reduction_method} on combined embeddings...")
+    embeddings_2d = reduce_dimensions(all_embeddings, method=reduction_method)
+    
+    # --- Compute metrics for each model ---
+    metrics_per_model = {}
+    
+    for model_name in model_embeddings.keys():
+        # Get indices for this model
+        train_mask = np.array([l[0] == model_name and l[1] == "train" for l in all_labels])
+        target_mask = np.array([l[0] == model_name and l[1] == "target" for l in all_labels])
+        
+        if np.any(train_mask) and np.any(target_mask):
+            # Compute centroids in original high-dim space
+            train_centroid_hd = np.mean(all_embeddings[train_mask], axis=0)
+            target_centroid_hd = np.mean(all_embeddings[target_mask], axis=0)
+            
+            # Compute centroids in 2D space (for visualization)
+            train_centroid_2d = np.mean(embeddings_2d[train_mask], axis=0)
+            target_centroid_2d = np.mean(embeddings_2d[target_mask], axis=0)
+            
+            # Distance metrics
+            dist_hd = float(np.linalg.norm(target_centroid_hd - train_centroid_hd))
+            dist_2d = float(np.linalg.norm(target_centroid_2d - train_centroid_2d))
+            
+            metrics_per_model[model_name] = {
+                "target_to_train_dist_hd": dist_hd,
+                "target_to_train_dist_2d": dist_2d,
+                "train_centroid_2d": train_centroid_2d.tolist(),
+                "target_centroid_2d": target_centroid_2d.tolist(),
+                "num_train_samples": int(np.sum(train_mask)),
+                "num_target_samples": int(np.sum(target_mask)),
+            }
+    
+    # --- Save metrics ---
+    metrics_path = output_path / f"cross_embodiment_metrics_{target_dataset}.json"
+    with open(metrics_path, "w") as f:
+        json.dump(metrics_per_model, f, indent=2)
+    logger.info(f"Saved metrics to {metrics_path}")
+    
+    # --- Print comparison ---
+    logger.info(f"\n{'='*60}")
+    logger.info(f"CROSS-EMBODIMENT TRANSFER COMPARISON (Target: {target_dataset})")
+    logger.info(f"{'='*60}")
+    logger.info(f"{'Model':<40} {'Train→Target Dist (HD)':<25} {'Train→Target Dist (2D)':<25}")
+    logger.info("-" * 90)
+    
+    # Sort by distance (lower is better)
+    sorted_models = sorted(metrics_per_model.items(), key=lambda x: x[1]["target_to_train_dist_hd"])
+    for model_name, metrics in sorted_models:
+        logger.info(
+            f"{model_name:<40} {metrics['target_to_train_dist_hd']:<25.4f} {metrics['target_to_train_dist_2d']:<25.4f}"
+        )
+    
+    if len(sorted_models) >= 2:
+        best_model = sorted_models[0][0]
+        worst_model = sorted_models[-1][0]
+        improvement = (
+            (sorted_models[-1][1]["target_to_train_dist_hd"] - sorted_models[0][1]["target_to_train_dist_hd"])
+            / sorted_models[-1][1]["target_to_train_dist_hd"]
+            * 100
+        )
+        logger.info(f"\nBest model: {best_model}")
+        logger.info(f"Worst model: {worst_model}")
+        logger.info(f"Improvement: {improvement:.1f}% closer to target")
+    
+    # --- Create visualizations ---
+    plot_cross_embodiment_comparison(
+        embeddings_2d=embeddings_2d,
+        all_labels=all_labels,
+        model_names=list(model_embeddings.keys()),
+        metrics_per_model=metrics_per_model,
+        target_dataset=target_dataset,
+        output_path=output_path,
+        embedding_type=embedding_type,
+        reduction_method=reduction_method,
+    )
+    
+    # Save raw data
+    np.savez(
+        output_path / f"embeddings_comparison_{target_dataset}.npz",
+        embeddings_2d=embeddings_2d,
+        embeddings_hd=all_embeddings,
+        labels=np.array(all_labels, dtype=object),
+        dataset_names=np.array(all_dataset_names, dtype=object),
+    )
+    
+    logger.info(f"\nDone! Results saved to {output_path}")
+    
+    return metrics_per_model
+
+
+def plot_cross_embodiment_comparison(
+    embeddings_2d: np.ndarray,
+    all_labels: list[tuple[str, str]],
+    model_names: list[str],
+    metrics_per_model: dict[str, dict],
+    target_dataset: str,
+    output_path: Path,
+    embedding_type: str,
+    reduction_method: str,
+):
+    """Create visualizations for cross-embodiment comparison.
+    
+    Args:
+        embeddings_2d: 2D embeddings [num_samples, 2]
+        all_labels: List of (model_name, "train"/"target") for each sample
+        model_names: List of model names
+        metrics_per_model: Metrics dictionary per model
+        target_dataset: Target dataset name
+        output_path: Output directory
+        embedding_type: Embedding type used
+        reduction_method: Reduction method used
+    """
+    n_models = len(model_names)
+    
+    # Color palette for models
+    if n_models <= 10:
+        model_colors = plt.cm.tab10(np.linspace(0, 1, 10))[:n_models]
+    else:
+        model_colors = plt.cm.rainbow(np.linspace(0, 1, n_models))
+    
+    model_to_color = {name: model_colors[i] for i, name in enumerate(model_names)}
+    
+    # --- Plot 1: All embeddings with model colors, train=circle, target=star ---
+    fig, ax = plt.subplots(figsize=(14, 10))
+    
+    for model_name in model_names:
+        color = model_to_color[model_name]
+        
+        # Training points (circles)
+        train_mask = np.array([l[0] == model_name and l[1] == "train" for l in all_labels])
+        ax.scatter(
+            embeddings_2d[train_mask, 0],
+            embeddings_2d[train_mask, 1],
+            c=[color],
+            marker='o',
+            alpha=0.4,
+            s=30,
+            label=f"{model_name[:25]} (train)",
+        )
+        
+        # Target points (stars)
+        target_mask = np.array([l[0] == model_name and l[1] == "target" for l in all_labels])
+        ax.scatter(
+            embeddings_2d[target_mask, 0],
+            embeddings_2d[target_mask, 1],
+            c=[color],
+            marker='*',
+            alpha=0.8,
+            s=100,
+            label=f"{model_name[:25]} (target)",
+            edgecolors='black',
+            linewidths=0.5,
+        )
+        
+        # Plot centroids and connecting line
+        if model_name in metrics_per_model:
+            train_centroid = metrics_per_model[model_name]["train_centroid_2d"]
+            target_centroid = metrics_per_model[model_name]["target_centroid_2d"]
+            
+            # Train centroid (square)
+            ax.scatter(
+                train_centroid[0], train_centroid[1],
+                c=[color], marker='s', s=200, edgecolors='black', linewidths=2,
+            )
+            
+            # Target centroid (pentagon)
+            ax.scatter(
+                target_centroid[0], target_centroid[1],
+                c=[color], marker='p', s=200, edgecolors='black', linewidths=2,
+            )
+            
+            # Line connecting centroids
+            ax.plot(
+                [train_centroid[0], target_centroid[0]],
+                [train_centroid[1], target_centroid[1]],
+                color=color, linestyle='--', linewidth=2, alpha=0.7,
+            )
+            
+            # Distance annotation
+            mid_point = [(train_centroid[0] + target_centroid[0]) / 2,
+                        (train_centroid[1] + target_centroid[1]) / 2]
+            dist = metrics_per_model[model_name]["target_to_train_dist_2d"]
+            ax.annotate(
+                f'd={dist:.1f}',
+                xy=mid_point,
+                fontsize=9,
+                fontweight='bold',
+                ha='center',
+                va='bottom',
+                color=color,
+            )
+    
+    ax.set_xlabel("Dimension 1", fontsize=12)
+    ax.set_ylabel("Dimension 2", fontsize=12)
+    ax.set_title(
+        f"Cross-Embodiment Transfer Comparison\n"
+        f"Target: {target_dataset} | Embedding: {embedding_type} | Method: {reduction_method}\n"
+        f"(circles=train, stars=target, squares=train centroid, pentagons=target centroid)",
+        fontsize=11,
+    )
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+    
+    plt.tight_layout()
+    plt.savefig(output_path / f"scatter_all_{embedding_type}_{reduction_method}.png", dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    # --- Plot 2: Bar chart comparing distances ---
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    sorted_models = sorted(metrics_per_model.items(), key=lambda x: x[1]["target_to_train_dist_hd"])
+    names = [m[0][:30] for m in sorted_models]
+    distances_hd = [m[1]["target_to_train_dist_hd"] for m in sorted_models]
+    colors = [model_to_color[m[0]] for m in sorted_models]
+    
+    bars = ax.bar(names, distances_hd, color=colors, edgecolor='black', linewidth=1)
+    
+    # Add value labels on bars
+    for bar, dist in zip(bars, distances_hd):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.5,
+            f'{dist:.1f}',
+            ha='center',
+            va='bottom',
+            fontsize=10,
+            fontweight='bold',
+        )
+    
+    ax.set_xlabel("Model", fontsize=12)
+    ax.set_ylabel("Distance to Target (High-Dim)", fontsize=12)
+    ax.set_title(
+        f"Cross-Embodiment Transfer: Distance from Training Mix to {target_dataset}\n"
+        f"(Lower = Better Transfer)",
+        fontsize=11,
+    )
+    ax.tick_params(axis='x', rotation=45)
+    
+    # Add ranking annotation
+    if len(sorted_models) >= 1:
+        ax.annotate(
+            "← Better Transfer",
+            xy=(0.02, 0.95),
+            xycoords='axes fraction',
+            fontsize=10,
+            color='green',
+            fontweight='bold',
+        )
+    
+    plt.tight_layout()
+    plt.savefig(output_path / f"bar_distances_{embedding_type}.png", dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    # --- Plot 3: Separate subplots for each model ---
+    fig, axes = plt.subplots(1, n_models, figsize=(6 * n_models, 5))
+    if n_models == 1:
+        axes = [axes]
+    
+    for ax, model_name in zip(axes, model_names):
+        color = model_to_color[model_name]
+        
+        # All other models' points in very light gray
+        other_mask = np.array([l[0] != model_name for l in all_labels])
+        ax.scatter(
+            embeddings_2d[other_mask, 0],
+            embeddings_2d[other_mask, 1],
+            c='lightgray',
+            alpha=0.2,
+            s=10,
+        )
+        
+        # This model's training points
+        train_mask = np.array([l[0] == model_name and l[1] == "train" for l in all_labels])
+        ax.scatter(
+            embeddings_2d[train_mask, 0],
+            embeddings_2d[train_mask, 1],
+            c=[color],
+            marker='o',
+            alpha=0.5,
+            s=40,
+            label='Training Mix',
+        )
+        
+        # This model's target points
+        target_mask = np.array([l[0] == model_name and l[1] == "target" for l in all_labels])
+        ax.scatter(
+            embeddings_2d[target_mask, 0],
+            embeddings_2d[target_mask, 1],
+            c='red',
+            marker='*',
+            alpha=0.8,
+            s=100,
+            label=f'Target ({target_dataset})',
+            edgecolors='darkred',
+            linewidths=0.5,
+        )
+        
+        # Centroids
+        if model_name in metrics_per_model:
+            train_centroid = metrics_per_model[model_name]["train_centroid_2d"]
+            target_centroid = metrics_per_model[model_name]["target_centroid_2d"]
+            
+            ax.scatter(train_centroid[0], train_centroid[1], c=[color], marker='X', s=200, edgecolors='black', linewidths=2)
+            ax.scatter(target_centroid[0], target_centroid[1], c='red', marker='X', s=200, edgecolors='darkred', linewidths=2)
+            
+            ax.plot(
+                [train_centroid[0], target_centroid[0]],
+                [train_centroid[1], target_centroid[1]],
+                'k--', linewidth=2, alpha=0.7,
+            )
+            
+            dist = metrics_per_model[model_name]["target_to_train_dist_hd"]
+            ax.set_title(f"{model_name[:35]}\nDist: {dist:.2f}", fontsize=10)
+        else:
+            ax.set_title(model_name[:35], fontsize=10)
+        
+        ax.legend(fontsize=8, loc='upper right')
+    
+    plt.tight_layout()
+    plt.savefig(output_path / f"subplots_{embedding_type}_{reduction_method}.png", dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    logger.info(f"Saved visualization plots to {output_path}")
+
+
 def plot_model_comparison(
     all_results: dict[str, dict],
     output_dir: Path,
@@ -990,6 +1466,28 @@ def main():
     compare_parser.add_argument("--seed", type=int, default=42)
     compare_parser.add_argument("--batch_size", type=int, default=None)
     
+    # Multi-model cross-embodiment comparison (with shared t-SNE)
+    compare_target_parser = subparsers.add_parser(
+        "compare_target",
+        help="Compare cross-embodiment transfer across multiple models with a target dataset (shared t-SNE)"
+    )
+    compare_target_parser.add_argument("--models", type=str, required=True,
+                                       help="Comma-separated list of config:exp_name:step (step optional)")
+    compare_target_parser.add_argument("--target_dataset", type=str, required=True,
+                                       help="Target dataset name to compare against (e.g., 'bridge_v2_oxe', 'fmb')")
+    compare_target_parser.add_argument("--num_samples", type=int, default=300,
+                                       help="Number of samples from training mix per model")
+    compare_target_parser.add_argument("--target_num_samples", type=int, default=100,
+                                       help="Number of samples from target dataset per model")
+    compare_target_parser.add_argument("--embedding_type", type=str, default="prefix_prelogits",
+                                       choices=["image", "prefix_prelogits", "combined_prefix", "text_only", "per_camera", "wrist_image"])
+    compare_target_parser.add_argument("--reduction_method", type=str, default="tsne",
+                                       choices=["tsne", "umap", "pca"])
+    compare_target_parser.add_argument("--output_dir", type=str, default="./cross_embodiment_comparison")
+    compare_target_parser.add_argument("--split", type=str, default="train", choices=["train", "val"])
+    compare_target_parser.add_argument("--seed", type=int, default=42)
+    compare_target_parser.add_argument("--batch_size", type=int, default=None)
+    
     args = parser.parse_args()
     
     if args.command == "single" or args.command is None:
@@ -1039,6 +1537,36 @@ def main():
             model_configs=model_configs,
             embedding_type=args.embedding_type,
             num_samples=args.num_samples,
+            output_dir=args.output_dir,
+            split=args.split,
+            seed=args.seed,
+            batch_size=args.batch_size,
+        )
+    
+    elif args.command == "compare_target":
+        # Parse model specifications
+        model_configs = []
+        for model_spec in args.models.split(","):
+            parts = model_spec.strip().split(":")
+            if len(parts) == 2:
+                model_configs.append((parts[0], parts[1], None))
+            elif len(parts) == 3:
+                model_configs.append((parts[0], parts[1], int(parts[2]) if parts[2] else None))
+            else:
+                logger.error(f"Invalid model specification: {model_spec}")
+                continue
+        
+        if not model_configs:
+            logger.error("No valid model configurations provided")
+            return
+        
+        compare_cross_embodiment(
+            model_configs=model_configs,
+            target_dataset=args.target_dataset,
+            embedding_type=args.embedding_type,
+            num_samples=args.num_samples,
+            target_num_samples=args.target_num_samples,
+            reduction_method=args.reduction_method,
             output_dir=args.output_dir,
             split=args.split,
             seed=args.seed,
