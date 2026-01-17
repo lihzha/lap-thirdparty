@@ -535,12 +535,17 @@ def reduce_dimensions(
     logger.info(f"Reducing dimensions with {method} from {embeddings.shape[1]} to {n_components}")
     
     if method == "tsne":
-        reducer = TSNE(
-            n_components=n_components,
-            perplexity=kwargs.get("perplexity", 30),
-            random_state=kwargs.get("random_state", 42),
-            n_iter=kwargs.get("n_iter", 1000),
-        )
+        # Use max_iter for scikit-learn >= 1.2, fallback to n_iter for older versions
+        tsne_kwargs = {
+            "n_components": n_components,
+            "perplexity": kwargs.get("perplexity", 30),
+            "random_state": kwargs.get("random_state", 42),
+        }
+        # Try max_iter first (scikit-learn >= 1.2), then n_iter for older versions
+        try:
+            reducer = TSNE(**tsne_kwargs, max_iter=kwargs.get("max_iter", 1000))
+        except TypeError:
+            reducer = TSNE(**tsne_kwargs, n_iter=kwargs.get("n_iter", 1000))
         return reducer.fit_transform(embeddings)
     
     elif method == "umap":
