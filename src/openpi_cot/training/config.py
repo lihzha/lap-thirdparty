@@ -1210,6 +1210,7 @@ _CONFIGS = [
             action_dim=7,
             action_horizon=16,
             max_token_len=220,
+            enable_action_training=True,
         ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
