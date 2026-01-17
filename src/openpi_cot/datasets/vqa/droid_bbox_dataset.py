@@ -484,19 +484,22 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             caption = frame["bbox_caption"]
             is_directional = frame["is_directional"]
 
-            # Select prompt parts based on whether sample is directional
-            prompt_parts = tf.cond(
-                is_directional,
-                lambda: ROBOT_DIRECTION_PROMPT_PARTS_EE,
-                lambda: ROBOT_BBOX_PROMPT_PARTS_EE,
-            )
-
             # Sample a prompt template using the shared helper
             seed_key = tf.strings.join([frame["trajectory_id"], "_bbox_", frame["frame_idx"]])
             seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
             seed_hash_int = tf.cast(seed_hash, tf.int32)
+            seed_pair = (self.seed, seed_hash_int)
 
-            prompt = sample_prompt_tf(prompt_parts, labels, (self.seed, seed_hash_int))
+            # Select prompt based on whether sample is directional
+            # Call sample_prompt_tf for both cases and select the result
+            prompt_directional = sample_prompt_tf(ROBOT_DIRECTION_PROMPT_PARTS_EE, labels, seed_pair)
+            prompt_bbox = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS_EE, labels, seed_pair)
+            
+            prompt = tf.cond(
+                is_directional,
+                lambda: prompt_directional,
+                lambda: prompt_bbox,
+            )
 
             # Create final output
             # Get VQA dataset ID for per-dataset metrics tracking

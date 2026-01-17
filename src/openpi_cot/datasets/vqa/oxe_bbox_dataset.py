@@ -509,20 +509,23 @@ class OXEBoundingBoxDataset(ABC):
             is_directional = frame["is_directional"]
             wrist_image_key = self.get_wrist_image_key()
 
-            # Select prompt parts based on whether sample is directional
-            # OXE bbox uses robot base frame (not end-effector) for directional
-            prompt_parts = tf.cond(
-                is_directional,
-                lambda: ROBOT_DIRECTION_PROMPT_PARTS_OXE,
-                lambda: ROBOT_BBOX_PROMPT_PARTS_OXE,
-            )
-
             # Sample a prompt template using the shared helper
             seed_key = tf.strings.join([frame["trajectory_id"], "_bbox_", frame["frame_idx"]])
             seed_hash = tf.strings.to_hash_bucket_fast(seed_key, 2147483647)
             seed_hash_int = tf.cast(seed_hash, tf.int32)
+            seed_pair = (self.seed, seed_hash_int)
 
-            prompt = sample_prompt_tf(prompt_parts, labels, (self.seed, seed_hash_int))
+            # Select prompt based on whether sample is directional
+            # OXE bbox uses robot base frame (not end-effector) for directional
+            # Call sample_prompt_tf for both cases and select the result
+            prompt_directional = sample_prompt_tf(ROBOT_DIRECTION_PROMPT_PARTS_OXE, labels, seed_pair)
+            prompt_bbox = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS_OXE, labels, seed_pair)
+            
+            prompt = tf.cond(
+                is_directional,
+                lambda: prompt_directional,
+                lambda: prompt_bbox,
+            )
 
             # Create final output
             # Get VQA dataset ID for per-dataset metrics tracking
