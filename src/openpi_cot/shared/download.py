@@ -5,6 +5,7 @@ import pathlib
 import re
 import shutil
 import stat
+import subprocess
 import time
 import urllib.parse
 
@@ -89,8 +90,7 @@ def maybe_download(
                     logger.info("Same-bucket access (no mirroring needed): %s", url)
                     print(f"Same-bucket access (no mirroring needed): {url}")
                     return epath.Path(url)
-                else:
-                    raise FileNotFoundError(f"File not found at {url}")
+                raise FileNotFoundError(f"File not found at {url}")
             except tf.errors.NotFoundError as e:
                 raise FileNotFoundError(f"File not found at {url}") from e
 
@@ -235,23 +235,101 @@ def _copy_dir_gcs(src: str, dst: str) -> None:
             tf.io.gfile.copy(s, d, overwrite=True)
 
 
-def _download_fsspec(url: str, local_path: pathlib.Path | str, **kwargs) -> None:
-    # ── Fast-path: src & dst are both gs:// ───────────────────────────────────
-    if _is_gcs(url) and _is_gcs(local_path):
-        # Prefer TensorFlow GFile to detect directories reliably in GCS.
-        # `fs.info` can report 404 for directory-like prefixes without marker
-        # objects, which leads to treating directories as files.
-        if tf.io.gfile.isdir(url):
-            _copy_dir_gcs(url, str(local_path))
-        else:
-            dst_dir = os.path.dirname(str(local_path))
-            tf.io.gfile.makedirs(dst_dir)
-            tf.io.gfile.copy(url, str(local_path), overwrite=True)
-        return
-    raise NotImplementedError(
-        "Downloading from remote filesystem to local cache is only supported for gs:// URLs. "
-        "Please use a local file path or a gs:// URL."
+def _is_gcs_directory(url: str) -> bool:
+    """Check if a GCS URL is a directory using gsutil.
+
+    This is more reliable than tf.io.gfile.isdir() when GCS auth via TensorFlow fails,
+    since gsutil has its own authentication mechanism.
+
+    Returns True if the URL is a directory (prefix with objects under it),
+    False if it's a single file.
+    """
+    # gsutil stat returns metadata for a file, but fails for directories (prefixes)
+    # So if stat fails but ls succeeds with trailing slash, it's a directory
+    result = subprocess.run(
+        ["gsutil", "stat", url],
+        check=False,
+        capture_output=True,
+        text=True,
     )
+    if result.returncode == 0:
+        # stat succeeded - it's a file
+        return False
+
+    # stat failed - check if it's a directory by listing with trailing slash
+    url_with_slash = url.rstrip("/") + "/"
+    result = subprocess.run(
+        ["gsutil", "ls", url_with_slash],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    # If ls succeeds and returns content, it's a directory
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _download_fsspec(url: str, local_path: pathlib.Path | str, **kwargs) -> None:
+    """Download from GCS to local or GCS destination using gsutil."""
+    if not _is_gcs(url):
+        raise NotImplementedError(f"Downloading from non-GCS URLs is not supported. Got: {url}")
+
+    local_path_str = str(local_path)
+
+    # Check if the source is a directory or a file
+    # First try tf.io.gfile.isdir(), but fall back to gsutil if it returns False
+    # (tf.io.gfile.isdir() can fail silently when GCS auth is not configured)
+    is_source_dir = tf.io.gfile.isdir(url)
+    if not is_source_dir:
+        # Double-check with gsutil, which has its own auth mechanism
+        is_source_dir = _is_gcs_directory(url)
+        if is_source_dir:
+            logger.info("tf.io.gfile.isdir() returned False but gsutil detected directory for %s", url)
+
+    if is_source_dir:
+        _download_directory(url, local_path_str)
+    else:
+        # Source is a file - use gsutil cp
+        # Create parent directory for the destination file
+        if not _is_gcs(local_path):
+            parent_dir = pathlib.Path(local_path_str).parent
+            parent_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            parent_dir = os.path.dirname(local_path_str)
+            tf.io.gfile.makedirs(parent_dir)
+
+        cmd = ["gsutil", "cp", url, local_path_str]
+        logger.info("Running: %s", " ".join(cmd))
+
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"gsutil cp failed with return code {result.returncode}.\n"
+                f"stdout: {result.stdout}\n"
+                f"stderr: {result.stderr}"
+            )
+
+
+def _download_directory(url: str, local_path_str: str) -> None:
+    """Download a GCS directory using gsutil rsync."""
+    # Create destination directory for rsync
+    if not _is_gcs(local_path_str):
+        subprocess.run(["mkdir", "-p", local_path_str], check=True)
+    else:
+        tf.io.gfile.makedirs(local_path_str)
+
+    # Use gsutil rsync for directories - avoids nesting issues with cp
+    # -m: parallel multi-threaded/multi-processing
+    # -r: recursive
+    cmd = ["gsutil", "-m", "rsync", "-r", url, local_path_str]
+    logger.info("Running: %s", " ".join(cmd))
+
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gsutil rsync failed with return code {result.returncode}.\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
 
 
 def ensure_commit_success(dir_path: str) -> None:
@@ -273,99 +351,6 @@ def ensure_commit_success(dir_path: str) -> None:
     except Exception:
         # Best-effort only
         pass
-
-
-def mirror_checkpoint_to_remote_cache(url: str, **kwargs) -> str:
-    """Ensure a checkpoint at `url` (gs://...) is mirrored into the remote cache.
-
-    The mirror location is: gs://<OPENPI_DATA_HOME>/<bucket>/<path>
-
-    Returns the mirror path (as a gs:// string). If OPENPI_DATA_HOME is not a
-    GCS path, returns the original url unchanged.
-    """
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "gs":
-        return url
-
-    cache_dir = get_cache_dir()
-    if not _is_gcs(cache_dir):
-        return url
-
-    # ── Check if source and cache are on the same bucket ──────────────────────
-    cache_bucket = urllib.parse.urlparse(str(cache_dir)).netloc
-    source_bucket = parsed.netloc
-    if source_bucket == cache_bucket:
-        # Same bucket - no need to mirror, just return the original URL
-        logger.info("Same-bucket access (no mirroring needed): %s", url)
-        return url
-
-    cache_root = str(cache_dir)
-    mirror_path = _join(cache_root, parsed.netloc, parsed.path.lstrip("/"))
-    scratch_path = f"{mirror_path}.partial"
-    scratch_commit_success = _join(scratch_path, "COMMIT_SUCCESS")
-
-    def _exists(p: str) -> bool:
-        return tf.io.gfile.exists(p)
-
-    # If checkpoint already present at mirror location, skip copying if it appears
-    # complete (directory with _METADATA or COMMIT_SUCCESS file present).
-    metadata_marker = _join(mirror_path, "_METADATA")
-    commit_success_marker = _join(mirror_path, "COMMIT_SUCCESS")
-    if tf.io.gfile.isdir(mirror_path) and (_exists(metadata_marker) or _exists(commit_success_marker)):
-        ensure_commit_success(mirror_path)
-        return mirror_path
-
-    # Clean scratch
-    if _exists(scratch_path):
-        if tf.io.gfile.isdir(scratch_path):
-            try:
-                tf.io.gfile.rmtree(scratch_path)
-            except tf.errors.NotFoundError:
-                pass
-        else:
-            try:
-                tf.io.gfile.remove(scratch_path)
-            except tf.errors.NotFoundError:
-                pass
-
-    # Copy upstream → scratch
-    logger.info("Mirroring %s → %s", url, mirror_path)
-    _download_fsspec(url, scratch_path, **kwargs)
-
-    # Add markers for Orbax compatibility (best-effort)
-    try:
-        if tf.io.gfile.isdir(scratch_path):
-            with tf.io.gfile.GFile(scratch_commit_success, "w") as f:
-                f.write("ok")
-    except Exception:
-        pass
-
-    # Rename into place
-    try:
-        tf.io.gfile.rename(scratch_path, mirror_path, overwrite=True)
-    except Exception:
-        pass
-
-    return mirror_path
-
-
-# def _download_fsspec(url: str, local_path: pathlib.Path, **kwargs) -> None:
-#     """Download a file from a remote filesystem to the local cache, and return the local path."""
-#     fs, _ = fsspec.core.url_to_fs(url, **kwargs)
-#     info = fs.info(url)
-#     # Folders are represented by 0-byte objects with a trailing forward slash.
-#     if is_dir := (info["type"] == "directory" or (info["size"] == 0 and info["name"].endswith("/"))):
-#         total_size = fs.du(url)
-#     else:
-#         total_size = info["size"]
-#     with tqdm.tqdm(total=total_size, unit="iB", unit_scale=True, unit_divisor=1024) as pbar:
-#         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-#         future = executor.submit(fs.get, url, local_path, recursive=is_dir)
-#         while not future.done():
-#             current_size = sum(f.stat().st_size for f in [*local_path.rglob("*"), local_path] if f.is_file())
-#             pbar.update(current_size - pbar.n)
-#             time.sleep(1)
-#         pbar.update(total_size - pbar.n)
 
 
 def _set_permission(path: pathlib.Path, target_permission: int):

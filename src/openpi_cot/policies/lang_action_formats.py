@@ -1,9 +1,10 @@
 import dataclasses
+import logging
 import re
 from typing import Literal
 
 import numpy as np
-import logging
+
 from openpi_cot.policies.utils import transform_actions_from_eef_frame
 
 
@@ -237,7 +238,12 @@ class VLA0ActionFormat(LanguageActionFormat):
         if isinstance(reasoning, list):
             reasoning = " ".join(reasoning)
 
-        # Extract all integers from the string (space-separated, no delimiters)
+        # Extract integers from <...> format
+        match = re.search(r"([\d\s]+)", reasoning)
+        if not match:
+            logging.info(f"No match found for VLA0 format: {reasoning}")
+            return np.zeros((self.action_horizon, self.action_dim), dtype=float)
+
         try:
             ints = [int(x) for x in reasoning.split()]
         except ValueError:

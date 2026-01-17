@@ -22,6 +22,33 @@ export LIBERO_CONFIG_PATH=third_party/openpi/third_party/libero
 PYTHONPATH=${PYTHONPATH:-}
 export PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$PWD/third_party/openpi/third_party/libero"
 
+# Function to find an available port
+find_available_port() {
+  local base_port=$1
+  local max_attempts=${2:-100}
+  local port=$base_port
+  
+  for ((i=0; i<max_attempts; i++)); do
+    # Check if port is in use using /dev/tcp or ss
+    if ! (echo >/dev/tcp/localhost/$port) 2>/dev/null && \
+       ! ss -tuln 2>/dev/null | grep -q ":${port} "; then
+      echo $port
+      return 0
+    fi
+    port=$((port + 1))
+  done
+  
+  # Fallback: return a port based on job ID if all else fails
+  echo $((base_port + (RANDOM % 1000)))
+  return 1
+}
+
+# Find an available port starting from a base derived from job ID
+# This spreads jobs across the port range while still checking availability
+BASE_PORT=$((8000 + (SLURM_JOB_ID % 500)))
+PORT=$(find_available_port $BASE_PORT 100)
+echo "Selected port: ${PORT} (base: ${BASE_PORT})"
+
 # Ensure log directory exists
 mkdir -p logs
 
@@ -31,11 +58,15 @@ echo "Policy config: ${POLICY_CONFIG}"
 echo "Epoch dir: ${EPOCH_DIR}"
 echo "Policy type: ${POLICY_TYPE}"
 echo "Control mode: ${CONTROL_MODE}"
+echo "Port: ${PORT}"
 echo "========================================"
 
+source scripts/libero/.venv/bin/activate
+deactivate
+
 # Start the policy server in background with separate logs
-uv run --group cuda --active scripts/serve_policy.py \
-  policy:checkpoint --policy.config="${POLICY_CONFIG}" --policy.dir="${EPOCH_DIR}" \
+uv run --group cuda --active scripts/serve_policy.py --port="${PORT}" \
+  policy:checkpoint --policy.config="${POLICY_CONFIG}" --policy.dir="${EPOCH_DIR}" --policy.type=raw \
   > "logs/serve-${SLURM_JOB_ID}.out" 2> "logs/serve-${SLURM_JOB_ID}.err" &
 policy_pid=$!
 echo "Started policy server with PID $policy_pid"
@@ -64,7 +95,8 @@ for task_suite in "${TASK_SUITES[@]}"; do
     python scripts/libero/main.py \
       --args.policy-type "${POLICY_TYPE}" \
       --args.control-mode "${CONTROL_MODE}" \
-      --args.task-suite-name "${task_suite}"
+      --args.task-suite-name "${task_suite}" \
+      --args.port "${PORT}"
   ) >> "logs/libero-${SLURM_JOB_ID}.out" 2>> "logs/libero-${SLURM_JOB_ID}.err"
   
   libero_exit=$?

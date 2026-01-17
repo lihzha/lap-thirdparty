@@ -254,6 +254,7 @@ class PiCoTGemma3(PiCoT):
         at.Float[at.Array, "b s emb"],
         at.Bool[at.Array, "b s"],
         at.Bool[at.Array, "b s"],
+        at.Bool[at.Array, "b s"],
     ]:
         """Embed images and text for the prefix using Gemma3's placeholder approach.
         
@@ -262,7 +263,11 @@ class PiCoTGemma3(PiCoT):
         This keeps the sequence structure matching the tokenizer's format.
         
         Returns:
-            (prefix_tokens, prefix_mask, prefix_ar_mask) with placeholders replaced
+            (prefix_tokens, prefix_mask, prefix_ar_mask, image_mask) where:
+            - prefix_tokens: embeddings with placeholders replaced by image embeddings
+            - prefix_mask: attention mask for valid positions
+            - prefix_ar_mask: autoregressive mask (True for causal, False for bidirectional)
+            - image_mask: boolean mask indicating which positions are image tokens
         """
         # Step 1: Embed the tokenized sequence (placeholders get dummy embeddings)
         # Replace IMAGE_TOKEN (262145, out-of-vocab) with 0 to avoid indexing errors
@@ -285,7 +290,7 @@ class PiCoTGemma3(PiCoT):
             token_ar_mask = jnp.zeros_like(token_mask, dtype=bool)
         
         # Step 2: Get image embeddings from SigLIP
-        image_embeddings, image_mask = self._embed_images(obs)
+        image_embeddings, siglip_image_mask = self._embed_images(obs)
         
         # Step 3: Replace placeholders with actual image embeddings and masks
         prefix_tokens, prefix_mask, prefix_ar_mask = self._replace_placeholders(
@@ -294,10 +299,13 @@ class PiCoTGemma3(PiCoT):
             token_ar_mask,
             obs.tokenized_prompt,
             image_embeddings,
-            image_mask,
+            siglip_image_mask,
         )
         
-        return prefix_tokens, prefix_mask, prefix_ar_mask
+        # Compute image_mask: positions where image tokens are (for bidirectional attention)
+        image_mask = obs.tokenized_prompt == self.IMAGE_TOKEN
+        
+        return prefix_tokens, prefix_mask, prefix_ar_mask, image_mask
 
     # ============ Override: _compute_language_loss ============
 

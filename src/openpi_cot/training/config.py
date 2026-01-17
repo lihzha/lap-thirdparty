@@ -22,7 +22,8 @@ from openpi_cot.datasets.utils.helpers import StateEncoding
 import openpi_cot.models.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
 from openpi_cot.models.tokenizer import FASTTokenizer
-from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer, Gemma3CoTTokenizer
+from openpi_cot.models.tokenizer import Gemma3CoTTokenizer
+from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.policies.libero_finetune_policy as libero_finetune_policy
 import openpi_cot.policies.libero_policy as libero_policy
@@ -1174,9 +1175,7 @@ _CONFIGS = [
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
-        weight_loader=weight_loaders.WeightLoaderChoice(
-            kind="paligemma"
-        ),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma"),
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
         optimizer=_optimizer.AdamW(weight_decay=0.0001),
         save_interval=1000,
@@ -1208,7 +1207,6 @@ _CONFIGS = [
             "data_mix": "oxe_magic_soup",
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
-            
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
@@ -1225,10 +1223,7 @@ _CONFIGS = [
         base_name="pi_combined_fast_cot",
         devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
         model=pi_cot_config.PiCoTConfig(
-            action_dim=7,
-            action_horizon=16,
-            max_token_len=220,
-            use_fast=True,
+            action_dim=7, action_horizon=16, max_token_len=220, use_fast=True, enable_action_training=True
         ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
@@ -1261,7 +1256,7 @@ _CONFIGS = [
             max_token_len=390,  # VLA0 format is more compact
             pi05=True,
             discrete_state_input=True,
-            enable_action_training=False,  # VLA0 uses language modeling loss only
+            enable_action_training=True,  # VLA0 uses language modeling loss only
             enable_langact_training=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",

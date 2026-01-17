@@ -34,7 +34,6 @@ import openpi.models.lora as lora
 import openpi.shared.array_typing as at
 import openpi.training.sharding as sharding
 
-
 # ============================================================================
 # Constants
 # ============================================================================
@@ -82,7 +81,7 @@ class Config:
 
     def get_attention_type(self, layer_idx: int) -> Literal["global", "local"]:
         """Determine if layer uses global or local (sliding window) attention.
-        
+
         Pattern: 5 local layers, then 1 global layer, repeating.
         Layer 0,1,2,3,4 = local; Layer 5 = global; Layer 6,7,8,9,10 = local; etc.
         """
@@ -92,14 +91,11 @@ class Config:
 
     def get_is_global_attn_array(self) -> jax.Array:
         """Pre-compute boolean array indicating global attention for each layer.
-        
+
         Returns:
             Boolean array of shape [num_layers] where True = global attention.
         """
-        return jnp.array([
-            self.get_attention_type(i) == "global" 
-            for i in range(self.num_layers)
-        ])
+        return jnp.array([self.get_attention_type(i) == "global" for i in range(self.num_layers)])
 
 
 def get_config(variant: Variant) -> Config:
@@ -113,13 +109,10 @@ def get_config(variant: Variant) -> Config:
             head_dim=256,
             vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=26,
-
             sliding_window_size=512,
             sliding_window_pattern=6,
-
             rope_local_base_freq=10000.0,
             rope_global_base_freq=1000000.0,
-
             use_qk_norm=True,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
@@ -134,13 +127,10 @@ def get_config(variant: Variant) -> Config:
             head_dim=256,
             vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=34,
-
             sliding_window_size=1024,
             sliding_window_pattern=6,
-
             rope_local_base_freq=10000.0,
             rope_global_base_freq=1000000.0,
-
             use_qk_norm=True,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
@@ -155,13 +145,10 @@ def get_config(variant: Variant) -> Config:
             head_dim=256,
             vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=48,
-
             sliding_window_size=1024,
             sliding_window_pattern=6,
-
             rope_local_base_freq=10000.0,
             rope_global_base_freq=1000000.0,
-
             use_qk_norm=True,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
@@ -176,13 +163,10 @@ def get_config(variant: Variant) -> Config:
             head_dim=256,
             vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=34,
-
             sliding_window_size=512,
             sliding_window_pattern=6,
-
             rope_local_base_freq=10000.0,
             rope_global_base_freq=1000000.0,
-
             use_qk_norm=True,
             use_post_attn_norm=True,
             use_post_ffw_norm=True,
@@ -194,6 +178,7 @@ def get_config(variant: Variant) -> Config:
 # ============================================================================
 # Embedder
 # ============================================================================
+
 
 @at.typecheck
 class Embedder(nn.Module):
@@ -222,20 +207,21 @@ class Embedder(nn.Module):
 # RMSNorm
 # ============================================================================
 
+
 @at.typecheck
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization.
-    
+
     Based on Gemma's implementation which uses (1 + weight) scaling.
     Supports adaptive RMSNorm with conditioning (adarms).
     """
-    
+
     @nn.compact
     def __call__(self, x, cond):
         dtype = x.dtype
         var = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
         normed_inputs = jnp.asarray(x * jnp.reciprocal(jnp.sqrt(var + 1e-06)))
-        
+
         if cond is None:
             # regular RMSNorm with (1 + scale) like Gemma
             scale = self.param("scale", nn.initializers.zeros_init(), (x.shape[-1]))
@@ -251,31 +237,32 @@ class RMSNorm(nn.Module):
 
 class QKRMSNorm(nn.Module):
     """RMSNorm for Query/Key normalization in Gemma3 attention.
-    
+
     Unlike the main RMSNorm, this uses direct scaling (not 1 + scale).
     Creates a nested 'scale' parameter to match checkpoint structure:
     - q_rmsnorm/scale
     - k_rmsnorm/scale
     """
+
     param_dtype: str = "bfloat16"
-    
+
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
         """Apply RMSNorm to query or key tensors.
-        
+
         Args:
             x: Input tensor of shape [..., head_dim]
-        
+
         Returns:
             Normalized tensor of same shape
         """
         original_shape = x.shape
         head_dim = x.shape[-1]
         dtype = x.dtype
-        
+
         # Flatten for normalization
         x_flat = x.reshape(-1, head_dim).astype(jnp.float32)
-        
+
         # Scale parameter - initialized to ones for identity at start
         scale = self.param(
             "scale",
@@ -283,9 +270,9 @@ class QKRMSNorm(nn.Module):
             (head_dim,),
             jnp.dtype(self.param_dtype),
         )
-        
+
         # RMSNorm computation
-        variance = jnp.mean(x_flat ** 2, axis=-1, keepdims=True)
+        variance = jnp.mean(x_flat**2, axis=-1, keepdims=True)
         x_normed = x_flat * jax.lax.rsqrt(variance + 1e-6)
         x_normed = x_normed * scale.astype(jnp.float32)
 
@@ -295,6 +282,7 @@ class QKRMSNorm(nn.Module):
 # ============================================================================
 # Einsum Layer
 # ============================================================================
+
 
 class Einsum(nn.Module):
     """Einsum layer for parameterized tensor multiplication."""
@@ -328,6 +316,7 @@ class Einsum(nn.Module):
 # ============================================================================
 # FeedForward
 # ============================================================================
+
 
 @at.typecheck
 class FeedForward(nn.Module):
@@ -375,6 +364,7 @@ class FeedForward(nn.Module):
 # Positional Embeddings (RoPE)
 # ============================================================================
 
+
 def apply_rope(
     inputs: jax.Array,
     positions: jax.Array,
@@ -383,7 +373,7 @@ def apply_rope(
     scale_factor: float = 1.0,
 ) -> jax.Array:
     """Applies RoPE.
-    
+
     Let B denote batch size, L denote sequence length, N denote number of heads,
     and H denote head dimension. Note that H must be divisible by 2.
 
@@ -410,7 +400,7 @@ def apply_rope(
     # Compute sin and cos
     sin = jnp.sin(angles)
     cos = jnp.cos(angles)
-    
+
     # Split x into even and odd components
     x1 = inputs[..., ::2]
     x2 = inputs[..., 1::2]
@@ -431,6 +421,7 @@ def apply_rope(
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
 
 def _name(base_name: str, expert_idx: int) -> str:
     """Generate layer names for multi-expert setup.
@@ -459,10 +450,11 @@ def _gated_residual(x, y, gate):
 # Attention
 # ============================================================================
 
+
 @at.typecheck
 class Attention(nn.Module):
     """Gemma3 Attention with local/global sliding window support."""
-    
+
     configs: Sequence[Config]
     is_global_attn: jax.Array | bool = False  # Whether this layer uses global attention (can be traced)
     stop_action_to_vlm_grad: bool = False
@@ -475,7 +467,7 @@ class Attention(nn.Module):
         positions: jnp.ndarray,
         attn_mask: jnp.ndarray,
         kv_cache: KVCache | None,
-        image_mask: jnp.ndarray | None = None
+        image_mask: jnp.ndarray | None = None,
     ):
         # All experts must share the same head dim, num heads, and num kv heads
         assert all(config.head_dim == self.configs[0].head_dim for config in self.configs)
@@ -486,11 +478,7 @@ class Attention(nn.Module):
         dtype = next(x.dtype for x in xs if x is not None)
 
         # Determine RoPE base frequency based on attention type (use jnp.where for traced values)
-        rope_base = jnp.where(
-            self.is_global_attn,
-            config.rope_global_base_freq,
-            config.rope_local_base_freq
-        )
+        rope_base = jnp.where(self.is_global_attn, config.rope_global_base_freq, config.rope_local_base_freq)
 
         qkvs = []
         for i, (x, cfg) in enumerate(zip(xs, self.configs, strict=True)):
@@ -526,6 +514,11 @@ class Attention(nn.Module):
 
         q, k, v = (jnp.concatenate(y, axis=1) for y in zip(*qkvs, strict=True))
 
+        # Ensure q, k, v are in the expected dtype (einsum can promote to float32)
+        q = q.astype(dtype)
+        k = k.astype(dtype)
+        v = v.astype(dtype)
+
         token_owner = None
         if self.stop_action_to_vlm_grad:
             token_owner = []
@@ -544,21 +537,27 @@ class Attention(nn.Module):
         k = apply_rope(k, positions=positions, base_frequency=rope_base)
 
         # Scale query (cast scalar to preserve dtype)
-        q = q * jnp.asarray(config.head_dim ** -0.5, dtype=dtype)
+        q = q * jnp.asarray(config.head_dim**-0.5, dtype=dtype)
 
         # Should still be half-precision here
-        assert q.dtype == k.dtype == v.dtype == dtype
+        assert q.dtype == k.dtype == v.dtype == dtype, (
+            f"q.dtype: {q.dtype}, k.dtype: {k.dtype}, v.dtype: {v.dtype}, dtype: {dtype}, head_dim: {config.head_dim}"
+        )
+
+        # Determine cache dtype (use explicit cache_dtype if set, otherwise use compute dtype)
+        effective_cache_dtype = jnp.dtype(self.cache_dtype) if self.cache_dtype else dtype
 
         if kv_cache is not None:  # inference time
             idx, cache_k, cache_v = kv_cache
             if xs[0] is not None:
-                idx, k, v = _update_cache(k, v, idx, cache_k, cache_v)
+                idx, k, v = _update_cache(k, v, idx, cache_k, cache_v, cache_dtype=effective_cache_dtype)
             else:
                 idx += k.shape[1]
-                k = jnp.concatenate([cache_k, k], axis=1)
-                v = jnp.concatenate([cache_v, v], axis=1)
+                # Ensure consistent dtype during concatenation
+                k = jnp.concatenate([cache_k, k.astype(effective_cache_dtype)], axis=1)
+                v = jnp.concatenate([cache_v, v.astype(effective_cache_dtype)], axis=1)
         else:
-            idx, k, v = _init_cache(k, v, attn_mask.shape[-1])
+            idx, k, v = _init_cache(k, v, attn_mask.shape[-1], cache_dtype=effective_cache_dtype)
 
         # Compute attention logits
         q = einops.rearrange(q, "B T (K G) H -> B T K G H", K=config.num_kv_heads)
@@ -583,23 +582,19 @@ class Attention(nn.Module):
             logits = logits.at[:, :, :, expert0_len:, :expert0_len].set(logits0_i)
 
         effective_mask = attn_mask
-        
+
         # Apply sliding window mask for local attention (always compute, conditionally apply)
-        sliding_mask = self._compute_sliding_window_mask(
-            positions, k.shape[1], config.sliding_window_size
-        )
+        sliding_mask = self._compute_sliding_window_mask(positions, k.shape[1], config.sliding_window_size)
         # For global attention, use original mask; for local, apply sliding window
         effective_mask = jnp.where(
             self.is_global_attn,
             effective_mask,  # global: keep original mask
-            effective_mask & sliding_mask  # local: apply sliding window
+            effective_mask & sliding_mask,  # local: apply sliding window
         )
 
         # Apply bidirectional attention for image tokens
         if image_mask is not None:
-            effective_mask = self._apply_bidirectional_image_attention(
-                effective_mask, image_mask
-            )
+            effective_mask = self._apply_bidirectional_image_attention(effective_mask, image_mask)
 
         # Validate mask shape
         if effective_mask.shape != (q.shape[0], 1, q.shape[1], k.shape[1]):
@@ -635,7 +630,8 @@ class Attention(nn.Module):
                     lora_config=cfg.lora_configs.get("attn"),
                     param_dtype=cfg.param_dtype,
                 )
-                out.append(out_einsum("BTNH,NHD->BTD", encoded[:, start:end]))
+                # Cast output back to input dtype to ensure consistent dtypes through scan
+                out.append(out_einsum("BTNH,NHD->BTD", encoded[:, start:end]).astype(dtype))
                 start = end
             else:
                 out.append(None)
@@ -677,6 +673,7 @@ class Attention(nn.Module):
 # ============================================================================
 # Block
 # ============================================================================
+
 
 @at.typecheck
 class Block(nn.Module):
@@ -780,10 +777,11 @@ class Block(nn.Module):
 # Module (Main Transformer)
 # ============================================================================
 
+
 @at.typecheck
 class Module(nn.Module):
     """Transformer model supporting mixture of experts for Pi0.
-    
+
     Uses nn.scan for efficient layer creation. Attention type (local/global)
     is pre-computed and passed as a scanned input to each layer.
     """
@@ -822,11 +820,11 @@ class Module(nn.Module):
             variable_axes={"params": 0},
             split_rngs={"params": True, "dropout": True},
             in_axes=(
-                0,             # kv_cache - stacked per layer
+                0,  # kv_cache - stacked per layer
                 nn.broadcast,  # positions
                 nn.broadcast,  # attn_mask
                 nn.broadcast,  # adarms_cond
-                0,             # is_global_attn - scanned per layer
+                0,  # is_global_attn - scanned per layer
                 nn.broadcast,  # image_mask
                 nn.broadcast,  # deterministic
             ),
@@ -844,7 +842,7 @@ class Module(nn.Module):
     @at.typecheck
     def embed(self, tokens: at.Int[at.Array, "b t"]) -> at.Float[at.Array, "b t d"]:
         return self.embedder.encode(tokens).astype(self.embed_dtype)
-    
+
     # @at.typecheck
     def decode(self, prelogits: at.Int[at.Array, "b t d"]) -> at.Float[at.Array, "b t"]:
         return self.embedder.decode(prelogits)
@@ -868,15 +866,13 @@ class Module(nn.Module):
 
         # Pass is_global_attn array as scanned input
         embedded, kv_cache = self.layers(
-            embedded, kv_cache, positions, mask, adarms_cond, 
-            self._is_global_attn, image_mask, deterministic
+            embedded, kv_cache, positions, mask, adarms_cond, self._is_global_attn, image_mask, deterministic
         )
 
         assert all(e.dtype == jnp.dtype(self.embed_dtype) for e in embedded if e is not None)
 
         out = [
-            f(e, a)[0] if e is not None else e 
-            for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
+            f(e, a)[0] if e is not None else e for f, e, a in zip(self.final_norms, embedded, adarms_cond, strict=True)
         ]
         return out, kv_cache
 
@@ -894,6 +890,7 @@ class Module(nn.Module):
 # ============================================================================
 # KV Cache Utilities
 # ============================================================================
+
 
 def _init_cache(k, v, cache_size, cache_dtype=None):
     """Initialize KV cache."""

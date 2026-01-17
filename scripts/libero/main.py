@@ -226,11 +226,11 @@ def eval_libero(args: Args) -> None:
                 [np.asarray(x) for x in replay_images],
                 fps=10,
             )
-            # imageio.mimwrite(
-            #     pathlib.Path(args.video_out_path) / f"rollout_wrist_{task_segment}_{suffix}.mp4",
-            #     [np.asarray(x) for x in wrist_replay_images],
-            #     fps=10,
-            # )
+            imageio.mimwrite(
+                pathlib.Path(args.video_out_path) / f"rollout_wrist_{task_segment}_{suffix}.mp4",
+                [np.asarray(x) for x in wrist_replay_images],
+                fps=10,
+            )
 
             # Log current results
             logging.info(f"Success: {done}")
@@ -290,8 +290,8 @@ def _get_libero_env(task, resolution, seed, controller="OSC_POSE"):
 
 def get_images_from_obs(obs, resize_size):
     # IMPORTANT: rotate 180 degrees to match train preprocessing
-    img = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
-    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][::-1, ::-1])
+    img = np.ascontiguousarray(obs["agentview_image"][:, ::-1])
+    wrist_img = np.ascontiguousarray(obs["robot0_eye_in_hand_image"][:, ::-1])
     img = image_tools.convert_to_uint8(image_tools.resize_with_pad(img, resize_size, resize_size))
     wrist_img = image_tools.convert_to_uint8(image_tools.resize_with_pad(wrist_img, resize_size, resize_size))
     # right_tensor = tf.convert_to_tensor(img)
