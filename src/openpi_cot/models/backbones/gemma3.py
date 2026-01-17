@@ -176,8 +176,8 @@ def get_config(variant: Variant) -> Config:
         return Config(
             width=768,
             hidden_dim=768 * 4,
-            num_heads=8,
-            num_kv_heads=4,
+            num_heads=4,
+            num_kv_heads=1,
             head_dim=256,
             vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=26,
