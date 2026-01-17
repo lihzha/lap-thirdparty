@@ -208,7 +208,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         
         # Get rotation_applied flag from data (set by decode function at dataset level)
         # This indicates whether wrist image rotation was actually applied
-        rotation_applied = data.get("rotation_applied", False)
+        rotation_applied = data["rotation_applied"]
         return inputs, rotation_applied
 
     def _summarize_language_actions(
