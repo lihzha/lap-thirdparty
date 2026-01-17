@@ -358,7 +358,12 @@ def make_decode_images_fn(
         
         # Apply wrist image rotation if sample requires it
         # This is used for DROID and other datasets with inverted wrist cameras
+        # BUT: Skip rotation for prediction samples
         needs_rotation = traj.get("needs_wrist_rotation", tf.constant(False, dtype=tf.bool))
+        is_prediction_sample = traj.get("is_prediction_sample", tf.constant(False, dtype=tf.bool))
+        
+        # Only rotate if needs_rotation is True AND it's not a prediction sample
+        should_rotate = tf.logical_and(needs_rotation, tf.logical_not(is_prediction_sample))
         
         # Track whether rotation was actually applied (for EEF frame adjustment in cot_policy)
         rotation_applied = tf.constant(False, dtype=tf.bool)
@@ -383,7 +388,7 @@ def make_decode_images_fn(
             return img, tf.constant(False, dtype=tf.bool)
         
         wrist_img, rotation_applied = tf.cond(
-            needs_rotation,
+            should_rotate,
             lambda: maybe_rotate_wrist(wrist_img),
             lambda: no_rotate(wrist_img),
         )
