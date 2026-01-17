@@ -266,6 +266,10 @@ class CoTInputs(upstream_transforms.DataTransformFn):
         inputs["is_vqa_sample"] = is_vqa_sample
 
         inputs["time_horizon_seconds"] = data.get("time_horizon_seconds")
+        
+        # Pass through vqa_dataset_id for per-dataset metrics tracking
+        vqa_dataset_id = data.get("vqa_dataset_id", 0)
+        inputs["vqa_dataset_id"] = vqa_dataset_id
 
         # Special handling for VQA datasets
         if is_vqa_sample:

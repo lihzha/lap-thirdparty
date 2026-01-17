@@ -47,6 +47,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
     tokenized_dataset_name: at.Int[ArrayT, "*b d"] | None = None
     is_vqa_sample: at.Bool[ArrayT, "*b"] | None = None
     is_prediction_sample: at.Bool[ArrayT, "*b"] | None = None
+    vqa_dataset_id: at.Int[ArrayT, "*b"] | None = None  # ID for per-VQA-dataset metrics (0=non-VQA)
 
     @classmethod
     def from_dict(cls, data: at.PyTree[ArrayT]) -> "CoTObservation[ArrayT]":
@@ -83,6 +84,7 @@ class CoTObservation(_model.Observation[ArrayT], Generic[ArrayT]):
             tokenized_dataset_name=getk("tokenized_dataset_name"),
             is_vqa_sample=getk("is_vqa_sample"),
             is_prediction_sample=getk("is_prediction_sample"),
+            vqa_dataset_id=getk("vqa_dataset_id"),
         )
 
 
@@ -180,4 +182,5 @@ def preprocess_observation(
         tokenized_dataset_name=getattr(observation, "tokenized_dataset_name", None),
         is_vqa_sample=getattr(observation, "is_vqa_sample", None),
         is_prediction_sample=getattr(observation, "is_prediction_sample", None),
+        vqa_dataset_id=getattr(observation, "vqa_dataset_id", None),
     )

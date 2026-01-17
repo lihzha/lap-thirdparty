@@ -60,6 +60,7 @@ class VQAInputs(CoTInputs):
 
         inputs["is_vqa_sample"] = True
         inputs["is_prediction_sample"] = False
+        inputs["vqa_dataset_id"] = 0  # Unknown VQA dataset during inference
 
         return inputs
 

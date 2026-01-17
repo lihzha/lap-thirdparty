@@ -31,6 +31,28 @@ VQA_DATASET_NAMES: set[str] = {
     "bridge_bbox",
 }
 
+# Mapping from VQA dataset name to integer ID for per-dataset metrics tracking
+# ID 0 is reserved for non-VQA samples
+VQA_DATASET_ID_MAP: dict[str, int] = {
+    "coco_captions": 1,
+    "vqa": 2,
+    "pixmo_cap": 3,
+    "pixmo_point": 4,
+    "lvis": 5,
+    "paco_lvis": 6,
+    "paco_ego4d": 7,
+    "droid_bbox": 8,
+    "molmoact_bbox": 9,
+    "bridge_bbox": 10,
+    "droid_bbox_direction": 11,  # Directional variant of droid_bbox
+}
+
+# Number of VQA dataset types (for metrics computation)
+NUM_VQA_DATASETS: int = len(VQA_DATASET_ID_MAP)
+
+# Reverse mapping for decoding
+VQA_DATASET_ID_TO_NAME: dict[int, str] = {v: k for k, v in VQA_DATASET_ID_MAP.items()}
+
 
 def ensure_dldataset(ds, is_flattened=False):
     """Ensure dataset is a DLataset instance."""
@@ -273,11 +295,15 @@ class BaseVQADataset(SingleCoTDataset):
             }
 
             # Create output matching robot dataset structure (shared)
+            # Get VQA dataset ID for per-dataset metrics tracking
+            dataset_name_str = self.get_dataset_name()
+            vqa_dataset_id = VQA_DATASET_ID_MAP.get(dataset_name_str, 0)
+            
             output = {
                 "observation": observation,
                 "prompt": prompt,
                 "caption": caption,
-                "dataset_name": tf.constant(self.get_dataset_name(), dtype=tf.string),
+                "dataset_name": tf.constant(dataset_name_str, dtype=tf.string),
                 "time_horizon_seconds": tf.constant(self.control_frequency, dtype=tf.float32),
                 "is_bimanual": tf.constant(False, dtype=tf.bool),
                 "state_type": tf.constant("none", dtype=tf.string),
@@ -287,6 +313,7 @@ class BaseVQADataset(SingleCoTDataset):
                 "raw_state": tf.zeros([self.state_dim], dtype=tf.float32),
                 "is_navigation": tf.constant(False, dtype=tf.bool),
                 "has_wrist_image": tf.constant(False, dtype=tf.bool),
+                "vqa_dataset_id": tf.constant(vqa_dataset_id, dtype=tf.int32),
             }
 
             return output

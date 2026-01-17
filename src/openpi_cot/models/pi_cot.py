@@ -17,6 +17,7 @@ import openpi_cot.models.backbones.gemma as _gemma
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.model_adapter import preprocess_observation
 import openpi_cot.models.pi_cot_config as _pi_cot_config
+from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_ID_TO_NAME, NUM_VQA_DATASETS
 
 logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
@@ -483,6 +484,16 @@ class PiCoT(_pi0.Pi0):
                             verbose_mode=effective_verbose_mode,
                         )
                     )
+                    # Add per-VQA-dataset metrics if vqa_dataset_id is available
+                    if hasattr(observation, "vqa_dataset_id") and observation.vqa_dataset_id is not None:
+                        vqa_dataset_ids = jnp.asarray(observation.vqa_dataset_id, dtype=jnp.int32)
+                        metrics.update(
+                            _compute_per_vqa_dataset_metrics(
+                                per_sample_loss=lang_loss,
+                                vqa_dataset_ids=vqa_dataset_ids,
+                                vqa_mask=vqa_mask,
+                            )
+                        )
                 if self.enable_prediction_training:
                     metrics.update(
                         _compute_sample_specific_metrics(
@@ -873,4 +884,43 @@ def _compute_sample_specific_metrics(
     #         metrics[f"{prefix}per_sample_direction_correct"] = direction_correct
     #         metrics[f"{prefix}per_sample_direction_total"] = direction_total
 
+    return metrics
+
+
+def _compute_per_vqa_dataset_metrics(
+    per_sample_loss: at.Float[at.Array, "b"],
+    vqa_dataset_ids: at.Int[at.Array, "b"],
+    vqa_mask: at.Bool[at.Array, "b"],
+) -> dict[str, at.Array]:
+    """Compute per-VQA-dataset metrics for detailed logging.
+    
+    Args:
+        per_sample_loss: Per-sample losses [b]
+        vqa_dataset_ids: VQA dataset ID for each sample [b] (0=non-VQA, 1-N=VQA datasets)
+        vqa_mask: Boolean mask indicating which samples are VQA [b]
+        
+    Returns:
+        Dictionary with metrics for each VQA dataset type.
+        Keys are formatted as "vqa_{dataset_name}_loss" and "vqa_{dataset_name}_num_samples"
+    """
+    metrics = {}
+    
+    # Iterate through all VQA dataset types with static keys
+    for dataset_id, dataset_name in VQA_DATASET_ID_TO_NAME.items():
+        # Create mask for this specific VQA dataset
+        # vqa_dataset_ids == dataset_id AND vqa_mask (to handle combined_langact_mask filtering)
+        dataset_mask = jnp.logical_and(vqa_dataset_ids == dataset_id, vqa_mask)
+        dataset_mask_f = dataset_mask.astype(jnp.float32)
+        
+        # Count samples for this dataset
+        num_samples = jnp.sum(dataset_mask_f)
+        
+        # Compute average loss for this dataset
+        masked_loss = per_sample_loss * dataset_mask_f
+        dataset_loss = jnp.sum(masked_loss) / jnp.maximum(num_samples, 1.0)
+        
+        # Add metrics with static keys (known at compile time)
+        metrics[f"vqa_{dataset_name}_loss"] = dataset_loss
+        metrics[f"vqa_{dataset_name}_num_samples"] = num_samples
+    
     return metrics

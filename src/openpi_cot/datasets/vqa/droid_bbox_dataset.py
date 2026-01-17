@@ -30,6 +30,7 @@ from openpi_cot.datasets.vqa.bbox_common import (
     sample_and_format_objects_tf,
     sample_prompt_tf,
 )
+from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_ID_MAP
 
 if TYPE_CHECKING:
     from openpi_cot.training.config import CoTDataConfig
@@ -433,6 +434,10 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
             prompt = sample_prompt_tf(prompt_parts, labels, (self.seed, seed_hash_int))
 
             # Create final output
+            # Get VQA dataset ID for per-dataset metrics tracking
+            dataset_name_str = self.get_dataset_name()
+            vqa_dataset_id = VQA_DATASET_ID_MAP.get(dataset_name_str, 0)
+            
             return {
                 "observation": frame["observation"],
                 "prompt": prompt,
@@ -447,6 +452,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 "raw_state": tf.zeros([self.state_dim], dtype=tf.float32),
                 "is_navigation": tf.constant(False, dtype=tf.bool),
                 "has_wrist_image": tf.constant(False, dtype=tf.bool),
+                "vqa_dataset_id": tf.constant(vqa_dataset_id, dtype=tf.int32),
                 "actions": tf.zeros([self.action_horizon, self.action_dim], dtype=tf.float32),
                 "language_actions": tf.zeros([7], dtype=tf.float32),
             }
