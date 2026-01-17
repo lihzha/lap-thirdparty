@@ -66,7 +66,7 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         enable_prediction_training: bool = False,
         pred_prob: float = 0.2,
         primary_pred_prob: float = 0.5,
-        directional: bool = True,
+        directional: bool = False,
         direction_slope: float = 2.0,
     ):
         if num_parallel_calls == -1 or num_parallel_reads == -1:
