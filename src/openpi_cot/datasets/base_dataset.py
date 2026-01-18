@@ -120,50 +120,13 @@ class SingleCoTDataset:
         self.dataset = self.build_dataset(self.builder)
         self.get_traj_identifier()
 
-        # Debug: Count right after building dataset
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                post_build_count = dataset_size(self.dataset)
-                logging.info(f"[DEBUG] Dataset after build_dataset: {post_build_count} trajectories")
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset after build_dataset: {e}")
-
         # Set statistics before filtering (needed for dataset-specific filters)
         self.dataset_statistics = cached_stats
 
         # Apply operations in consistent order: filter -> split -> restructure
-        # Debug: Count before filters
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                pre_filter_count = dataset_size(self.dataset)
-                logging.info(f"[DEBUG] Dataset before apply_traj_filters: {pre_filter_count} trajectories")
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset before filters: {e}")
-
         self.apply_traj_filters(action_key="action")
-
-        # Debug: Count after filters, before split
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                post_filter_count = dataset_size(self.dataset)
-                logging.info(f"[DEBUG] Dataset after apply_traj_filters: {post_filter_count} trajectories")
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset after filters: {e}")
-
         self.split_val(split_seed=seed)
         self.apply_restructure()
-
-        # Debug: Count after restructure (before flattening)
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                post_restructure_count = dataset_size(self.dataset)
-                logging.info(f"[DEBUG] Dataset after apply_restructure (before flattening): {post_restructure_count} trajectories")
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset after restructure: {e}")
 
         # If state encoding is NONE, ensure state stats are properly padded
         if self.state_encoding == StateEncoding.NONE:
@@ -248,64 +211,17 @@ class SingleCoTDataset:
             num_parallel_reads=self.num_parallel_reads,
         )
         
-        # Debug: Count before sharding
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                pre_shard_count = dataset_size(dataset)
-                process_count = jax.process_count()
-                process_index = jax.process_index()
-                logging.info(
-                    f"[DEBUG] Dataset before sharding: {pre_shard_count} trajectories "
-                    f"(process {process_index}/{process_count})"
-                )
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset before sharding: {e}")
-        
         # For validation, don't shard the dataset - each process should see all data
         # This ensures validation is deterministic and all processes can evaluate
         # For training, shard to distribute data across processes
         if not self.want_val:
             dataset = dataset.shard(jax.process_count(), jax.process_index())
-        else:
-            # For validation, we still need to handle multi-process setup
-            # But we want all processes to see the same data for consistent evaluation
-            # Option 1: Don't shard at all (each process sees all data)
-            # Option 2: Use modulo sharding that wraps around (but this is complex)
-            # For now, we'll not shard for validation - each process gets all data
-            # This is fine for validation since we're not training and data is small
-            logging.info(
-                f"[DEBUG] Skipping sharding for validation - all processes will see all {pre_shard_count if self.want_val else '?'} trajectories"
-            )
-        
-        # Debug: Count after sharding (or no sharding for validation)
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                post_shard_count = dataset_size(dataset)
-                process_count = jax.process_count()
-                process_index = jax.process_index()
-                logging.info(
-                    f"[DEBUG] Dataset after sharding (or no sharding for val): {post_shard_count} trajectories "
-                    f"(process {process_index}/{process_count})"
-                )
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset after sharding: {e}")
         
         # Repeat early to increase interleaving across files/episodes
         dataset = dataset.with_options(self.get_dataset_ops())
         return dataset
 
     def split_val(self, split_seed):
-        # Debug: Count trajectories before split
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                pre_split_count = dataset_size(self.dataset)
-                logging.info(f"[DEBUG] Dataset before split_val: {pre_split_count} trajectories (want_val={self.want_val}, val_fraction={self.val_fraction})")
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset before split_val: {e}")
-
         def _split_filter(traj):
             salt = tf.strings.as_string(split_seed)
             anchor = traj["trajectory_id"][0]
@@ -316,15 +232,6 @@ class SingleCoTDataset:
             return is_val if self.want_val else tf.logical_not(is_val)
 
         self.dataset = self.dataset.filter(_split_filter)
-
-        # Debug: Count trajectories after split
-        if self.want_val:
-            try:
-                from openpi_cot.datasets.utils.dataset_utils import dataset_size
-                post_split_count = dataset_size(self.dataset)
-                logging.info(f"[DEBUG] Dataset after split_val: {post_split_count} trajectories (want_val={self.want_val}, val_fraction={self.val_fraction})")
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not count dataset after split_val: {e}")
 
         #  def split_val(self, split_seed):
         #     self.not_used_fraction = getattr(self.config, "not_used_fraction", 0.85)

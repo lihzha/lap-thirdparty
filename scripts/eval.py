@@ -249,22 +249,6 @@ def main(config: _config.TrainConfig):
         max_samples=None,  # Don't limit samples for validation - iterate until StopIteration
     )
 
-    # Debug: Log dataset info
-    if config.eval_split == "val":
-        logging.info(f"[DEBUG] Created validation data loader (split={config.eval_split}, batch_size={config.batch_size})")
-        # Try to get dataset info if available
-        if hasattr(data_loader, "dataset"):
-            try:
-                dataset = data_loader.dataset
-                if hasattr(dataset, "cardinality"):
-                    cardinality = dataset.cardinality().numpy()
-                    if cardinality >= 0:
-                        logging.info(f"[DEBUG] Validation data loader dataset cardinality: {cardinality} batches")
-                    else:
-                        logging.info(f"[DEBUG] Validation data loader dataset cardinality: {cardinality}")
-            except Exception as e:
-                logging.warning(f"[DEBUG] Could not get validation data loader dataset info: {e}")
-
     # Determine number of evaluation batches (None means iterate until StopIteration)
     num_eval_batches = config.num_eval_batches
 

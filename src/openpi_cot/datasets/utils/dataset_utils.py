@@ -200,53 +200,7 @@ def prepare_batched_dataset(
     num_parallel_calls = tf.data.AUTOTUNE
     dataset = dataset.frame_map(decode_fn, num_parallel_calls)
 
-    # Debug: Log cardinality before batching for validation datasets
-    if want_val:
-        try:
-            # Try to get cardinality before batching (works for finite datasets)
-            pre_batch_cardinality = dataset.cardinality().numpy()
-            if pre_batch_cardinality >= 0:
-                expected_batches = pre_batch_cardinality // batch_size
-                logging.info(
-                    f"[DEBUG] Validation dataset before batching: {pre_batch_cardinality} samples, "
-                    f"expected ~{expected_batches} batches (batch_size={batch_size})"
-                )
-            elif pre_batch_cardinality == tf.data.UNKNOWN_CARDINALITY:
-                # For UNKNOWN_CARDINALITY, manually count samples
-                # Note: This will consume the dataset, but TensorFlow datasets should be re-iterable
-                logging.info(f"[DEBUG] Validation dataset before batching: UNKNOWN_CARDINALITY, counting samples...")
-                sample_count = dataset_size(dataset)
-                expected_batches = sample_count // batch_size if sample_count > 0 else 0
-                logging.info(
-                    f"[DEBUG] Validation dataset before batching: {sample_count} samples counted, "
-                    f"expected ~{expected_batches} batches (batch_size={batch_size})"
-                )
-                # Dataset should be re-iterable, so we can continue using it
-            else:
-                logging.info(f"[DEBUG] Validation dataset before batching: INFINITE_CARDINALITY (batch_size={batch_size})")
-        except Exception as e:
-            logging.warning(f"[DEBUG] Could not get validation dataset cardinality before batching: {e}")
-
     dataset = dataset.batch(batch_size, drop_remainder=True)
-
-    # Debug: Log cardinality after batching for validation datasets
-    if want_val:
-        try:
-            # Try to get cardinality after batching
-            post_batch_cardinality = dataset.cardinality().numpy()
-            if post_batch_cardinality >= 0:
-                logging.info(f"[DEBUG] Validation dataset after batching: {post_batch_cardinality} batches (batch_size={batch_size})")
-            elif post_batch_cardinality == tf.data.UNKNOWN_CARDINALITY:
-                # For UNKNOWN_CARDINALITY, manually count batches
-                # Note: This will consume the dataset, but TensorFlow datasets should be re-iterable
-                logging.info(f"[DEBUG] Validation dataset after batching: UNKNOWN_CARDINALITY, counting batches...")
-                batch_count = dataset_size(dataset)
-                logging.info(f"[DEBUG] Validation dataset after batching: {batch_count} batches counted (batch_size={batch_size})")
-                # Dataset should be re-iterable, so we can continue using it
-            else:
-                logging.info(f"[DEBUG] Validation dataset after batching: INFINITE_CARDINALITY (batch_size={batch_size})")
-        except Exception as e:
-            logging.warning(f"[DEBUG] Could not get validation dataset cardinality after batching: {e}")
 
     # Apply device-specific and buffering operations
     # For validation, use smaller prefetch buffer since we only iterate once
