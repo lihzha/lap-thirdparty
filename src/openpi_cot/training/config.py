@@ -1331,7 +1331,7 @@ _CONFIGS = [
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma", params_path="gs://pi0-cot/cache/gemma3-1b-it"),  # params_path auto-set from variant
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="paligemma2", params_path="gs://pi0-cot/cache/gemma3-1b-it"),  # params_path auto-set from variant
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
         optimizer=_optimizer.AdamW(weight_decay=0.0001),
         save_interval=1000,
