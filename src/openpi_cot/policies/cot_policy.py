@@ -222,7 +222,7 @@ class CoTInputs(upstream_transforms.DataTransformFn):
 
         use_eef_frame = self.language_action_format.use_eef_frame and initial_state is not None
         if self.random_base_prob > 0.0:
-            use_eef_frame = use_eef_frame and has_wrist_image and random.random() < self.random_base_prob
+            use_eef_frame = use_eef_frame and has_wrist_image and random.random() < (1-self.random_base_prob)
 
         # Transform to EEF frame if requested
         # rotation_applied indicates whether wrist image was rotated at dataset level

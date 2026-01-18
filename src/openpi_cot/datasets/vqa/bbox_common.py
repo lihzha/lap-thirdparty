@@ -53,6 +53,17 @@ BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
 # ROBOT BBOX PROMPT PARTS (full combinations)
 # =============================================================================
 
+GENERAL_BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
+    ("Show me where the ", " is in the image using a bounding box."),
+    ("Draw a bounding box around the ", " in the image."),
+    ("Please provide a bounding box for the ", " in this image."),
+    ("Locate the ", " in the image by drawing a bounding box."),
+    ("mark the ", " with a bounding box."),
+    ("Identify the ", " in the image by bounding it."),
+    ("Find the ", " and draw a bounding box around it."),
+    ("Highlight the ", " with a bounding box."),
+]
+
 # Base action phrases (part 1) for robot bbox prompts
 _ROBOT_BBOX_PART1: list[str] = [
     # Pick/grasp actions
@@ -66,14 +77,6 @@ _ROBOT_BBOX_PART1: list[str] = [
     "Reach for the ",
     "Move the gripper to the ",
     "Navigate to the ",
-    # Place/put actions
-    "Place the object on the ",
-    "Put the item near the ",
-    "Stack the object on the ",
-    # Push/pull/slide actions
-    "Push the ",
-    "Pull the ",
-    "Slide the ",
 ]
 
 # Part 2 variants for different coordinate frames
@@ -86,21 +89,21 @@ ROBOT_BBOX_PROMPT_PARTS: list[tuple[str, str]] = [
     (p1, p2)
     for p1 in _ROBOT_BBOX_PART1
     for p2 in [_ROBOT_BBOX_PART2_IMAGE, _ROBOT_BBOX_PART2_ROBOT_BASE, _ROBOT_BBOX_PART2_EE]
-]
+] + GENERAL_BBOX_PROMPT_PARTS
 
 # OXE-specific: robot base frame + image (no end-effector frame)
 ROBOT_BBOX_PROMPT_PARTS_OXE: list[tuple[str, str]] = [
     (p1, p2)
     for p1 in _ROBOT_BBOX_PART1
     for p2 in [_ROBOT_BBOX_PART2_IMAGE, _ROBOT_BBOX_PART2_ROBOT_BASE]
-]
+] + GENERAL_BBOX_PROMPT_PARTS
 
 # End-effector specific: end-effector frame + image (for DROID, PACO, LVIS, etc.)
 ROBOT_BBOX_PROMPT_PARTS_EE: list[tuple[str, str]] = [
     (p1, p2)
     for p1 in _ROBOT_BBOX_PART1
     for p2 in [_ROBOT_BBOX_PART2_IMAGE, _ROBOT_BBOX_PART2_EE]
-]
+] + GENERAL_BBOX_PROMPT_PARTS
 
 # Direction classification prompts (for directional VQA tasks)
 DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
@@ -114,6 +117,14 @@ DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
 # =============================================================================
 # ROBOT DIRECTION PROMPT PARTS (full combinations)
 # =============================================================================
+
+GENERAL_DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
+    ("Answer where is the ", " located."),
+    ("Describe which direction ", " is in the image."),
+    ("Describe the direction of ", " in the image."),
+    ("Point out the direction of ", "."),
+    ("Show me where ", " is.")
+]
 
 # Base action phrases (part 1) for robot direction prompts
 _ROBOT_DIRECTION_PART1: list[str] = [
@@ -134,19 +145,19 @@ ROBOT_DIRECTION_PROMPT_PARTS: list[tuple[str, str]] = [
     (p1, p2)
     for p1 in _ROBOT_DIRECTION_PART1
     for p2 in [_ROBOT_DIRECTION_PART2_EE, _ROBOT_DIRECTION_PART2_ROBOT_BASE]
-]
+] + GENERAL_DIRECTION_PROMPT_PARTS
 
 # OXE-specific: robot base frame only
 ROBOT_DIRECTION_PROMPT_PARTS_OXE: list[tuple[str, str]] = [
     (p1, _ROBOT_DIRECTION_PART2_ROBOT_BASE)
     for p1 in _ROBOT_DIRECTION_PART1
-]
+] + GENERAL_DIRECTION_PROMPT_PARTS
 
 # End-effector specific: end-effector frame only (for DROID, etc.)
 ROBOT_DIRECTION_PROMPT_PARTS_EE: list[tuple[str, str]] = [
     (p1, _ROBOT_DIRECTION_PART2_EE)
     for p1 in _ROBOT_DIRECTION_PART1
-]
+] + GENERAL_DIRECTION_PROMPT_PARTS
 
 
 # =============================================================================
@@ -1230,7 +1241,10 @@ def compute_direction_from_bbox(
         direction = f"{base_dir} and {vert_dir}"
 
     if add_move_prefix:
-        return f"move {direction}"
+        # With probability 0.5, add or not add "move " prefix, using tf random for seed consistency
+        prob = tf.random.uniform([], dtype=tf.float32)
+        if prob < 0.5:
+            return f"move {direction}"
     return direction
 
 
