@@ -212,7 +212,16 @@ def prepare_batched_dataset(
                     f"expected ~{expected_batches} batches (batch_size={batch_size})"
                 )
             elif pre_batch_cardinality == tf.data.UNKNOWN_CARDINALITY:
-                logging.info(f"[DEBUG] Validation dataset before batching: UNKNOWN_CARDINALITY (batch_size={batch_size})")
+                # For UNKNOWN_CARDINALITY, manually count samples
+                # Note: This will consume the dataset, but TensorFlow datasets should be re-iterable
+                logging.info(f"[DEBUG] Validation dataset before batching: UNKNOWN_CARDINALITY, counting samples...")
+                sample_count = dataset_size(dataset)
+                expected_batches = sample_count // batch_size if sample_count > 0 else 0
+                logging.info(
+                    f"[DEBUG] Validation dataset before batching: {sample_count} samples counted, "
+                    f"expected ~{expected_batches} batches (batch_size={batch_size})"
+                )
+                # Dataset should be re-iterable, so we can continue using it
             else:
                 logging.info(f"[DEBUG] Validation dataset before batching: INFINITE_CARDINALITY (batch_size={batch_size})")
         except Exception as e:
@@ -228,7 +237,12 @@ def prepare_batched_dataset(
             if post_batch_cardinality >= 0:
                 logging.info(f"[DEBUG] Validation dataset after batching: {post_batch_cardinality} batches (batch_size={batch_size})")
             elif post_batch_cardinality == tf.data.UNKNOWN_CARDINALITY:
-                logging.info(f"[DEBUG] Validation dataset after batching: UNKNOWN_CARDINALITY (batch_size={batch_size})")
+                # For UNKNOWN_CARDINALITY, manually count batches
+                # Note: This will consume the dataset, but TensorFlow datasets should be re-iterable
+                logging.info(f"[DEBUG] Validation dataset after batching: UNKNOWN_CARDINALITY, counting batches...")
+                batch_count = dataset_size(dataset)
+                logging.info(f"[DEBUG] Validation dataset after batching: {batch_count} batches counted (batch_size={batch_size})")
+                # Dataset should be re-iterable, so we can continue using it
             else:
                 logging.info(f"[DEBUG] Validation dataset after batching: INFINITE_CARDINALITY (batch_size={batch_size})")
         except Exception as e:

@@ -325,7 +325,12 @@ class OXECoTDatasets:
                 if cardinality >= 0:
                     logging.info(f"[DEBUG] Validation dataset after flattening (before batching): {cardinality} samples")
                 elif cardinality == tf.data.UNKNOWN_CARDINALITY:
-                    logging.info(f"[DEBUG] Validation dataset after flattening: UNKNOWN_CARDINALITY")
+                    # For UNKNOWN_CARDINALITY, manually count samples
+                    # Note: This will consume the dataset, but it should be re-iterable
+                    logging.info(f"[DEBUG] Validation dataset after flattening: UNKNOWN_CARDINALITY, counting samples...")
+                    from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                    sample_count = dataset_size(self.dataset)
+                    logging.info(f"[DEBUG] Validation dataset after flattening (before batching): {sample_count} samples counted")
                 else:
                     logging.info(f"[DEBUG] Validation dataset after flattening: INFINITE_CARDINALITY")
             except Exception as e:
