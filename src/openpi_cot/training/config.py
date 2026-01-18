@@ -1118,6 +1118,13 @@ def create_multi_device_configs(
             weight_loader = train_kwargs["weight_loader"]
             device_cache_dir = device_cfg.get_cache_dir()
             
+            # Debug logging to diagnose weight loader kind detection
+            logging.info(
+                f"[{config_name}] Weight loader type: {type(weight_loader)}, "
+                f"has 'kind' attr: {hasattr(weight_loader, 'kind')}, "
+                f"kind value: {getattr(weight_loader, 'kind', 'N/A')}"
+            )
+            
             # Auto-set Gemma3 params_path based on model variant
             if hasattr(weight_loader, "kind") and weight_loader.kind == "gemma3":
                 if isinstance(model, pi_cot_config.PiCoTConfig) and hasattr(model, "paligemma_variant"):
@@ -1146,7 +1153,14 @@ def create_multi_device_configs(
                     )
             else:
                 # For non-Gemma3 or when variant info not available, just make params_path device-specific
-                raise ValueError(f"No weight loader specified for device {weight_loader.kind}")
+                # Warn if we have a Gemma3 model but non-Gemma3 weight loader
+                if isinstance(model, pi_cot_config.PiCoTConfig) and hasattr(model, "paligemma_variant"):
+                    if "gemma3" in model.paligemma_variant:
+                        logging.info(
+                            f"[{config_name}] Model has Gemma3 variant '{model.paligemma_variant}' "
+                            f"but weight_loader.kind is '{getattr(weight_loader, 'kind', 'N/A')}', not 'gemma3'. "
+                            f"This may cause issues. Expected weight_loader.kind='gemma3'."
+                        )
                 if hasattr(weight_loader, "params_path") and weight_loader.params_path:
                     params_path = weight_loader.params_path
                     # Extract the relative path after /cache/
@@ -1157,9 +1171,6 @@ def create_multi_device_configs(
                         train_kwargs["weight_loader"] = dataclasses.replace(
                             weight_loader, params_path=device_params_path
                         )
-        else:
-            logging.info(f"No weight loader specified for device {device}, using default no-op weight loader")
-            raise ValueError(f"No weight loader specified for device {device}")
 
         # Set batch_size from device default if not specified
         if "batch_size" not in train_config_kwargs:
