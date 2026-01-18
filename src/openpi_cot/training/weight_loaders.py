@@ -277,8 +277,6 @@ def compare_checkpoints(source_info: dict, target_info: dict):
     print("\n--- End of Checkpoint Comparison ---\n")
 
 
-
-
 @dataclasses.dataclass(frozen=True)
 class Gemma3ScanCompatibleWeightLoader(WeightLoader):
     """Loads and remaps Gemma3 weights to match Pi0's nn.scan naming conventions.
@@ -651,7 +649,6 @@ class Gemma3WeightLoader(WeightLoader):
         # Load raw checkpoint
         loaded_params = restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
 
-
         # ==========================================================
         # ===== RUN DEBUGGING CHECKS ON OUR CLEANED PARAMS =========
         # ==========================================================
@@ -660,7 +657,7 @@ class Gemma3WeightLoader(WeightLoader):
         original_info = get_param_info(loaded_params)
         original_total_params = sum(p["size"] for p in original_info.values())
 
-        final_llm_nested = unflatten_dict({tuple(k.split("/")): v for k, v in flat_llm.items()})
+        final_llm_nested = unflatten_dict({tuple(k.split("/")): v for k, v in loaded_params.items()})
         final_llm_info = get_param_info(final_llm_nested)
         final_total_params = sum(p["size"] for p in final_llm_info.values())
 
@@ -684,7 +681,7 @@ class Gemma3WeightLoader(WeightLoader):
 
         # Now, with a clean `flat_llm`, we can perform the merge.
         flat_model = flax.traverse_util.flatten_dict(params, sep="/")
-        merged = _merge_params(flat_llm, flat_model, missing_regex=".*")
+        merged = _merge_params(loaded_params, flat_model, missing_regex=".*")
 
         return merged
 
@@ -713,6 +710,7 @@ class WeightLoaderChoice(WeightLoader):
         "paligemma",
         "paligemma2",
         "gemma3",
+        "gemma3_1b",
     ] = "paligemma"
     # Used when kind == "checkpoint", "paligemma2", "gemma3".
     params_path: str | None = None
@@ -739,6 +737,10 @@ class WeightLoaderChoice(WeightLoader):
                 return Gemma3ScanCompatibleWeightLoader(
                     self.params_path, target_pos_emb_grid_size=self.target_pos_emb_grid_size
                 )
+            case "gemma3_1b":
+                if not self.params_path:
+                    raise ValueError("--weight-loader.params-path must be set when kind=gemma3_1b")
+                return Gemma3WeightLoader(self.params_path)
             case "none":
                 return NoOpWeightLoader()
             case _:
