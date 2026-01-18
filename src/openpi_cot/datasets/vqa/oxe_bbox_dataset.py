@@ -23,6 +23,7 @@ from openpi_cot.datasets.vqa.bbox_common import (
     ROBOT_BBOX_PROMPT_PARTS_OXE,
     ROBOT_DIRECTION_PROMPT_PARTS_OXE,
     bridge_key_extractor,
+    build_annotated_keys_and_frame_table_v2,
     build_annotated_keys_set,
     build_frame_objects_table_v2,
     build_frame_objects_table_v2_direction,
@@ -128,20 +129,30 @@ class OXEBoundingBoxDataset(ABC):
 
         # Build path to bbox annotations directory
         self.bbox_annotations_dir = self._get_bbox_annotations_dir(config)
-        logging.info(f"Loading bbox annotations from: {self.bbox_annotations_dir}")
+        logging.info(f"[{self.dataset_name}] Loading bbox annotations from: {self.bbox_annotations_dir}")
 
-        # Build RLDS dataset
+        # Build RLDS dataset (lazy operation, should be fast)
+        logging.info(f"[{self.dataset_name}] Building RLDS dataset builder...")
         self.builder = self.build_dataset_builder(oxe_dataset_name, data_dir)
+        logging.info(f"[{self.dataset_name}] Building RLDS dataset...")
         self.dataset = self.build_dataset(self.builder)
 
         # Apply trajectory identifier (OXE-style: hash-based)
+        # This processes trajectories to add trajectory_id and episode_id
+        logging.info(f"[{self.dataset_name}] Computing trajectory identifiers (this may take a while for large datasets)...")
         self.get_traj_identifier()
+        logging.info(f"[{self.dataset_name}] Finished computing trajectory identifiers")
 
         # Split train/val
+        logging.info(f"[{self.dataset_name}] Splitting train/val...")
         self.split_val(split_seed=seed)
+        logging.info(f"[{self.dataset_name}] Finished train/val split")
 
         # Apply VQA restructure for bounding box
+        # This also builds the frame objects table in a single pass for efficiency
+        logging.info(f"[{self.dataset_name}] Restructuring trajectories and building lookup tables...")
         self.apply_restructure()
+        logging.info(f"[{self.dataset_name}] Finished restructuring")
 
         # Apply frame filters (only keep frames with valid bbox annotations)
         self.apply_frame_filters()
@@ -372,21 +383,44 @@ class OXEBoundingBoxDataset(ABC):
 
     def apply_restructure(self):
         """Restructure trajectory data into VQA-style bbox samples."""
-        # OPTIMIZATION: Build set of episode_ids with annotations and filter trajectories first
-        # This skips entire trajectories without any bbox annotations
+        # OPTIMIZATION: Build set of episode_ids with annotations and frame objects table
+        # in a single pass to avoid scanning JSONL files multiple times
         key_extractor = self.get_key_extractor()
-        annotated_episode_ids = build_annotated_keys_set(
-            self.bbox_annotations_dir, key_extractor
-        )
-        logging.info(f"Found {len(annotated_episode_ids)} trajectories with bbox annotations")
-
+        orig_w, orig_h = self.get_original_image_size()
+        target_h, target_w = self.config.resize_resolution
+        
+        # Build both annotated keys set and frame objects table in one pass
+        # This is much faster than calling them separately
+        if not self.directional:
+            logging.info(f"[{self.dataset_name}] Building annotated keys set and frame objects table in single pass...")
+            annotated_episode_ids, self._frame_objects_table, self._num_transitions = build_annotated_keys_and_frame_table_v2(
+                bbox_annotations_dir=self.bbox_annotations_dir,
+                key_extractor=key_extractor,
+                dataset_name=self.dataset_name,
+                orig_size=(orig_w, orig_h),
+                target_size=(target_w, target_h),
+                target_only=self.use_target_only(),
+                direction_slope=self.direction_slope,
+            )
+            logging.info(f"[{self.dataset_name}] Found {len(annotated_episode_ids)} trajectories with bbox annotations")
+        else:
+            # For directional, we still need to use the separate function
+            # TODO: Could optimize this further by creating a combined directional version
+            annotated_episode_ids = build_annotated_keys_set(
+                self.bbox_annotations_dir, key_extractor
+            )
+            self._frame_objects_table = None  # Will be built in _build_frame_objects_table
+            self._num_transitions = None  # Will be computed in get_num_transitions()
+        
         # Log sample file_paths from JSONL for debugging
         if annotated_episode_ids:
             sample_paths = list(annotated_episode_ids)[:2]
-            logging.info(f"Sample JSONL file_paths (keys): {sample_paths}")
+            logging.info(f"[{self.dataset_name}] Sample JSONL file_paths (keys): {sample_paths}")
 
         # Enable trajectory-level filtering using episode_id
+        # This filters out trajectories that don't have any annotated frames
         if annotated_episode_ids:
+            logging.info(f"[{self.dataset_name}] Filtering trajectories to only those with annotations...")
             annotated_ids_table = tf.lookup.StaticHashTable(
                 tf.lookup.KeyValueTensorInitializer(
                     tf.constant(list(annotated_episode_ids), dtype=tf.string),
@@ -401,6 +435,7 @@ class OXEBoundingBoxDataset(ABC):
                 return annotated_ids_table.lookup(episode_id)
 
             self.dataset = self.dataset.filter(has_any_annotations)
+            logging.info(f"[{self.dataset_name}] Finished filtering trajectories")
 
         primary_image_key = self.get_primary_image_key()
         frame_offset = self.get_frame_offset()
@@ -585,7 +620,16 @@ class OXEBoundingBoxDataset(ABC):
         self.dataset = self.dataset.filter(has_valid_qa)
 
     def _build_frame_objects_table(self):
-        """Build a lookup table from episode_id--frame_idx to pipe-delimited objects."""
+        """Build a lookup table from episode_id--frame_idx to pipe-delimited objects.
+        
+        Uses cached table from apply_restructure() if available (non-directional case),
+        otherwise builds it fresh (directional case).
+        """
+        # If we already built the table in apply_restructure(), reuse it
+        if hasattr(self, '_frame_objects_table') and self._frame_objects_table is not None:
+            return self._frame_objects_table
+        
+        # Otherwise, build it now (directional case or fallback)
         orig_w, orig_h = self.get_original_image_size()
         target_h, target_w = self.config.resize_resolution
         
@@ -609,11 +653,19 @@ class OXEBoundingBoxDataset(ABC):
         )
 
     def get_num_transitions(self) -> int:
-        """Return number of transitions computed from JSONL annotation files."""
-        if not hasattr(self, "_num_transitions"):
-            self._num_transitions = count_annotated_frames(
-                self.bbox_annotations_dir, self.get_key_extractor()
-            )
+        """Return number of transitions computed from JSONL annotation files.
+        
+        Uses cached count from build_annotated_keys_and_frame_table_v2() if available
+        (non-directional case), otherwise scans JSONL files to count (directional case).
+        """
+        # If we already computed it during table building, reuse it
+        if hasattr(self, "_num_transitions") and self._num_transitions is not None:
+            return self._num_transitions
+        
+        # Otherwise, compute it now (directional case or fallback)
+        self._num_transitions = count_annotated_frames(
+            self.bbox_annotations_dir, self.get_key_extractor()
+        )
         return self._num_transitions
 
     def debug_key_mismatch(self, num_samples: int = 5):
