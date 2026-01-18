@@ -167,8 +167,8 @@ def prepare_batched_dataset(
     elif want_val:
         if max_samples is not None:
             dataset = dataset.take(int(max_samples))
-        # NOTE: For validation, we cache AFTER image decoding (see below)
-        # This caches decoded images so subsequent val iterations are fast
+        # NOTE: For validation, we don't cache since we reconstruct iterator each time
+        # and max_samples is typically not used, so we iterate until StopIteration
     else:
         raise NotImplementedError("Mode with max_samples and no val not implemented")
 
@@ -191,18 +191,25 @@ def prepare_batched_dataset(
     num_parallel_calls = tf.data.AUTOTUNE
     dataset = dataset.frame_map(decode_fn, num_parallel_calls)
 
-    # For validation: cache AFTER decoding so decoded images are cached
-    # This makes subsequent validation iterations much faster
-    # if want_val:
-        # dataset = dataset.cache()
-
     dataset = dataset.batch(batch_size, drop_remainder=True)
 
     # Apply device-specific and buffering operations
-    try:
-        dataset = dataset.prefetch_to_device(2)
-    except Exception:
-        dataset = dataset.prefetch(2)
-    dataset = dataset.with_ram_budget(1)
+    # For validation, use smaller prefetch buffer since we only iterate once
+    # and don't need aggressive buffering
+    if want_val:
+        # Simplified buffering for validation - just basic prefetch
+        try:
+            dataset = dataset.prefetch_to_device(1)  # Smaller buffer for validation
+        except Exception:
+            dataset = dataset.prefetch(1)
+        # Skip with_ram_budget for validation to avoid expensive memory management
+        # since we're only iterating once
+    else:
+        # Full buffering for training
+        try:
+            dataset = dataset.prefetch_to_device(2)
+        except Exception:
+            dataset = dataset.prefetch(2)
+        dataset = dataset.with_ram_budget(1)
 
     return dataset

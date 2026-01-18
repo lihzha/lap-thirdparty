@@ -192,6 +192,7 @@ def create_data_loader(
             num_batches=num_batches,
             data_cfg=data_cfg,
             persistent_iterator=persistent_iterator,
+            split=split,
         )
 
     # Non-RLDS: delegate entirely to upstream (this will require torch if used)
@@ -225,6 +226,7 @@ class CoTRLDSDataLoader:
         num_batches: int | None = None,
         data_cfg: _config.CoTDataConfig,
         persistent_iterator: bool = False,
+        split: str = "train",
     ):
         self._dataset = dataset
         self._original_dataset = dataset  # Keep reference for skip-based resumption
@@ -237,6 +239,7 @@ class CoTRLDSDataLoader:
         self._checkpoint = None
         self._seen_batches = 0
         self._skip_batches = 0  # Track how many batches to skip on next iteration
+        self._split = split  # Track split to determine if we should stop on StopIteration
 
         if sharding is None:
             sharding = jax.sharding.PositionalSharding(jax.local_devices())
@@ -323,6 +326,10 @@ class CoTRLDSDataLoader:
             try:
                 batch = next(data_iter)
             except StopIteration:
+                # For validation, stop on StopIteration (don't restart iterator)
+                # For training, restart the iterator to loop forever
+                if self._split == "val":
+                    return  # Stop iteration for validation
                 data_iter = iter(self._dataset)
                 continue
 
