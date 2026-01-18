@@ -1031,10 +1031,20 @@ def _get_gemma3_params_path_from_variant(variant: str, cache_dir: str) -> str | 
         "gemma3_12b": "gemma3-12b-it",
     }
     
-    # Find matching variant
+    # Find matching variant (check exact match first, then substring)
+    # Try exact match first for precision
+    if variant in variant_to_params:
+        params_name = variant_to_params[variant]
+        result = f"{cache_dir}/{params_name}"
+        logging.info(f"Matched variant '{variant}' exactly to params path: {result}")
+        return result
+    
+    # Fall back to substring matching
     for var_key, params_name in variant_to_params.items():
         if var_key in variant:
-            return f"{cache_dir}/{params_name}"
+            result = f"{cache_dir}/{params_name}"
+            logging.info(f"Matched variant '{variant}' (contains '{var_key}') to params path: {result}")
+            return result
     
     # Default fallback (shouldn't happen, but handle gracefully)
     logging.warning(f"Unknown Gemma3 variant: {variant}, using default gemma3-4b-it")
@@ -1109,39 +1119,31 @@ def create_multi_device_configs(
             device_cache_dir = device_cfg.get_cache_dir()
             
             # Auto-set Gemma3 params_path based on model variant
-            if (
-                hasattr(weight_loader, "kind")
-                and weight_loader.kind == "gemma3"
-                and isinstance(model, pi_cot_config.PiCoTConfig)
-                and hasattr(model, "paligemma_variant")
-            ):
-                # Get variant-based path
-                variant_based_path = _get_gemma3_params_path_from_variant(
-                    model.paligemma_variant, device_cache_dir
-                )
-                
-                if variant_based_path:
-                    # Check if params_path is not set or needs to be updated
-                    if not hasattr(weight_loader, "params_path") or not weight_loader.params_path:
-                        # Auto-set based on variant
+            if hasattr(weight_loader, "kind") and weight_loader.kind == "gemma3":
+                if isinstance(model, pi_cot_config.PiCoTConfig) and hasattr(model, "paligemma_variant"):
+                    variant = model.paligemma_variant
+                    # Get variant-based path
+                    variant_based_path = _get_gemma3_params_path_from_variant(variant, device_cache_dir)
+                    
+                    if variant_based_path:
+                        # Always set params_path based on variant (variant takes precedence)
+                        logging.info(
+                            f"Setting Gemma3 params_path to {variant_based_path} "
+                            f"based on variant '{variant}' for device {device}"
+                        )
                         train_kwargs["weight_loader"] = dataclasses.replace(
                             weight_loader, params_path=variant_based_path
                         )
                     else:
-                        # Update existing params_path to be device-specific and variant-based
-                        # First, make it device-specific if it has /cache/ in it
-                        params_path = weight_loader.params_path
-                        if "/cache/" in params_path:
-                            cache_suffix = params_path.split("/cache/", 1)[1]
-                            device_params_path = f"{device_cache_dir}/{cache_suffix}"
-                        else:
-                            device_params_path = variant_based_path
-                        
-                        # Use variant-based path if it's different (variant takes precedence)
-                        final_params_path = variant_based_path
-                        train_kwargs["weight_loader"] = dataclasses.replace(
-                            weight_loader, params_path=final_params_path
+                        logging.warning(
+                            f"Could not determine Gemma3 params_path for variant '{variant}', "
+                            f"using existing params_path: {getattr(weight_loader, 'params_path', None)}"
                         )
+                else:
+                    logging.warning(
+                        f"Gemma3 weight loader detected but model is not PiCoTConfig or missing paligemma_variant. "
+                        f"Model type: {type(model)}, has paligemma_variant: {hasattr(model, 'paligemma_variant') if isinstance(model, pi_cot_config.PiCoTConfig) else 'N/A'}"
+                    )
             else:
                 # For non-Gemma3 or when variant info not available, just make params_path device-specific
                 if hasattr(weight_loader, "params_path") and weight_loader.params_path:
