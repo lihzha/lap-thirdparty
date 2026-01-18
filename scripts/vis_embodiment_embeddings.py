@@ -630,29 +630,48 @@ def extract_all_embeddings(
             
             first_batch = False
             
-            # Convert to numpy - handle sharded arrays properly
+            # Block until computation is complete, then convert to numpy
+            # This ensures data is transferred to CPU before we continue
+            jax.block_until_ready(embeddings)
             embeddings_np = _to_numpy_safe(embeddings)
+            
+            # Explicitly delete JAX array to free device memory
+            del embeddings
+            
             batch_size = embeddings_np.shape[0]
             
             # Get dataset names from the batch
             dataset_names = ["unknown"] * batch_size
             
             if tokenized_names is not None and tokenizer is not None:
+                jax.block_until_ready(tokenized_names)
                 tokenized_names_np = _to_numpy_safe(tokenized_names)
+                del tokenized_names
                 dataset_names = decode_dataset_names(tokenized_names_np, tokenizer)
             
-            # Store results
+            # Store results (as numpy arrays on CPU)
             for i in range(batch_size):
                 if collected >= num_samples:
                     break
-                all_embeddings.append(embeddings_np[i])
+                all_embeddings.append(embeddings_np[i].copy())  # Explicit copy to ensure no device reference
                 all_dataset_names.append(dataset_names[i] if i < len(dataset_names) else "unknown")
                 sample_indices.append(collected)
                 collected += 1
             
+            # Free batch memory
+            del embeddings_np
+            del observation
+            
+            # Periodically clear JAX caches to free device memory
+            if collected % 1000 == 0:
+                jax.clear_caches()
+            
             pbar.update(min(batch_size, num_samples - collected + batch_size))
     
     pbar.close()
+    
+    # Final cache clear
+    jax.clear_caches()
     
     return EmbeddingResult(
         embeddings=np.stack(all_embeddings),
