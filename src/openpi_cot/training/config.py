@@ -1135,12 +1135,12 @@ def create_multi_device_configs(
                             weight_loader, params_path=variant_based_path
                         )
                     else:
-                        logging.warning(
+                        logging.info(
                             f"Could not determine Gemma3 params_path for variant '{variant}', "
                             f"using existing params_path: {getattr(weight_loader, 'params_path', None)}"
                         )
                 else:
-                    logging.warning(
+                    logging.info(
                         f"Gemma3 weight loader detected but model is not PiCoTConfig or missing paligemma_variant. "
                         f"Model type: {type(model)}, has paligemma_variant: {hasattr(model, 'paligemma_variant') if isinstance(model, pi_cot_config.PiCoTConfig) else 'N/A'}"
                     )
@@ -1157,7 +1157,7 @@ def create_multi_device_configs(
                             weight_loader, params_path=device_params_path
                         )
         else:
-            logging.warning(f"No weight loader specified for device {device}, using default no-op weight loader")
+            logging.info(f"No weight loader specified for device {device}, using default no-op weight loader")
             raise ValueError(f"No weight loader specified for device {device}")
 
         # Set batch_size from device default if not specified
