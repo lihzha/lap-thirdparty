@@ -120,6 +120,15 @@ class SingleCoTDataset:
         self.dataset = self.build_dataset(self.builder)
         self.get_traj_identifier()
 
+        # Debug: Count right after building dataset
+        if self.want_val:
+            try:
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                post_build_count = dataset_size(self.dataset)
+                logging.info(f"[DEBUG] Dataset after build_dataset: {post_build_count} trajectories")
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset after build_dataset: {e}")
+
         # Set statistics before filtering (needed for dataset-specific filters)
         self.dataset_statistics = cached_stats
 
@@ -237,7 +246,39 @@ class SingleCoTDataset:
             shuffle=bool(not want_full_determinism),  # shuffle at file/shard level for deterministic interleaving
             num_parallel_reads=self.num_parallel_reads,
         )
+        
+        # Debug: Count before sharding
+        if self.want_val:
+            try:
+                import jax
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                pre_shard_count = dataset_size(dataset)
+                process_count = jax.process_count()
+                process_index = jax.process_index()
+                logging.info(
+                    f"[DEBUG] Dataset before sharding: {pre_shard_count} trajectories "
+                    f"(process {process_index}/{process_count})"
+                )
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset before sharding: {e}")
+        
         dataset = dataset.shard(jax.process_count(), jax.process_index())
+        
+        # Debug: Count after sharding
+        if self.want_val:
+            try:
+                import jax
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                post_shard_count = dataset_size(dataset)
+                process_count = jax.process_count()
+                process_index = jax.process_index()
+                logging.info(
+                    f"[DEBUG] Dataset after sharding: {post_shard_count} trajectories "
+                    f"(process {process_index}/{process_count})"
+                )
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset after sharding: {e}")
+        
         # Repeat early to increase interleaving across files/episodes
         dataset = dataset.with_options(self.get_dataset_ops())
         return dataset
