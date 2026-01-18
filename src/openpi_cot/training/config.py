@@ -1146,6 +1146,7 @@ def create_multi_device_configs(
                     )
             else:
                 # For non-Gemma3 or when variant info not available, just make params_path device-specific
+                raise ValueError(f"No weight loader specified for device {weight_loader.kind}")
                 if hasattr(weight_loader, "params_path") and weight_loader.params_path:
                     params_path = weight_loader.params_path
                     # Extract the relative path after /cache/
