@@ -387,13 +387,13 @@ def load_model_from_params_directly(
     # Determine checkpoint step directory
     # CheckpointManager uses step directories like "step_1000", "step_2000", etc.
     if config.eval_checkpoint_step is not None:
-        checkpoint_step_dir = checkpoint_dir / f"step_{config.eval_checkpoint_step}"
+        checkpoint_step_dir = checkpoint_dir / config.eval_checkpoint_step
     else:
         # Find latest checkpoint step
         checkpoint_dirs = [d for d in checkpoint_dir.iterdir()]
         if not checkpoint_dirs:
             raise ValueError(f"No checkpoint steps found in {checkpoint_dir}")
-        checkpoint_step_dir = max(checkpoint_dirs, key=lambda d: int(d.name))
+        checkpoint_step_dir = max(checkpoint_dirs, key=lambda d: int(d.name))  # type: ignore
         logging.info(f"No checkpoint step specified, using latest: {checkpoint_step_dir.name}")
     
     params_path = checkpoint_step_dir / "params"
