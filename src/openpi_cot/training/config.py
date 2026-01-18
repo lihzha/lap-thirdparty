@@ -1011,6 +1011,36 @@ class EmaScheduleChoice:
         raise ValueError(f"Unsupported EMA schedule kind: {self.kind}")
 
 
+def _get_gemma3_params_path_from_variant(variant: str, cache_dir: str) -> str | None:
+    """Get Gemma3 params path from variant name.
+    
+    Args:
+        variant: Model variant name (e.g., "gemma3_1b", "gemma3_4b", "gemma3_12b")
+        cache_dir: Cache directory base path
+        
+    Returns:
+        Params path or None if variant is not Gemma3
+    """
+    if "gemma3" not in variant:
+        return None
+    
+    # Map variant to params directory name
+    variant_to_params = {
+        "gemma3_1b": "gemma3-1b-it",
+        "gemma3_4b": "gemma3-4b-it",
+        "gemma3_12b": "gemma3-12b-it",
+    }
+    
+    # Find matching variant
+    for var_key, params_name in variant_to_params.items():
+        if var_key in variant:
+            return f"{cache_dir}/{params_name}"
+    
+    # Default fallback (shouldn't happen, but handle gracefully)
+    logging.warning(f"Unknown Gemma3 variant: {variant}, using default gemma3-4b-it")
+    return f"{cache_dir}/gemma3-4b-it"
+
+
 def create_multi_device_configs(
     base_name: str,
     devices: list[str],
@@ -1076,16 +1106,54 @@ def create_multi_device_configs(
         # Handle device-specific weight loader params_path
         if "weight_loader" in train_kwargs:
             weight_loader = train_kwargs["weight_loader"]
-            # Check if weight_loader has params_path that needs to be device-specific
-            if hasattr(weight_loader, "params_path") and weight_loader.params_path:
-                params_path = weight_loader.params_path
-                # Extract the relative path after /cache/
-                if "/cache/" in params_path:
-                    cache_suffix = params_path.split("/cache/", 1)[1]
-                    device_cache_dir = device_cfg.get_cache_dir()
-                    device_params_path = f"{device_cache_dir}/{cache_suffix}"
-                    # Create new weight loader with device-specific params_path
-                    train_kwargs["weight_loader"] = dataclasses.replace(weight_loader, params_path=device_params_path)
+            device_cache_dir = device_cfg.get_cache_dir()
+            
+            # Auto-set Gemma3 params_path based on model variant
+            if (
+                hasattr(weight_loader, "kind")
+                and weight_loader.kind == "gemma3"
+                and isinstance(model, pi_cot_config.PiCoTConfig)
+                and hasattr(model, "paligemma_variant")
+            ):
+                # Get variant-based path
+                variant_based_path = _get_gemma3_params_path_from_variant(
+                    model.paligemma_variant, device_cache_dir
+                )
+                
+                if variant_based_path:
+                    # Check if params_path is not set or needs to be updated
+                    if not hasattr(weight_loader, "params_path") or not weight_loader.params_path:
+                        # Auto-set based on variant
+                        train_kwargs["weight_loader"] = dataclasses.replace(
+                            weight_loader, params_path=variant_based_path
+                        )
+                    else:
+                        # Update existing params_path to be device-specific and variant-based
+                        # First, make it device-specific if it has /cache/ in it
+                        params_path = weight_loader.params_path
+                        if "/cache/" in params_path:
+                            cache_suffix = params_path.split("/cache/", 1)[1]
+                            device_params_path = f"{device_cache_dir}/{cache_suffix}"
+                        else:
+                            device_params_path = variant_based_path
+                        
+                        # Use variant-based path if it's different (variant takes precedence)
+                        final_params_path = variant_based_path
+                        train_kwargs["weight_loader"] = dataclasses.replace(
+                            weight_loader, params_path=final_params_path
+                        )
+            else:
+                # For non-Gemma3 or when variant info not available, just make params_path device-specific
+                if hasattr(weight_loader, "params_path") and weight_loader.params_path:
+                    params_path = weight_loader.params_path
+                    # Extract the relative path after /cache/
+                    if "/cache/" in params_path:
+                        cache_suffix = params_path.split("/cache/", 1)[1]
+                        device_params_path = f"{device_cache_dir}/{cache_suffix}"
+                        # Create new weight loader with device-specific params_path
+                        train_kwargs["weight_loader"] = dataclasses.replace(
+                            weight_loader, params_path=device_params_path
+                        )
 
         # Set batch_size from device default if not specified
         if "batch_size" not in train_config_kwargs:
@@ -1255,7 +1323,7 @@ _CONFIGS = [
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3"),  # params_path auto-set from variant
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
         optimizer=_optimizer.AdamW(weight_decay=0.0001),
         save_interval=1000,
@@ -1289,7 +1357,7 @@ _CONFIGS = [
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-4b-it"),
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3"),  # params_path auto-set from variant
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
         optimizer=_optimizer.AdamW(weight_decay=0.0001),
         save_interval=1000,
