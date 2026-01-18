@@ -28,7 +28,6 @@ from openpi_cot.datasets.vqa.bbox_common import (
     build_frame_objects_table_v2_direction,
     count_annotated_frames,
     oxe_key_extractor,
-    sample_and_format_objects_direction_tf,
     sample_and_format_objects_tf,
     sample_prompt_tf,
 )
@@ -463,7 +462,8 @@ class OXEBoundingBoxDataset(ABC):
         self.dataset = self.dataset.filter(has_bbox_annotation)
 
         # Sample objects and format caption using pure TensorFlow operations
-        max_objects = 1000
+        # Always sample exactly 1 object for both bbox and directional samples
+        max_objects = 1
         direction_prob = 0.5  # Probability of using direction caption instead of bbox
 
         def lookup_and_sample_objects(frame):

@@ -17,7 +17,7 @@ import openpi_cot.models.backbones.gemma as _gemma
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.model_adapter import preprocess_observation
 import openpi_cot.models.pi_cot_config as _pi_cot_config
-from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_ID_TO_NAME, NUM_VQA_DATASETS
+from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_ID_TO_NAME, VQA_DATASET_ID_MAP, NUM_VQA_DATASETS
 
 logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
@@ -63,6 +63,17 @@ class PiCoT(_pi0.Pi0):
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
         self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 0.2))
         self.vqa_loss_weight = float(getattr(config, "vqa_loss_weight", 0.1))
+        # Per-dataset VQA loss weights: convert dataset names to IDs for efficient lookup
+        vqa_loss_weights_dict = getattr(config, "vqa_loss_weights", None)
+        if vqa_loss_weights_dict is not None:
+            # Convert dataset names to IDs for efficient lookup during loss computation
+            self.vqa_loss_weights_by_id = {
+                VQA_DATASET_ID_MAP[name]: weight
+                for name, weight in vqa_loss_weights_dict.items()
+                if name in VQA_DATASET_ID_MAP
+            }
+        else:
+            self.vqa_loss_weights_by_id = None
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         if self.enable_action_training:
@@ -516,8 +527,28 @@ class PiCoT(_pi0.Pi0):
                     )
                 )
 
+                # Compute per-sample VQA loss weights if per-dataset weights are specified
+                if self.enable_vqa_training and self.vqa_loss_weights_by_id is not None:
+                    # Get dataset IDs for VQA samples
+                    if hasattr(observation, "vqa_dataset_id") and observation.vqa_dataset_id is not None:
+                        vqa_dataset_ids = jnp.asarray(observation.vqa_dataset_id, dtype=jnp.int32)
+                        # Create per-sample weight array: use per-dataset weight if specified, else default
+                        vqa_weights = jnp.full(batch_size, self.vqa_loss_weight, dtype=jnp.float32)
+                        for dataset_id, weight in self.vqa_loss_weights_by_id.items():
+                            vqa_weights = jnp.where(
+                                vqa_dataset_ids == dataset_id,
+                                weight,
+                                vqa_weights
+                            )
+                    else:
+                        # Fallback to default weight if dataset IDs not available
+                        vqa_weights = jnp.full(batch_size, self.vqa_loss_weight, dtype=jnp.float32)
+                else:
+                    # Use scalar weight for all VQA samples
+                    vqa_weights = jnp.full(batch_size, self.vqa_loss_weight, dtype=jnp.float32)
+                
                 lang_per_sample_loss += (
-                    self.vqa_loss_weight * lang_loss * vqa_mask
+                    vqa_weights * lang_loss * vqa_mask
                     + self.prediction_loss_weight * lang_loss * pred_mask
                     + self.language_loss_weight * lang_loss * lang_mask
                 )

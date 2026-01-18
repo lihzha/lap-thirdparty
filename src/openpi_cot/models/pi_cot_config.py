@@ -68,6 +68,11 @@ class PiCoTConfig(_model.BaseModelConfig):
     action_loss_weight: float = 1.0
     prediction_loss_weight: float = 0.2
     vqa_loss_weight: float = 0.1
+    # Per-dataset VQA loss weights. If provided, overrides vqa_loss_weight for specific datasets.
+    # Format: dict[str, float] mapping dataset names to weights.
+    # Unspecified datasets will use vqa_loss_weight as default.
+    # Example: {"droid_bbox": 0.2, "coco_captions": 0.15}
+    vqa_loss_weights: dict[str, float] | None = None
 
     state_dropout: float = 0.0
     reasoning_mask_prob: float = 0.0

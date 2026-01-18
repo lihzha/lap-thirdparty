@@ -397,7 +397,8 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
         self.dataset = self.dataset.filter(has_bbox_annotation)
 
         # Sample objects and format caption using pure TensorFlow operations
-        max_objects = 2
+        # Always sample exactly 1 object for both bbox and directional samples
+        max_objects = 1
         direction_prob = 0.5  # Probability of using direction caption instead of bbox
 
         def lookup_and_sample_objects(frame):
@@ -421,35 +422,39 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 objects_data, max_objects=max_objects, seed_pair=seed_pair, direction_prob=direction_prob
             )
 
-            # For droid_bbox, rotate bbox coordinates to match rotated wrist image
-            # Split caption by " ; " to handle multiple bboxes
-            bbox_parts = tf.strings.split(caption, " ; ")
+            # Apply rotation if wrist image is rotated (needs_wrist_rotation is True)
+            # For DROID, wrist image is always used (for bbox samples as primary, for directional as wrist)
+            # and needs_wrist_rotation is always True, so rotation is always applied
+            needs_wrist_rotation = frame["needs_wrist_rotation"]
             
-            def rotate_bbox_part(bbox_part: tf.Tensor) -> tf.Tensor:
-                """Rotate bbox coordinates in a single bbox part."""
-                # Split by space to separate loc tokens from label
-                parts = tf.strings.split(bbox_part, " ")
-                if tf.shape(parts)[0] < 1:
-                    return bbox_part
+            def rotate_bbox_caption():
+                """Rotate bbox coordinates for bbox samples."""
+                # Split caption by " ; " to handle multiple bboxes (though we only sample 1 now)
+                bbox_parts = tf.strings.split(caption, " ; ")
                 
-                loc_tokens = parts[0]
-                label = tf.cond(
-                    tf.shape(parts)[0] > 1,
-                    lambda: tf.strings.reduce_join(parts[1:], separator=" "),
-                    lambda: tf.constant("", dtype=tf.string),
-                )
+                def rotate_bbox_part(bbox_part: tf.Tensor) -> tf.Tensor:
+                    """Rotate bbox coordinates in a single bbox part."""
+                    # Split by space to separate loc tokens from label
+                    parts = tf.strings.split(bbox_part, " ")
+                    if tf.shape(parts)[0] < 1:
+                        return bbox_part
+                    
+                    loc_tokens = parts[0]
+                    label = tf.cond(
+                        tf.shape(parts)[0] > 1,
+                        lambda: tf.strings.reduce_join(parts[1:], separator=" "),
+                        lambda: tf.constant("", dtype=tf.string),
+                    )
+                    
+                    # Rotate loc tokens
+                    rotated_loc = rotate_bbox_loc_tokens_180_tf(loc_tokens)
+                    
+                    # Reconstruct: rotated_loc + " " + label
+                    if tf.strings.length(label) > 0:
+                        return tf.strings.join([rotated_loc, label], separator=" ")
+                    else:
+                        return rotated_loc
                 
-                # Rotate loc tokens
-                rotated_loc = rotate_bbox_loc_tokens_180_tf(loc_tokens)
-                
-                # Reconstruct: rotated_loc + " " + label
-                if tf.strings.length(label) > 0:
-                    return tf.strings.join([rotated_loc, label], separator=" ")
-                else:
-                    return rotated_loc
-            
-            # Rotate each bbox part (only for non-directional bbox samples)
-            def rotate_caption():
                 rotated_parts = tf.map_fn(
                     rotate_bbox_part,
                     bbox_parts,
@@ -457,17 +462,20 @@ class DroidBoundingBoxDataset(SingleCoTDataset):
                 )
                 return tf.strings.reduce_join(rotated_parts, separator=" ; ")
             
-            # Rotate caption based on sample type
             def rotate_directional_caption():
-                # For directional samples, rotate the direction label
+                """Rotate direction label for directional samples."""
                 return rotate_direction_180_tf(caption)
             
-            # For directional samples: rotate direction label
-            # For bbox samples: rotate bbox coordinates
+            # Apply rotation based on sample type and whether rotation is needed
+            # For DROID, needs_wrist_rotation is always True, so rotation is always applied
             final_caption = tf.cond(
-                is_directional,
-                lambda: rotate_directional_caption(),  # Rotate direction for directional samples
-                lambda: rotate_caption(),  # Rotate bbox coordinates for bbox samples
+                needs_wrist_rotation,
+                lambda: tf.cond(
+                    is_directional,
+                    lambda: rotate_directional_caption(),  # Rotate direction for directional samples
+                    lambda: rotate_bbox_caption(),  # Rotate bbox coordinates for bbox samples
+                ),
+                lambda: caption,  # No rotation needed (shouldn't happen for DROID)
             )
 
             frame["object_labels"] = labels
