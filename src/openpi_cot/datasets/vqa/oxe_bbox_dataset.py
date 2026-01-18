@@ -403,6 +403,7 @@ class OXEBoundingBoxDataset(ABC):
                 direction_slope=self.direction_slope,
             )
             logging.info(f"[{self.dataset_name}] Found {len(annotated_episode_ids)} trajectories with bbox annotations")
+            logging.info(f"[{self.dataset_name}] Cached frame objects table (type: {type(self._frame_objects_table).__name__})")
         else:
             # For directional, we still need to use the separate function
             # TODO: Could optimize this further by creating a combined directional version
@@ -485,7 +486,10 @@ class OXEBoundingBoxDataset(ABC):
     def apply_frame_filters(self):
         """Filter and expand frames to create final VQA samples."""
         # Build a lookup table that maps episode_id--frame_idx to pipe-delimited objects
+        # This should reuse the cached table from apply_restructure() if available
+        logging.info(f"[{self.dataset_name}] Building/retrieving frame objects lookup table...")
         frame_to_objects = self._build_frame_objects_table()
+        logging.info(f"[{self.dataset_name}] Frame objects table ready")
 
         # Filter frames using pure TF lookup (fast) - only keep frames with annotations
         def has_bbox_annotation(frame):
@@ -627,9 +631,12 @@ class OXEBoundingBoxDataset(ABC):
         """
         # If we already built the table in apply_restructure(), reuse it
         if hasattr(self, '_frame_objects_table') and self._frame_objects_table is not None:
+            logging.info(f"[{self.dataset_name}] Reusing cached frame objects table")
             return self._frame_objects_table
         
         # Otherwise, build it now (directional case or fallback)
+        # This should NOT happen for non-directional case if apply_restructure() ran correctly
+        logging.warning(f"[{self.dataset_name}] Building frame objects table (not cached - this may be slow!)")
         orig_w, orig_h = self.get_original_image_size()
         target_h, target_w = self.config.resize_resolution
         
