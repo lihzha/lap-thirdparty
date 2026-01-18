@@ -162,15 +162,24 @@ def prepare_batched_dataset(
             that have needs_wrist_rotation=True. Set to 0.0 for validation.
     """
     # Apply standard pipeline operations
-    if (not want_val) and shuffle and max_samples is None:
-        dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
-    elif want_val:
+    if want_val:
+        # Validation: iterate once through the data
         if max_samples is not None:
             dataset = dataset.take(int(max_samples))
         # NOTE: For validation, we don't cache since we reconstruct iterator each time
         # and max_samples is typically not used, so we iterate until StopIteration
+    elif (not want_val) and shuffle and max_samples is None:
+        # Training with shuffling: repeat and shuffle
+        dataset = dataset.repeat().shuffle(shuffle_buffer_size, seed=seed)
+    elif (not want_val) and not shuffle and max_samples is None:
+        # Training without shuffling: just iterate once (no repeat, no shuffle)
+        # This is useful for evaluation on training split
+        pass  # Don't modify dataset, just iterate once
+    elif (not want_val) and max_samples is not None:
+        # Training with max_samples limit
+        dataset = dataset.take(int(max_samples))
     else:
-        raise NotImplementedError("Mode with max_samples and no val not implemented")
+        raise NotImplementedError(f"Unsupported mode: want_val={want_val}, shuffle={shuffle}, max_samples={max_samples}")
 
     # Only apply aggressive augmentation during training (not validation)
     # Per-sample check for "droid" in dataset_name is done inside make_decode_images_fn
