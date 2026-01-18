@@ -390,10 +390,10 @@ def load_model_from_params_directly(
         checkpoint_step_dir = checkpoint_dir / f"step_{config.eval_checkpoint_step}"
     else:
         # Find latest checkpoint step
-        checkpoint_dirs = [d for d in checkpoint_dir.iterdir() if d.name.startswith("step_")]
+        checkpoint_dirs = [d for d in checkpoint_dir.iterdir()]
         if not checkpoint_dirs:
             raise ValueError(f"No checkpoint steps found in {checkpoint_dir}")
-        checkpoint_step_dir = max(checkpoint_dirs, key=lambda d: int(d.name.split("_")[1]))
+        checkpoint_step_dir = max(checkpoint_dirs, key=lambda d: int(d.name))
         logging.info(f"No checkpoint step specified, using latest: {checkpoint_step_dir.name}")
     
     params_path = checkpoint_step_dir / "params"
@@ -401,7 +401,7 @@ def load_model_from_params_directly(
         raise ValueError(f"Params directory not found: {params_path}")
     
     # Get step number from checkpoint directory name
-    step = int(checkpoint_step_dir.name.split("_")[1]) if checkpoint_step_dir.name.startswith("step_") else 0
+    step = int(checkpoint_step_dir.name)
     
     # Load params directly using _model.restore_params, same as policy_config_adapter.py
     params = _model.restore_params(params_path)
