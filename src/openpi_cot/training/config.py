@@ -1319,7 +1319,7 @@ _CONFIGS = [
             paligemma_variant="gemma3_12b",
             action_expert_variant="gemma3_300m_48",
             use_pan_and_scan=False,
-            use_fast=True,
+            use_fast=False,
         ),
         data_config_class=RLDSCoTDataConfig,
         data_config_kwargs={
