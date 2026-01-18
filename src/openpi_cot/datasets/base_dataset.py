@@ -124,9 +124,37 @@ class SingleCoTDataset:
         self.dataset_statistics = cached_stats
 
         # Apply operations in consistent order: filter -> split -> restructure
+        # Debug: Count before filters
+        if self.want_val:
+            try:
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                pre_filter_count = dataset_size(self.dataset)
+                logging.info(f"[DEBUG] Dataset before apply_traj_filters: {pre_filter_count} trajectories")
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset before filters: {e}")
+
         self.apply_traj_filters(action_key="action")
+
+        # Debug: Count after filters, before split
+        if self.want_val:
+            try:
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                post_filter_count = dataset_size(self.dataset)
+                logging.info(f"[DEBUG] Dataset after apply_traj_filters: {post_filter_count} trajectories")
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset after filters: {e}")
+
         self.split_val(split_seed=seed)
         self.apply_restructure()
+
+        # Debug: Count after restructure (before flattening)
+        if self.want_val:
+            try:
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                post_restructure_count = dataset_size(self.dataset)
+                logging.info(f"[DEBUG] Dataset after apply_restructure (before flattening): {post_restructure_count} trajectories")
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset after restructure: {e}")
 
         # If state encoding is NONE, ensure state stats are properly padded
         if self.state_encoding == StateEncoding.NONE:
@@ -215,6 +243,15 @@ class SingleCoTDataset:
         return dataset
 
     def split_val(self, split_seed):
+        # Debug: Count trajectories before split
+        if self.want_val:
+            try:
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                pre_split_count = dataset_size(self.dataset)
+                logging.info(f"[DEBUG] Dataset before split_val: {pre_split_count} trajectories (want_val={self.want_val}, val_fraction={self.val_fraction})")
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset before split_val: {e}")
+
         def _split_filter(traj):
             salt = tf.strings.as_string(split_seed)
             anchor = traj["trajectory_id"][0]
@@ -225,6 +262,15 @@ class SingleCoTDataset:
             return is_val if self.want_val else tf.logical_not(is_val)
 
         self.dataset = self.dataset.filter(_split_filter)
+
+        # Debug: Count trajectories after split
+        if self.want_val:
+            try:
+                from openpi_cot.datasets.utils.dataset_utils import dataset_size
+                post_split_count = dataset_size(self.dataset)
+                logging.info(f"[DEBUG] Dataset after split_val: {post_split_count} trajectories (want_val={self.want_val}, val_fraction={self.val_fraction})")
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not count dataset after split_val: {e}")
 
         #  def split_val(self, split_seed):
         #     self.not_used_fraction = getattr(self.config, "not_used_fraction", 0.85)
