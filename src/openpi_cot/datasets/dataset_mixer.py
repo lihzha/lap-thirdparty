@@ -317,6 +317,20 @@ class OXECoTDatasets:
             )
             self.global_statistics = None
 
+        # Debug: Log number of samples after flattening (before batching)
+        if want_val:
+            try:
+                # Try to get cardinality of the flattened dataset
+                cardinality = self.dataset.cardinality().numpy()
+                if cardinality >= 0:
+                    logging.info(f"[DEBUG] Validation dataset after flattening (before batching): {cardinality} samples")
+                elif cardinality == tf.data.UNKNOWN_CARDINALITY:
+                    logging.info(f"[DEBUG] Validation dataset after flattening: UNKNOWN_CARDINALITY")
+                else:
+                    logging.info(f"[DEBUG] Validation dataset after flattening: INFINITE_CARDINALITY")
+            except Exception as e:
+                logging.warning(f"[DEBUG] Could not get validation dataset cardinality after flattening: {e}")
+
         self.dataset = prepare_batched_dataset(
             dataset=self.dataset,
             want_val=want_val,
