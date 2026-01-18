@@ -458,7 +458,10 @@ def main(config: _config.TrainConfig):
         seed=config.seed,
         persistent_iterator=True,
     )
-    tok = PaligemmaCoTTokenizer(max_len=300)
+    if "gemma3" in config.model.paligemma_variant:
+        tok = data_loader.tokenizer
+    else:
+        tok = PaligemmaCoTTokenizer(max_len=300)
 
     # Initialize dataset log tracker for uniform sample logging across datasets
     dataset_log_tracker = vis_tools.DatasetLogTracker(tokenizer=tok)
