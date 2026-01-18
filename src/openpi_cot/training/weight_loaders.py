@@ -627,65 +627,6 @@ class Gemma3ScanCompatibleWeightLoader(WeightLoader):
 
         return merged
 
-
-@dataclasses.dataclass(frozen=True)
-class Gemma3WeightLoader(WeightLoader):
-    """Loads and remaps Gemma3 weights to match Pi0's nn.scan naming conventions.
-
-    This loader:
-    1. Loads raw Gemma3 checkpoint with per-layer naming (layer_0, layer_1, ...)
-    2. Stacks per-layer weights into a single 'layers' array dimension
-    3. Remaps key names (_key_norm -> k_rmsnorm, gating_einsum -> Einsum_0, etc.)
-    4. Extracts and remaps vision encoder (SigLiP) from per-layer to stacked format
-    5. Extracts embedder to PaliGemma namespace
-    6. Optionally resizes SigLiP positional embeddings to match target patch count
-    """
-
-    params_path: str
-
-    def load(self, params: at.Params) -> at.Params:
-        logger.info("Loading Gemma3 weights using Gemma3ScanCompatibleWeightLoader...")
-
-        # Load raw checkpoint
-        loaded_params = restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
-
-        # ==========================================================
-        # ===== RUN DEBUGGING CHECKS ON OUR CLEANED PARAMS =========
-        # ==========================================================
-        logger.info("Running post-remapping validation checks...")
-
-        original_info = get_param_info(loaded_params)
-        original_total_params = sum(p["size"] for p in original_info.values())
-
-        final_llm_nested = unflatten_dict({tuple(k.split("/")): v for k, v in loaded_params.items()})
-        final_llm_info = get_param_info(final_llm_nested)
-        final_total_params = sum(p["size"] for p in final_llm_info.values())
-
-        print("\n--- Starting Parameter Conservation Check ---")
-        print(f"Total params in original checkpoint: {original_total_params:,}")
-        print(f"Total params in final remapped dict: {final_total_params:,}")
-        if original_total_params >= final_total_params:
-            print(
-                f"✅ SUCCESS: Parameter count is valid. Discarded {original_total_params - final_total_params:,} parameters that are not in the target model."
-            )
-        else:
-            print(
-                f"❌ ERROR: Parameter count mismatch! Gained {final_total_params - original_total_params:,} parameters, indicating duplication."
-            )
-        print("--- End of Conservation Check ---\n")
-
-        final_model_info = get_param_info(params)
-        compare_checkpoints(final_llm_info, final_model_info)
-        # ==========================================================
-        # ==========================================================
-
-        # Now, with a clean `flat_llm`, we can perform the merge.
-        flat_model = flax.traverse_util.flatten_dict(params, sep="/")
-        merged = _merge_params(loaded_params, flat_model, missing_regex=".*")
-
-        return merged
-
-
 @dataclasses.dataclass(frozen=True)
 class WeightLoaderChoice(WeightLoader):
     """CLI-friendly wrapper to choose a weight loader without nested subcommands.
@@ -710,7 +651,6 @@ class WeightLoaderChoice(WeightLoader):
         "paligemma",
         "paligemma2",
         "gemma3",
-        "gemma3_1b",
     ] = "paligemma"
     # Used when kind == "checkpoint", "paligemma2", "gemma3".
     params_path: str | None = None
@@ -737,10 +677,7 @@ class WeightLoaderChoice(WeightLoader):
                 return Gemma3ScanCompatibleWeightLoader(
                     self.params_path, target_pos_emb_grid_size=self.target_pos_emb_grid_size
                 )
-            case "gemma3_1b":
-                if not self.params_path:
-                    raise ValueError("--weight-loader.params-path must be set when kind=gemma3_1b")
-                return Gemma3WeightLoader(self.params_path)
+
             case "none":
                 return NoOpWeightLoader()
             case _:

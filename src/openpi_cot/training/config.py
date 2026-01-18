@@ -1308,7 +1308,7 @@ _CONFIGS = [
         resume=True,
     ),
     *create_multi_device_configs(
-        base_name="gemma3_1b_combined_cot",
+        base_name="gemma3_12b_combined_cot",
         devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
         model=pi_cot_config.PiCoTConfig(
             action_dim=7,
@@ -1316,8 +1316,8 @@ _CONFIGS = [
             enable_action_training=True,
             enable_langact_training=True,
             max_token_len=800,  # Gemma3 needs ~600+ tokens (512 image + prompt + reasoning)
-            paligemma_variant="gemma3_1b",
-            action_expert_variant="gemma3_300m_26",
+            paligemma_variant="gemma3_12b",
+            action_expert_variant="gemma3_300m_48",
             use_pan_and_scan=False,
             use_fast=True,
         ),
@@ -1331,7 +1331,7 @@ _CONFIGS = [
             "shuffle_buffer_size": 400_000,
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
-        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-1b-it"),  # params_path auto-set from variant
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-12b-it"),  # params_path auto-set from variant
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
         optimizer=_optimizer.AdamW(weight_decay=0.0001),
         save_interval=1000,
