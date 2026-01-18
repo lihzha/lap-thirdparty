@@ -1876,6 +1876,30 @@ def franka_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
 
     return trajectory
 
+def yam_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
+    # Compute movement actions with zero-padding (no truncation) for both arms
+
+    # trajectory["observation"]["state"] = tf.concat(
+    #     (
+    #         trajectory["observation"]["state"][:, :6],
+    #     ),
+    #     axis=-1,
+    # )
+
+    padded_movement_actions = compute_padded_movement_actions(trajectory["observation"]["state"][:, :6])
+    trajectory["language_action"] = tf.concat(
+        [padded_movement_actions, tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)], axis=1
+    )
+    trajectory["action"] = tf.concat(
+        [
+            trajectory["observation"]["state"][:, :6],
+            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+        ],
+        axis=1,
+    )
+
+    return trajectory
+
 
 # === Registry ===
 OXE_STANDARDIZATION_TRANSFORMS = {
@@ -1974,4 +1998,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "molmoact_dataset": molmoact_dataset_transform,
     "planning_dataset": planning_dataset_transform,
     "franka_dataset": franka_dataset_transform,
+    "yam_dataset": yam_dataset_transform,
+    "franka_eval_dataset": franka_dataset_transform,
+    "yam_eval_dataset": yam_dataset_transform,
 }
