@@ -344,13 +344,26 @@ class EmbeddingExtractor:
         prefix_attn_mask = jnp.ones((prefix_tokens.shape[0], prefix_tokens.shape[1], prefix_tokens.shape[1]), dtype=bool)
         positions = jnp.cumsum(prefix_mask, axis=1) - 1
         
-        # Forward through LLM
-        pre_logits, _ = self.model.PaliGemma.llm(
-            [prefix_tokens],
-            mask=prefix_attn_mask,
-            positions=positions,
-            adarms_cond=[None],
-        )
+        # Check if model uses action training (requires 2-element lists)
+        enable_action_training = getattr(self.model, 'enable_action_training', False)
+        
+        # Forward through LLM - list length must match model's internal config
+        if enable_action_training:
+            # Model expects [prefix, suffix] format
+            pre_logits, _ = self.model.PaliGemma.llm(
+                [prefix_tokens, None],
+                mask=prefix_attn_mask,
+                positions=positions,
+                adarms_cond=[None, None],
+            )
+        else:
+            # Model expects [prefix] format
+            pre_logits, _ = self.model.PaliGemma.llm(
+                [prefix_tokens],
+                mask=prefix_attn_mask,
+                positions=positions,
+                adarms_cond=[None],
+            )
         
         # Mean pool over valid tokens
         pre_logits_squeezed = pre_logits[0]  # [b, seq, emb]
