@@ -1156,6 +1156,9 @@ def create_multi_device_configs(
                         train_kwargs["weight_loader"] = dataclasses.replace(
                             weight_loader, params_path=device_params_path
                         )
+        else:
+            logging.warning(f"No weight loader specified for device {device}, using default no-op weight loader")
+            raise ValueError(f"No weight loader specified for device {device}")
 
         # Set batch_size from device default if not specified
         if "batch_size" not in train_config_kwargs:
