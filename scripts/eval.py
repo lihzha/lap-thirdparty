@@ -355,6 +355,81 @@ class ValidationLossEvaluator:
         return val_metrics
 
 
+def load_model_from_params_directly(
+    config: _config.TrainConfig,
+    checkpoint_dir: epath.Path,
+    mesh: jax.sharding.Mesh,
+    init_rng: at.KeyArrayLike,
+    train_state_shape: training_utils.TrainState,
+    train_state_sharding: training_utils.TrainState,
+) -> training_utils.TrainState:
+    """Load model directly from params directory, similar to policy_config_adapter.create_trained_policy.
+    
+    This mode loads params directly from checkpoint_dir / "params" using _model.restore_params,
+    then creates a model using config.model.load(). This is simpler than loading the full
+    TrainState and can be useful when you only need the model for inference.
+    
+    Args:
+        config: Training configuration
+        checkpoint_dir: Checkpoint directory path
+        mesh: Device mesh for sharding
+        init_rng: Random key for initialization
+        train_state_shape: Shape template for the train state
+        train_state_sharding: Sharding specification for the train state
+        
+    Returns:
+        TrainState with loaded model
+    """
+    from openpi.training import optimizer as _optimizer
+    
+    logging.info("Loading model directly from params (eval_load_params_directly=True)")
+    
+    # Determine checkpoint step directory
+    # CheckpointManager uses step directories like "step_1000", "step_2000", etc.
+    if config.eval_checkpoint_step is not None:
+        checkpoint_step_dir = checkpoint_dir / f"step_{config.eval_checkpoint_step}"
+    else:
+        # Find latest checkpoint step
+        checkpoint_dirs = [d for d in checkpoint_dir.iterdir() if d.name.startswith("step_")]
+        if not checkpoint_dirs:
+            raise ValueError(f"No checkpoint steps found in {checkpoint_dir}")
+        checkpoint_step_dir = max(checkpoint_dirs, key=lambda d: int(d.name.split("_")[1]))
+        logging.info(f"No checkpoint step specified, using latest: {checkpoint_step_dir.name}")
+    
+    params_path = checkpoint_step_dir / "params"
+    if not params_path.exists():
+        raise ValueError(f"Params directory not found: {params_path}")
+    
+    # Get step number from checkpoint directory name
+    step = int(checkpoint_step_dir.name.split("_")[1]) if checkpoint_step_dir.name.startswith("step_") else 0
+    
+    # Load params directly using _model.restore_params, same as policy_config_adapter.py
+    params = _model.restore_params(params_path)
+    
+    # Create model from params
+    model = config.model.load(params)
+    
+    # Create TrainState from the loaded model
+    params_state = nnx.state(model)
+    model_def = nnx.graphdef(model)
+    
+    tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
+    ema_decay, ema_params_enabled = config.get_ema_init()
+    
+    train_state = training_utils.TrainState(
+        step=step,
+        params=params_state,
+        model_def=model_def,
+        tx=tx,
+        opt_state=tx.init(params_state.filter(config.trainable_filter)),
+        ema_decay=ema_decay,
+        ema_params=None if not ema_params_enabled else params_state,
+    )
+    
+    logging.info(f"Loaded model from params at step {step}")
+    return train_state
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
@@ -372,16 +447,6 @@ def main(config: _config.TrainConfig):
     logging.info("Replicated sharding spec: %s", sharding.format_sharding(replicated_sharding))
 
     init_wandb(config, enabled=config.wandb_enabled)
-
-    # Initialize checkpoint manager
-    checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
-        config.checkpoint_dir,
-        keep_period=config.keep_period,
-        overwrite=False,  # Never overwrite for evaluation
-        resume=True,  # Always resume for evaluation
-        async_timeout_secs=config.checkpoint_async_timeout_secs,
-        async_enable=False,  # No async for evaluation
-    )
 
     tx = _optimizer.create_optimizer(config.optimizer, config.lr_schedule, weight_decay_mask=None)
     ema_decay, ema_params_enabled = config.get_ema_init()
@@ -404,30 +469,52 @@ def main(config: _config.TrainConfig):
     train_state_shape = jax.eval_shape(init, init_rng)
     train_state_sharding = sharding.fsdp_sharding(train_state_shape, mesh, log=True)
 
-    # Log available checkpoints and determine which to load
-    available_steps = list(checkpoint_manager.all_steps())
-    logging.info(f"Available checkpoints: {available_steps}")
-
-    if config.eval_checkpoint_step is None:
-        latest_step = checkpoint_manager.latest_step()
-        logging.info(f"No checkpoint step specified (--eval_checkpoint_step), using latest: {latest_step}")
-        checkpoint_step_to_load = latest_step
+    # Load model using either direct params loading or full state restoration
+    if config.eval_load_params_directly:
+        checkpoint_dir = epath.Path(config.checkpoint_dir)
+        train_state = load_model_from_params_directly(
+            config,
+            checkpoint_dir,
+            mesh,
+            init_rng,
+            train_state_shape,
+            train_state_sharding,
+        )
     else:
-        checkpoint_step_to_load = config.eval_checkpoint_step
-        if checkpoint_step_to_load not in available_steps:
-            raise ValueError(
-                f"Requested checkpoint step {checkpoint_step_to_load} not found. Available steps: {available_steps}"
-            )
-        logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
+        # Initialize checkpoint manager
+        checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
+            config.checkpoint_dir,
+            keep_period=config.keep_period,
+            overwrite=False,  # Never overwrite for evaluation
+            resume=True,  # Always resume for evaluation
+            async_timeout_secs=config.checkpoint_async_timeout_secs,
+            async_enable=False,  # No async for evaluation
+        )
 
-    # Restore checkpoint using the same helper as training (supports explicit sharding)
-    train_state = _checkpoints.restore_state(
-        checkpoint_manager,
-        train_state_shape,
-        data_loader=None,
-        step=checkpoint_step_to_load,
-        train_state_sharding=train_state_sharding,
-    )
+        # Log available checkpoints and determine which to load
+        available_steps = list(checkpoint_manager.all_steps())
+        logging.info(f"Available checkpoints: {available_steps}")
+
+        if config.eval_checkpoint_step is None:
+            latest_step = checkpoint_manager.latest_step()
+            logging.info(f"No checkpoint step specified (--eval_checkpoint_step), using latest: {latest_step}")
+            checkpoint_step_to_load = latest_step
+        else:
+            checkpoint_step_to_load = config.eval_checkpoint_step
+            if checkpoint_step_to_load not in available_steps:
+                raise ValueError(
+                    f"Requested checkpoint step {checkpoint_step_to_load} not found. Available steps: {available_steps}"
+                )
+            logging.info(f"Loading specified checkpoint step: {checkpoint_step_to_load}")
+
+        # Restore checkpoint using the same helper as training (supports explicit sharding)
+        train_state = _checkpoints.restore_state(
+            checkpoint_manager,
+            train_state_shape,
+            data_loader=None,
+            step=checkpoint_step_to_load,
+            train_state_sharding=train_state_sharding,
+        )
 
     # if train_state.ema_params is not None:
     #     ema_rtol = EMA_VALUE_RTOL

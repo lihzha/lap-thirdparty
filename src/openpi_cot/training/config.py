@@ -1170,9 +1170,10 @@ class TrainConfig(upstream_config.TrainConfig):
     use_eval: bool = True
     eval_checkpoint_step: int | None = None
     num_eval_batches: int | None = 50
-    eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss"] = "rollout"
+    eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss", "val_loss"] = "rollout"
     eval_use_ema: bool = False
     eval_split: Literal["val", "train"] = "val"
+    eval_load_params_directly: bool = False
     # Multi-stage training schedule choice
     training_schedule_choice: TrainingScheduleChoice = dataclasses.field(default_factory=TrainingScheduleChoice)
 
