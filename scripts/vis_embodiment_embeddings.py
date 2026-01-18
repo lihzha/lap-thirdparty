@@ -75,6 +75,53 @@ EmbeddingType = Literal[
 ]
 
 
+def _to_numpy_safe(arr: jax.Array) -> np.ndarray:
+    """Safely convert JAX array to numpy, handling sharded arrays.
+    
+    Args:
+        arr: JAX array, possibly sharded across devices
+        
+    Returns:
+        Numpy array with the same data
+    """
+    if not hasattr(arr, 'sharding'):
+        # Not a JAX array, or simple array
+        return np.asarray(arr)
+    
+    try:
+        # Try direct conversion first (works for fully replicated or single-device)
+        return np.asarray(arr)
+    except RuntimeError:
+        pass
+    
+    # Handle sharded arrays
+    try:
+        # Try using to_local_array from training utils
+        local_arr = training_utils.to_local_array(arr)
+        return np.asarray(local_arr)
+    except Exception:
+        pass
+    
+    # Fallback: gather from addressable shards
+    try:
+        if hasattr(arr, 'addressable_shards') and arr.addressable_shards:
+            # Concatenate addressable shards
+            shards_data = [np.asarray(shard.data) for shard in arr.addressable_shards]
+            if len(shards_data) == 1:
+                return shards_data[0]
+            # Check if shards are along batch dimension
+            return np.concatenate(shards_data, axis=0)
+    except Exception:
+        pass
+    
+    # Last resort: use multihost utils
+    try:
+        from jax.experimental import multihost_utils
+        return np.asarray(multihost_utils.process_allgather(arr))
+    except Exception as e:
+        raise RuntimeError(f"Could not convert JAX array to numpy: {e}")
+
+
 @dataclasses.dataclass
 class EmbeddingResult:
     """Container for extracted embeddings with metadata."""
@@ -583,15 +630,15 @@ def extract_all_embeddings(
             
             first_batch = False
             
-            # Convert to numpy - replicated sharding should make this straightforward
-            embeddings_np = np.asarray(embeddings)
+            # Convert to numpy - handle sharded arrays properly
+            embeddings_np = _to_numpy_safe(embeddings)
             batch_size = embeddings_np.shape[0]
             
             # Get dataset names from the batch
             dataset_names = ["unknown"] * batch_size
             
             if tokenized_names is not None and tokenizer is not None:
-                tokenized_names_np = np.asarray(tokenized_names)
+                tokenized_names_np = _to_numpy_safe(tokenized_names)
                 dataset_names = decode_dataset_names(tokenized_names_np, tokenizer)
             
             # Store results
