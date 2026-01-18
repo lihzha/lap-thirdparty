@@ -1563,97 +1563,114 @@ def build_annotated_keys_and_frame_table_v2(
     skipped_non_target = 0
     num_annotated_frames = 0  # Count frames with valid annotations
 
+    # Always use merged file - simpler and faster for sequential processing
     jsonl_files = tf.io.gfile.glob(os.path.join(bbox_annotations_dir, "*.jsonl"))
-    total_files = len([f for f in jsonl_files if "merged" not in f])
-    logging.info(f"Processing {total_files} JSONL files{log_prefix}...")
+    merged_files = [f for f in jsonl_files if "merged" in f.lower()]
+    
+    if not merged_files:
+        raise FileNotFoundError(
+            f"No merged JSONL file found in {bbox_annotations_dir}. "
+            f"Please create a merged file (e.g., 'bridge_bbox_merged.jsonl') containing all annotations."
+        )
+    
+    # Use first merged file if multiple exist
+    jsonl_file = merged_files[0]
+    if len(merged_files) > 1:
+        logging.warning(f"Multiple merged files found, using: {jsonl_file}{log_prefix}")
+    else:
+        logging.info(f"Using merged JSONL file: {jsonl_file}{log_prefix}")
+    
+    # Process merged file sequentially (simpler and faster than parallel processing)
+    logging.info(f"Processing merged JSONL file{log_prefix}...")
+    
+    line_count = 0
+    with tf.io.gfile.GFile(jsonl_file, "r") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            
+            line_count += 1
+            # Log progress every 100k lines
+            if line_count % 100000 == 0:
+                logging.info(f"  Processed {line_count:,} lines{log_prefix}...")
+            
+            try:
+                episode_data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-    for file_idx, jsonl_file in enumerate(jsonl_files):
-        if "merged" in jsonl_file:
-            continue
-        
-        # Log progress every 10 files or for the last file
-        if (file_idx + 1) % 10 == 0 or (file_idx + 1) == total_files:
-            logging.info(f"  Processed {file_idx + 1}/{total_files} files{log_prefix}...")
-        
-        with tf.io.gfile.GFile(jsonl_file, "r") as f:
-            for line in f:
-                if not line.strip():
+            # Use the provided key extractor to get the lookup key
+            episode_key = key_extractor(episode_data)
+            if not episode_key:
+                continue
+
+            # Add to annotated keys set (for trajectory filtering)
+            annotated_keys.add(episode_key)
+
+            labels = episode_data.get("labels", [])
+            for label_entry in labels:
+                frame_idx = label_entry.get("frame")
+                all_objects = label_entry.get("all_objects", [])
+
+                if frame_idx is None or not all_objects:
                     continue
-                try:
-                    episode_data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
 
-                # Use the provided key extractor to get the lookup key
-                episode_key = key_extractor(episode_data)
-                if not episode_key:
-                    continue
+                # Count this as an annotated frame
+                num_annotated_frames += 1
 
-                # Add to annotated keys set (for trajectory filtering)
-                annotated_keys.add(episode_key)
+                key = f"{episode_key}--{frame_idx}"
 
-                labels = episode_data.get("labels", [])
-                for label_entry in labels:
-                    frame_idx = label_entry.get("frame")
-                    all_objects = label_entry.get("all_objects", [])
+                objects_list = []
+                for obj in all_objects:
+                    total_bboxes += 1
+                    obj_label = obj.get("label", "")
+                    bbox = obj.get("bbox", [])
+                    is_target = obj.get("is_target", False)
 
-                    if frame_idx is None or not all_objects:
+                    if not obj_label:
+                        missing_label_count += 1
+                        continue
+                    if len(bbox) != 4:
+                        invalid_bbox_count += 1
                         continue
 
-                    # Count this as an annotated frame
-                    num_annotated_frames += 1
+                    # Skip non-target objects if target_only is enabled
+                    if target_only and not is_target:
+                        skipped_non_target += 1
+                        continue
 
-                    key = f"{episode_key}--{frame_idx}"
+                    # Normalize bbox (bbox values are in 0-1000 range in JSONL)
+                    y_min_raw = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
+                    x_min_raw = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
+                    y_max_raw = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
+                    x_max_raw = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
 
-                    objects_list = []
-                    for obj in all_objects:
-                        total_bboxes += 1
-                        obj_label = obj.get("label", "")
-                        bbox = obj.get("bbox", [])
-                        is_target = obj.get("is_target", False)
+                    # Pre-apply letterbox transformation
+                    x_min, y_min, x_max, y_max = transform_bbox_for_letterbox(
+                        x_min_raw, y_min_raw, x_max_raw, y_max_raw,
+                        orig_w, orig_h, target_w, target_h,
+                    )
 
-                        if not obj_label:
-                            missing_label_count += 1
-                            continue
-                        if len(bbox) != 4:
-                            invalid_bbox_count += 1
-                            continue
+                    # Pre-compute loc tokens
+                    loc_tokens = bbox_to_loc_tokens(x_min, y_min, x_max, y_max)
 
-                        # Skip non-target objects if target_only is enabled
-                        if target_only and not is_target:
-                            skipped_non_target += 1
-                            continue
+                    # Pre-compute direction with "move " prefix
+                    direction = compute_direction_from_bbox(
+                        x_min, y_min, x_max, y_max,
+                        slope=direction_slope,
+                        add_move_prefix=True,
+                    )
 
-                        # Normalize bbox (bbox values are in 0-1000 range in JSONL)
-                        y_min_raw = max(0.0, min(1.0, float(bbox[0]) / 1000.0))
-                        x_min_raw = max(0.0, min(1.0, float(bbox[1]) / 1000.0))
-                        y_max_raw = max(0.0, min(1.0, float(bbox[2]) / 1000.0))
-                        x_max_raw = max(0.0, min(1.0, float(bbox[3]) / 1000.0))
+                    # Store as "label|loc_tokens|direction"
+                    objects_list.append(f"{obj_label}|{loc_tokens}|{direction}")
 
-                        # Pre-apply letterbox transformation
-                        x_min, y_min, x_max, y_max = transform_bbox_for_letterbox(
-                            x_min_raw, y_min_raw, x_max_raw, y_max_raw,
-                            orig_w, orig_h, target_w, target_h,
-                        )
-
-                        # Pre-compute loc tokens
-                        loc_tokens = bbox_to_loc_tokens(x_min, y_min, x_max, y_max)
-
-                        # Pre-compute direction with "move " prefix
-                        direction = compute_direction_from_bbox(
-                            x_min, y_min, x_max, y_max,
-                            slope=direction_slope,
-                            add_move_prefix=True,
-                        )
-
-                        # Store as "label|loc_tokens|direction"
-                        objects_list.append(f"{obj_label}|{loc_tokens}|{direction}")
-
-                    if objects_list:
-                        if key in frame_to_objects:
-                            frame_to_objects[key].extend(objects_list)
-                        else:
-                            frame_to_objects[key] = objects_list
+                if objects_list:
+                    if key in frame_to_objects:
+                        frame_to_objects[key].extend(objects_list)
+                    else:
+                        frame_to_objects[key] = objects_list
+    
+    logging.info(f"Finished processing {line_count:,} lines from merged file{log_prefix}")
 
     # Convert to lookup table with semicolon-delimited values
     keys = []

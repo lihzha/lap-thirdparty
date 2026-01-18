@@ -622,6 +622,11 @@ class OXEBoundingBoxDataset(ABC):
             return tf.logical_and(has_prompt, has_caption)
 
         self.dataset = self.dataset.filter(has_valid_qa)
+        
+        # Add memory budget constraint to prevent memory explosion during iteration
+        # This is critical for large datasets like bridge_bbox with 159k+ frames
+        # Apply before batching to limit memory usage during data loading
+        self.dataset = self.dataset.with_ram_budget(1)
 
     def _build_frame_objects_table(self):
         """Build a lookup table from episode_id--frame_idx to pipe-delimited objects.
