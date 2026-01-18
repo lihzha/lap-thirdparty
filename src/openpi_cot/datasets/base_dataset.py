@@ -239,6 +239,7 @@ class SingleCoTDataset:
         return opts
 
     def build_dataset(self, builder):
+        import jax
         want_full_determinism = self.want_full_determinism or self.want_val
         dataset = dl.DLataset.from_rlds(
             builder,
@@ -250,7 +251,6 @@ class SingleCoTDataset:
         # Debug: Count before sharding
         if self.want_val:
             try:
-                import jax
                 from openpi_cot.datasets.utils.dataset_utils import dataset_size
                 pre_shard_count = dataset_size(dataset)
                 process_count = jax.process_count()
@@ -262,18 +262,31 @@ class SingleCoTDataset:
             except Exception as e:
                 logging.warning(f"[DEBUG] Could not count dataset before sharding: {e}")
         
-        dataset = dataset.shard(jax.process_count(), jax.process_index())
+        # For validation, don't shard the dataset - each process should see all data
+        # This ensures validation is deterministic and all processes can evaluate
+        # For training, shard to distribute data across processes
+        if not self.want_val:
+            dataset = dataset.shard(jax.process_count(), jax.process_index())
+        else:
+            # For validation, we still need to handle multi-process setup
+            # But we want all processes to see the same data for consistent evaluation
+            # Option 1: Don't shard at all (each process sees all data)
+            # Option 2: Use modulo sharding that wraps around (but this is complex)
+            # For now, we'll not shard for validation - each process gets all data
+            # This is fine for validation since we're not training and data is small
+            logging.info(
+                f"[DEBUG] Skipping sharding for validation - all processes will see all {pre_shard_count if self.want_val else '?'} trajectories"
+            )
         
-        # Debug: Count after sharding
+        # Debug: Count after sharding (or no sharding for validation)
         if self.want_val:
             try:
-                import jax
                 from openpi_cot.datasets.utils.dataset_utils import dataset_size
                 post_shard_count = dataset_size(dataset)
                 process_count = jax.process_count()
                 process_index = jax.process_index()
                 logging.info(
-                    f"[DEBUG] Dataset after sharding: {post_shard_count} trajectories "
+                    f"[DEBUG] Dataset after sharding (or no sharding for val): {post_shard_count} trajectories "
                     f"(process {process_index}/{process_count})"
                 )
             except Exception as e:
