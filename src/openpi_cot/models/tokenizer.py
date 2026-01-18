@@ -129,6 +129,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         else:
             fmt = self._prompt_format
 
+        # frame_description = "robot base frame"
+
         # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
         formatted_prompt = fmt.format_prompt(
             prompt,
@@ -138,6 +140,8 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
             frame_description=frame_description,
             state_dropout=state_dropout,
         )
+
+        # print(formatted_prompt)
 
         # Tokenize
         pad_id = self._tokenizer.pad_id()

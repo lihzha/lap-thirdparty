@@ -64,6 +64,9 @@ class TokenizePromptAndReasoning(DataTransformFn):
         is_prediction_sample = data["is_prediction_sample"]
         time_horizon_seconds = data.pop("time_horizon_seconds", None)
 
+        # frame_description = "end-effector frame"
+
+
         # Tokenize regular reasoning
         (
             tokens,

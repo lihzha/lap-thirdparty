@@ -22,7 +22,7 @@ def _encode_image_if_needed(image, encoding: str):
 
 class I2rtEvalRunner(BaseEvalRunner):
 
-    CHUNK_STEPS=8
+    CHUNK_STEPS = 8
 
     def __init__(self, args):
         super().__init__(args)
@@ -50,7 +50,8 @@ class I2rtEvalRunner(BaseEvalRunner):
         # gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         gripper_position = binarize_gripper_actions_np(gripper_position)
 
-        right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
+        right_image = image_observations["0"][:,:, :3][..., ::-1]
+        # right_image = image_observations["31425515_left"][:,:, :3][..., ::-1]
         # wrist_image = image_observations["1"][::-1, ::-1, ::-1] # rotate 180
         right_image = _encode_image_if_needed(right_image, self.args.right_image_encoding)
         # wrist_image = _encode_image_if_needed(wrist_image, self.args.wrist_image_encoding)

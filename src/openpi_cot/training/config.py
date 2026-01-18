@@ -1283,7 +1283,7 @@ _CONFIGS = [
         model=pi_cot_config.PiCoTConfig(
             action_dim=7,
             action_horizon=16,
-            enable_action_training=False,
+            enable_action_training=True,
             enable_langact_training=True,
             max_token_len=800,  # Gemma3 needs ~600+ tokens (512 image + prompt + reasoning)
             paligemma_variant="gemma3_4b",
@@ -1416,7 +1416,7 @@ _CONFIGS = [
             max_token_len=390,  # VLA0 format is more compact
             pi05=True,
             discrete_state_input=True,
-            enable_action_training=True,  # VLA0 uses language modeling loss only
+            enable_action_training=False,  # VLA0 uses language modeling loss only
             enable_langact_training=True,
             paligemma_variant="gemma_2b",
             action_expert_variant="gemma_300m",
@@ -1460,6 +1460,26 @@ _CONFIGS = [
             repo_id="combined",
             asset_id="combined",
             dataset_type="combined",
+            language_action_format_name="verbose_with_rotation",
+        ),
+    ),TrainConfig(
+        name="paligemma_boundsq99_32",
+        model=pi_cot_config.PiCoTConfig(
+            action_horizon=32,
+            max_token_len=180,
+            pi05=True,
+            discrete_state_input=True,
+            enable_action_training=True,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+            prompt_format="pi05_notime",
+        ),
+        data=RLDSCoTDataConfig(
+            action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,
+            repo_id="combined",
+            asset_id="combined",
+            dataset_type="combined",
+            language_action_format_name="verbose_with_rotation",
         ),
     ),
     TrainConfig(
