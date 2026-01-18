@@ -1117,60 +1117,17 @@ def create_multi_device_configs(
         if "weight_loader" in train_kwargs:
             weight_loader = train_kwargs["weight_loader"]
             device_cache_dir = device_cfg.get_cache_dir()
-            
-            # Debug logging to diagnose weight loader kind detection
-            logging.info(
-                f"[{config_name}] Weight loader type: {type(weight_loader)}, "
-                f"has 'kind' attr: {hasattr(weight_loader, 'kind')}, "
-                f"kind value: {getattr(weight_loader, 'kind', 'N/A')}"
-            )
-            
-            # Auto-set Gemma3 params_path based on model variant
-            if hasattr(weight_loader, "kind") and weight_loader.kind == "gemma3":
-                if isinstance(model, pi_cot_config.PiCoTConfig) and hasattr(model, "paligemma_variant"):
-                    variant = model.paligemma_variant
-                    # Get variant-based path
-                    variant_based_path = _get_gemma3_params_path_from_variant(variant, device_cache_dir)
-                    
-                    if variant_based_path:
-                        # Always set params_path based on variant (variant takes precedence)
-                        logging.info(
-                            f"Setting Gemma3 params_path to {variant_based_path} "
-                            f"based on variant '{variant}' for device {device}"
-                        )
-                        train_kwargs["weight_loader"] = dataclasses.replace(
-                            weight_loader, params_path=variant_based_path
-                        )
-                    else:
-                        logging.info(
-                            f"Could not determine Gemma3 params_path for variant '{variant}', "
-                            f"using existing params_path: {getattr(weight_loader, 'params_path', None)}"
-                        )
-                else:
-                    logging.info(
-                        f"Gemma3 weight loader detected but model is not PiCoTConfig or missing paligemma_variant. "
-                        f"Model type: {type(model)}, has paligemma_variant: {hasattr(model, 'paligemma_variant') if isinstance(model, pi_cot_config.PiCoTConfig) else 'N/A'}"
+
+            if hasattr(weight_loader, "params_path") and weight_loader.params_path:
+                params_path = weight_loader.params_path
+                # Extract the relative path after /cache/
+                if "/cache/" in params_path:
+                    cache_suffix = params_path.split("/cache/", 1)[1]
+                    device_params_path = f"{device_cache_dir}/{cache_suffix}"
+                    # Create new weight loader with device-specific params_path
+                    train_kwargs["weight_loader"] = dataclasses.replace(
+                        weight_loader, params_path=device_params_path
                     )
-            else:
-                # For non-Gemma3 or when variant info not available, just make params_path device-specific
-                # Warn if we have a Gemma3 model but non-Gemma3 weight loader
-                if isinstance(model, pi_cot_config.PiCoTConfig) and hasattr(model, "paligemma_variant"):
-                    if "gemma3" in model.paligemma_variant:
-                        logging.info(
-                            f"[{config_name}] Model has Gemma3 variant '{model.paligemma_variant}' "
-                            f"but weight_loader.kind is '{getattr(weight_loader, 'kind', 'N/A')}', not 'gemma3'. "
-                            f"This may cause issues. Expected weight_loader.kind='gemma3'."
-                        )
-                if hasattr(weight_loader, "params_path") and weight_loader.params_path:
-                    params_path = weight_loader.params_path
-                    # Extract the relative path after /cache/
-                    if "/cache/" in params_path:
-                        cache_suffix = params_path.split("/cache/", 1)[1]
-                        device_params_path = f"{device_cache_dir}/{cache_suffix}"
-                        # Create new weight loader with device-specific params_path
-                        train_kwargs["weight_loader"] = dataclasses.replace(
-                            weight_loader, params_path=device_params_path
-                        )
 
         # Set batch_size from device default if not specified
         if "batch_size" not in train_config_kwargs:
@@ -1375,6 +1332,40 @@ _CONFIGS = [
             "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
         },
         weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3"),  # params_path auto-set from variant
+        ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
+        optimizer=_optimizer.AdamW(weight_decay=0.0001),
+        save_interval=1000,
+        keep_period=5000,
+        val_interval=2000,
+        num_train_steps=40000,
+        seed=0,
+        resume=True,
+    ),
+    *create_multi_device_configs(
+        base_name="gemma3_1b_combined_fast_cot",
+        devices=["v6", "v6europe", "v4", "local", "v5", "v5europe"],
+        model=pi_cot_config.PiCoTConfig(
+            action_dim=7,
+            action_horizon=16,
+            enable_action_training=True,
+            enable_langact_training=True,
+            max_token_len=800,  # Gemma3 needs ~600+ tokens (512 image + prompt + reasoning)
+            paligemma_variant="gemma3_1b",
+            action_expert_variant="gemma3_300m_26",
+            use_pan_and_scan=False,
+            use_fast=True,
+        ),
+        data_config_class=RLDSCoTDataConfig,
+        data_config_kwargs={
+            "repo_id": "combined",
+            "asset_id": "combined",
+            "dataset_type": "combined",
+            "droid_dataset_name": "droid",
+            "data_mix": "oxe_magic_soup",
+            "shuffle_buffer_size": 400_000,
+            "action_proprio_normalization_type": NormalizationType.BOUNDS_Q99,
+        },
+        weight_loader=weight_loaders.WeightLoaderChoice(kind="gemma3", params_path="gs://pi0-cot/cache/gemma3-1b-it"),  # params_path auto-set from variant
         ema_schedule_choice=EmaScheduleChoice(kind="cosine_delayed", start_step=5000),
         optimizer=_optimizer.AdamW(weight_decay=0.0001),
         save_interval=1000,
