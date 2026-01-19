@@ -107,9 +107,16 @@ class SingleCoTDataset:
             self.apply_restructure()
             self.apply_traj_transforms(action_horizon=action_horizon)
 
+            # NOTE: For statistics computation, always shard the dataset so each process
+            # only counts its subset. This prevents num_trajectories from being multiplied
+            # by the number of processes when _gather_and_reduce sums across processes.
+            # This is needed even for validation datasets, which are normally not sharded.
+            import jax
+            stats_dataset = self.dataset.shard(jax.process_count(), jax.process_index())
+
             # Compute and save statistics
             cached_stats = get_dataset_statistics(
-                self.dataset,
+                stats_dataset,
                 save_dir=self.builder.data_dir,
                 action_key="actions",
                 state_key="state",
