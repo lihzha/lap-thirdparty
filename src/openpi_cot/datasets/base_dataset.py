@@ -264,41 +264,44 @@ class SingleCoTDataset:
         self.dataset = self.dataset.filter(_split_filter)
 
     def chunk_actions(self, traj, action_horizon: int, action_key: str = "actions"):
-        """Splits episode into action chunks with proper zero-padding."""
-        # traj_len = tf.shape(traj[action_key])[0]
-
-        # # Use unified gather function with proper zero-padding
-        # traj[action_key] = gather_with_padding(
-        #     data=traj[action_key],
-        #     sequence_length=traj_len,
-        #     window_size=action_horizon,
-        # )
-        # # Ensure static shape is preserved: [T, action_horizon, action_dim]
-        # traj[action_key].set_shape([None, action_horizon, self.action_dim])
+        """Splits episode into action chunks with proper padding based on control mode.
+        
+        Control modes:
+        - ABS_EEF_POS: Absolute end-effector poses -> use last-value padding + compute differences
+        - EEF_POS, EEF_R6: Delta end-effector actions -> use zero padding, no difference computation
+        - JOINT_POS, JOINT_POS_BIMANUAL: Joint position control -> use last-value padding, no difference computation
+        """
+        from openpi_cot.datasets.utils.helpers import ActionEncoding
 
         traj_len = tf.shape(traj[action_key])[0]
+        action_encoding = self.action_encoding
 
-        # Use unified gather function with proper zero-padding
-        traj[action_key] = gather_with_last_value_padding(
-            data=traj[action_key],
-            sequence_length=traj_len,
-            window_size=action_horizon + 1,
-        )
+        is_joint_pos = action_encoding in (ActionEncoding.JOINT_POS, ActionEncoding.JOINT_POS_BIMANUAL)
 
-        traj[action_key] = tf.concat(
-            (
-                traj[action_key][:, 1:, :3] - traj[action_key][:, 0:1, :3],
-                euler_diff(
-                    traj[action_key][:, 1:, 3:6],
-                    traj[action_key][:, 0:1, 3:6],
+        if is_joint_pos:
+            # Joint position control: use last-value padding, no difference computation
+            traj[action_key] = gather_with_last_value_padding(
+                data=traj[action_key],
+                sequence_length=traj_len,
+                window_size=action_horizon,
+            )
+        else:
+            traj[action_key] = gather_with_last_value_padding(
+                data=traj[action_key],
+                sequence_length=traj_len,
+                window_size=action_horizon + 1,
+            )
+            traj[action_key] = tf.concat(
+                (
+                    traj[action_key][:, 1:, :3] - traj[action_key][:, 0:1, :3],
+                    euler_diff(
+                        traj[action_key][:, 1:, 3:6],
+                        traj[action_key][:, 0:1, 3:6],
+                    ),
+                    traj[action_key][:, :-1, 6:7],
                 ),
-                traj[action_key][:, :-1, 6:7],
-            ),
-            axis=-1,
-        )
-
-        # Ensure static shape is preserved: [T, action_horizon, action_dim]
-        # traj[action_key].set_shape([None, action_horizon, self.action_dim])
+                axis=-1,
+            )
 
         return traj
 

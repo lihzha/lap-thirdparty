@@ -243,8 +243,19 @@ def load_dataset_kwargs(
 ) -> dict[str, Any]:
     """Generates config (kwargs) for given dataset from Open-X Embodiment."""
     dataset_kwargs = deepcopy(OXE_DATASET_CONFIGS[dataset_name])
-    if dataset_kwargs["action_encoding"] not in [ActionEncoding.EEF_POS, ActionEncoding.EEF_R6]:
-        raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
+    # Support multiple action encodings: EEF_POS, EEF_R6, ABS_EEF_POS, JOINT_POS, JOINT_POS_BIMANUAL
+    supported_encodings = [
+        ActionEncoding.EEF_POS,
+        ActionEncoding.EEF_R6,
+        ActionEncoding.ABS_EEF_POS,
+        ActionEncoding.JOINT_POS,
+        ActionEncoding.JOINT_POS_BIMANUAL,
+    ]
+    if dataset_kwargs["action_encoding"] not in supported_encodings:
+        raise ValueError(
+            f"Cannot load `{dataset_name}`; action encoding {dataset_kwargs['action_encoding']} not supported! "
+            f"Supported encodings: {supported_encodings}"
+        )
 
     language_annotations = dataset_kwargs.get("language_annotations")
     if not language_annotations or language_annotations.lower() == "none":
@@ -261,14 +272,6 @@ def load_dataset_kwargs(
         has_suboptimal = has_suboptimal.lower() == "yes"
     if has_suboptimal:
         logging.warning(f"Cannot load `{dataset_name}`; suboptimal datasets are not supported!")
-
-    if (
-        dataset_kwargs["action_encoding"] is ActionEncoding.EEF_POS
-        or dataset_kwargs["action_encoding"] is ActionEncoding.EEF_R6
-    ):
-        pass
-    else:
-        raise ValueError(f"Cannot load `{dataset_name}`; only EEF_POS & EEF_R6 actions supported!")
 
     # For bimanual datasets, also load wrist_right camera if available
     camera_views_to_load = load_camera_views

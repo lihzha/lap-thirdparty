@@ -835,7 +835,7 @@ OXE_DATASET_CONFIGS = {
             "state",
         ],
         "state_encoding": StateEncoding.POS_EULER,
-        "action_encoding": ActionEncoding.EEF_POS,
+        "action_encoding": ActionEncoding.JOINT_POS,
     },
     "franka_eval_dataset": {
         "image_obs_keys": {
