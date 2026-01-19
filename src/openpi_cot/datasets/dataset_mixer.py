@@ -648,7 +648,7 @@ class OXECoTDatasets:
 
         return int(
             num_transitions
-            // (self.batch_size * jax.process_count())
+            // (self.batch_size)  # NOTE: No sharding here since we're using the full dataset
             * self.config.val_fraction
             * 0.8  # empirically estimated ratio for filtering
         )

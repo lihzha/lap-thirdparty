@@ -543,7 +543,6 @@ def main(config: _config.TrainConfig):
         val_xemb_demo_data_loader = _data_loader.create_data_loader(
             replace(
                 config,
-                batch_size=128,
                 data=replace(config.data, data_mix="eval_demo_dataset", val_fraction=1.0),
             ),
             sharding=data_sharding,

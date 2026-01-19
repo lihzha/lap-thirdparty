@@ -111,8 +111,6 @@ class SingleCoTDataset:
             # only counts its subset. This prevents num_trajectories from being multiplied
             # by the number of processes when _gather_and_reduce sums across processes.
             # This is needed even for validation datasets, which are normally not sharded.
-            # import jax
-            # stats_dataset = self.dataset.shard(jax.process_count(), jax.process_index())
 
             # Compute and save statistics
             cached_stats = get_dataset_statistics(
@@ -221,8 +219,8 @@ class SingleCoTDataset:
         # For validation, don't shard the dataset - each process should see all data
         # This ensures validation is deterministic and all processes can evaluate
         # For training, shard to distribute data across processes
-        # if not self.want_val:
-        dataset = dataset.shard(jax.process_count(), jax.process_index())
+        if not self.want_val:
+            dataset = dataset.shard(jax.process_count(), jax.process_index())
         
         # Repeat early to increase interleaving across files/episodes
         dataset = dataset.with_options(self.get_dataset_ops())
