@@ -218,7 +218,7 @@ class CoTDataConfig(upstream_config.DataConfig):
     primary_pred_prob: float = 0.5  # Probability of using primary camera (vs wrist) for prediction training
 
     # VQA bbox dataset parameters
-    direction_prob: float = 0.5  # Probability of using direction caption instead of bbox for bbox VQA datasets
+    direction_prob: float = 0.0  # Probability of using direction caption instead of bbox for bbox VQA datasets
 
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
@@ -1173,9 +1173,9 @@ class TrainConfig(upstream_config.TrainConfig):
     use_eval: bool = True
     eval_checkpoint_step: int | None = None
     eval_checkpoint_steps: list[int] | None = None  # List of specific checkpoint steps to evaluate
-    eval_all_checkpoints: bool = False  # If True, evaluate all available checkpoints sequentially
+    eval_all_checkpoints: bool = True  # If True, evaluate all available checkpoints sequentially
     num_eval_batches: int | None = 50
-    eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss", "val_loss"] = "val_loss"
+    eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss", "val_loss", "action_prediction_loss"] = "val_loss"
     eval_use_ema: bool = True
     eval_split: Literal["val", "train"] = "val"
     eval_load_params_directly: bool = False

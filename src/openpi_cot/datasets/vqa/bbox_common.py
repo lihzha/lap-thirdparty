@@ -809,7 +809,7 @@ def sample_and_format_objects_tf(
     objects_data: tf.Tensor,
     max_objects: int = 2,
     seed_pair: tuple[int, tf.Tensor] | None = None,
-    direction_prob: float = 0.5,
+    direction_prob: float = 0.0,
 ) -> tuple[tf.Tensor, tf.Tensor]:
     """Sample objects and format them into prompt labels and caption (pure TensorFlow).
 
@@ -826,7 +826,7 @@ def sample_and_format_objects_tf(
         objects_data: tf.string tensor with pipe-delimited objects data
         max_objects: Maximum number of objects to include for bbox caption (randomly sampled if more)
         seed_pair: Tuple of (base_seed, hash_value) for stateless random sampling
-        direction_prob: Probability of using direction caption instead of bbox (default 0.5)
+        direction_prob: Probability of using direction caption instead of bbox (default 0.0)
 
     Returns:
         Tuple of (prompt_labels, caption) as tf.string tensors

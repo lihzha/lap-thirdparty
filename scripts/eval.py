@@ -9,6 +9,7 @@ import platform
 import etils.epath as epath
 import flax.nnx as nnx
 import jax
+import jax.numpy as jnp
 import numpy as np
 from openpi.models import model as _model
 from openpi.models.model import Observation
@@ -160,6 +161,43 @@ class ValidationLossEvaluator:
         return val_metrics
 
 
+class ActionPredictionLossEvaluator:
+    """Evaluator that computes L2 loss between sampled actions and ground truth labels."""
+
+    def __init__(self, config: _config.TrainConfig):
+        self.config = config
+
+    @at.typecheck
+    def __call__(
+        self,
+        rng: at.KeyArrayLike,
+        state: training_utils.TrainState,
+        batch: tuple[CoTObservation | Observation, _model.Actions],
+    ) -> dict[str, at.Array]:
+        model = nnx.merge(state.model_def, state.params)
+        model.eval()
+
+        eval_rng = jax.random.fold_in(rng, state.step)
+        observation, ground_truth_actions = batch
+
+        # Sample actions from the model
+        sample_rng, _ = jax.random.split(eval_rng)
+        predicted_actions = model.sample_actions(sample_rng, observation)
+
+        # Compute L2 loss (MSE) between predicted and ground truth actions
+        # Shape: (batch, action_horizon, action_dim)
+        # Compute mean over action_horizon and action_dim, keeping batch dimension
+        per_sample_loss = jnp.mean(jnp.square(predicted_actions - ground_truth_actions), axis=(-1, -2))
+        
+        # Compute mean loss across batch
+        mean_loss = jnp.mean(per_sample_loss)
+
+        return {
+            "action_prediction_loss": mean_loss,
+            "per_sample_action_prediction_loss": per_sample_loss,
+        }
+
+
 def main(config: _config.TrainConfig):
     init_logging()
     effective_fsdp_devices = init_tpu(config)
@@ -252,7 +290,6 @@ def main(config: _config.TrainConfig):
     # Determine number of evaluation batches (None means iterate until StopIteration)
     num_eval_batches = config.num_eval_batches
 
-    assert config.eval_mode == "val_loss"
     logging.info(f"Evaluation mode: {config.eval_mode}")
 
     # Evaluate each checkpoint sequentially
@@ -279,34 +316,49 @@ def main(config: _config.TrainConfig):
         logging.info(f"Loaded checkpoint at step {train_state.step}")
         sharding.log_param_sharding_actual(train_state.params)
 
-        # Evaluate this checkpoint
-        val_results = evaluate_validation_loss(
-            config,
-            eval_rng,
-            train_state,
-            train_state_sharding,
-            data_loader,
-            mesh,
-            data_sharding,
-            replicated_sharding,
-            num_eval_batches,
-        )
+        # Evaluate this checkpoint based on mode
+        if config.eval_mode == "val_loss":
+            eval_results = evaluate_validation_loss(
+                config,
+                eval_rng,
+                train_state,
+                train_state_sharding,
+                data_loader,
+                mesh,
+                data_sharding,
+                replicated_sharding,
+                num_eval_batches,
+            )
+        elif config.eval_mode == "action_prediction_loss":
+            eval_results = evaluate_action_prediction_loss(
+                config,
+                eval_rng,
+                train_state,
+                train_state_sharding,
+                data_loader,
+                mesh,
+                data_sharding,
+                replicated_sharding,
+                num_eval_batches,
+            )
+        else:
+            raise ValueError(f"Unsupported eval_mode: {config.eval_mode}")
 
         # Store results with checkpoint step
-        step_results = {f"step_{checkpoint_step}/{k}": v for k, v in val_results.items()}
+        step_results = {f"step_{checkpoint_step}/{k}": v for k, v in eval_results.items()}
         all_results.update(step_results)
 
         # Log results for this checkpoint
         logging.info("=" * 80)
         logging.info(f"EVALUATION RESULTS for step {checkpoint_step}")
         logging.info("=" * 80)
-        for key, value in val_results.items():
+        for key, value in eval_results.items():
             logging.info(f"{key:40s}: {value}")
         logging.info("=" * 80)
 
         # Log to wandb for this checkpoint step
         if jax.process_index() == 0 and config.wandb_enabled:
-            wandb.log(val_results, step=int(checkpoint_step))
+            wandb.log(eval_results, step=int(checkpoint_step))
 
     # Update wandb summary with all results
     if jax.process_index() == 0 and config.wandb_enabled:
@@ -411,6 +463,112 @@ def evaluate_validation_loss(
                 results[f"eval/val_loss/{key}"] = float(np.mean(values))
 
     results["eval/val_loss/num_batches"] = len(val_infos)
+
+    return results
+
+
+def evaluate_action_prediction_loss(
+    config: _config.TrainConfig,
+    eval_rng: at.KeyArrayLike,
+    train_state: training_utils.TrainState,
+    train_state_sharding,
+    data_loader,
+    mesh,
+    data_sharding,
+    replicated_sharding,
+    num_eval_batches: int | None,
+) -> dict[str, float]:
+    """Evaluate action prediction loss by sampling actions and comparing with labels.
+    
+    This computes the L2 loss between model-sampled actions and ground truth action labels.
+    Only applies to action loss (not language loss).
+    
+    Args:
+        num_eval_batches: If None, iterate until StopIteration. Otherwise, limit to this many batches.
+    """
+    evaluator = ActionPredictionLossEvaluator(config)
+    pval_step = jax.jit(
+        evaluator,
+        in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+        out_shardings=replicated_sharding,
+    )
+
+    # Create a new iterator for this evaluation (validation dataset should only iterate once)
+    data_iter = iter(data_loader)
+    val_infos = []
+
+    # Use a progress bar that adapts to whether we have a fixed number of batches
+    if num_eval_batches is not None:
+        pbar = tqdm.tqdm(
+            range(num_eval_batches),
+            total=num_eval_batches,
+            dynamic_ncols=True,
+            desc="Action prediction loss evaluation",
+            disable=(jax.process_index() != 0),
+        )
+        max_batches = num_eval_batches
+    else:
+        # For unknown number of batches, use a simple counter
+        pbar = tqdm.tqdm(
+            desc="Action prediction loss evaluation",
+            dynamic_ncols=True,
+            disable=(jax.process_index() != 0),
+        )
+        max_batches = None
+
+    with sharding.set_mesh(mesh):
+        batch_idx = 0
+        while True:
+            # Check if we've reached the batch limit
+            if max_batches is not None and batch_idx >= max_batches:
+                break
+
+            try:
+                batch = next(data_iter)
+            except StopIteration:
+                logging.info(f"Reached end of validation dataset at batch {batch_idx}")
+                break
+
+            val_info = pval_step(eval_rng, train_state, batch)
+            val_infos.append(val_info)
+            batch_idx += 1
+
+            # Update progress bar
+            if num_eval_batches is not None:
+                pbar.update(1)
+            else:
+                pbar.update(1)
+                pbar.total = batch_idx  # Update total as we go
+
+            # Update progress bar with running loss
+            if val_infos and batch_idx % 10 == 0:
+                recent_losses = [
+                    float(jax.device_get(info["action_prediction_loss"]))
+                    for info in val_infos[-min(10, len(val_infos)) :]
+                ]
+                pbar.set_postfix({"action_pred_loss": f"{np.mean(recent_losses):.4f}", "batches": batch_idx})
+
+        pbar.close()
+
+    # Aggregate metrics across all batches
+    results = {}
+    if val_infos:
+        # Get all metric keys from the first batch
+        metric_keys = val_infos[0].keys()
+
+        for key in metric_keys:
+            # Skip non-scalar metrics
+            values = []
+            for info in val_infos:
+                if key in info:
+                    val = jax.device_get(info[key])
+                    # Only aggregate scalar values
+                    if np.isscalar(val) or (hasattr(val, "shape") and val.shape == ()):
+                        values.append(float(val))
+            if values:
+                results[f"eval/action_prediction_loss/{key}"] = float(np.mean(values))
+
+    results["eval/action_prediction_loss/num_batches"] = len(val_infos)
 
     return results
 

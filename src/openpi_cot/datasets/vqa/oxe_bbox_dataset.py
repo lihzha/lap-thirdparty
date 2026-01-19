@@ -92,7 +92,7 @@ class OXEBoundingBoxDataset(ABC):
         self.want_val = split == "val"
         self.directional = directional
         self.direction_slope = direction_slope
-        self.direction_prob = getattr(config, "direction_prob", 0.5)
+        self.direction_prob = getattr(config, "direction_prob", 0.0)
         self.dataset_name = self.get_dataset_name()
         self.action_dim = action_dim
         self.state_dim = state_dim
