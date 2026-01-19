@@ -92,6 +92,7 @@ class OXEBoundingBoxDataset(ABC):
         self.want_val = split == "val"
         self.directional = directional
         self.direction_slope = direction_slope
+        self.direction_prob = getattr(config, "direction_prob", 0.5)
         self.dataset_name = self.get_dataset_name()
         self.action_dim = action_dim
         self.state_dim = state_dim
@@ -503,7 +504,7 @@ class OXEBoundingBoxDataset(ABC):
         # Sample objects and format caption using pure TensorFlow operations
         # Always sample exactly 1 object for both bbox and directional samples
         max_objects = 1
-        direction_prob = 0.5  # Probability of using direction caption instead of bbox
+        direction_prob = self.direction_prob  # Probability of using direction caption instead of bbox
 
         def lookup_and_sample_objects(frame):
             """Look up objects, sample if needed, and format caption using pure TF."""

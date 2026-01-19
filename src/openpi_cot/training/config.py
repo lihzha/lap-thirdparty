@@ -217,6 +217,9 @@ class CoTDataConfig(upstream_config.DataConfig):
     pred_prob: float = 0.2  # Probability of converting a frame to prediction sample (after flattening)
     primary_pred_prob: float = 0.5  # Probability of using primary camera (vs wrist) for prediction training
 
+    # VQA bbox dataset parameters
+    direction_prob: float = 0.5  # Probability of using direction caption instead of bbox for bbox VQA datasets
+
     ### DROID fields (used when dataset_type == "droid")
     vis_dataset: bool = False
     language_action_dir: str | None = None

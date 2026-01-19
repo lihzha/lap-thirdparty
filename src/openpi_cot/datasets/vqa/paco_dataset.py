@@ -25,6 +25,8 @@ class PacoLvis(BaseVQADataset):
         self.directional = directional
         self.direction_slope = direction_slope
         super().__init__(*args, **kwargs)
+        # Get direction_prob from config
+        self.direction_prob = getattr(self.config, "direction_prob", 0.5)
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
         return tfds.builder("paco_lvis:1.0.0", data_dir=data_dir)
@@ -79,9 +81,9 @@ class PacoLvis(BaseVQADataset):
         # Sample a prompt using the shared helper
         prompt = sample_prompt_tf(ROBOT_BBOX_PROMPT_PARTS_EE, category_name, (self.seed, image_id_hash))
 
-        # With 50% probability, use direction caption instead of bbox
+        # With direction_prob probability, use direction caption instead of bbox
         dir_seed = (self.seed + 7919, image_id_hash)
-        use_direction = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < 0.5
+        use_direction = tf.random.stateless_uniform([], seed=dir_seed, dtype=tf.float32) < self.direction_prob
 
         # Format bbox as caption using shared function
         bbox_caption = bbox_to_text_tf(bbox)
