@@ -1893,7 +1893,7 @@ def yam_dataset_transform(trajectory: dict[str, Any]) -> dict[str, Any]:
     trajectory["action"] = tf.concat(
         [
             trajectory["observation"]["state"][:, :6],
-            invert_gripper_actions(tf.clip_by_value(trajectory["action"][:, -1:], 0, 1)),
+           tf.clip_by_value(trajectory["action"][:, -1:], 0, 1),
         ],
         axis=1,
     )
