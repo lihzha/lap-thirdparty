@@ -49,7 +49,7 @@ KVCache: TypeAlias = tuple[
 # Configuration & Factory
 # ============================================================================
 
-Variant = Literal["gemma3_300m", "gemma3_1b", "gemma3_4b", "gemma3_12b", "gemma3_300m_26", "gemma3_300m_48"]
+Variant = Literal["gemma3_300m", "gemma3_1b", "gemma3_4b", "gemma3_12b", "gemma3_300m_26", "gemma3_300m_48", "gemma3_27b", "gemma3_300m_62"]
 
 
 @dataclasses.dataclass
@@ -154,6 +154,24 @@ def get_config(variant: Variant) -> Config:
             use_post_ffw_norm=True,
             transpose_gating_einsum=True,
         )
+    if variant == "gemma3_27b":
+        return Config(
+            width=5376,
+            hidden_dim=5376 * 8 // 2,
+            num_heads=32,
+            num_kv_heads=16,
+            head_dim=128,
+            vocab_size=GEMMA3_VOCAB_SIZE,
+            num_layers=62,
+            sliding_window_size=1024,
+            sliding_window_pattern=6,
+            rope_local_base_freq=10000.0,
+            rope_global_base_freq=1000000.0,
+            use_qk_norm=True,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            transpose_gating_einsum=True,
+        )
     if variant == "gemma3_300m":
         return Config(
             width=768,
@@ -199,6 +217,24 @@ def get_config(variant: Variant) -> Config:
             head_dim=256,
             vocab_size=GEMMA3_VOCAB_SIZE,
             num_layers=48,
+            sliding_window_size=512,
+            sliding_window_pattern=6,
+            rope_local_base_freq=10000.0,
+            rope_global_base_freq=1000000.0,
+            use_qk_norm=True,
+            use_post_attn_norm=True,
+            use_post_ffw_norm=True,
+            transpose_gating_einsum=True,
+        )
+    if variant == "gemma3_300m_62":
+        return Config(
+            width=768,
+            hidden_dim=768 * 4,
+            num_heads=32,
+            num_kv_heads=16,
+            head_dim=128,
+            vocab_size=GEMMA3_VOCAB_SIZE,
+            num_layers=62,
             sliding_window_size=512,
             sliding_window_pattern=6,
             rope_local_base_freq=10000.0,
