@@ -24,9 +24,11 @@ class Lvis(BaseVQADataset):
     def __init__(self, *args, directional: bool = False, direction_slope: float = 2.0, **kwargs):
         self.directional = directional
         self.direction_slope = direction_slope
+        # Get direction_prob from config before calling super().__init__()
+        # because super().__init__() calls apply_vqa_restructure() which uses self.direction_prob
+        config = kwargs.get("config")
+        self.direction_prob = getattr(config, "direction_prob", 0.5) if config else 0.5
         super().__init__(*args, **kwargs)
-        # Get direction_prob from config
-        self.direction_prob = getattr(self.config, "direction_prob", 0.5)
 
     def build_dataset_builder(self, ds_name: str, data_dir: str):
         """Build TFDS builder for LVIS."""
