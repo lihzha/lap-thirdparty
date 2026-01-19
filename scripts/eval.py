@@ -301,16 +301,16 @@ def main(config: _config.TrainConfig):
         dataset_configs.append(("eval_demo_dataset", eval_demo_config))
         logging.info("Added eval_demo_dataset dataset configuration (data_mix='eval_demo_dataset', val_fraction=1.0)")
         
-        eval_rollout_config = dataclasses.replace(
-            config,
-            data=dataclasses.replace(
-                config.data,
-                data_mix="eval_rollout_dataset",
-                val_fraction=1.0,
-            ),
-        )
-        dataset_configs.append(("eval_rollout_dataset", eval_rollout_config))
-        logging.info("Added eval_rollout_dataset dataset configuration (data_mix='eval_rollout_dataset', val_fraction=1.0)")
+        # eval_rollout_config = dataclasses.replace(
+        #     config,
+        #     data=dataclasses.replace(
+        #         config.data,
+        #         data_mix="eval_rollout_dataset",
+        #         val_fraction=1.0,
+        #     ),
+        # )
+        # dataset_configs.append(("eval_rollout_dataset", eval_rollout_config))
+        # logging.info("Added eval_rollout_dataset dataset configuration (data_mix='eval_rollout_dataset', val_fraction=1.0)")
         
     # Evaluate each checkpoint sequentially
     all_results = {}
