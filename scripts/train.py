@@ -540,21 +540,21 @@ def main(config: _config.TrainConfig):
             persistent_iterator=False,
         )
 
-        # franka_val_data_loader = _data_loader.create_data_loader(
-        #     replace(
-        #         config,
-        #         # model=replace(config.model, verbose_mode=True),
-        #         batch_size=128,
-        #         data=replace(config.data, data_mix="franka_dataset", val_fraction=1.0),
-        #     ),
-        #     sharding=data_sharding,
-        #     shuffle=False,
-        #     split="val",
-        #     seed=config.seed,
-        #     max_samples=getattr(config.data, "val_max_samples", None),
-        #     hash_tables=hash_tables_cache,
-        #     persistent_iterator=False,
-        # )
+        val_xemb_demo_data_loader = _data_loader.create_data_loader(
+            replace(
+                config,
+                batch_size=128,
+                data=replace(config.data, data_mix="eval_demo_dataset", val_fraction=1.0),
+            ),
+            sharding=data_sharding,
+            shuffle=False,
+            split="val",
+            seed=config.seed,
+            max_samples=getattr(config.data, "val_max_samples", None),
+            hash_tables=hash_tables_cache,
+            persistent_iterator=False,
+        )
+        
 
         num_val_batches = val_data_loader.num_val_batches()
         logging.info(f"Initial number of validation batches (from loader): {num_val_batches}")
@@ -565,6 +565,16 @@ def main(config: _config.TrainConfig):
                 logging.info(f"Validation dataset statistics: {val_dataset.dataset_statistics}")
             if hasattr(val_dataset, "dataset_length"):
                 logging.info(f"Validation dataset length: {val_dataset.dataset_length}")
+        logging.info("=" * 80)
+        
+        num_val_xemb_demo_batches = val_xemb_demo_data_loader.num_val_batches()
+        logging.info(f"Initial number of validation xemb demo batches (from loader): {num_val_xemb_demo_batches}")
+        val_dataset = getattr(val_xemb_demo_data_loader, "dataset", None)
+        if val_dataset:
+            if hasattr(val_dataset, "dataset_statistics"):
+                logging.info(f"Validation xemb demo dataset statistics: {val_dataset.dataset_statistics}")
+            if hasattr(val_dataset, "dataset_length"):
+                logging.info(f"Validation xemb demo dataset length: {val_dataset.dataset_length}")
         logging.info("=" * 80)
 
         # Try to obtain the tokenizer from the transform pipeline for decoding
@@ -701,38 +711,38 @@ def main(config: _config.TrainConfig):
                         verbose_mode=verbose_mode,
                     )
 
-                # val_infos = []
-                # # Recreate a fresh iterator to ensure the same fixed validation subset each time.
-                # franka_val_iter = iter(franka_val_data_loader)
+                val_infos = []
+                # Recreate a fresh iterator to ensure the same fixed validation subset each time.
+                val_xemb_demo_data_iter = iter(val_xemb_demo_data_loader)
 
-                # # Subsequent validation runs: use progress bar with known batch count
-                # val_pbar = tqdm.tqdm(
-                #     range(20),
-                #     initial=0,
-                #     total=20,
-                #     dynamic_ncols=True,
-                #     disable=(jax.process_index() != 0),
-                # )
-                # for _ in val_pbar:
-                #     val_batch = next(franka_val_iter)
-                #     val_info = pval_step(train_rng, train_state, val_batch)
-                #     # val_info_local = jax.device_get(val_info)
-                #     # val_infos.append(val_info_local)
-                #     val_infos.append(val_info)
+                # Subsequent validation runs: use progress bar with known batch count
+                val_pbar = tqdm.tqdm(
+                    range(num_val_xemb_demo_batches),
+                    initial=0,
+                    total=num_val_xemb_demo_batches,
+                    dynamic_ncols=True,
+                    disable=(jax.process_index() != 0),
+                )
+                for _ in val_pbar:
+                    val_batch = next(val_xemb_demo_data_iter)
+                    val_info = pval_step(train_rng, train_state, val_batch)
+                    # val_info_local = jax.device_get(val_info)
+                    # val_infos.append(val_info_local)
+                    val_infos.append(val_info)
 
-                # log_util.process_and_log_metrics(
-                #     step=step,
-                #     infos=val_infos,
-                #     batch=val_batch,  # Use last val_batch for dataset info
-                #     dataset_stats_tracker=val_dataset_stats_tracker,
-                #     dataset_info_buffer=val_dataset_info_buffer,
-                #     config=config,
-                #     host_batch_cache=val_host_batch_cache,
-                #     dataset_log_tracker=dataset_log_tracker,
-                #     tok=tok,
-                #     prefix="franka_val_",
-                #     verbose_mode=False,
-                # )
+                log_util.process_and_log_metrics(
+                    step=step,
+                    infos=val_infos,
+                    batch=val_batch,  # Use last val_batch for dataset info
+                    dataset_stats_tracker=val_dataset_stats_tracker,
+                    dataset_info_buffer=val_dataset_info_buffer,
+                    config=config,
+                    host_batch_cache=val_host_batch_cache,
+                    dataset_log_tracker=dataset_log_tracker,
+                    tok=tok,
+                    prefix="val_xemb_demo_",
+                    verbose_mode=False,
+                )
 
         batch = next(data_iter)
 
