@@ -1174,7 +1174,7 @@ class TrainConfig(upstream_config.TrainConfig):
     eval_checkpoint_step: int | None = None
     eval_checkpoint_steps: list[int] | None = None  # List of specific checkpoint steps to evaluate
     eval_all_checkpoints: bool = True  # If True, evaluate all available checkpoints sequentially
-    num_eval_batches: int | None = 50
+    num_eval_batches: int | None = 463
     eval_mode: Literal["token_accuracy", "rollout", "both", "token_visualization", "train_loss", "val_loss", "action_prediction_loss"] = "val_loss"
     eval_use_ema: bool = True
     eval_split: Literal["val", "train"] = "val"
