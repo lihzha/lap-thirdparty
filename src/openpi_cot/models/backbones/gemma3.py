@@ -592,7 +592,7 @@ class Attention(nn.Module):
         v = v.astype(dtype)
 
         token_owner = None
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[0] is not None:
             token_owner = []
             for i, x in enumerate(xs):
                 if x is not None:
@@ -640,7 +640,7 @@ class Attention(nn.Module):
                 f"Attention mask with shape {attn_mask.shape} but shapes for q and k are: {q.shape} and {k.shape}"
             )
 
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[0] is not None:
             q_owner = token_owner[:, None, None, :, None]
             k_owner = token_owner[:, None, None, None, :]
             cross_to_expert0 = (q_owner != 0) & (k_owner == 0)
@@ -679,7 +679,7 @@ class Attention(nn.Module):
 
         # Softmax and weighted sum
         probs = jax.nn.softmax(masked_logits, axis=-1).astype(dtype)
-        if self.stop_action_to_vlm_grad:
+        if self.stop_action_to_vlm_grad and xs[0] is not None:
             probs_cross = probs * cross_to_expert0.astype(probs.dtype)
             probs_self = probs - probs_cross
             encoded = jnp.einsum("BKGTS,BSKH->BTKGH", probs_self, v) + jnp.einsum(

@@ -824,7 +824,7 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
-    "yam_dataset": {
+    "yam_jointpos_dataset": {
         "image_obs_keys": {
             "primary": "image",
             "secondary": None,
@@ -837,7 +837,7 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.JOINT_POS,
     },
-    "franka_eval_dataset": {
+    "franka_demo_dataset": {
         "image_obs_keys": {
             "primary": "image",
             "secondary": None,
@@ -850,7 +850,33 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.EEF_POS,
     },
-    "yam_eval_dataset": {
+    "yam_demo_dataset": {
+        "image_obs_keys": {
+            "primary": "image",
+            "secondary": None,
+            "wrist": None,
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            "state",
+        ],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
+    "franka_rollout_dataset": {
+        "image_obs_keys": {
+            "primary": "image",
+            "secondary": None,
+            "wrist": "wrist_image",
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            "state",
+        ],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.EEF_POS,
+    },
+    "yam_rollout_dataset": {
         "image_obs_keys": {
             "primary": "image",
             "secondary": None,
@@ -1317,19 +1343,31 @@ OXE_DATASET_METADATA = {
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
-    "yam_dataset": {
+    "yam_jointpos_dataset": {
+        "control_frequency": 15,
+        "language_annotations": "Natual detailed instructions",
+        "robot_morphology": "Single Arm",
+            "has_suboptimal": "No",
+        },
+    "franka_rollout_dataset": {
         "control_frequency": 15,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
-    "franka_eval_dataset": {
+    "yam_rollout_dataset": {
         "control_frequency": 15,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Single Arm",
         "has_suboptimal": "No",
     },
-    "yam_eval_dataset": {
+    "franka_demo_dataset": {
+        "control_frequency": 15,
+        "language_annotations": "Natual detailed instructions",
+        "robot_morphology": "Single Arm",
+        "has_suboptimal": "No",
+    },
+    "yam_demo_dataset": {
         "control_frequency": 15,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Single Arm",

@@ -276,21 +276,32 @@ def main(config: _config.TrainConfig):
         logging.info(f"No checkpoint step specified, using latest: {latest_step}")
         checkpoint_steps_to_eval = [latest_step]
 
-    # Create data loader once (will be reused for each checkpoint)
-    # For validation, we don't use max_samples and reconstruct iterator each time
-    data_loader = _data_loader.create_data_loader(
-        config,
-        sharding=data_sharding,
-        shuffle=False,
-        split=config.eval_split,
-        seed=config.seed,
-        max_samples=None,  # Don't limit samples for validation - iterate until StopIteration
-    )
-
     # Determine number of evaluation batches (None means iterate until StopIteration)
     num_eval_batches = config.num_eval_batches
 
-    logging.info(f"Evaluation mode: {config.eval_mode}")
+    # Define eval modes and dataset configs to iterate over
+    eval_modes = ["val_loss", "action_prediction_loss"]
+    
+    # Create dataset configs: (config_name, modified_config)
+    dataset_configs = [
+        ("original", config),  # Use original config's data_mix and val_fraction
+    ]
+    
+    # Add eval_mix config if data has data_mix attribute
+    if hasattr(config.data, "data_mix") and config.data.data_mix is not None:
+        # Create modified config with eval_mix and val_fraction=1.0
+        eval_mix_config = dataclasses.replace(
+            config,
+            data=dataclasses.replace(
+                config.data,
+                data_mix="eval_mix",
+                val_fraction=1.0,
+            ),
+        )
+        dataset_configs.append(("eval_mix", eval_mix_config))
+        logging.info("Added eval_mix dataset configuration (data_mix='eval_mix', val_fraction=1.0)")
+    else:
+        logging.info("Skipping eval_mix config: data.data_mix not available")
 
     # Evaluate each checkpoint sequentially
     all_results = {}
@@ -316,49 +327,69 @@ def main(config: _config.TrainConfig):
         logging.info(f"Loaded checkpoint at step {train_state.step}")
         sharding.log_param_sharding_actual(train_state.params)
 
-        # Evaluate this checkpoint based on mode
-        if config.eval_mode == "val_loss":
-            eval_results = evaluate_validation_loss(
-                config,
-                eval_rng,
-                train_state,
-                train_state_sharding,
-                data_loader,
-                mesh,
-                data_sharding,
-                replicated_sharding,
-                num_eval_batches,
-            )
-        elif config.eval_mode == "action_prediction_loss":
-            eval_results = evaluate_action_prediction_loss(
-                config,
-                eval_rng,
-                train_state,
-                train_state_sharding,
-                data_loader,
-                mesh,
-                data_sharding,
-                replicated_sharding,
-                num_eval_batches,
-            )
-        else:
-            raise ValueError(f"Unsupported eval_mode: {config.eval_mode}")
+        # Iterate over eval modes and dataset configs
+        for eval_mode in eval_modes:
+            for dataset_config_name, dataset_config in dataset_configs:
+                logging.info("=" * 80)
+                logging.info(f"Evaluating: mode={eval_mode}, dataset={dataset_config_name}")
+                logging.info("=" * 80)
+                
+                # Create data loader for this dataset configuration
+                data_loader = _data_loader.create_data_loader(
+                    dataset_config,
+                    sharding=data_sharding,
+                    shuffle=False,
+                    split=dataset_config.eval_split,
+                    seed=dataset_config.seed,
+                    max_samples=None,  # Don't limit samples for validation - iterate until StopIteration
+                )
 
-        # Store results with checkpoint step
-        step_results = {f"step_{checkpoint_step}/{k}": v for k, v in eval_results.items()}
-        all_results.update(step_results)
+                # Evaluate based on mode
+                if eval_mode == "val_loss":
+                    eval_results = evaluate_validation_loss(
+                        dataset_config,
+                        eval_rng,
+                        train_state,
+                        train_state_sharding,
+                        data_loader,
+                        mesh,
+                        data_sharding,
+                        replicated_sharding,
+                        num_eval_batches,
+                    )
+                elif eval_mode == "action_prediction_loss":
+                    eval_results = evaluate_action_prediction_loss(
+                        dataset_config,
+                        eval_rng,
+                        train_state,
+                        train_state_sharding,
+                        data_loader,
+                        mesh,
+                        data_sharding,
+                        replicated_sharding,
+                        num_eval_batches,
+                    )
+                else:
+                    raise ValueError(f"Unsupported eval_mode: {eval_mode}")
 
-        # Log results for this checkpoint
-        logging.info("=" * 80)
-        logging.info(f"EVALUATION RESULTS for step {checkpoint_step}")
-        logging.info("=" * 80)
-        for key, value in eval_results.items():
-            logging.info(f"{key:40s}: {value}")
-        logging.info("=" * 80)
+                # Store results with checkpoint step, eval mode, and dataset config
+                prefix = f"step_{checkpoint_step}/{eval_mode}/{dataset_config_name}"
+                step_results = {f"{prefix}/{k}": v for k, v in eval_results.items()}
+                all_results.update(step_results)
 
-        # Log to wandb for this checkpoint step
-        if jax.process_index() == 0 and config.wandb_enabled:
-            wandb.log(eval_results, step=int(checkpoint_step))
+                # Log results for this combination
+                logging.info("=" * 80)
+                logging.info(f"EVALUATION RESULTS: step={checkpoint_step}, mode={eval_mode}, dataset={dataset_config_name}")
+                logging.info("=" * 80)
+                for key, value in eval_results.items():
+                    logging.info(f"{key:40s}: {value}")
+                logging.info("=" * 80)
+
+                # Log to wandb for this checkpoint step, eval mode, and dataset config
+                if jax.process_index() == 0 and config.wandb_enabled:
+                    # Add metadata to results for wandb
+                    wandb_results = {f"{eval_mode}/{dataset_config_name}/{k}": v for k, v in eval_results.items()}
+                    wandb.log(wandb_results, step=int(checkpoint_step))
 
     # Update wandb summary with all results
     if jax.process_index() == 0 and config.wandb_enabled:
