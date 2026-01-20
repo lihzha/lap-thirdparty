@@ -257,14 +257,76 @@ def init_train_state(
         allow_partial=config.allow_partial_weights,
     )
     replicated_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    
+    # Shard partial_params to avoid OOM during JIT compilation.
+    # This distributes the 54GB across devices instead of replicating on all devices.
+    # Match partial_params structure with the param sharding tree.
+    # Convert state_sharding.params to pure dict if it's an NNX state object
+    if hasattr(state_sharding.params, 'to_pure_dict'):
+        param_sharding_dict = state_sharding.params.to_pure_dict()
+    else:
+        param_sharding_dict = state_sharding.params
+    
+    def _match_and_shard(partial_val, full_sharding_tree):
+        """Recursively match and shard partial params with the full sharding structure."""
+        if isinstance(partial_val, dict) and isinstance(full_sharding_tree, dict):
+            result = {}
+            for key, val in partial_val.items():
+                if key in full_sharding_tree:
+                    result[key] = _match_and_shard(val, full_sharding_tree[key])
+                else:
+                    result[key] = val
+            return result
+        elif isinstance(partial_val, jax.Array):
+            # Extract sharding spec from full_sharding_tree (might be wrapped in NNX Param)
+            sharding_spec = full_sharding_tree
+            if hasattr(full_sharding_tree, 'value'):
+                # NNX Param object - extract the sharding spec
+                sharding_spec = full_sharding_tree.value
+            if isinstance(sharding_spec, jax.sharding.Sharding):
+                # Shard this parameter
+                return jax.device_put(partial_val, sharding_spec)
+            else:
+                # No sharding spec found, return as is
+                return partial_val
+        else:
+            # Leaf node - return as is (might be None or other types)
+            return partial_val
+    
+    partial_params_sharded = _match_and_shard(partial_params, param_sharding_dict)
+    
+    # Create sharding spec tree matching partial_params structure
+    def _extract_sharding_spec(partial_val, full_sharding_tree):
+        """Extract sharding spec matching the partial_params structure."""
+        if isinstance(partial_val, dict) and isinstance(full_sharding_tree, dict):
+            result = {}
+            for key, val in partial_val.items():
+                if key in full_sharding_tree:
+                    result[key] = _extract_sharding_spec(val, full_sharding_tree[key])
+            return result
+        elif isinstance(partial_val, jax.Array):
+            # Extract sharding spec from full_sharding_tree (might be wrapped in NNX Param)
+            sharding_spec = full_sharding_tree
+            if hasattr(full_sharding_tree, 'value'):
+                # NNX Param object - extract the sharding spec
+                sharding_spec = full_sharding_tree.value
+            if isinstance(sharding_spec, jax.sharding.Sharding):
+                return sharding_spec
+            else:
+                return None
+        else:
+            return None
+    
+    partial_params_sharding = _extract_sharding_spec(partial_params, param_sharding_dict)
 
     # Initialize the train state and mix in the partial params.
+    # Use sharded input for partial_params to reduce memory usage during compilation.
     train_state = jax.jit(
         init,
         donate_argnums=(1,),  # donate the partial params buffer.
-        in_shardings=replicated_sharding,
+        in_shardings=(replicated_sharding, partial_params_sharding),
         out_shardings=state_sharding,
-    )(init_rng, partial_params)
+    )(init_rng, partial_params_sharded)
 
     del partial_params
     import gc
