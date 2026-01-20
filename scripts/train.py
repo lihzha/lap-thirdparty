@@ -626,7 +626,8 @@ def main(config: _config.TrainConfig):
             log_util.buffer_dataset_metrics_from_batch(dataset_info_buffer, batch, info)
         
         should_save = (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps
-        if config.additional_save_steps and step in config.additional_save_steps:
+        is_additional_save = config.additional_save_steps and step in config.additional_save_steps
+        if is_additional_save:
             should_save = True
         if should_save:
             checkpoint_manager = _checkpoints.save_state(
@@ -640,6 +641,7 @@ def main(config: _config.TrainConfig):
                 fallback_to_sync=config.checkpoint_fallback_to_sync,
                 async_timeout_secs=config.checkpoint_async_timeout_secs,
                 keep_period=config.keep_period,
+                preserve_checkpoint=is_additional_save,
             )
 
         if step % config.log_interval == 0:

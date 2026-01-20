@@ -172,19 +172,39 @@ def save_state(
     fallback_to_sync: bool = False,
     async_timeout_secs: int | None = None,
     keep_period: int | None = None,
+    preserve_checkpoint: bool = False,
 ) -> ocp.CheckpointManager:
     start_time = time.perf_counter()
     directory_str = _extract_directory(checkpoint_manager)
-    logging.info("Checkpoint save start | step=%d | dir=%s", step, directory_str)
+    logging.info("Checkpoint save start | step=%d | dir=%s | preserve=%s", step, directory_str, preserve_checkpoint)
 
     if keep_period is None:
         keep_period = _extract_keep_period(checkpoint_manager)
     if async_timeout_secs is None:
         async_timeout_secs = _extract_async_timeout(checkpoint_manager)
+    
+    # If preserve_checkpoint is True, save to a separate subdirectory to prevent
+    # the main checkpoint manager's keep_period from deleting it
+    if preserve_checkpoint:
+        # Save to a separate "additional" subdirectory that's not managed by keep_period
+        additional_dir = epath.Path(directory_str) / "additional"
+        if str(additional_dir).startswith("gs://"):
+            tf.io.gfile.makedirs(str(additional_dir))
+        else:
+            additional_dir.mkdir(parents=True, exist_ok=True)
+        # Create a separate checkpoint manager for additional saves without keep_period
+        manager_to_use = create_checkpoint_manager(
+            str(additional_dir),
+            keep_period=None,  # Disable keep_period to preserve these checkpoints
+            async_timeout_secs=async_timeout_secs,
+            async_enable=_has_async_enabled(checkpoint_manager),
+        )
+        logging.info("Saving preserved checkpoint at step %d to additional subdirectory: %s", step, additional_dir)
+    else:
+        manager_to_use = checkpoint_manager
 
     attempt = 0
     delay_secs = retry_delay_secs
-    manager_to_use = checkpoint_manager
 
     while True:
         attempt += 1
@@ -280,7 +300,8 @@ def save_state(
                 _extract_directory(manager_to_use),
                 duration,
             )
-            return manager_to_use
+            # Return the original checkpoint manager (not the temp one if preserve_checkpoint was used)
+            return checkpoint_manager
         except KeyboardInterrupt:
             raise
         except Exception as err:
