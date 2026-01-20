@@ -750,8 +750,12 @@ def main(config: _config.TrainConfig):
                     dynamic_ncols=True,
                     disable=(jax.process_index() != 0),
                 )
-                for _ in val_pbar:
-                    val_batch = next(val_iter)
+                for batch_idx in val_pbar:
+                    try:
+                        val_batch = next(val_iter)
+                    except StopIteration:
+                        logging.info(f"Reached end of validation dataset at batch {batch_idx}")
+                        break
                     val_info = pval_step(train_rng, train_state, val_batch)
                     # val_info_local = jax.device_get(val_info)
                     # val_infos.append(val_info_local)
@@ -786,8 +790,12 @@ def main(config: _config.TrainConfig):
                     dynamic_ncols=True,
                     disable=(jax.process_index() != 0),
                 )
-                for _ in val_pbar:
-                    val_batch = next(val_xemb_demo_data_iter)
+                for batch_idx in val_pbar:
+                    try:
+                        val_batch = next(val_xemb_demo_data_iter)
+                    except StopIteration:
+                        logging.info(f"Reached end of validation xemb demo dataset at batch {batch_idx}")
+                        break
                     val_info = pval_step(train_rng, train_state, val_batch)
                     # val_info_local = jax.device_get(val_info)
                     # val_infos.append(val_info_local)
