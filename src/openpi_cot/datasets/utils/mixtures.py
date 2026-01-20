@@ -185,9 +185,9 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("molmoact_bbox", 20.0),
         ("bridge_bbox", 20.0),
     ],
-    "oxe_magic_soup_magic_vqa_small": [
+    "oxe_magic_soup_magic_vqa_big": [
         # ("kuka", 0.01),  # no language instructions, 580392 trajs, no wrist, action scale is strange
-        ("bc_z", 0.05),
+        ("bc_z", 1.0),
         ("droid", 2.0),
         ("fractal20220817_data", 1.0),
         ("bridge_v2_oxe", 1.0),
@@ -214,16 +214,16 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
         ("austin_sirius_dataset_converted_externally_to_rlds", 1.0),  # no language instructions, 600 trajs
         ("viola", 1.0),  # gripper mostly out of view, 135 trajs
         ("molmoact_dataset", 2.0),
-        ("coco_captions", 1.0),  # 10% COCO caption samples
-        ("vqa", 0.1),  # 10% vqa samples
+        ("coco_captions", 4.0),  # 10% COCO caption samples
+        ("vqa", 0.2),  # 10% vqa samples
         ("lvis", 0.01),
-        ("pixmo_cap", 3.0),  # 10% COCO caption samples
-        ("pixmo_point", 1.0),  # 10% vqa samples
-        ("paco_lvis", 5.0),
-        ("paco_ego4d", 5.0),
-        ("droid_bbox", 5.0),
-        ("molmoact_bbox", 5.0),
-        ("bridge_bbox", 5.0),
+        ("pixmo_cap", 15.0),  # 10% COCO caption samples
+        ("pixmo_point", 5.0),  # 10% vqa samples
+        ("paco_lvis", 10.0),
+        ("paco_ego4d", 35.0),
+        ("droid_bbox", 35.0),
+        ("molmoact_bbox", 50.0),
+        ("bridge_bbox", 50.0),
     ],
     "franka_no_droid": [
         ("furniture_bench_dataset_converted_externally_to_rlds", 0.5),
