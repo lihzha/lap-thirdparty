@@ -311,6 +311,22 @@ def main(config: _config.TrainConfig):
         # )
         # dataset_configs.append(("eval_rollout_dataset", eval_rollout_config))
         # logging.info("Added eval_rollout_dataset dataset configuration (data_mix='eval_rollout_dataset', val_fraction=1.0)")
+
+    # Create data loaders once upfront (keyed by dataset_config_name)
+    # This avoids recreating data loaders for each checkpoint, which is expensive
+    logging.info("Creating data loaders for all dataset configurations...")
+    data_loaders = {}
+    for dataset_config_name, dataset_config in dataset_configs:
+        logging.info(f"Creating data loader for dataset: {dataset_config_name}")
+        data_loaders[dataset_config_name] = _data_loader.create_data_loader(
+            dataset_config,
+            sharding=data_sharding,
+            shuffle=False,
+            split=dataset_config.eval_split,
+            seed=dataset_config.seed,
+            max_samples=None,  # Don't limit samples for validation - iterate until StopIteration
+        )
+    logging.info(f"Created {len(data_loaders)} data loaders")
         
     # Evaluate each checkpoint sequentially
     all_results = {}
@@ -343,15 +359,9 @@ def main(config: _config.TrainConfig):
                 logging.info(f"Evaluating: mode={eval_mode}, dataset={dataset_config_name}")
                 logging.info("=" * 80)
                 
-                # Create data loader for this dataset configuration
-                data_loader = _data_loader.create_data_loader(
-                    dataset_config,
-                    sharding=data_sharding,
-                    shuffle=False,
-                    split=dataset_config.eval_split,
-                    seed=dataset_config.seed,
-                    max_samples=None,  # Don't limit samples for validation - iterate until StopIteration
-                )
+                # Get the pre-created data loader and create a fresh iterator for this checkpoint
+                data_loader = data_loaders[dataset_config_name]
+                data_iter = iter(data_loader)
 
                 # Evaluate based on mode
                 if eval_mode == "val_loss":
@@ -360,7 +370,7 @@ def main(config: _config.TrainConfig):
                         eval_rng,
                         train_state,
                         train_state_sharding,
-                        data_loader,
+                        data_iter,
                         mesh,
                         data_sharding,
                         replicated_sharding,
@@ -372,7 +382,7 @@ def main(config: _config.TrainConfig):
                         eval_rng,
                         train_state,
                         train_state_sharding,
-                        data_loader,
+                        data_iter,
                         mesh,
                         data_sharding,
                         replicated_sharding,
@@ -412,7 +422,7 @@ def evaluate_validation_loss(
     eval_rng: at.KeyArrayLike,
     train_state: training_utils.TrainState,
     train_state_sharding,
-    data_loader,
+    data_iter,
     mesh,
     data_sharding,
     replicated_sharding,
@@ -421,6 +431,7 @@ def evaluate_validation_loss(
     """Evaluate validation loss, matching train.py's ValidationStepRunner exactly.
     
     Args:
+        data_iter: Iterator over the data loader (caller should call iter() on the data loader).
         num_eval_batches: If None, iterate until StopIteration. Otherwise, limit to this many batches.
     """
     evaluator = ValidationLossEvaluator(config)
@@ -430,8 +441,6 @@ def evaluate_validation_loss(
         out_shardings=replicated_sharding,
     )
 
-    # Create a new iterator for this evaluation (validation dataset should only iterate once)
-    data_iter = iter(data_loader)
     val_infos = []
 
     # Use a progress bar that adapts to whether we have a fixed number of batches
@@ -512,7 +521,7 @@ def evaluate_action_prediction_loss(
     eval_rng: at.KeyArrayLike,
     train_state: training_utils.TrainState,
     train_state_sharding,
-    data_loader,
+    data_iter,
     mesh,
     data_sharding,
     replicated_sharding,
@@ -524,6 +533,7 @@ def evaluate_action_prediction_loss(
     Only applies to action loss (not language loss).
     
     Args:
+        data_iter: Iterator over the data loader (caller should call iter() on the data loader).
         num_eval_batches: If None, iterate until StopIteration. Otherwise, limit to this many batches.
     """
     evaluator = ActionPredictionLossEvaluator(config)
@@ -533,8 +543,6 @@ def evaluate_action_prediction_loss(
         out_shardings=replicated_sharding,
     )
 
-    # Create a new iterator for this evaluation (validation dataset should only iterate once)
-    data_iter = iter(data_loader)
     val_infos = []
 
     # Use a progress bar that adapts to whether we have a fixed number of batches
