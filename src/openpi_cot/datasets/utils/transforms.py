@@ -2024,6 +2024,7 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "planning_dataset": planning_dataset_transform,
     "franka_dataset": franka_dataset_transform,
     "yam_jointpos_dataset": yam_jointpos_dataset_transform,
+    "yam_jointpos_dataset_small": yam_jointpos_dataset_transform,
     "yam_dataset": yam_dataset_transform,
     "franka_demo_dataset": franka_dataset_transform,
     "yam_demo_dataset": yam_dataset_transform,

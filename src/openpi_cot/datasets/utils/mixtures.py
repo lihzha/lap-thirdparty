@@ -331,6 +331,7 @@ OXE_NAMED_MIXTURES: dict[str, list[tuple[str, float]]] = {
     "molmoact_bbox": [("molmoact_bbox", 1.0)],
     "droid_100": [("droid_100", 1.0)],
     "yam_jointpos_dataset": [("yam_jointpos_dataset", 1.0)],
+    "yam_jointpos_dataset_small": [("yam_jointpos_dataset_small", 1.0)],
     "eval_demo_dataset": [("yam_demo_dataset", 1.0), ("franka_demo_dataset", 1.0)],
     "eval_rollout_dataset": [("franka_rollout_dataset", 1.0)],
 }

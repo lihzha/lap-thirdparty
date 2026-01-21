@@ -837,6 +837,19 @@ OXE_DATASET_CONFIGS = {
         "state_encoding": StateEncoding.POS_EULER,
         "action_encoding": ActionEncoding.JOINT_POS,
     },
+    "yam_jointpos_dataset_small": {
+        "image_obs_keys": {
+            "primary": "image",
+            "secondary": None,
+            "wrist": None,
+        },
+        "depth_obs_keys": {"primary": None, "secondary": None, "wrist": None},
+        "state_obs_keys": [
+            "state",
+        ],
+        "state_encoding": StateEncoding.POS_EULER,
+        "action_encoding": ActionEncoding.JOINT_POS,
+    },
     "franka_demo_dataset": {
         "image_obs_keys": {
             "primary": "image",
@@ -1344,6 +1357,12 @@ OXE_DATASET_METADATA = {
         "has_suboptimal": "No",
     },
     "yam_jointpos_dataset": {
+        "control_frequency": 15,
+        "language_annotations": "Natual detailed instructions",
+        "robot_morphology": "Single Arm",
+            "has_suboptimal": "No",
+        },
+    "yam_jointpos_dataset_small": {
         "control_frequency": 15,
         "language_annotations": "Natual detailed instructions",
         "robot_morphology": "Single Arm",
