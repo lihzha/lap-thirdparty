@@ -10,7 +10,6 @@ from openpi.transforms import apply_tree
 from openpi.transforms import flatten_dict
 from openpi.transforms import unflatten_dict
 
-from openpi_cot.datasets.utils.helpers import NormalizationType
 from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 
@@ -47,7 +46,7 @@ class TokenizePromptAndReasoning(DataTransformFn):
         # Always tokenize regular reasoning (prompt + language_actions)
         language_actions = data.pop("language_actions", None)  # if None, inference
         dataset_name = data.pop("dataset_name", None)  # if None, inference
-        frame_description = data.pop("frame_description", "end-effector frame")
+        frame_description = data.pop("frame_description", "robot base frame")
         if dataset_name is not None:
             tokenized_dataset_name = self.tokenizer._tokenizer.encode(dataset_name)
             pad_id = self.tokenizer._tokenizer.pad_id()
@@ -59,12 +58,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
             pad_id = self.tokenizer._tokenizer.pad_id()
             tokenized_dataset_name = [pad_id] * self.dataset_name_pad_len
             tokenized_dataset_name = np.asarray(tokenized_dataset_name, dtype=np.int32)
-
-        is_vqa_sample = data["is_vqa_sample"]
-        is_prediction_sample = data["is_prediction_sample"]
-        time_horizon_seconds = data.pop("time_horizon_seconds", None)
-
-        # frame_description = "end-effector frame"
 
 
         # Tokenize regular reasoning
@@ -79,9 +72,6 @@ class TokenizePromptAndReasoning(DataTransformFn):
             prompt,
             language_actions,
             state,
-            is_vqa_sample=is_vqa_sample,
-            is_prediction_sample=is_prediction_sample,
-            time_horizon_seconds=time_horizon_seconds,
             frame_description=frame_description,
             state_dropout=self.state_dropout,
         )
@@ -152,31 +142,21 @@ class SafeRepackTransform:
 class Normalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
     # Normalization type to use (NORMAL, BOUNDS, or BOUNDS_Q99)
-    normalization_type: NormalizationType | str = NormalizationType.NORMAL
+    normalization_type: str = "normal"
     # If true, will raise an error if any of the keys in the norm stats are not present in the data.
     strict: bool = False
 
-    def __post_init__(self):
-        normalization_type = self.normalization_type
-        if isinstance(normalization_type, str):
-            normalization_type = NormalizationType(normalization_type)
-
-        if self.norm_stats is not None and normalization_type in (NormalizationType.BOUNDS_Q99,):
-            _assert_quantile_stats(self.norm_stats)
 
     def __call__(self, data: DataDict) -> DataDict:
         if self.norm_stats is None:
             return data
 
         normalization_type = self.normalization_type
-        if isinstance(normalization_type, str):
-            normalization_type = NormalizationType(normalization_type)
-
-        if normalization_type == NormalizationType.NORMAL:
+        if normalization_type == "normal":
             normalize_fn = self._normalize
-        elif normalization_type == NormalizationType.BOUNDS:
+        elif normalization_type == "bounds":
             normalize_fn = self._normalize_bounds
-        elif normalization_type == NormalizationType.BOUNDS_Q99:
+        elif normalization_type == "bounds_q99":
             normalize_fn = self._normalize_quantile
         else:
             raise ValueError(f"Unknown normalization type: {normalization_type}")
@@ -223,29 +203,19 @@ class Normalize(DataTransformFn):
 class Unnormalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
     # Normalization type to use (NORMAL, BOUNDS, or BOUNDS_Q99)
-    normalization_type: NormalizationType | str = NormalizationType.NORMAL
-
-    def __post_init__(self):
-        normalization_type = self.normalization_type
-        if isinstance(normalization_type, str):
-            normalization_type = NormalizationType(normalization_type)
-
-        if self.norm_stats is not None and normalization_type in (NormalizationType.BOUNDS_Q99,):
-            _assert_quantile_stats(self.norm_stats)
+    normalization_type: str = "normal"
 
     def __call__(self, data: DataDict) -> DataDict:
         if self.norm_stats is None:
             return data
 
         normalization_type = self.normalization_type
-        if isinstance(normalization_type, str):
-            normalization_type = NormalizationType(normalization_type)
 
-        if normalization_type == NormalizationType.NORMAL:
+        if normalization_type == "normal":
             unnormalize_fn = self._unnormalize
-        elif normalization_type == NormalizationType.BOUNDS:
+        elif normalization_type == "bounds":
             unnormalize_fn = self._unnormalize_bounds
-        elif normalization_type == NormalizationType.BOUNDS_Q99:
+        elif normalization_type == "bounds_q99":
             unnormalize_fn = self._unnormalize_quantile
         else:
             raise ValueError(f"Unknown normalization type: {normalization_type}")
@@ -291,161 +261,6 @@ class PadStates(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
-class NormalizeActionAndProprio(DataTransformFn):
-    """Normalize `action` and `proprio`-like fields using dataset statistics.
-
-    This class adapts the behavior of `normalize_action_and_proprio` from
-    `openpi_cot.datasets.oxe_utils.data_utils` into a DataTransformFn so it can
-    be used directly in dataset pipelines.
-
-    It supports both NumPy arrays and TensorFlow tensors. When TensorFlow tensors
-    are encountered, TensorFlow math/clip/where ops are used to preserve graph
-    execution; otherwise NumPy is used.
-    """
-
-    norm_stats: at.PyTree | None
-    normalization_type: NormalizationType | str = NormalizationType.NORMAL
-    action_key: str = "action"
-    state_key: str = "proprio"
-
-    def __call__(self, traj: DataDict) -> DataDict:
-        if self.norm_stats is None:
-            return traj
-
-        normalization_type = self.normalization_type
-        if isinstance(normalization_type, str):
-            normalization_type = NormalizationType(normalization_type)
-
-        def _is_tf_tensor(x):
-            return tf is not None and isinstance(x, tf.Tensor)
-
-        def _to_tensor(value, like):
-            if value is None:
-                return None
-            if _is_tf_tensor(like):
-                if _is_tf_tensor(value):
-                    return tf.cast(value, tf.float32)
-                return tf.convert_to_tensor(value, dtype=tf.float32)
-            # NumPy path
-            if isinstance(value, np.ndarray):
-                return value.astype(np.float32, copy=False)
-            return np.asarray(value, dtype=np.float32)
-
-        def _clip(x, lo, hi):
-            if _is_tf_tensor(x):
-                return tf.clip_by_value(x, lo, hi)
-            return np.clip(x, lo, hi)
-
-        def _where(mask, a, b):
-            if _is_tf_tensor(a) or _is_tf_tensor(b):
-                return tf.where(mask, a, b)
-            return np.where(mask, a, b)
-
-        def _equal(a, b):
-            if _is_tf_tensor(a) or _is_tf_tensor(b):
-                return tf.equal(a, b)
-            return np.equal(a, b)
-
-        def _get_group(stats_root, group_name: str):
-            if isinstance(stats_root, dict):
-                group = stats_root.get(group_name)
-                if group is None and group_name.endswith("s"):
-                    group = stats_root.get(group_name[:-1])
-                return group
-            return None
-
-        def _get_value(group_stats, key: str, like_arr):
-            if group_stats is None:
-                return None
-            if isinstance(group_stats, dict):
-                value = group_stats.get(key)
-            else:
-                value = getattr(group_stats, key, None)
-            if value is None:
-                return None
-            return _to_tensor(value, like_arr)
-
-        # Resolve stats groups
-        actions_stats = _get_group(self.norm_stats, "actions")
-        state_stats = _get_group(self.norm_stats, "state")
-
-        # Fetch action/state tensors from the trajectory and harmonize dtypes
-        action_arr = traj[self.action_key]
-        state_container = traj.get("observation", {})
-        state_arr = state_container.get(self.state_key)
-
-        # Ensure numeric dtype consistency (float32) before arithmetic to avoid TF float64 vs float32 issues
-        if _is_tf_tensor(action_arr):
-            action_arr = tf.cast(action_arr, tf.float32)
-        else:
-            action_arr = np.asarray(action_arr, dtype=np.float32)
-
-        if state_arr is not None:
-            if _is_tf_tensor(state_arr):
-                state_arr = tf.cast(state_arr, tf.float32)
-            else:
-                state_arr = np.asarray(state_arr, dtype=np.float32)
-            # Update the container to keep downstream consistency
-            traj.setdefault("observation", {})[self.state_key] = state_arr
-        # Update the action in traj to the standardized dtype pre-normalization
-        traj[self.action_key] = action_arr
-
-        if normalization_type == NormalizationType.NORMAL:
-            a_mean = _get_value(actions_stats, "mean", action_arr)
-            a_std = _get_value(actions_stats, "std", action_arr)
-            s_mean = _get_value(state_stats, "mean", state_arr) if state_arr is not None else None
-            s_std = _get_value(state_stats, "std", state_arr) if state_arr is not None else None
-
-            if a_mean is not None and a_std is not None:
-                if _is_tf_tensor(action_arr):
-                    traj[self.action_key] = (action_arr - a_mean) / (a_std + 1e-6)
-                else:
-                    traj[self.action_key] = (action_arr - a_mean) / (a_std + 1e-6)
-
-            if state_arr is not None and s_mean is not None and s_std is not None:
-                normed = (state_arr - s_mean) / (s_std + 1e-6)
-                traj["observation"][self.state_key] = normed
-
-        elif normalization_type in (NormalizationType.BOUNDS, NormalizationType.BOUNDS_Q99):
-            low_key = "min" if normalization_type == NormalizationType.BOUNDS else "q01"
-            high_key = "max" if normalization_type == NormalizationType.BOUNDS else "q99"
-
-            a_low = _get_value(actions_stats, low_key, action_arr)
-            a_high = _get_value(actions_stats, high_key, action_arr)
-            s_low = _get_value(state_stats, low_key, state_arr) if state_arr is not None else None
-            s_high = _get_value(state_stats, high_key, state_arr) if state_arr is not None else None
-
-            if a_low is not None and a_high is not None:
-                # scale to [-1, 1] and clip
-                scaled = 2.0 * (action_arr - a_low) / (a_high - a_low + (1e-8)) - 1.0
-                traj[self.action_key] = _clip(scaled, -1.0, 1.0)
-                # zero-out dimensions with zero range
-                zeros_mask = _equal(a_low, a_high)  # shape [..., D]
-                # Broadcast mask over leading dims of action tensor
-                if _is_tf_tensor(action_arr):
-                    while len(zeros_mask.shape) < len(action_arr.shape):
-                        zeros_mask = zeros_mask[None, ...]
-                else:
-                    while zeros_mask.ndim < action_arr.ndim:
-                        zeros_mask = zeros_mask[None, ...]
-                traj[self.action_key] = _where(zeros_mask, 0.0, traj[self.action_key])
-
-            if state_arr is not None and s_low is not None and s_high is not None:
-                scaled = 2.0 * (state_arr - s_low) / (s_high - s_low + (1e-8)) - 1.0
-                state_normed = _clip(scaled, -1.0, 1.0)
-                zeros_mask = _equal(s_low, s_high)
-                if _is_tf_tensor(state_normed):
-                    while len(zeros_mask.shape) < len(state_normed.shape):
-                        zeros_mask = zeros_mask[None, ...]
-                else:
-                    while zeros_mask.ndim < state_normed.ndim:
-                        zeros_mask = zeros_mask[None, ...]
-                traj["observation"][self.state_key] = _where(zeros_mask, 0.0, state_normed)
-
-        return traj
-
-
-@dataclasses.dataclass(frozen=True)
 class TokenizeFASTCoTInputs(DataTransformFn):
     """Tokenize inputs for FAST CoT model.
 
@@ -479,8 +294,7 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             if state is None:
                 raise ValueError("State is required for FAST tokenization.")
 
-        time_horizon_seconds = data.pop("time_horizon_seconds", None)
-        frame_description = data.pop("frame_description", "end-effector frame")
+        frame_description = data.pop("frame_description", "robot base frame")
 
         # Get language_actions (contains VQA answer or prediction answer)
         # Similar to TokenizePromptAndReasoning pattern
@@ -504,10 +318,6 @@ class TokenizeFASTCoTInputs(DataTransformFn):
         if state_type is not None and not isinstance(state_type, str):
             state_type = state_type.item() if hasattr(state_type, "item") else str(state_type)
 
-        # Get VQA and prediction flags
-        is_vqa_sample = data.get("is_vqa_sample", False)
-        is_prediction_sample = data.get("is_prediction_sample", False)
-
         # Get actions (None during inference)
         actions = data.get("actions")
 
@@ -518,9 +328,6 @@ class TokenizeFASTCoTInputs(DataTransformFn):
             actions=actions,
             language_actions=language_actions,
             state_type=state_type,
-            is_vqa_sample=is_vqa_sample,
-            is_prediction_sample=is_prediction_sample,
-            time_horizon_seconds=time_horizon_seconds,
             state_dropout=self.state_dropout,
             frame_description=frame_description,
         )

@@ -10,20 +10,18 @@ import openpi.shared.nnx_utils as nnx_utils
 from typing_extensions import override
 
 import openpi_cot.models.backbones.gemma as _gemma
-import openpi_cot.models.backbones.gemma3 as _gemma3
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.model_adapter import ExtendedModelType
 
 if TYPE_CHECKING:
     from openpi_cot.models.pi_cot import PiCoT
-    from openpi_cot.models.pi_cot_gemma3 import PiCoTGemma3
 
 
 @dataclasses.dataclass(frozen=True)
 class PiCoTConfig(_model.BaseModelConfig):
     dtype: str = "bfloat16"
-    paligemma_variant: _gemma.Variant | _gemma3.Variant = "gemma_2b"
-    action_expert_variant: _gemma.Variant | _gemma3.Variant = "gemma_300m"
+    paligemma_variant: _gemma.Variant = "gemma_2b"
+    action_expert_variant: _gemma.Variant = "gemma_300m"
 
     # Set the model specific defaults.
     action_dim: int = 7
@@ -45,14 +43,6 @@ class PiCoTConfig(_model.BaseModelConfig):
     # Whether to use bimanual (3 cameras) or single-arm (2 cameras) setup
     # When False, only uses base_0_rgb and left_wrist_0_rgb to save memory
     use_bimanual: bool = False
-    # Whether to use Pan & Scan for Gemma3 (multi-crop image processing)
-    # When False, uses standard single-crop processing even with Gemma3
-    use_pan_and_scan: bool = False
-    # Override image resolution for Gemma3. If None, uses default (896, 896).
-    # Set to (224, 224) to use smaller images with resized positional embeddings.
-    # Note: When using non-default resolution, you must also set weight_loader.target_pos_emb_grid_size
-    # to match (e.g., (16, 16) for 224x224 images with 14x14 patches).
-    gemma3_image_resolution: tuple[int, int] | None = None
 
     # Enable/disable individual loss components
     # When True, enables training on raw actions (diffusion suffix) in addition to language tokens.
@@ -98,17 +88,8 @@ class PiCoTConfig(_model.BaseModelConfig):
     @property
     def image_resolution(self) -> tuple[int, int]:
         """Returns image resolution based on model variant.
-        
-        For Gemma3, can be overridden via gemma3_image_resolution config.
-        Supported resolutions for Gemma3 (with 14x14 patches):
-        - (896, 896): 64x64 grid -> 4x4 pool -> 256 tokens (default)
-        - (448, 448): 32x32 grid -> 2x2 pool -> 256 tokens
-        - (224, 224): 16x16 grid -> no pool -> 256 tokens
         """
-        # if "gemma3" in self.paligemma_variant:
-        #     if self.gemma3_image_resolution is not None:
-        #         return self.gemma3_image_resolution
-        #     return (896, 896)
+
         return (224, 224)
 
     @property
@@ -119,14 +100,10 @@ class PiCoTConfig(_model.BaseModelConfig):
         return ExtendedModelType.PI_COT
 
     @override
-    def create(self, rng: at.KeyArrayLike) -> "PiCoT | PiCoTGemma3":
+    def create(self, rng: at.KeyArrayLike) -> "PiCoT":
         """Create the appropriate model based on the variant."""
-        if "gemma3" in self.paligemma_variant:
-            from openpi_cot.models.pi_cot_gemma3 import PiCoTGemma3
-            return PiCoTGemma3(self, rngs=nnx.Rngs(rng))
-        else:
-            from openpi_cot.models.pi_cot import PiCoT
-            return PiCoT(self, rngs=nnx.Rngs(rng))
+        from openpi_cot.models.pi_cot import PiCoT
+        return PiCoT(self, rngs=nnx.Rngs(rng))
 
     @override
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[CoTObservation, _model.Actions]:

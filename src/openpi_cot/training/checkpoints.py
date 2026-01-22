@@ -15,7 +15,6 @@ import orbax.checkpoint as ocp
 import orbax.checkpoint.future as future
 import tensorflow as tf
 
-from openpi_cot.datasets import cot_data_loader as _data_loader
 from openpi_cot.shared.adapters import normalize_adapter as _normalize_adapter
 from openpi_cot.training import utils as training_utils
 
@@ -163,7 +162,7 @@ def _has_async_enabled(checkpoint_manager: ocp.CheckpointManager) -> bool:
 def save_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
-    data_loader: _data_loader.DataLoader,
+    data_loader,
     step: int,
     *,
     max_retries: int = 0,
@@ -342,7 +341,7 @@ def save_state(
 def restore_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
-    data_loader: _data_loader.DataLoader | None,
+    data_loader,
     step: int | None = None,
     train_state_sharding: training_utils.TrainState | None = None,
 ) -> training_utils.TrainState:

@@ -17,7 +17,6 @@ import openpi_cot.models.backbones.gemma as _gemma
 from openpi_cot.models.model_adapter import CoTObservation
 from openpi_cot.models.model_adapter import preprocess_observation
 import openpi_cot.models.pi_cot_config as _pi_cot_config
-from openpi_cot.datasets.vqa.vqa_base import VQA_DATASET_ID_TO_NAME, VQA_DATASET_ID_MAP, NUM_VQA_DATASETS
 
 logger = logging.getLogger("openpi")
 PALIGEMMA_VOCAB_SIZE = 257_152
@@ -63,17 +62,6 @@ class PiCoT(_pi0.Pi0):
         self.action_loss_weight = float(getattr(config, "action_loss_weight", 1.0))
         self.prediction_loss_weight = float(getattr(config, "prediction_loss_weight", 0.2))
         self.vqa_loss_weight = float(getattr(config, "vqa_loss_weight", 0.1))
-        # Per-dataset VQA loss weights: convert dataset names to IDs for efficient lookup
-        vqa_loss_weights_dict = getattr(config, "vqa_loss_weights", None)
-        if vqa_loss_weights_dict is not None:
-            # Convert dataset names to IDs for efficient lookup during loss computation
-            self.vqa_loss_weights_by_id = {
-                VQA_DATASET_ID_MAP[name]: weight
-                for name, weight in vqa_loss_weights_dict.items()
-                if name in VQA_DATASET_ID_MAP
-            }
-        else:
-            self.vqa_loss_weights_by_id = None
 
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         if self.enable_action_training:
@@ -466,103 +454,16 @@ class PiCoT(_pi0.Pi0):
                 verbose_mode=effective_verbose_mode,
             )
             metrics.update(lang_metrics)
-
-            if self.enable_vqa_training or self.enable_prediction_training:
-                if vqa_mask is None:
-                    vqa_mask = jnp.zeros(batch_size, dtype=bool)
-                if pred_mask is None:
-                    pred_mask = jnp.zeros(batch_size, dtype=bool)
-                lang_mask = jnp.logical_not(jnp.logical_or(vqa_mask, pred_mask))
-
-                vqa_mask = jnp.logical_and(vqa_mask, combined_langact_mask)
-                pred_mask = jnp.logical_and(pred_mask, combined_langact_mask)
-                lang_mask = jnp.logical_and(lang_mask, combined_langact_mask)
-                num_active_samples = jnp.maximum(jnp.sum(combined_langact_mask), 1.0)
-                metrics["active_num_samples"] = jnp.sum(combined_langact_mask)
-                metrics["active_sample_portion"] = metrics["active_num_samples"] / jnp.maximum(batch_size, 1.0)
-                metrics["vqa_num_samples"] = jnp.sum(vqa_mask)
-                metrics["vqa_sample_portion"] = metrics["vqa_num_samples"] / num_active_samples
-                metrics["pred_num_samples"] = jnp.sum(pred_mask)
-                metrics["pred_sample_portion"] = metrics["pred_num_samples"] / num_active_samples
-                metrics["langact_num_samples"] = jnp.sum(lang_mask)
-                metrics["langact_sample_portion"] = metrics["langact_num_samples"] / num_active_samples
-
-                if self.enable_vqa_training:
-                    metrics.update(
-                        _compute_sample_specific_metrics(
-                            per_sample_loss=lang_loss,
-                            lang_metrics=lang_metrics,
-                            sample_mask=vqa_mask,
-                            prefix="vqa_",
-                            verbose_mode=effective_verbose_mode,
-                        )
-                    )
-                    # Add per-VQA-dataset metrics if vqa_dataset_id is available
-                    if hasattr(observation, "vqa_dataset_id") and observation.vqa_dataset_id is not None:
-                        vqa_dataset_ids = jnp.asarray(observation.vqa_dataset_id, dtype=jnp.int32)
-                        metrics.update(
-                            _compute_per_vqa_dataset_metrics(
-                                per_sample_loss=lang_loss,
-                                vqa_dataset_ids=vqa_dataset_ids,
-                                vqa_mask=vqa_mask,
-                            )
-                        )
-                if self.enable_prediction_training:
-                    metrics.update(
-                        _compute_sample_specific_metrics(
-                            per_sample_loss=lang_loss,
-                            lang_metrics=lang_metrics,
-                            sample_mask=pred_mask,
-                            prefix="pred_",
-                            verbose_mode=effective_verbose_mode,
-                        )
-                    )
-                metrics.update(
-                    _compute_sample_specific_metrics(
-                        per_sample_loss=lang_loss,
-                        lang_metrics=lang_metrics,
-                        sample_mask=lang_mask,
-                        prefix="langact_",
-                        verbose_mode=effective_verbose_mode,
-                    )
+            metrics.update(
+                _compute_sample_specific_metrics(
+                    per_sample_loss=lang_loss,
+                    lang_metrics=lang_metrics,
+                    sample_mask=combined_langact_mask,
+                    prefix="langact_",
+                    verbose_mode=effective_verbose_mode,
                 )
-
-                # Compute per-sample VQA loss weights if per-dataset weights are specified
-                if self.enable_vqa_training and self.vqa_loss_weights_by_id is not None:
-                    # Get dataset IDs for VQA samples
-                    if hasattr(observation, "vqa_dataset_id") and observation.vqa_dataset_id is not None:
-                        vqa_dataset_ids = jnp.asarray(observation.vqa_dataset_id, dtype=jnp.int32)
-                        # Create per-sample weight array: use per-dataset weight if specified, else default
-                        vqa_weights = jnp.full(batch_size, self.vqa_loss_weight, dtype=jnp.float32)
-                        for dataset_id, weight in self.vqa_loss_weights_by_id.items():
-                            vqa_weights = jnp.where(
-                                vqa_dataset_ids == dataset_id,
-                                weight,
-                                vqa_weights
-                            )
-                    else:
-                        # Fallback to default weight if dataset IDs not available
-                        vqa_weights = jnp.full(batch_size, self.vqa_loss_weight, dtype=jnp.float32)
-                else:
-                    # Use scalar weight for all VQA samples
-                    vqa_weights = jnp.full(batch_size, self.vqa_loss_weight, dtype=jnp.float32)
-                
-                lang_per_sample_loss += (
-                    vqa_weights * lang_loss * vqa_mask
-                    + self.prediction_loss_weight * lang_loss * pred_mask
-                    + self.language_loss_weight * lang_loss * lang_mask
-                )
-            else:
-                metrics.update(
-                    _compute_sample_specific_metrics(
-                        per_sample_loss=lang_loss,
-                        lang_metrics=lang_metrics,
-                        sample_mask=combined_langact_mask,
-                        prefix="langact_",
-                        verbose_mode=effective_verbose_mode,
-                    )
-                )
-                lang_per_sample_loss += self.language_loss_weight * lang_loss
+            )
+            lang_per_sample_loss += self.language_loss_weight * lang_loss
 
         if self.enable_action_training:
             suffix_out = pre_logits[1]
@@ -919,41 +820,3 @@ def _compute_sample_specific_metrics(
 
     return metrics
 
-
-def _compute_per_vqa_dataset_metrics(
-    per_sample_loss: at.Float[at.Array, "b"],
-    vqa_dataset_ids: at.Int[at.Array, "b"],
-    vqa_mask: at.Bool[at.Array, "b"],
-) -> dict[str, at.Array]:
-    """Compute per-VQA-dataset metrics for detailed logging.
-    
-    Args:
-        per_sample_loss: Per-sample losses [b]
-        vqa_dataset_ids: VQA dataset ID for each sample [b] (0=non-VQA, 1-N=VQA datasets)
-        vqa_mask: Boolean mask indicating which samples are VQA [b]
-        
-    Returns:
-        Dictionary with metrics for each VQA dataset type.
-        Keys are formatted as "vqa_{dataset_name}_loss" and "vqa_{dataset_name}_num_samples"
-    """
-    metrics = {}
-    
-    # Iterate through all VQA dataset types with static keys
-    for dataset_id, dataset_name in VQA_DATASET_ID_TO_NAME.items():
-        # Create mask for this specific VQA dataset
-        # vqa_dataset_ids == dataset_id AND vqa_mask (to handle combined_langact_mask filtering)
-        dataset_mask = jnp.logical_and(vqa_dataset_ids == dataset_id, vqa_mask)
-        dataset_mask_f = dataset_mask.astype(jnp.float32)
-        
-        # Count samples for this dataset
-        num_samples = jnp.sum(dataset_mask_f)
-        
-        # Compute average loss for this dataset
-        masked_loss = per_sample_loss * dataset_mask_f
-        dataset_loss = jnp.sum(masked_loss) / jnp.maximum(num_samples, 1.0)
-        
-        # Add metrics with static keys (known at compile time)
-        metrics[f"vqa_{dataset_name}_loss"] = dataset_loss
-        metrics[f"vqa_{dataset_name}_num_samples"] = num_samples
-    
-    return metrics
