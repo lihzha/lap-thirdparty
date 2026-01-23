@@ -187,21 +187,6 @@ COMPACT_BIMANUAL_WITH_ROTATION_FORMAT = LanguageActionFormat(
     include_rotation=True,
 )
 
-# VLA-0 formats: actions as discretized integers
-VLA0_FORMAT = VLA0ActionFormat(
-    name="vla0",
-    num_bins=1000,
-    action_horizon=1,
-    action_dim=7,
-)
-
-VLA0_CHUNKED_FORMAT = VLA0ActionFormat(
-    name="vla0_chunked",
-    num_bins=1000,
-    action_horizon=10,
-    action_dim=7,
-)
-
 LANGUAGE_ACTION_FORMAT_REGISTRY = {
     fmt.name: fmt
     for fmt in [
@@ -214,8 +199,6 @@ LANGUAGE_ACTION_FORMAT_REGISTRY = {
         EEF_WITH_ROTATION_FORMAT,
         COMPACT_BIMANUAL_FORMAT,
         COMPACT_BIMANUAL_WITH_ROTATION_FORMAT,
-        VLA0_FORMAT,
-        VLA0_CHUNKED_FORMAT,
     ]
 }
 

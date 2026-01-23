@@ -9,13 +9,10 @@ import cv2
 import h5py
 from moviepy.editor import ImageSequenceClip
 import numpy as np
-from openpi_client import image_tools
 from openpi_client import websocket_client_policy
 from scipy.spatial.transform import Rotation as R
-import tqdm
 
 sys.path.append(".")
-from helpers import interpolate_rpy
 from helpers import prevent_keyboard_interrupt
 
 faulthandler.enable()
@@ -30,12 +27,6 @@ IMAGE_KEYS = (
 
 @dataclasses.dataclass
 class Args:
-    # Hardware parameters
-    left_camera_id: str = "31177322"  # e.g., "24259877"
-    right_camera_id: str = "38872458"  # e.g., "24514023"
-    wrist_camera_id: str = "10501775"  # e.g., "13062452"
-    # Policy parameters
-    external_camera: str = "right"  # which external camera should be fed to the policy, choose from ["left", "right"]
     # Rollout parameters
     max_timesteps: int = 1200
     # How many actions to execute from a predicted action chunk before querying policy server again
@@ -46,10 +37,6 @@ class Args:
     remote_port: int = (
         8000  # point this to the port of the policy server, default server port for openpi servers is 8000
     )
-    use_wrist_camera: bool = True  # whether to use the wrist camera image as input to the policy
-    run_upstream: bool = False  # whether to run the upstream policy server
-    right_image_encoding: str = "raw"  # choose from ["raw", "tf_jpeg"]
-    wrist_image_encoding: str = "raw"  # choose from ["raw", "tf_jpeg"]
     delta_chunk: bool = True  # whether the action chunks are delta actions or absolute positions
     # Rollout saving parameters
     save_rollout: bool = False  # whether to save rollout data to h5 file
@@ -57,7 +44,6 @@ class Args:
     rollout_subsample_rate: int = 10  # subsample rate when saving rollout (1 = no subsampling)
 
 class BaseEvalRunner:
-    CHUNK_STEPS = 8
 
     def __init__(self, args):
         self.env = self.init_env()
@@ -65,12 +51,7 @@ class BaseEvalRunner:
         self.side_image_name = None
 
     def init_env(self):
-        from droid.robot_env import RobotEnv
-
-        return RobotEnv(
-            action_space="cartesian_position",
-            gripper_action_space="position",
-        )
+        raise NotImplementedError()
 
     def binarize_gripper(self, action):
         # Binarize gripper action
@@ -86,8 +67,8 @@ class BaseEvalRunner:
 
     def _record_frames(self, curr_obs, video, wrist_video):
         side_frame = curr_obs.get(self.side_image_name)
-        if side_frame is None and self.args.external_camera is not None:
-            side_frame = curr_obs.get(f"{self.args.external_camera}_image")
+        if side_frame is None:
+            side_frame = curr_obs.get("right_image")
         if side_frame is not None:
             video.append(side_frame[0] if len(side_frame.shape) == 4 else side_frame)
 
@@ -103,12 +84,11 @@ class BaseEvalRunner:
                 "gripper_position": curr_obs["gripper_position"],
                 "joint_position": curr_obs["joint_position"],
                 "state": curr_obs["state"],
+                IMAGE_KEYS[1]: curr_obs["wrist_image"]
             },
             "prompt": instruction,
             "batch_size": None,
         }
-        if self.args.use_wrist_camera:
-            request["observation"][IMAGE_KEYS[1]] = curr_obs["wrist_image"]
         return request
     
     def process_gripper_action(self, action, curr_obs):
@@ -117,39 +97,22 @@ class BaseEvalRunner:
     def get_action_from_response(self, response, curr_obs, use_quaternions=False):
         curr_pos = np.asarray(curr_obs["cartesian_position"][:3], dtype=float)
         curr_rpy = np.asarray(curr_obs["euler"], dtype=float)
-        if "reasoning" in response and response["reasoning"] is not None and "actions" not in response:
-            action = np.asarray(response["actions"])
-            grip_action = self.process_gripper_action(action, curr_obs)
-            print(grip_action)
-            # Linearly interpolate to CHUNK_STEPS actions
-            positions = np.linspace(curr_pos, curr_pos + action[:3], self.CHUNK_STEPS, endpoint=True)
-            rpy_arr = interpolate_rpy(curr=curr_rpy, delta=action[3:6], steps=self.CHUNK_STEPS)
-            grip_vals = np.full((self.CHUNK_STEPS, 1), grip_action)
-            # grip_vals[: self.CHUNK_STEPS // 2] = 1 - curr_obs["gripper_position"]
-            if use_quaternions:
-                # Convert RPY to quaternions for action representation
-                quat_arr = R.from_euler("xyz", rpy_arr, degrees=False).as_quat()  # (x,y,z,w)
-                pred_action_chunk = np.concatenate([positions, quat_arr, grip_vals], axis=1)
-            else:
-                pred_action_chunk = np.concatenate([positions, rpy_arr, grip_vals], axis=1)
 
-        else:
-            pred_action_chunk = response["actions"].copy()
-            print(pred_action_chunk)
-            if pred_action_chunk.shape[-1] > 7:
-                return pred_action_chunk  # joint position or velocity
-            if self.args.delta_chunk:
-                pred_action_chunk[:, :3] += curr_pos
-                rpy_arr = add_euler(curr=curr_rpy, delta=pred_action_chunk[:, 3:6])
-                pred_action_chunk[:, 3:6] = rpy_arr
-            
-            grip_action = self.process_gripper_action(pred_action_chunk, curr_obs)
-            pred_action_chunk[:, -1] = grip_action
-            if use_quaternions:
-                quat_arr = R.from_euler("xyz", pred_action_chunk[:, 3:6], degrees=False).as_quat()  # (x,y,z,w)
-                pred_action_chunk = np.concatenate(
-                    [pred_action_chunk[:, :3], quat_arr, pred_action_chunk[:, 6:7]], axis=1
-                )
+        pred_action_chunk = response["actions"].copy()
+        if pred_action_chunk.shape[-1] > 7:
+            return pred_action_chunk  # joint position or velocity
+        if self.args.delta_chunk:
+            pred_action_chunk[:, :3] += curr_pos
+            rpy_arr = add_euler(curr=curr_rpy, delta=pred_action_chunk[:, 3:6])
+            pred_action_chunk[:, 3:6] = rpy_arr
+        
+        grip_action = self.process_gripper_action(pred_action_chunk, curr_obs)
+        pred_action_chunk[:, -1] = grip_action
+        if use_quaternions:
+            quat_arr = R.from_euler("xyz", pred_action_chunk[:, 3:6], degrees=False).as_quat()  # (x,y,z,w)
+            pred_action_chunk = np.concatenate(
+                [pred_action_chunk[:, :3], quat_arr, pred_action_chunk[:, 6:7]], axis=1
+            )
         return pred_action_chunk
 
     @staticmethod
@@ -385,15 +348,7 @@ class BaseEvalRunner:
 
         self._run_sessions(make_fetcher, refresh_horizon=self.CHUNK_STEPS)
 
-    def run_upstream(self):
-        # Connect to the policy server
-        policy_client = websocket_client_policy.WebsocketClientPolicy(self.args.remote_host, self.args.remote_port)
 
-        def make_fetcher(instruction):
-            return lambda curr_obs: policy_client.infer(self.obs_to_request(curr_obs, instruction))["actions"]
-
-        self._run_sessions(make_fetcher, refresh_horizon=self.args.open_loop_horizon, print_action=True)
-    
 def add_euler(curr: np.ndarray, delta: np.ndarray, seq: str = "xyz") -> np.ndarray:
     """
     Add Euler-angle delta to a current Euler rotation.
