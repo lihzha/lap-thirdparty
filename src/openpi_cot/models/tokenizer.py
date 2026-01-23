@@ -64,9 +64,6 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         state: np.ndarray | None = None,
         state_type: str | None = None,
         *,
-        is_vqa_sample: bool = False,
-        is_prediction_sample: bool = False,
-        time_horizon_seconds: float | None = None,
         frame_description: str = "end-effector frame",
         state_dropout: float = 0.0,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None]:
@@ -92,21 +89,13 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
         """
         # Resolve prompt format
 
-        if is_prediction_sample:
-            fmt = self._prediction_format
-        elif is_vqa_sample:
-            fmt = self._vqa_format
-        else:
-            fmt = self._prompt_format
-
-        # frame_description = "robot base frame"
+        fmt = self._prompt_format
 
         # Pass time_horizon_seconds to format_prompt (only for robot tasks, not VQA)
         formatted_prompt = fmt.format_prompt(
             prompt,
             state,
             state_type,
-            time_horizon_seconds=time_horizon_seconds if not is_vqa_sample else None,
             frame_description=frame_description,
             state_dropout=state_dropout,
         )
@@ -164,17 +153,15 @@ class PaligemmaCoTTokenizer(_tokenizer.PaligemmaTokenizer):
 
         # Build number and direction masks using format-specific checkers
         # Only mark tokens within reasoning span (not in the prompt)
-
-        if not is_vqa_sample and reasoning is not None:
-            for i in range(start_idx, end_idx):
-                if not reasoning_mask[i]:
-                    continue
-                piece = self._tokenizer.id_to_piece(tokens[i])
-                if piece:
-                    if is_number(piece):
-                        number_mask[i] = True
-                    if fmt.direction_token_checker(piece):
-                        direction_mask[i] = True
+        for i in range(start_idx, end_idx):
+            if not reasoning_mask[i]:
+                continue
+            piece = self._tokenizer.id_to_piece(tokens[i])
+            if piece:
+                if is_number(piece):
+                    number_mask[i] = True
+                if fmt.direction_token_checker(piece):
+                    direction_mask[i] = True
 
         # Right pad
         pad_count = self._max_len - len(tokens)
@@ -220,9 +207,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
         language_actions: str | None = None,
         state_type: str | None = None,
         *,
-        is_vqa_sample: bool = False,
-        is_prediction_sample: bool = False,
-        time_horizon_seconds: float | None = None,
         state_dropout: float = 0.0,
         clip_action: bool = False,
         frame_description: str = "end-effector frame",
@@ -238,11 +222,8 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             prompt: Task description
             state: Current state vector
             actions: Action sequence (optional, None during inference)
-            language_actions: Language description of actions / VQA answer / prediction answer
+            language_actions: Language description of actions
             state_type: Type of state representation
-            is_vqa_sample: Whether this is a VQA sample
-            is_prediction_sample: Whether this is a prediction sample
-            time_horizon_seconds: Time horizon for robot tasks
             state_dropout: Probability of dropping state info
             clip_action: Whether to clip actions to [-3, 3]
             frame_description: Description of the coordinate frame
@@ -254,31 +235,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             - ar_mask: Autoregressive mask (False=prefix attention, True=causal)
             - loss_mask: Mask for tokens that contribute to loss
         """
-        # For VQA and prediction samples, use the parent's tokenize_cot logic
-        # This ensures they are processed exactly the same way as non-FAST training
-        if is_vqa_sample or is_prediction_sample:
-            # Call parent's tokenize_cot - returns (tokens, attn_mask, reasoning_mask, number_mask, direction_mask, token_loss_mask)
-            tokens, attn_mask, reasoning_mask, _number_mask, _direction_mask, token_loss_mask = super().tokenize_cot(
-                prompt=prompt,
-                reasoning=language_actions,
-                state=state,
-                state_type=state_type,
-                is_vqa_sample=is_vqa_sample,
-                is_prediction_sample=is_prediction_sample,
-                time_horizon_seconds=time_horizon_seconds,
-                frame_description=frame_description,
-                state_dropout=state_dropout,
-            )
-            # Map outputs to FAST format:
-            # - token_mask = attn_mask
-            # - ar_mask = reasoning_mask (marks which tokens are autoregressive/causal)
-            # - loss_mask = token_loss_mask AND reasoning_mask (loss only on reasoning tokens)
-            ar_mask = reasoning_mask if reasoning_mask is not None else np.zeros(len(tokens), dtype=bool)
-            loss_mask = token_loss_mask if token_loss_mask is not None else np.ones(len(tokens), dtype=bool)
-            if reasoning_mask is not None:
-                loss_mask = np.logical_and(loss_mask, reasoning_mask)
-
-            return (tokens, attn_mask, ar_mask, loss_mask)
 
         # For regular robot samples, use FAST action token logic
         fmt = self._prompt_format
@@ -287,7 +243,6 @@ class FASTTokenizer(PaligemmaCoTTokenizer):
             prompt,
             state,
             state_type,
-            time_horizon_seconds=time_horizon_seconds,
             state_dropout=state_dropout,
             frame_description=frame_description,
         )

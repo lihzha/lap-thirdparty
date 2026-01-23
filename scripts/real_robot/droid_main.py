@@ -3,7 +3,6 @@ import numpy as np
 from openpi_client import image_tools
 from droid.robot_env import RobotEnv
 import tyro
-from scipy.spatial.transform import Rotation as R
 import sys
 
 sys.path.append(".")

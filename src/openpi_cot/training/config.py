@@ -23,7 +23,6 @@ from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
-import openpi_cot.training.weight_loaders as weight_loaders
 from openpi_cot.transforms import DetokenizeReasoning
 from openpi_cot.transforms import ExtractFASTActions
 from openpi_cot.transforms import TokenizeFASTCoTInputs
@@ -317,9 +316,6 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
 class TrainConfig(upstream_config.TrainConfig):
     # Overide
     project_name: str = "openpi-cot"
-    weight_loader: weight_loaders.WeightLoaderChoice = dataclasses.field(
-        default_factory=weight_loaders.WeightLoaderChoice
-    )
     model: _model.BaseModelConfig = dataclasses.field(default_factory=build_picot_model)
     lr_schedule: _optimizer.LRScheduleConfig = dataclasses.field(default_factory=build_cosine_lr)
     num_train_steps: int = 100_000
