@@ -1,13 +1,11 @@
-# openpi-cot
-
-Add language CoT to $\pi$-sery models published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
+# LAP: LAP: Language Action Pre-training Enables Zero-Shot Cross-Embodiment Transfer
 
 ## Installation
 
 When cloning this repo, make sure to update submodules:
 
 ```bash
-git clone --recurse-submodules git@github.com:lihzha/openpi-cot.git
+git clone --branch third_party --recurse-submodules git@github.com:lihzha/openpi-cot.git
 
 # Or if you already cloned the repo:
 git submodule update --init --recursive
