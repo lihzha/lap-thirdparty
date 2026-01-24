@@ -26,11 +26,14 @@ We provide detailed scripts for running inference of CoT checkpoints on [DROID](
 
 ### Step 1: Start a policy server
 
+After you download the checkpoint(s) from Google Drive, put them under `./checkpoints/`.
 Start the policy server via the following command:
 
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint --policy.config=lap --policy.dir=checkpoints/lap/15000
+uv run scripts/serve_policy.py policy:checkpoint --policy.config=lap --policy.dir=checkpoints/lap
 ```
+
+If you want to run another model (e.g., lap2), just modify the argument `--policy.dir` accordingly.
 
 ### Step 2: Run the robot
 
