@@ -31,7 +31,7 @@ class Checkpoint:
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
     dir: str
-    type: str = "cot"
+    type: str = "raw"
 
 
 @dataclasses.dataclass

@@ -48,7 +48,6 @@ class BaseEvalRunner:
     def __init__(self, args):
         self.env = self.init_env()
         self.args: Args = args
-        self.side_image_name = None
 
     def init_env(self):
         raise NotImplementedError()
@@ -66,9 +65,7 @@ class BaseEvalRunner:
         raise NotImplementedError()
 
     def _record_frames(self, curr_obs, video, wrist_video):
-        side_frame = curr_obs.get(self.side_image_name)
-        if side_frame is None:
-            side_frame = curr_obs.get("right_image")
+        side_frame = curr_obs.get("right_image")
         if side_frame is not None:
             video.append(side_frame[0] if len(side_frame.shape) == 4 else side_frame)
 
@@ -79,7 +76,7 @@ class BaseEvalRunner:
     def obs_to_request(self, curr_obs, instruction):
         request = {
             "observation": {
-                IMAGE_KEYS[0]: curr_obs[self.side_image_name],
+                IMAGE_KEYS[0]: curr_obs["right_image"],
                 "cartesian_position": curr_obs["cartesian_position"],
                 "gripper_position": curr_obs["gripper_position"],
                 "joint_position": curr_obs["joint_position"],
@@ -262,7 +259,7 @@ class BaseEvalRunner:
                         float(curr_obs["gripper_position"])
                     )
                     # Collect images
-                    side_frame = curr_obs.get(self.side_image_name)
+                    side_frame = curr_obs.get("right_image")
                     if side_frame is None and self.args.external_camera is not None:
                         side_frame = curr_obs.get(f"{self.args.external_camera}_image")
                     if side_frame is not None:
@@ -346,7 +343,7 @@ class BaseEvalRunner:
                 policy_client.infer(self.obs_to_request(curr_obs, instruction)), curr_obs
             )
 
-        self._run_sessions(make_fetcher, refresh_horizon=self.CHUNK_STEPS)
+        self._run_sessions(make_fetcher, refresh_horizon=self.args.open_loop_horizon)
 
 
 def add_euler(curr: np.ndarray, delta: np.ndarray, seq: str = "xyz") -> np.ndarray:

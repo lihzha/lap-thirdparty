@@ -365,7 +365,7 @@ class TrainConfig(upstream_config.TrainConfig):
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
     TrainConfig(
-        name="paligemma_boundsq99",
+        name="lap",
         model=pi_cot_config.PiCoTConfig(
             action_horizon=16,
             max_token_len=180,
