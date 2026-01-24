@@ -5,10 +5,7 @@
 When cloning this repo, make sure to update submodules:
 
 ```bash
-git clone --branch third_party --recurse-submodules git@github.com:lihzha/openpi-cot.git
-
-# Or if you already cloned the repo:
-git submodule update --init --recursive
+git clone --recurse-submodules https://github.com/lihzha/lap-thirdparty.git
 ```
 
 We use [uv](https://docs.astral.sh/uv/) to manage Python dependencies. See the [uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/) to set it up. Once uv is installed, run the following to set up the environment:
