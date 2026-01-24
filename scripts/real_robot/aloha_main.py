@@ -14,6 +14,9 @@ from helpers import binarize_gripper_actions_np, euler_to_rot6d, invert_gripper_
 class AlohaEvalRunner(BaseEvalRunner):
     def __init__(self, args):
         super().__init__(args)
+        
+    def init_env(self):
+        self.env = RealEnv()
 
     def _extract_observation(self, obs_dict, save_to_disk=False):
         image_observations = obs_dict["image"]

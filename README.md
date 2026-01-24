@@ -1,4 +1,4 @@
-# LAP: LAP: Language Action Pre-training Enables Zero-Shot Cross-Embodiment Transfer
+# LAP: Language Action Pre-training Enables Zero-Shot Cross-Embodiment Transfer
 
 ## Installation
 
@@ -34,11 +34,13 @@ uv run scripts/serve_policy.py policy:checkpoint --policy.config=lap --policy.di
 
 ### Step 2: Run the robot
 
-1. Modify the _extract_observation() function under `scripts/real_robot/aloha_main.py` to make sure it matches your robot environment API. Notably, you should rotate rotate wrist image to match the base frame. For example, when the robot is at its initial pose, if looking from the robot base, the object is on the left, while in the wrist image, the object is on the right, then you should rotate the wrist image by 180 degrees, i.e. wrist_image[::-1, ::-1, ::-1].
-2. Run the robot server script.
+1. Modify the init_env() and _extract_observation() function under `scripts/real_robot/aloha_main.py` to make sure it matches your robot environment API. Notably, you should rotate rotate wrist image to match the base frame. For example, when the robot is at its initial pose, if looking from the robot base, the object is on the left, while in the wrist image, the object is on the right, then you should rotate the wrist image by 180 degrees, i.e. wrist_image[::-1, ::-1, ::-1].
+2. Under your robot control environment, run `cd third_party/openpi/packages/openpi-client && pip install -e .` Then run `pip install tyro`.
+3. Under your robot control environment, Run the robot server script.
 
 ```bash
-python3 scripts/real_robot/aloha_main.py
+
+python scripts/real_robot/aloha_main.py
 ```
 When prompted with instructions, make sure the first letter is upper-cased. For example, "Put the apple into the bowl".
 
