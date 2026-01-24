@@ -21,6 +21,7 @@ import openpi_cot.models.model_adapter as _model_adapter
 import openpi_cot.models.pi_cot_config as pi_cot_config
 from openpi_cot.models.tokenizer import FASTTokenizer
 from openpi_cot.models.tokenizer import PaligemmaCoTTokenizer
+import openpi_cot.policies.cot_policy as cot_policy
 import openpi_cot.shared.adapters.normalize_adapter as _normalize_adapter
 from openpi_cot.shared.download import maybe_download
 from openpi_cot.transforms import DetokenizeReasoning
