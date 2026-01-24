@@ -293,7 +293,6 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     action_dim=model_config.action_dim,
                     model_type=model_config.model_type,
                     wrist_image_dropout_prob=base_cfg.wrist_image_dropout_prob,
-                    action_encoding=base_cfg.action_encoding,
                     language_action_format=base_cfg.language_action_format_name,
                     filter_all_1s_actions=base_cfg.filter_all_1s_actions,
                     use_rough_scale=False,
