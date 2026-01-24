@@ -299,7 +299,7 @@ class RLDSCoTDataConfig(BaseCoTDataConfigFactory):
                     enable_langact_training=model_config.enable_langact_training,
                 )
             ],
-            outputs=[cot_policy.CoTOutputs(decoding_schema=base_cfg.decoding_schema)],
+            outputs=[cot_policy.CoTOutputs()],
         )
 
     @override
