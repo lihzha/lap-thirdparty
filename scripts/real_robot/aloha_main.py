@@ -77,6 +77,16 @@ class RealEnvCartesian(RealEnv):
         obs['images'] = self.get_images()
         if get_base_vel:
             obs['base_vel'] = self.get_base_vel()
+
+        R_T_curr = self.follower_bot_right.arm.get_ee_pose()
+        cartesian_xyz = np.array([R_T_curr[0, 3], R_T_curr[1, 3], R_T_curr[2, 3]])
+        cartesian_euler = ang.rotationMatrixToEulerAngles(R_T_curr[:3, :3])
+
+        obs['robot_state'] = {}
+        obs['robot_state']['cartesian_position'] = np.concatenate([cartesian_xyz, cartesian_euler])
+
+        # Right arm hardcoded
+        obs['robot_state']['gripper_position'] = obs['qpos'][-1]
         return obs
     
     def step(self, action, base_action=None, get_base_vel=False, get_obs=True):
