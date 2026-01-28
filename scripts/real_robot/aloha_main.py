@@ -11,7 +11,6 @@ from interbotix_common_modules.common_robot.robot import (
     robot_startup,
     InterbotixRobotNode
 )
-from aloha.constants import IS_MOBILE
 from interbotix_common_modules.common_robot.exceptions import InterbotixException
 import tyro
 import sys
@@ -28,6 +27,7 @@ def make_cartesian_real_env(
     setup_robots: bool = True,
     setup_base: bool = False,
     torque_base: bool = False,
+    config: dict = None,
 ):
     if node is None:
         node = get_interbotix_global_node()
@@ -37,28 +37,28 @@ def make_cartesian_real_env(
         node=node,
         setup_robots=setup_robots,
         setup_base=setup_base,
-        is_mobile=IS_MOBILE,
         torque_base=torque_base,
+        config=config,
     )
     return env
 
 class RealEnvCartesian(RealEnv):
-    def __init__(self, args):
-        super().__init__(args)
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
         left_arm_init_R_T = np.array([[0.87965611, 0.02124257, 0.47513565, 0.33629917], [-0.01259074, 0.99969204, -0.02138442, -0.00444487], [-0.47544359, 0.01282863, 0.87965267, 0.2516704], [0., 0., 0., 1.]])
-        self.follower_bot_left.arm.set_ee_pose_matrix(left_arm_init_R_T)
+        self.follower_bots[1].arm.set_ee_pose_matrix(left_arm_init_R_T, moving_time=20.0, accel_time=1.0, blocking=True)
 
     def set_relative_ee(self, dx=0, dy=0, dz=0, droll=0, dpitch=0, dyaw=0, custom_guess=None, execute=True, moving_time=None, accel_time=None, blocking=True):
         
-        R_T_curr = self.follower_bot_right.arm.T_sb
+        R_T_curr = self.follower_bots[0].arm.T_sb
         R_curr = R_T_curr[:3, :3]
         R_delta = ang.eulerAnglesToRotationMatrix([droll, dpitch, dyaw])
 
         R_target = R_curr @ R_delta
         euler_r_target = ang.rotationMatrixToEulerAngles(R_target)
         
-        return self.follower_bot_right.arm.set_ee_pose_components(
+        return self.follower_bots[0].arm.set_ee_pose_components(
             x=R_T_curr[0, 3] + dx,
             y=R_T_curr[1, 3] + dy,
             z=R_T_curr[2, 3] + dz,
@@ -72,7 +72,7 @@ class RealEnvCartesian(RealEnv):
             blocking=blocking,
         )
 
-    def get_observation(self, get_base_vel=IS_MOBILE):
+    def get_observation(self, get_base_vel=False):
         obs = collections.OrderedDict()
         obs['qpos'] = self.get_qpos()
         obs['qvel'] = self.get_qvel()
@@ -81,7 +81,7 @@ class RealEnvCartesian(RealEnv):
         if get_base_vel:
             obs['base_vel'] = self.get_base_vel()
 
-        R_T_curr = self.follower_bot_right.arm.get_ee_pose()
+        R_T_curr = self.follower_bots[0].arm.get_ee_pose()
         cartesian_xyz = np.array([R_T_curr[0, 3], R_T_curr[1, 3], R_T_curr[2, 3]])
         cartesian_euler = ang.rotationMatrixToEulerAngles(R_T_curr[:3, :3])
 
@@ -92,7 +92,7 @@ class RealEnvCartesian(RealEnv):
         obs['robot_state']['gripper_position'] = obs['qpos'][-1]
         return obs
     
-    def step(self, action, base_action=None, get_base_vel=False, get_obs=True):
+    def step(self, action, get_base_vel=False, get_obs=True):
 
         assert len(action) == 7
         dx = action[0]
@@ -104,7 +104,7 @@ class RealEnvCartesian(RealEnv):
 
         breakpoint()
 
-        # _, success = self.set_relative_ee(dx=dx, dy=dy, dz=dz, droll=droll, dpitch=dpitch, dyaw=dyaw)
+        # _, success = self.set_relative_ee(dx=dx, dy=dy, dz=dz, droll=droll, dpitch=dpitch, dyaw=dyaw, moving_time=20.0, accel_time=0.1, blocking=True)
         if get_obs:
             obs = self.get_observation(get_base_vel)
         else:

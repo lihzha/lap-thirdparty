@@ -3,7 +3,7 @@ name = "openpi-cot"
 version = "0.1.0"
 description = "Open source repo for CoT based on openpi from Physical Intelligence"
 readme = "README.md"
-requires-python = ">=3.11,<3.12" 
+requires-python = ">=3.10,<3.11" 
 license = { file = "LICENSE" }
 dependencies = [
     "augmax>=0.3.4",
