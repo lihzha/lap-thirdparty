@@ -1,9 +1,21 @@
 # ruff: noqa
 import numpy as np
+import collections
 from openpi_client import image_tools
 from aloha.real_env import RealEnv
+import interbotix_common_modules.angle_manipulation as ang
+from aloha.robot_utils import move_grippers, load_yaml_file # requires aloha
+from interbotix_common_modules.common_robot.robot import (
+    create_interbotix_global_node,
+    get_interbotix_global_node,
+    robot_startup,
+    InterbotixRobotNode
+)
+from aloha.constants import IS_MOBILE
+from interbotix_common_modules.common_robot.exceptions import InterbotixException
 import tyro
 import sys
+import dm_env
 
 sys.path.append(".")
 from shared import BaseEvalRunner, Args
@@ -11,25 +23,128 @@ from PIL import Image
 
 from helpers import binarize_gripper_actions_np, euler_to_rot6d, invert_gripper_actions_np
 
+def make_cartesian_real_env(
+    node: InterbotixRobotNode = None,
+    setup_robots: bool = True,
+    setup_base: bool = False,
+    torque_base: bool = False,
+):
+    if node is None:
+        node = get_interbotix_global_node()
+        if node is None:
+            node = create_interbotix_global_node('aloha')
+    env = RealEnvCartesian(
+        node=node,
+        setup_robots=setup_robots,
+        setup_base=setup_base,
+        is_mobile=IS_MOBILE,
+        torque_base=torque_base,
+    )
+    return env
+
+class RealEnvCartesian(RealEnv):
+    def __init__(self, args):
+        super().__init__(args)
+
+    def set_relative_ee(self, dx=0, dy=0, dz=0, droll=0, dpitch=0, dyaw=0, custom_guess=None, execute=True, moving_time=None, accel_time=None, blocking=True):
+        
+        R_T_curr = self.follower_bot_right.arm.T_sb
+        R_curr = R_T_curr[:3, :3]
+        R_delta = ang.eulerAnglesToRotationMatrix([droll, dpitch, dyaw])
+
+        R_target = R_curr @ R_delta
+        euler_r_target = ang.rotationMatrixToEulerAngles(R_target)
+        
+        return self.follower_bot_right.arm.set_ee_pose_components(
+            x=R_T_curr[0, 3] + dx,
+            y=R_T_curr[1, 3] + dy,
+            z=R_T_curr[2, 3] + dz,
+            roll=euler_r_target[0],
+            pitch=euler_r_target[1],
+            yaw=euler_r_target[2],
+            custom_guess=custom_guess,
+            execute=execute,
+            moving_time=moving_time,
+            accel_time=accel_time,
+            blocking=blocking,
+        )
+
+    def get_observation(self, get_base_vel=IS_MOBILE):
+        obs = collections.OrderedDict()
+        obs['qpos'] = self.get_qpos()
+        obs['qvel'] = self.get_qvel()
+        obs['effort'] = self.get_effort()
+        obs['images'] = self.get_images()
+        if get_base_vel:
+            obs['base_vel'] = self.get_base_vel()
+        return obs
+    
+    def step(self, action, base_action=None, get_base_vel=False, get_obs=True):
+
+        assert len(action) == 7
+        dx = action[0]
+        dy = action[1]
+        dz = action[2]
+        droll = action[3]
+        dpitch = action[4]
+        dyaw = action[5]
+
+        _, success = self.set_relative_ee(dx=dx, dy=dy, dz=dz, droll=droll, dpitch=dpitch, dyaw=dyaw)
+        if get_obs:
+            obs = self.get_observation(get_base_vel)
+        else:
+            obs = None
+        return dm_env.TimeStep(
+            step_type=dm_env.StepType.MID,
+            reward=self.get_reward(),
+            discount=None,
+            observation=obs)
+
+
 class AlohaEvalRunner(BaseEvalRunner):
     def __init__(self, args):
         super().__init__(args)
         
     def init_env(self):
-        self.env = RealEnv()
+
+        try:
+            node = get_interbotix_global_node()
+        except:
+            node = create_interbotix_global_node('aloha')
+
+        real_config = load_yaml_file(config_type='robot', name='aloha_stationary', base_path='/home/aloha/interbotix_ws/src/aloha/config').get('robot', {})
+
+        env = make_cartesian_real_env(node=node, setup_robots=True, setup_base=False, config=real_config)
+        try:
+            robot_startup(node)
+        except InterbotixException:
+            pass
+
+        self.env = env
 
     def _extract_observation(self, obs_dict, save_to_disk=False):
-        image_observations = obs_dict["image"]
-        base_image = image_observations["cam_high"]
-        right_image = image_observations["cam_right_wrist"]
-        # left_image = left_image[..., ::-1]
-        right_image = image_tools.resize_with_pad(right_image[..., ::-1], 224, 224)
-        #TODO: rotate wrist image to match the base frame. For example, if looking from the robot base, 
+        image_observations = obs_dict["images"]
+
+        right_image = image_observations["camera_wrist_right"]
+        left_image = image_observations["camera_wrist_left"]
+
+        # Cropping to the standard Aloha resolution due to TISL camera version incompatibility.
+        start_col = 104
+        end_col = 744
+        right_image = right_image[:, start_col:end_col]
+        left_image = left_image[:, start_col:end_col]
+
+        left_image = image_tools.resize_with_pad(left_image, 224, 224)
+        right_image = image_tools.resize_with_pad(right_image, 224, 224)
+
+        #rotate wrist image to match the base frame. For example, if looking from the robot base, 
         # the object is on the left, while in the wrist image, the object is on the right, 
         # then you should rotate the wrist image by 180 degrees, i.e. wrist_image[::-1, ::-1, ::-1]
-        wrist_image = image_tools.resize_with_pad(wrist_image[..., ::-1], 224, 224)
+
+        right_image = right_image.transpose[::-1, ::-1, :]
+ 
         if save_to_disk:
-            combined_image = np.concatenate([base_image, right_image], axis=1)
+            combined_image = np.concatenate([left_image, right_image], axis=1)
             combined_image = Image.fromarray(combined_image)
             combined_image.save("robot_camera_views.png")
 
@@ -42,8 +157,8 @@ class AlohaEvalRunner(BaseEvalRunner):
         gripper_position = np.array([robot_state["gripper_position"]])
         gripper_position = binarize_gripper_actions_np(invert_gripper_actions_np(gripper_position), threshold=0.5)
         return {
-            "right_image": right_image,
-            "wrist_image": wrist_image,
+            "right_image": left_image,
+            "wrist_image": right_image,
             "cartesian_position": cartesian_position,
             "gripper_position": gripper_position,
             "state": np.concatenate([cartesian_position, gripper_position]),
