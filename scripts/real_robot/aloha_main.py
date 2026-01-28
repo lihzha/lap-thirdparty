@@ -46,6 +46,9 @@ class RealEnvCartesian(RealEnv):
     def __init__(self, args):
         super().__init__(args)
 
+        left_arm_init_R_T = np.array([[0.87965611, 0.02124257, 0.47513565, 0.33629917], [-0.01259074, 0.99969204, -0.02138442, -0.00444487], [-0.47544359, 0.01282863, 0.87965267, 0.2516704], [0., 0., 0., 1.]])
+        self.follower_bot_left.arm.set_ee_pose_matrix(left_arm_init_R_T)
+
     def set_relative_ee(self, dx=0, dy=0, dz=0, droll=0, dpitch=0, dyaw=0, custom_guess=None, execute=True, moving_time=None, accel_time=None, blocking=True):
         
         R_T_curr = self.follower_bot_right.arm.T_sb
@@ -99,7 +102,9 @@ class RealEnvCartesian(RealEnv):
         dpitch = action[4]
         dyaw = action[5]
 
-        _, success = self.set_relative_ee(dx=dx, dy=dy, dz=dz, droll=droll, dpitch=dpitch, dyaw=dyaw)
+        breakpoint()
+
+        # _, success = self.set_relative_ee(dx=dx, dy=dy, dz=dz, droll=droll, dpitch=dpitch, dyaw=dyaw)
         if get_obs:
             obs = self.get_observation(get_base_vel)
         else:
