@@ -188,7 +188,20 @@ class AlohaEvalRunner(BaseEvalRunner):
 
 if __name__ == "__main__":
     args: Args = tyro.cli(Args)
-    print(args)
     eval_runner = AlohaEvalRunner(args)
-    eval_runner.run()
-  
+    
+    try:
+        eval_runner.run()
+    except KeyboardInterrupt:
+        print("\n[INFO] KeyboardInterrupt received. Cleaning up...")
+    finally:
+        if hasattr(eval_runner, 'env'):
+            for bot in eval_runner.env.follower_bots:
+                bot.arm.core.robot_stop_moving()
+        
+        # Shutdown the global node safely
+        from interbotix_common_modules.common_robot.robot import robot_shutdown
+        node = get_interbotix_global_node()
+        if node:
+            robot_shutdown(node)
+        print("[INFO] Shutdown complete. Safe to restart.")
