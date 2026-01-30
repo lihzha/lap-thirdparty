@@ -2,19 +2,12 @@
 import os
 import sys
 import time
-
-# --- FORCE LOCAL COMMUNICATION ---
-# These must be set before any ROS or Interbotix imports
-os.environ["ROS_IP"] = "127.0.0.1"
-os.environ["ROS_HOSTNAME"] = "127.0.0.1"
-os.environ["ROS_MASTER_URI"] = "http://127.0.0.1:11311"
-# --------------------------------
-
 import numpy as np
 import torch
 import tyro
 from PIL import Image
 from typing import Dict
+from openpi_client import image_tools
 
 # Aloha / Interbotix imports
 from aloha.real_env import make_real_env, RealEnv
@@ -89,7 +82,6 @@ class AlohaEvalRunner(BaseEvalRunner):
 
         self.left_arm = next(bot for name, bot in self.env.robots.items() if "follower" in name).arm
         
-        # 5. MONKEY PATCH for BaseEvalRunner compatibility
         self.env.step = self.ik_step
         
         return self.env
@@ -97,7 +89,7 @@ class AlohaEvalRunner(BaseEvalRunner):
     def ik_step(self, action):
         t0 = time.time()
         current_T = self.left_arm.get_ee_pose()
-        R_delta = ang.eulerAnglesToRotationMatrix(action[3:6])
+        R_delta = ang.euler_angles_to_rotation_matrix(action[3:6])
         target_T = np.eye(4)
         target_T[:3, :3] = current_T[:3, :3] @ R_delta
         target_T[:3, 3] = current_T[:3, 3] + action[:3]
@@ -119,8 +111,16 @@ class AlohaEvalRunner(BaseEvalRunner):
         top_image = obs_dict["images"]["camera_high"][:, 104:744]
         left_image = obs_dict["images"]["camera_wrist_left"][:, 104:744]
 
+        top_image = image_tools.resize_with_pad(top_image[:, :, ::-1], 224, 224)
+        left_image = image_tools.resize_with_pad(left_image[:, :, ::-1], 224, 224)
+
+        if save_to_disk:
+            combined_image = np.concatenate([top_image, left_image], axis=1)
+            combined_image = Image.fromarray(combined_image)
+            combined_image.save("robot_camer_views.png")
+
         R_T_curr = self.left_arm.get_ee_pose()
-        euler = ang.rotationMatrixToEulerAngles(R_T_curr[:3, :3])
+        euler = ang.rotation_matrix_to_euler_angles(R_T_curr[:3, :3])
         cartesian_6d = np.concatenate([R_T_curr[:3, 3], euler_to_rot6d(euler)])
         
         qpos = obs_dict['qpos']
