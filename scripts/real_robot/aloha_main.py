@@ -87,18 +87,16 @@ class AlohaEvalRunner(BaseEvalRunner):
         return self.env
     
     def ik_step(self, action):
-        print(f"[DEBUG] Action Received: {action}")
+        print(f"[DEBUG] Absolute Action Received: {action}")
         t0 = time.time()
-        current_T = self.left_arm.get_ee_pose()
-        
-        # 1. Calculate Target (No scaling needed if frequencies match)
-        R_delta = ang.euler_angles_to_rotation_matrix(action[3:6])
-        target_T = np.eye(4)
-        target_T[:3, :3] = current_T[:3, :3] @ R_delta
-        target_T[:3, 3] = current_T[:3, 3] + action[:3]
 
-        # 2. IK Solve with current joints as seed
-        current_joints = self.env.get_qpos()[:6]
+        target_T = np.eye(4)
+        target_T[:3, :3] = ang.euler_angles_to_rotation_matrix(action[3:6])
+        target_T[:3, 3] = action[:3]
+
+        current_qpos = self.env.get_qpos()
+        current_joints = current_qpos[:6]
+
         joint_targets, success = self.left_arm.set_ee_pose_matrix(
             target_T, 
             custom_guess=current_joints, 
@@ -107,16 +105,19 @@ class AlohaEvalRunner(BaseEvalRunner):
 
         if success:
             diff = joint_targets - current_joints
+            
+            if np.any(np.abs(diff) > 0.5):
+                print(f"[WARNING] Large joint jump detected! Diff: {diff}")
+                
             clamped_diff = np.clip(diff, -0.05, 0.05) 
             safe_joints = current_joints + clamped_diff
             
             full_joint_action = np.append(safe_joints, action[6])
             ts = RealEnv.step(self.env, full_joint_action)
         else:
-            print("[DEBUG] IK Failure: Target out of reach or singular.")
+            print(f"[DEBUG] IK Failure at Target: {action[:3]}")
             ts = self.env.get_observation()
 
-        # Sleep to maintain 15Hz (approx 0.066s)
         time.sleep(max(0, self.dt - (time.time() - t0)))
         return ts
 
