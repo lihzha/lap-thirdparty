@@ -47,11 +47,11 @@ def opening_ceremony(robots: Dict[str, InterbotixManipulatorXS], dt: float) -> N
 
 class AlohaEvalRunner(BaseEvalRunner):
     def __init__(self, args):
-        self.dt = 1 / 50 
+        self.dt = 1 / 15 
         super().__init__(args)
 
     def init_env(self):
-        # 1. Clean Node Handling
+        # 1. Clean Node Handling1 
         try:
             node = get_interbotix_global_node()
             if node is None:
@@ -85,26 +85,40 @@ class AlohaEvalRunner(BaseEvalRunner):
         self.env.step = self.ik_step
         
         return self.env
-
+    
     def ik_step(self, action):
+        print(f"[DEBUG] Action Received: {action}")
         t0 = time.time()
         current_T = self.left_arm.get_ee_pose()
+        
+        # 1. Calculate Target (No scaling needed if frequencies match)
         R_delta = ang.euler_angles_to_rotation_matrix(action[3:6])
         target_T = np.eye(4)
         target_T[:3, :3] = current_T[:3, :3] @ R_delta
         target_T[:3, 3] = current_T[:3, 3] + action[:3]
 
+        # 2. IK Solve with current joints as seed
+        current_joints = self.env.get_qpos()[:6]
         joint_targets, success = self.left_arm.set_ee_pose_matrix(
-            target_T, execute=False, blocking=False
+            target_T, 
+            custom_guess=current_joints, 
+            execute=False
         )
 
         if success:
-            full_joint_action = np.append(joint_targets, action[6])
+            diff = joint_targets - current_joints
+            clamped_diff = np.clip(diff, -0.05, 0.05) 
+            safe_joints = current_joints + clamped_diff
+            
+            full_joint_action = np.append(safe_joints, action[6])
             ts = RealEnv.step(self.env, full_joint_action)
-            time.sleep(max(0, self.dt - (time.time() - t0)))
-            return ts
         else:
-            return self.env.get_observation()
+            print("[DEBUG] IK Failure: Target out of reach or singular.")
+            ts = self.env.get_observation()
+
+        # Sleep to maintain 15Hz (approx 0.066s)
+        time.sleep(max(0, self.dt - (time.time() - t0)))
+        return ts
 
     def _extract_observation(self, obs_dict, save_to_disk=False):
         # TISL Resolution Crop
