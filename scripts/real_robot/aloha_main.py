@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+import cv2
 import numpy as np
 import torch
 import tyro
@@ -32,22 +33,45 @@ sys.path.append(".")
 from shared import BaseEvalRunner, Args
 from helpers import binarize_gripper_actions_np, euler_to_rot6d, invert_gripper_actions_np
 
-def opening_ceremony(robots: Dict[str, InterbotixManipulatorXS], dt: float) -> None:
+def opening_ceremony(robots: Dict[str, InterbotixManipulatorXS], dt: float, init_matrix: np.ndarray = None) -> None:
     follower_bots = {name: bot for name, bot in robots.items() if "follower" in name}
     for name, follower_bot in follower_bots.items():
+        # Hardware reset and mode setup
         follower_bot.core.robot_reboot_motors("single", "gripper", True)
         follower_bot.core.robot_set_operating_modes("group", "arm", "position")
         follower_bot.core.robot_set_operating_modes("single", "gripper", "current_based_position")
         follower_bot.core.robot_set_motor_registers("single", "gripper", "current_limit", 300)
         torque_on(follower_bot)
 
-        move_arms(bot_list=[follower_bot], target_pose_list=[START_ARM_POSE[:6]], moving_time=4.0, dt=dt)
+        if init_matrix is not None:
+            # Solve for the specific matrix you provided
+            joint_targets, success = follower_bot.arm.set_ee_pose_matrix(
+                init_matrix, execute=False, blocking=True
+            )
+            if success:
+                print(f"[INFO] Moving to custom initialization pose...")
+                move_arms(bot_list=[follower_bot], target_pose_list=[joint_targets], moving_time=4.0, dt=dt)
+            else:
+                print("[WARN] Could not solve IK for init_matrix, falling back to START_ARM_POSE")
+                move_arms(bot_list=[follower_bot], target_pose_list=[START_ARM_POSE[:6]], moving_time=4.0, dt=dt)
+        else:
+            move_arms(bot_list=[follower_bot], target_pose_list=[START_ARM_POSE[:6]], moving_time=4.0, dt=dt)
+        
         move_grippers([follower_bot], [FOLLOWER_GRIPPER_JOINT_CLOSE], moving_time=0.5, dt=dt)
     print("[INFO] Opening ceremony complete.")
 
 class AlohaEvalRunner(BaseEvalRunner):
     def __init__(self, args):
         self.dt = 1 / 15 
+        self.video_writer = None
+
+        self.init_matrix = np.array([
+            [ 0.25857837,  0.29014628,  0.92138611,  0.3358438 ],
+            [-0.02039871,  0.95525284, -0.29508627, -0.01964546],
+            [-0.96577488,  0.05750783,  0.25292633,  0.30597105],
+            [ 0.        ,  0.        ,  0.        ,  1.        ]
+        ])
+
         super().__init__(args)
 
     def init_env(self):
@@ -78,7 +102,7 @@ class AlohaEvalRunner(BaseEvalRunner):
         robot_startup(node)
         self.env.reset()
         
-        opening_ceremony(self.env.robots, dt=self.dt)
+        opening_ceremony(self.env.robots, dt=self.dt, init_matrix=self.init_matrix)
 
         self.left_arm = next(bot for name, bot in self.env.robots.items() if "follower" in name).arm
         
@@ -133,6 +157,15 @@ class AlohaEvalRunner(BaseEvalRunner):
             combined_image = np.concatenate([top_image, left_image], axis=1)
             combined_image = Image.fromarray(combined_image)
             combined_image.save("robot_camer_views.png")
+
+        wrist_frame_bgr = cv2.cvtColor(left_image, cv2.COLOR_RGB2BGR)
+        
+        if self.video_writer is None:
+            height, width = wrist_frame_bgr.shape[:2]
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            self.video_writer = cv2.VideoWriter('wrist_camera.mp4', fourcc, 15.0, (width, height))
+        
+        self.video_writer.write(wrist_frame_bgr)
 
         R_T_curr = self.left_arm.get_ee_pose()
         euler = ang.rotation_matrix_to_euler_angles(R_T_curr[:3, :3])
